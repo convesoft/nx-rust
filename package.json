@@ -1,0 +1,44 @@
+{
+  "name": "@convesoft/nx-rust-source",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "scripts": {
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint": "nx run-many -t lint"
+  },
+  "dependencies": {
+    "@nx/devkit": "24.0.6"
+  },
+  "devDependencies": {
+    "@nx/jest": "24.0.6",
+    "@nx/js": "24.0.6",
+    "@nx/oxlint": "24.0.6",
+    "@nx/plugin": "24.0.6",
+    "@nx/workspace": "24.0.6",
+    "@sourcegraph/scip-typescript": "0.6.2",
+    "@swc-node/register": "~1.11.1",
+    "@swc/cli": "~0.8.1",
+    "@swc/core": "~1.15.5",
+    "@swc/helpers": "~0.5.18",
+    "@types/jest": "~30.0.0",
+    "@types/node": "^22.0.0",
+    "jest": "~30.3.0",
+    "jest-environment-jsdom": "~30.3.0",
+    "jest-environment-node": "~30.3.0",
+    "jest-util": "~30.3.0",
+    "nx": "24.0.6",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.75.0",
+    "ts-jest": "^29.4.7",
+    "ts-node": "10.9.1",
+    "tslib": "^2.3.0",
+    "typescript": "~6.0.3",
+    "verdaccio": "^6.3.2"
+  },
+  "packageManager": "pnpm@12.18.0",
+  "nx": {
+    "includedScripts": []
+  }
+}

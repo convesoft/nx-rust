@@ -1,0 +1,50 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
+      "!{projectRoot}/tsconfig.spec.json",
+      "!{projectRoot}/jest.config.{cjs,mjs,js,cts,mts,ts}",
+      "!{projectRoot}/src/test-setup.[jt]s",
+      "!{projectRoot}/test-setup.[jt]s"
+    ],
+    "sharedGlobals": []
+  },
+  "analytics": false,
+  "targetDefaults": {
+    "@nx/js:tsc": {
+      "cache": true,
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"]
+    }
+  },
+  "release": {
+    "version": {
+      "preVersionCommand": "pnpm exec nx run-many -t build"
+    }
+  },
+  "plugins": [
+    {
+      "plugin": "@nx/oxlint",
+      "options": {
+        "targetName": "lint"
+      }
+    },
+    {
+      "plugin": "@nx/jest/plugin",
+      "exclude": ["nx-rust-e2e/**/*"],
+      "options": {
+        "targetName": "test"
+      }
+    },
+    {
+      "plugin": "@nx/jest/plugin",
+      "include": ["nx-rust-e2e/**/*"],
+      "options": {
+        "targetName": "e2e"
+      }
+    }
+  ]
+}

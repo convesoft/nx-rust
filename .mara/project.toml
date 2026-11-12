@@ -1,0 +1,27 @@
+format_version = 3
+
+[project]
+name = "nx-rust"
+schema = ".mara/schema.yaml"
+
+[content]
+include = ["**/*.mara.md"]
+
+[rules]
+format_version = 1
+files = [".mara/engineering-rules.yaml"]
+
+[query_policy]
+format_version = 1
+files = [".mara/engineering-policy.yaml"]
+definition_files = [".mara/engineering-queries.json"]
+shape_files = [".mara/engineering-shapes.ttl"]
+max_rows = 10000
+
+[[code.languages]]
+name = "typescript"
+command = ["pnpm", "exec", "scip-typescript", "index", "--no-progress-bar", "--output", "{output}", "nx-rust", "nx-rust-e2e"]
+position_encoding = "utf16"
+extensions = ["ts", "mts", "cts"]
+grammar = ".mara/code/typescript.wasm"
+query = ".mara/code/typescript.scm"

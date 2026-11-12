@@ -1,0 +1,7 @@
+autoInstallPeers: true
+allowBuilds:
+  nx: true
+  "@nx/plugin": false
+  "@parcel/watcher": false
+  unrs-resolver: false
+  "@swc/core": false

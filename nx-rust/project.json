@@ -1,0 +1,58 @@
+{
+  "name": "@convesoft/nx-rust",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "nx-rust/src",
+  "projectType": "library",
+  "release": {
+    "version": {
+      "manifestRootsToUpdate": ["dist/{projectRoot}"],
+      "currentVersionResolver": "git-tag",
+      "fallbackCurrentVersionResolver": "disk"
+    }
+  },
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/nx-rust",
+        "main": "nx-rust/src/index.ts",
+        "tsConfig": "nx-rust/tsconfig.lib.json",
+        "assets": [
+          "nx-rust/*.md",
+          {
+            "input": "./nx-rust/src",
+            "glob": "**/!(*.ts)",
+            "output": "./src"
+          },
+          {
+            "input": "./nx-rust/src",
+            "glob": "**/*.d.ts",
+            "output": "./src"
+          },
+          {
+            "input": "./nx-rust",
+            "glob": "generators.json",
+            "output": "."
+          },
+          {
+            "input": "./nx-rust",
+            "glob": "executors.json",
+            "output": "."
+          },
+          {
+            "input": ".",
+            "glob": "LICENSE-*",
+            "output": "."
+          }
+        ]
+      }
+    },
+    "nx-release-publish": {
+      "options": {
+        "packageRoot": "dist/{projectRoot}"
+      }
+    }
+  }
+}

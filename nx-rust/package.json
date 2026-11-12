@@ -1,0 +1,21 @@
+{
+  "name": "@convesoft/nx-rust",
+  "version": "0.0.1",
+  "description": "Nx plugin for Rust projects",
+  "license": "MIT OR Apache-2.0",
+  "author": "Aliaksei Raketski",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/convesoft/nx-rust.git",
+    "directory": "nx-rust"
+  },
+  "type": "commonjs",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "tslib": "^2.3.0"
+  }
+}
