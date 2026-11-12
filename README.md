@@ -1,97 +1,120 @@
-# NxRust
+# nx-rust
 
-<a alt="Nx logo" href="https://nx.dev" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/nrwl/nx/master/images/nx-logo.png" width="45"></a>
+**`@convesoft/nx-rust` is an Nx plugin that makes Cargo workspaces first-class
+Nx projects while Cargo stays the build tool.** It is written for monorepos
+where Rust crates sit beside JS and TS projects.
 
-✨ Your new, shiny [Nx workspace](https://nx.dev) is ready ✨.
+> **Status:** the design is specified and the implementation has not started.
+> The package is not published to npm yet. The specification is in
+> [`nx-rust/docs/`](nx-rust/docs/index.mara.md), and progress is tracked in
+> [`.zban/`](.zban/).
 
-Run `npx nx graph` to visually explore what got created. Now, let's get you up to speed!
+## Why
 
-## Run tasks
+In a mixed monorepo Nx knows every JS project, but Rust is usually a set of
+opaque scripts: no edges in the graph, no `nx affected`, and either no caching
+or caching that cuts corners. nx-rust reads the Cargo workspaces as they are:
 
-To run tasks with Nx use:
+- **Nothing to describe twice.** Projects, targets and dependencies come from
+  `cargo metadata`. No crate needs a `project.json`.
+- **Cargo keeps working.** Plain `cargo` and rust-analyzer use the same
+  directories and flags as before, and no files are generated inside crates.
+- **A cache you can trust.** Cache keys cover every file of the crate, the
+  sources of its dependencies, the toolchain and a fixed list of environment
+  variables. Nx stores task results and final artifacts, never Cargo's
+  intermediate files.
+- **Few cargo invocations.** Nx schedules one task per crate, and the plugin
+  runs them as one cargo call per group.
+- **Rust and JS in one graph.** `nx affected -t lint test build` covers both
+  languages, and napi and wasm crates produce artifacts that JS projects depend
+  on.
 
-```sh
-npx nx <target> <project-name>
-```
+See what nx-rust [deliberately does not do](nx-rust/docs/product.mara.md#what-nx-rust-deliberately-does-not-do).
 
-For example:
-
-```sh
-npx nx build myproject
-```
-
-These targets are either [inferred automatically](https://nx.dev/concepts/inferred-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) or defined in the `project.json` or `package.json` files.
-
-[More about running tasks in the docs &raquo;](https://nx.dev/features/run-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-## Add new projects
-
-While you could add new projects to your workspace manually, you might want to leverage [Nx plugins](https://nx.dev/concepts/nx-plugins?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) and their [code generation](https://nx.dev/features/generate-code?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) feature.
-
-To install a new plugin you can use the `nx add` command. Here's an example of adding the React plugin:
-
-```sh
-npx nx add @nx/react
-```
-
-Use the plugin's generator to create new projects. For example, to create a new React app or library:
+## What it will look like
 
 ```sh
-# Generate an app
-npx nx g @nx/react:app demo
+nx add @convesoft/nx-rust        # register the plugin; nothing is written into crates
 
-# Generate a library
-npx nx g @nx/react:lib some-lib
+nx show projects                 # every crate is a project
+nx graph                         # with normal, build and dev-dependency edges
+nx affected -t lint test build   # clippy, tests and builds, Rust and JS together
 ```
 
-You can use `npx nx list` to get a list of installed plugins. Then, run `npx nx list <plugin-name>` to learn about more specific capabilities of a particular plugin. Alternatively, [install Nx Console](https://nx.dev/getting-started/editor-setup?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) to browse plugins and generators in your IDE.
+Overrides live in the `Cargo.toml` that already describes the crate:
 
-[Learn more about Nx plugins &raquo;](https://nx.dev/concepts/nx-plugins?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) | [Browse the plugin registry &raquo;](https://nx.dev/plugin-registry?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
+```toml
+[package.metadata.nx]
+tags = ["scope:backend"]
 
-## Set up CI!
+[package.metadata.nx.targets.test.options]
+features = ["integration"]
+```
 
-### Step 1
+## Requirements
 
-To connect to Nx Cloud, run the following command:
+|       | Supported       |
+| ----- | --------------- |
+| Nx    | 24              |
+| Cargo | 1.91 and later  |
+| Host  | Linux and macOS |
+
+Later Nx majors are added once the end-to-end tests pass on them. macOS is
+supported, but CI covers Linux only for the moment. Every machine that runs
+`nx` in the repository needs cargo, also for JS-only work.
+
+## Roadmap
+
+| Milestone | Contents                                                                                                |
+| --------- | ------------------------------------------------------------------------------------------------------- |
+| 0.1       | Project graph, inferred targets and caching, with one cargo call per task. `init` and crate generators. |
+| 0.2       | Batching and feature unification.                                                                       |
+| 0.3       | nextest, affected tests and the coverage baseline.                                                      |
+| 0.4       | napi and wasm artifacts.                                                                                |
+| 0.5       | Releasing with Nx release.                                                                              |
+| 1.0       | The open assumptions are checked and closed.                                                            |
+
+## Documentation
+
+The [documentation](nx-rust/docs/index.mara.md) is both the user guide and the
+engineering specification:
+
+- [What nx-rust is](nx-rust/docs/product.mara.md)
+- [Setup and compatibility](nx-rust/docs/setup.mara.md)
+- [Workspaces and projects](nx-rust/docs/workspaces.mara.md)
+- [Configuration](nx-rust/docs/configuration.mara.md)
+- [Targets](nx-rust/docs/targets.mara.md)
+- [Caching](nx-rust/docs/caching.mara.md)
+- [Batching and features](nx-rust/docs/execution.mara.md)
+- [Testing](nx-rust/docs/testing.mara.md)
+- [napi and wasm artifacts](nx-rust/docs/artifacts.mara.md)
+- [Releasing](nx-rust/docs/release.mara.md)
+- [Continuous integration](nx-rust/docs/ci.mara.md)
+- [Decisions and risks](nx-rust/docs/decisions.mara.md)
+- [Verification](nx-rust/docs/verification.mara.md)
+
+## Development
+
+This repository is an Nx workspace managed with pnpm. The plugin is the
+`nx-rust/` package, and `nx-rust-e2e/` holds its end-to-end tests. The
+specification is maintained with [Mara](https://github.com/convesoft/mara) and
+the backlog with [zban](https://github.com/convesoft/zban). Contributors and
+coding agents start with [AGENTS.md](AGENTS.md).
 
 ```sh
-npx nx connect
+pnpm install
+pnpm exec nx run-many -t build lint test
+pnpm exec nx e2e nx-rust-e2e          # publishes to a local registry and installs from it
+pnpm format:check
+mara schema validate && mara project validate
+zban check
 ```
 
-Connecting to Nx Cloud ensures a [fast and scalable CI](https://nx.dev/ci/intro/why-nx-cloud?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) pipeline. It includes features such as:
+## License
 
-- [Remote caching](https://nx.dev/ci/features/remote-cache?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [Task distribution across multiple machines](https://nx.dev/ci/features/distribute-task-execution?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [Automated e2e test splitting](https://nx.dev/ci/features/split-e2e-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [Task flakiness detection and rerunning](https://nx.dev/ci/features/flaky-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
+nx-rust is available under your choice of the [MIT license](LICENSE-MIT) or the
+[Apache License 2.0](LICENSE-APACHE).
 
-### Step 2
-
-Use the following command to configure a CI workflow for your workspace:
-
-```sh
-npx nx g ci-workflow
-```
-
-[Learn more about Nx on CI](https://nx.dev/ci/intro/ci-with-nx#ready-get-started-with-your-provider?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-## Install Nx Console
-
-Nx Console is an editor extension that enriches your developer experience. It lets you run tasks, generate code, and improves code autocompletion in your IDE. It is available for VSCode and IntelliJ.
-
-[Install Nx Console &raquo;](https://nx.dev/getting-started/editor-setup?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-## Useful links
-
-Learn more:
-
-- [Learn about Nx on CI](https://nx.dev/ci/intro/ci-with-nx?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [Releasing Packages with Nx release](https://nx.dev/features/manage-releases?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [What are Nx plugins?](https://nx.dev/concepts/nx-plugins?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-And join the Nx community:
-
-- [Discord](https://go.nx.dev/community)
-- [Follow us on X](https://twitter.com/nxdevtools) or [LinkedIn](https://www.linkedin.com/company/nrwl)
-- [Our Youtube channel](https://www.youtube.com/@nxdevtools)
-- [Our blog](https://nx.dev/blog?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in nx-rust by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
