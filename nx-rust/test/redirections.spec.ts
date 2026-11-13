@@ -521,6 +521,97 @@ describe("edges to redirected crates", () => {
     HARNESS_TIMEOUT,
   );
 
+  it(
+    "come from a member that reaches a registry dependency only through a path crate that cargo does not report",
+    async () => {
+      // other lists no members, so cargo builds stray for plain, applying
+      // rust's [patch] to stray's model, but refuses to report it. What stray
+      // depends on is then unknown, so plain may use every redirected crate.
+      const workspace = FixtureWorkspace.create("patched-workspaces", {
+        "rust/crates/plain/Cargo.toml": (manifest) =>
+          `${manifest}\n[dependencies]\nstray = { path = "../../../other/stray" }\n`,
+        "other/Cargo.toml": '[workspace]\nmembers = []\nresolver = "3"\n',
+        "other/stray/Cargo.toml":
+          '[package]\nname = "stray"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nmodel = "0.1"\n',
+        "other/stray/src/lib.rs": "",
+        ".nxignore": "other/\n",
+      });
+      try {
+        const graph = await workspace.graph();
+        const shown = await workspace.nx(["show", "projects"]);
+
+        expect(edges(graph)).toEqual(
+          [...committed, ["plain", "model"], ["plain", "types"]].sort(
+            (a, b) => compare(a[0], b[0]) || compare(a[1], b[1]),
+          ),
+        );
+        expect(shown.status).toBe(0);
+        expect(shown.output).toContain("`cargo metadata` failed for other/stray/Cargo.toml");
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "keep a possible use whose opposite rests only on a crate without a report, and turn that one into an input",
+    async () => {
+      // backend redirects server and b to themselves. server depends on the
+      // registry crate wrapper, which depends on b: cargo builds server ->
+      // wrapper -> b -> leaf. b's only dependency, leaf, is a crate of a
+      // directory source without a report, so b's use of server is assumed.
+      const crate = (name: string) =>
+        `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n`;
+      const workspace = FixtureWorkspace.create("cross-workspace-path", {
+        "backend/Cargo.toml":
+          '[workspace]\nmembers = ["crates/server", "crates/b"]\nresolver = "3"\n\n[patch.crates-io]\nserver = { path = "crates/server" }\nb = { path = "crates/b" }\n',
+        "backend/.cargo/config.toml":
+          '[source.crates-io]\nreplace-with = "vendor"\n\n[source.vendor]\ndirectory = "../vendor"\n',
+        "backend/crates/server/Cargo.toml": `${crate("server")}\n[dependencies]\nwrapper = "0.1"\n`,
+        "backend/crates/b/Cargo.toml": `${crate("b")}\n[dependencies]\nleaf = { path = "../../../vendor/leaf" }\n`,
+        "backend/crates/b/src/lib.rs": "",
+        "vendor/leaf/Cargo.toml": crate("leaf"),
+        "vendor/leaf/src/lib.rs": "",
+        "vendor/leaf/.cargo-checksum.json": '{"files":{},"package":null}\n',
+        "vendor/wrapper/Cargo.toml": `${crate("wrapper")}\n[dependencies]\nb = "0.1"\n`,
+        "vendor/wrapper/src/lib.rs": "",
+        "vendor/wrapper/.cargo-checksum.json": '{"files":{},"package":null}\n',
+        ".nxignore": "shared/\n",
+      });
+      try {
+        const graph = await workspace.graph();
+        const affected = await workspace.nx([
+          "show",
+          "projects",
+          "--affected",
+          "--files=backend/crates/b/src/lib.rs",
+          // Nx prints JSON by itself only where it detects an AI agent.
+          "--json",
+        ]);
+
+        expect(edges(graph).filter(([source]) => source !== "backend")).toEqual([["server", "b"]]);
+        expect(affected.status).toBe(0);
+        // The JSON is the last line, after any warning of graph creation.
+        expect(JSON.parse(affected.output.trim().split("\n").pop()).sort()).toEqual([
+          "b",
+          "backend",
+          "server",
+        ]);
+        // What the left-out use would have brought.
+        expect(graph.projects.b.targets.check.inputs).toContain(
+          "{workspaceRoot}/backend/crates/server/**/*",
+        );
+        expect(graph.projects.server.targets.check.inputs).not.toContain(
+          "{workspaceRoot}/backend/crates/b/**/*",
+        );
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
   // Cargo 1.91 ignores include, so only that version accepts a broken
   // included file; 1.100 fails on it, and so does graph creation.
   if (pinnedToolchainAvailable()) {
