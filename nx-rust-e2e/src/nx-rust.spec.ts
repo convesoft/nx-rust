@@ -429,6 +429,51 @@ describe("@convesoft/nx-rust", () => {
       );
 
       it(
+        "ignores options that the executor does not know and says they came from the command line",
+        () => {
+          // The installed plugin's preTasksExecution hook records the
+          // command, and its executor reads the schema beside it.
+          const output = withoutColours(
+            nx(projectDirectory, cargo, [
+              "run",
+              "api:build",
+              "--output-style=static",
+              "--coverage",
+              "--allTargets",
+            ]),
+          );
+
+          expect(output).toContain(
+            "api:build: ignoring option `coverage`, passed on the command line.",
+          );
+          expect(output).toContain(
+            "api:build: ignoring option `allTargets`, which this target does not take, passed on the command line.",
+          );
+          // Words after -- reach the task as positional arguments, which the
+          // executor compares with Nx's own parse of the command line.
+          const positional = withoutColours(
+            nx(projectDirectory, cargo, [
+              "run",
+              "api:build",
+              "--output-style=static",
+              "--",
+              "3000",
+            ]),
+          );
+          expect(positional).toContain(
+            'api:build: ignoring the positional arguments ["3000"] (option `_`), passed on the command line.',
+          );
+          expect(cargo.calls(projectDirectory)).toEqual([
+            readRustWorkspace,
+            { cwd: "rust", args: ["build", "-p", "api"] },
+            readRustWorkspace,
+            { cwd: "rust", args: ["build", "-p", "api"] },
+          ]);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
         "shares its builds with plain cargo in both orders",
         () => {
           // Nx first, then plain cargo, which finds nothing to compile.

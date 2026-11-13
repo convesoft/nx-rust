@@ -30,6 +30,7 @@ const probe = {
     appendFileSync(process.env.DISCOVERY_PROBE_LOG, `${JSON.stringify(record)}\n`);
     return dependencies;
   },
+  preTasksExecution: plugin.preTasksExecution,
 };
 
 export = probe;
