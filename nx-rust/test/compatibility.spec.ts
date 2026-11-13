@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UnsupportedCargoError } from "../src/compatibility/cargo-version";
 import {
   describeNxMajors,
+  installedNx,
   majorsOfRange,
   nxVerdict,
   nxWorkspaceRoot,
@@ -11,6 +13,7 @@ import {
 } from "../src/compatibility/nx-version";
 import {
   CargoCall,
+  fakeNxPackage,
   FileChanges,
   FixtureWorkspace,
   GraphCreationError,
@@ -319,6 +322,87 @@ describe("graph creation with an unsupported Nx", () => {
       }),
     HARNESS_TIMEOUT,
   );
+});
+
+describe("an installed Nx whose version cannot be read", () => {
+  /** The advice that follows the problem in each such message. */
+  const advice = `This version of @convesoft/nx-rust supports ${supported}. Reinstall nx, or install a supported version of it, then run the command again.`;
+
+  it(
+    "fails graph creation when its version is no version, naming the file, the value and the supported majors",
+    () =>
+      inFixture({}, async (workspace) => {
+        workspace.useNx("not-a-version");
+
+        const message = await graphError(workspace);
+
+        expect(message).toMatch(
+          /nx-rust could not read the version of the Nx installed in this repository: \S+\/nx-not-a-version\/node_modules\/nx\/package\.json gives the version "not-a-version"\./,
+        );
+        expect(message).toContain(advice);
+      }),
+    HARNESS_TIMEOUT,
+  );
+
+  // The Nx that runs reads its own package.json, so the unreadable one is
+  // the one that Nx and the plugin look at first: .nx/installation.
+  it(
+    "fails graph creation when its package.json cannot be read, naming the file and the supported majors",
+    () =>
+      inFixture({}, async (workspace) => {
+        const folder = join(workspace.root, ".nx", "installation", "node_modules", "nx");
+        mkdirSync(folder, { recursive: true });
+        const packageJson = join(folder, "package.json");
+        writeFileSync(packageJson, `{ "name": "nx", "version": "${installedNxVersion}" }\n`);
+        chmodSync(packageJson, 0o000);
+        try {
+          const message = await graphError(workspace);
+
+          expect(message).toContain(
+            `nx-rust could not read the version of the Nx installed in this repository: Cannot read package config ${packageJson}`,
+          );
+          expect(message).toContain(advice);
+        } finally {
+          chmodSync(packageJson, 0o644);
+        }
+      }),
+    HARNESS_TIMEOUT,
+  );
+
+  it("is read from the harness's copy of Nx, and reported when that copy's package.json is unreadable or gives no version", () => {
+    const base = mkdtempSync(join(tmpdir(), "nx-rust-installed-nx-"));
+    try {
+      const copy = fakeNxPackage(base, "25.1.0");
+      const packageJson = join(copy, "package.json");
+
+      expect(installedNx(base)).toEqual({ version: "25.1.0", major: 25 });
+
+      // Node.js reports the file when it resolves the package, or, where it
+      // has resolved it before in this process, when the plugin reads it.
+      chmodSync(packageJson, 0o000);
+      const unreadable = (() => {
+        try {
+          installedNx(base);
+        } catch (error) {
+          return (error as Error).message;
+        }
+        return "";
+      })();
+      chmodSync(packageJson, 0o644);
+      expect(unreadable).toMatch(
+        /^nx-rust could not read the version of the Nx installed in this repository: /,
+      );
+      expect(unreadable).toContain(packageJson);
+      expect(unreadable).toContain(advice);
+
+      writeFileSync(packageJson, '{ "name": "nx", "version": 25 }\n');
+      expect(() => installedNx(base)).toThrow(
+        `nx-rust could not read the version of the Nx installed in this repository: ${packageJson} gives the version 25.\n${advice}`,
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("graph creation with an unsupported Cargo", () => {

@@ -94,7 +94,14 @@ export async function checkGraphCreation(
   nxJson: NxJsonConfiguration,
   workspaceRoot: string,
 ): Promise<GraphCheck> {
-  const verdict = nxVerdictFor(workspaceRoot, process.env);
+  let verdict: ReturnType<typeof nxVerdictFor>;
+  try {
+    verdict = nxVerdictFor(workspaceRoot, process.env);
+  } catch (error) {
+    // The version of the installed Nx cannot be read: loading the plugin
+    // fails with this message as well.
+    throw new GraphCheckError([error instanceof Error ? error.message : String(error)]);
+  }
   if (verdict.kind === "error") {
     throw new GraphCheckError([verdict.message]);
   }

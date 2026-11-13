@@ -76,20 +76,36 @@ export interface InstalledNx {
 /**
  * The Nx installed in the repository at `workspaceRoot`: the `nx` package
  * that resolves from there, where Nx itself looks for the installed Nx
- * (`.nx/installation` first, then the repository root), or, failing that,
- * the `nx` package that resolves from the plugin, its peer dependency.
+ * (`.nx/installation` first, then the repository root), or, where none
+ * resolves from there, the `nx` package that resolves from the plugin, its
+ * peer dependency. An `nx` package there whose `package.json` cannot be read
+ * is an error, not a reason to look elsewhere.
  *
- * @throws {Error} When no `nx` package can be found or read.
+ * @throws {Error} When no `nx` package can be found, or its version cannot
+ *   be read. The message names the path, the value found if any, the
+ *   supported majors and what to do.
  */
+// @mara implements DES-DIAGNOSTICS
 export function installedNx(workspaceRoot: string): InstalledNx {
+  const unreadable = (problem: string) =>
+    new Error(
+      [
+        `nx-rust could not read the version of the Nx installed in this repository: ${problem}.`,
+        `This version of ${packageName} supports ${describeSupportedNx()}. Reinstall nx, or install a supported version of it, then run the command again.`,
+      ].join("\n"),
+    );
   let packageJson: string;
   try {
     packageJson = resolveNxPackageJson(workspaceRoot);
   } catch (error) {
+    if (errorCode(error) !== "MODULE_NOT_FOUND") {
+      // Node.js could not read the package.json it found, and names it.
+      throw unreadable(reason(error).replace(/\.$/, ""));
+    }
     throw new Error(
       [
         `nx-rust could not find the nx package installed in ${workspaceRoot}: ${reason(error)}.`,
-        `It checks that the installed Nx is one that ${packageName} supports. Install nx in the repository, then run the command again.`,
+        `This version of ${packageName} supports ${describeSupportedNx()}. Install a supported version of nx in the repository, then run the command again.`,
       ].join("\n"),
     );
   }
@@ -97,26 +113,38 @@ export function installedNx(workspaceRoot: string): InstalledNx {
   try {
     version = JSON.parse(readFileSync(packageJson, "utf8"))?.version;
   } catch (error) {
-    throw new Error(
-      `nx-rust could not read the version of Nx from ${packageJson}: ${reason(error)}.`,
-    );
+    throw unreadable(`${packageJson} could not be read (${reason(error)})`);
   }
   const major = typeof version === "string" ? /^(\d+)\./.exec(version)?.[1] : undefined;
   if (typeof version !== "string" || major === undefined) {
-    throw new Error(
-      `nx-rust could not read the version of Nx from ${packageJson}: its version is ${JSON.stringify(version)}.`,
-    );
+    throw unreadable(`${packageJson} gives the version ${JSON.stringify(version)}`);
   }
   return { version, major: Number(major) };
 }
 
+// Where no nx package resolves from the repository, the one that resolves
+// from the plugin; any other failure, such as a package.json that Node.js
+// cannot read, stands.
 function resolveNxPackageJson(workspaceRoot: string): string {
   try {
     return require.resolve("nx/package.json", {
       paths: [join(workspaceRoot, ".nx", "installation"), workspaceRoot],
     });
-  } catch {
+  } catch (error) {
+    if (errorCode(error) !== "MODULE_NOT_FOUND") {
+      throw error;
+    }
     return require.resolve("nx/package.json");
+  }
+}
+
+// The supported majors in words, or where the plugin's own package is
+// broken, where they would come from.
+function describeSupportedNx(): string {
+  try {
+    return describeNxMajors(supportedNxMajors());
+  } catch {
+    return "the Nx majors that the peer dependency range on nx in its package.json names";
   }
 }
 
@@ -266,6 +294,12 @@ function brokenPackage(problem: string): Error {
   );
 }
 
+// The first line of an error's message: Node.js adds the require stack to a
+// MODULE_NOT_FOUND error on further lines.
 function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return (error instanceof Error ? error.message : String(error)).split("\n")[0];
+}
+
+function errorCode(error: unknown): unknown {
+  return (error as { code?: unknown } | null)?.code;
 }

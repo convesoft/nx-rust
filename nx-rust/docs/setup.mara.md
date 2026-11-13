@@ -2,13 +2,14 @@
 
 > **Status:** `nx add`, the `library` and `binary` generators and the checks of
 > the Nx and Cargo versions are implemented. `init` stops for each problem that
-> graph creation detects so far: an unsupported Nx or Cargo, a missing cargo, a
-> failing `cargo metadata` and two crates with one project name.
-> Of the tools below it counts only cargo-deny as needed by your settings.
-> Apart from the one for a newer Nx with `NX_RUST_ALLOW_UNSUPPORTED_NX`, the
-> warnings are not implemented yet, and neither are the errors of a task for a
-> missing tool, which need the targets that run the tools. The package is not
-> published to npm yet.
+> graph creation detects so far: an unsupported Nx or Cargo, an installed Nx
+> whose version cannot be read, a missing cargo, a pinned toolchain that is not
+> installed, a failing `cargo metadata`, two crates with one project name and
+> invalid `targetNames`. Of the tools below it counts only cargo-deny as needed
+> by your settings. Apart from the one for a newer Nx with
+> `NX_RUST_ALLOW_UNSUPPORTED_NX`, the warnings are not implemented yet, and
+> neither are the errors of a task for a missing tool, which need the plugin's
+> executor. The package is not published to npm yet.
 
 ## What you need
 

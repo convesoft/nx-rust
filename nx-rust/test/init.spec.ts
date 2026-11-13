@@ -406,6 +406,26 @@ describe("init", () => {
     );
 
     it(
+      "stops when the version of the installed Nx cannot be read",
+      () =>
+        runInit(
+          "subfolder-workspace",
+          {},
+          (workspace, result) => {
+            expectStopped(
+              result,
+              '/nx-not-a-version/node_modules/nx/package.json gives the version "not-a-version".',
+              `This version of ${pluginName} supports Nx ${installedMajor}. Reinstall nx, or install a supported version of it, then run the command again.`,
+            );
+            expect(workspace.cargoCalls()).toEqual([]);
+          },
+          [],
+          { prepare: (workspace) => workspace.useNx("not-a-version") },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
       "stops with the version found and the version required when Cargo is older than 1.91",
       () =>
         runInit(
@@ -488,6 +508,33 @@ describe("init", () => {
             expect(output).not.toContain("nx-rust would give");
             expect(changed).toEqual(["nx.json"]);
           },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "stops when targetNames in the registered entry gives two targets of a project one name",
+      () =>
+        runInit(
+          "subfolder-workspace",
+          {
+            "nx.json": `${JSON.stringify({
+              plugins: [{ plugin: pluginName, options: { targetNames: { test: "build" } } }],
+            })}\n`,
+          },
+          (_workspace, { status, output, changed }) => {
+            expect(status).toBe(1);
+            expect(output).toContain(
+              "Nx cannot create the project graph with nx-rust as nx.json registers it.",
+            );
+            expect(output).toContain(
+              `"targetNames" in the options of the ${pluginName} entry in nx.json gives two inferred targets of one project the same name`,
+            );
+            expect(output).toContain("nx.json is unchanged.");
+            expect(changed).toEqual([]);
+          },
+          // As above: the harness cannot load the registered plugin by name.
+          ["--skipProjectGraph"],
         ),
       HARNESS_TIMEOUT,
     );
