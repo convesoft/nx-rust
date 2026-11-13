@@ -824,6 +824,22 @@ describe("options in the target tables", () => {
       ],
     ],
     [
+      "pluginVersion, which only the plugin sets, in options and in a configuration",
+      "subfolder-workspace",
+      {
+        "rust/crates/model/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.build.options]\npluginVersion = "0.0.0"',
+        ),
+        "rust/Cargo.toml": appendTo(
+          '[workspace.metadata.nx.targets.test.configurations.ci]\npluginVersion = "0.0.0"',
+        ),
+      },
+      [
+        `rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build.options] sets the option "pluginVersion", which only the plugin sets: it carries the plugin's version into the cache key, and a value set by hand would replace it, so that Nx could restore results of another version of the plugin. Remove it.`,
+        'rust/Cargo.toml: [workspace.metadata.nx.targets.test.configurations.ci] sets the option "pluginVersion", which only the plugin sets',
+      ],
+    ],
+    [
       "an extra target that names the plugin's executor",
       "subfolder-workspace",
       {
@@ -880,7 +896,7 @@ describe("options in the target tables", () => {
   );
 
   it(
-    "accepts the options that each target takes, pluginVersion among them, and leaves other executors' options to Nx",
+    "accepts the options that each target takes, and leaves other executors' options to Nx",
     async () => {
       const graph = await loadFixtureGraph("crate-shapes", {
         files: {
@@ -893,7 +909,6 @@ describe("options in the target tables", () => {
               "noDefaultFeatures = true",
               'profile = "release"',
               'targetTriple = "x86_64-unknown-linux-gnu"',
-              'pluginVersion = "0.0.0"',
               "",
               "[workspace.metadata.nx.targets.typecheck.configurations.quick]",
               "allTargets = false",
@@ -924,7 +939,7 @@ describe("options in the target tables", () => {
             ].join("\n"),
           ),
           "rust/crates/server/Cargo.toml": appendTo(
-            '[package.metadata.nx.targets.run.options]\nbin = "migrate"\nprofile = "release"',
+            '[package.metadata.nx.targets.run.options]\nbin = "migrate"\nprofile = "release"\nargs = "--port 3000"',
           ),
           "rust/crates/perf/Cargo.toml": appendTo(
             '[package.metadata.nx.targets.bench.options]\nfeatures = ["fast"]',
@@ -939,7 +954,6 @@ describe("options in the target tables", () => {
         noDefaultFeatures: true,
         profile: "release",
         targetTriple: "x86_64-unknown-linux-gnu",
-        pluginVersion: "0.0.0",
       });
       expect(projects.cli.targets.typecheck.configurations).toMatchObject({
         quick: { allTargets: false },
@@ -960,6 +974,7 @@ describe("options in the target tables", () => {
       expect(projects.server.targets.run.options).toMatchObject({
         bin: "migrate",
         profile: "release",
+        args: "--port 3000",
       });
       expect(projects.perf.targets.bench.options).toMatchObject({ features: ["fast"] });
     },

@@ -12,8 +12,9 @@ let declared: ReadonlyMap<string, ReadonlySet<string>> | undefined;
  * the executor's full name, such as `@convesoft/nx-rust:cargo`: the keys of
  * the `properties` of the schema file that `executors.json` names for it,
  * which is the file Nx checks a task's options against
- * (`DES-UNKNOWN-OPTIONS`). Reading the schema itself, rather than a list of
- * its own, keeps a check of options from disagreeing with the executor.
+ * (`DES-UNKNOWN-OPTIONS`). The executors and the check of the target tables
+ * in Cargo metadata both take their options from here, so they cannot
+ * disagree.
  *
  * @throws {Error} When `executors.json` or a schema cannot be read, or a
  *   schema declares no properties.
@@ -22,6 +23,21 @@ let declared: ReadonlyMap<string, ReadonlySet<string>> | undefined;
 export function declaredExecutorOptions(): ReadonlyMap<string, ReadonlySet<string>> {
   declared ??= readDeclaredOptions();
   return declared;
+}
+
+/**
+ * The options that the schema of one of the plugin's executors declares
+ * ({@link declaredExecutorOptions}).
+ *
+ * @param executor The executor's full name, such as `@convesoft/nx-rust:run`.
+ * @throws {Error} When `executors.json` does not list the executor.
+ */
+export function declaredOptionsOf(executor: string): ReadonlySet<string> {
+  const options = declaredExecutorOptions().get(executor);
+  if (options === undefined) {
+    throw new Error(`executors.json in ${packageRoot} does not list ${executor}.`);
+  }
+  return options;
 }
 
 function readDeclaredOptions(): ReadonlyMap<string, ReadonlySet<string>> {

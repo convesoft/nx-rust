@@ -1,5 +1,5 @@
 import type { CreateDependenciesContext, TargetConfiguration } from "@nx/devkit";
-import { targetTakes } from "../executors/command";
+import { pluginVersionOption, targetTakes } from "../executors/command";
 import { declaredExecutorOptions } from "../executors/declared-options";
 import { nxGraphInternals } from "./nx-internals";
 import type { CargoGraph } from "./projects";
@@ -167,7 +167,10 @@ function tableProblems(
  * The executors' options are those that their schemas declare
  * ({@link declaredExecutorOptions}), and on an inferred target only those
  * that the target takes ({@link targetTakes}), which the cargo command uses
- * as well. On an extra target that names one of the executors, which fails
+ * as well. `pluginVersion`, which the plugin sets itself, is no table's to
+ * set, because a value set by hand would replace the plugin's version in the
+ * cache key (`GOAL-TRUSTED-CACHE`). On an extra target that names one of the
+ * executors, which fails
  * when its task starts, a key is checked against the executor's schema
  * alone, because the option reference gives options to inferred targets
  * only. An extra target of another executor, or with a `command`, has Nx's
@@ -191,9 +194,10 @@ function optionProblems(table: TargetTable, inferred: TargetConfiguration | unde
   const inferredName: InferredTargetName | undefined =
     inferred?.metadata?.[targetCargoMetadataKey]?.target;
   const takes = (option: string) =>
-    declared.has(option) && (inferredName === undefined || targetTakes(inferredName, option));
-  // `pluginVersion` is the plugin's own (`DES-PLUGIN-OPTIONS`), so no message offers it.
-  const offered = [...declared].filter((option) => takes(option) && option !== "pluginVersion");
+    option !== pluginVersionOption &&
+    declared.has(option) &&
+    (inferredName === undefined || targetTakes(inferredName, option));
+  const offered = [...declared].filter(takes);
   const subject =
     inferredName === undefined
       ? `the target "${name}"`
@@ -218,14 +222,21 @@ function optionProblems(table: TargetTable, inferred: TargetConfiguration | unde
       if (takes(key)) {
         continue;
       }
-      const similar = offered.find((option) => looseName(option) === looseName(key));
+      const option = JSON.stringify(key);
+      if (key === pluginVersionOption && declared.has(key)) {
+        problems.push(
+          `${manifest}: ${place} sets the option ${option}, which only the plugin sets: it carries the plugin's version into the cache key, and a value set by hand would replace it, so that Nx could restore results of another version of the plugin. Remove it.`,
+        );
+        continue;
+      }
+      const similar = offered.find((candidate) => looseName(candidate) === looseName(key));
       problems.push(
         [
           declared.has(key)
-            ? `${manifest}: ${place} sets the option ${JSON.stringify(key)}, which ${subject}${pause} does not take.`
-            : `${manifest}: ${place} sets the option ${JSON.stringify(key)}, which ${executor}, the executor of ${subject}, does not know.`,
+            ? `${manifest}: ${place} sets the option ${option}, which ${subject}${pause} does not take.`
+            : `${manifest}: ${place} sets the option ${option}, which ${executor}, the executor of ${subject}, does not know.`,
           similar === undefined ? undefined : `Did you mean "${similar}"?`,
-          `The options that ${offeredBy} are ${list(offered.map((option) => `"${option}"`))}.`,
+          `The options that ${offeredBy} are ${list(offered.map((candidate) => `"${candidate}"`))}.`,
           inferredName === undefined
             ? `${executor} runs only the targets that nx-rust infers; to run another cargo command, define a target with a "command" instead.`
             : undefined,

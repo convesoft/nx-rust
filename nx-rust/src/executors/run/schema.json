@@ -33,6 +33,10 @@
       "type": "string",
       "description": "The binary to run, passed as --bin, for a crate with several binaries and no default-run."
     },
+    "args": {
+      "type": "string",
+      "description": "Arguments for the binary, after those of cargo: a string split into words at blanks, where quotes and backslashes group and escape as in a POSIX shell and nothing is expanded. Arguments after -- on the nx command line follow them."
+    },
     "pluginVersion": {
       "type": "string",
       "description": "The plugin's version, which the plugin sets for the cache key. Not meant to be set by hand."
