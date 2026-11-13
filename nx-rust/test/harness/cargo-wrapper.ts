@@ -10,6 +10,14 @@ export interface CargoCall {
   args: string[];
 }
 
+/** The variables of cargo's environment that the wrapper records with each call. */
+export type RecordedVariable = "RUSTUP_AUTO_INSTALL";
+
+/** A {@link CargoCall} with the recorded variables, each `null` where it was unset. */
+export interface CargoCallWithEnv extends CargoCall {
+  env: Record<RecordedVariable, string | null>;
+}
+
 /**
  * A `cargo` executable that logs every invocation and then runs the real
  * cargo found on `PATH` in the same folder, with the real cargo's folder
@@ -91,17 +99,26 @@ export class CargoWrapper {
    *   `{workspaceRoot}`.
    */
   calls(root?: string): CargoCall[] {
+    return this.callsWithEnv(root).map(({ cwd, args }) => ({ cwd, args }));
+  }
+
+  /**
+   * The invocations logged so far, as {@link CargoWrapper.calls} returns
+   * them, each with the {@link RecordedVariable}s of its environment.
+   */
+  callsWithEnv(root?: string): CargoCallWithEnv[] {
     const text = existsSync(this.logFile) ? readFileSync(this.logFile, "utf8") : "";
-    const calls: CargoCall[] = text
+    const calls: CargoCallWithEnv[] = text
       .split("\n")
       .filter((line) => line !== "")
       .map((line) => JSON.parse(line));
     if (root === undefined) {
       return calls;
     }
-    return calls.map(({ cwd, args }) => ({
+    return calls.map(({ cwd, args, env }) => ({
       cwd: relative(root, cwd) || ".",
       args: args.map((arg) => arg.split(root).join("{workspaceRoot}")),
+      env,
     }));
   }
 
