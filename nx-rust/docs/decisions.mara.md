@@ -77,13 +77,31 @@ Cargo allows cycles through dev-dependencies. Three treatments were considered: 
 :::mara decision ADR-EXTERNAL-NODES
 :mid: 01M78FHG7FYRBX038BA9MX7YXN
 :title: Represent external crates as graph nodes
-:status: accepted
-:justifies: REQ-EXTERNAL-DEPS
-:justifies: DES-LOCKFILE-HASHING
+:status: retired
 
 With the whole `Cargo.lock` as an input, any dependency update invalidates every crate of the workspace. Each direct external dependency becomes a node with the prefix `cargo:` instead, so a crate can be hashed on the dependencies it uses. This is agreed in principle; the hashing mechanism is not designed yet.
 
 Neither is the identity of a node. Several workspaces have several lockfiles, and one lockfile can hold several versions of a crate, so a name without a version cannot stand for all of them. The nodes are therefore created only together with the hashing design, and until then the whole lockfile stays an input.
+
+Retired on 13 November 2026: v1 creates no external nodes. Nx 24 keys crates correctly through such nodes, but `nx affected` ignores them after a change to `Cargo.lock` alone ([[EVD-NX-24-EXTERNAL-NODES]]). [[ADR-LOCKFILE-TASK]] replaces this decision.
+:::
+
+:::mara decision ADR-LOCKFILE-TASK
+:mid: 01M7ACCPE3JYNPZCK42RZG5H3H
+:title: Key crates on a lockfile task per workspace, not on external nodes
+:status: accepted
+:justifies: REQ-EXTERNAL-DEPS
+:justifies: DES-LOCKFILE-HASHING
+:justifies: REQ-NO-RUST-TASK-DEPS
+:supersedes: ADR-EXTERNAL-NODES
+
+With the whole `Cargo.lock` as an input, any dependency update invalidates every crate of the workspace. [[ADR-EXTERNAL-NODES]] planned a graph node with the prefix `cargo:` for each external dependency, so that a crate's key could follow the dependencies it uses. In Nx 24.0.6 such nodes key the crates correctly, but `nx affected` then selects no crate after a change to `Cargo.lock` alone: Nx works out which external nodes moved only for JS lockfiles, and a plugin has no way to tell it ([[EVD-NX-24-EXTERNAL-NODES]]). A pipeline that runs `nx affected` would skip Rust on every dependency update. The nodes would also reach JS projects: a target without an `externalDependencies` input hashes every external node of the graph, so each change to a `Cargo.lock` would invalidate the `package.json` scripts of every JS project.
+
+Each workspace therefore has one cached task that reads its `Cargo.lock` and writes, for each crate, a digest of the packages the crate reaches. Every cached target of a crate depends on that task and hashes the crate's digest. A change to `Cargo.lock` reaches the task through its file input, and Nx selects every task that reads the task's output, so `nx affected` selects the crates of that workspace, and those whose digest did not change are restored from the cache ([[EVD-NX-24-LOCKFILE-TASK]]). `nx affected` selects more than it must and the keys select exactly, which is the trade [[GOAL-TRUSTED-CACHE]] asks for.
+
+Rejected: external nodes alone, for the reasons above; external nodes for the keys together with a task of constant output for `nx affected`, which works but keeps the invalidation of JS projects and needs node names that tell apart versions and lockfiles; a digest in a target option, which keys correctly but which `nx affected` never selects; and the whole lockfile, which does not meet [[REQ-EXTERNAL-DEPS]].
+
+The costs are one cheap task per workspace in every run that includes a cached crate target, which the crate tasks wait for; a dependency of crate targets on a target of another project, the one exception [[REQ-NO-RUST-TASK-DEPS]] makes; a graph that shows no external crates; and reliance on how Nx 24 selects the tasks that read a producer's output, which a later Nx major could change. The end-to-end checks of [[VER-CACHE-KEYS]] cover that selection, and a later major is supported only once they pass ([[ADR-COMPATIBILITY]]).
 :::
 
 :::mara decision ADR-METADATA-KEY
@@ -713,6 +731,71 @@ An experiment and a reading of the `nx`, `@nx/js` and `@nx/workspace` 24.0.6 pac
 - **typecheck.** `@nx/js` adds its TypeScript plugin with the target name `typecheck` (`src/utils/typescript/add-typescript-plugin.js`), and the CI workflow generator of `@nx/workspace` writes `nx affected -t lint test build typecheck` when a workspace has that target (`src/generators/ci-workflow/ci-workflow.js`).
 
 The targets of the experiment ran no cargo. The points marked with a source file were read, not run.
+:::
+
+:::mara evidence EVD-NX-24-EXTERNAL-NODES
+:mid: 01M7ACCPE3NW5Z2SMKCY08AV3H
+:title: What Nx 24.0.6 does with external nodes, externalDependencies and a lockfile it does not parse
+:status: accepted
+:supports: ADR-LOCKFILE-TASK
+:supports: DES-INPUTS
+:supports: DES-LOCKFILE-HASHING
+
+Experiments on 13 November 2026 with `nx` 24.0.6, pnpm 12.18.0, Node 26.12.0 and git 2.56.0 on Linux x86-64. The throwaway workspace lay outside this repository, was installed with `pnpm install --offline` and had the default task-based affected. A local plugin made the projects `a`, `b` and `c` from `rust/crates/*/Cargo.toml` and read a hand-written `rust/Cargo.lock` in Cargo's version 4 format, in which `a` depended on `serde`, `serde` on `serde_derive`, `b` on `itoa` and `c` on `a`. It turned every package with a `source` into an external node `cargo:<name>@<version>` of type `cargo`, with the package's checksum as `data.hash`. Its `createDependencies` returned an edge from each crate to its direct external dependencies, an edge from each external node to those its lockfile entry lists, and the project edge from `c` to `a`. The targets used `nx:run-commands`, `nx:noop` and an executor from a package installed with `file:`; a JS project listed in `pnpm-workspace.yaml` added a `package.json` script. Hashes came from Nx's own hasher: a script built the graph with `createProjectGraphAsync` and the task graph with `createTaskGraph`, called `InProcessTaskHasher.hashTask` and printed each task's hash with its parts, all with `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false`; `HashPlanInspector` printed the plans. Selection came from `nx affected -t <target> --base=HEAD~1 --head=HEAD --explain=stdout` after a commit.
+
+- **Every external node by default.** A target without an `externalDependencies` input hashed `AllExternalDependencies`, every external node of the graph, npm and `cargo:` alike. That held for `nx:run-commands`, `nx:noop`, the executor from a package and the `package.json` script (`nx:run-script`), whose hash changed when only the hash of `cargo:itoa@1.0.0` changed. An `externalDependencies` input, an empty one included, removed it.
+- **Edges and `^` inputs.** With edges from projects to external nodes, a `^` input such as `^default` hashed the project's direct external nodes and, along the edges between external nodes, the nodes behind them: `serde` and `serde_derive` for `a`, and the same for `c` through its edge to `a`. A target without a `^` input hashed none of them.
+- **Named nodes.** `externalDependencies: ["cargo:serde@1.0.0"]` hashed that node and `serde_derive` behind it, and `["@exp/executor"]`, a bare package name, resolved to its `npm:` node. A name without a node failed hashing with "The externalDependency 'cargo:does-not-exist' for 'a:rc-extmissing' could not be found". A package name failed in the same way when `nx.json` set `pluginsConfig["@nx/js"].analyzeLockfile` to `false`, which leaves the graph without npm nodes.
+- **The `hash` field.** A changed checksum with the version unchanged changed the keys of exactly the tasks that reached the node. Without `data.hash`, a changed checksum changed no key, while a changed version, which renamed the node, did.
+- **One name twice.** When two `createNodes` results declared one node name with different hashes, the graph kept the last one, without a message.
+- **Affected.** After a commit that changed only `rust/Cargo.lock`, and with it the hash of `cargo:serde@1.0.0`, `nx affected` selected no task that reached that node, whether through a `^` input, `externalDependencies` or `AllExternalDependencies`. Only tasks with the lockfile as a file input were selected. Adding `Cargo.lock` to the plugin's `createNodes` pattern changed nothing. Neither did a per-crate digest that the plugin put into a target option, although the option changed the task's key through the project's configuration. As read in the installed source, Nx works out which external nodes moved only from the JS lockfiles and `package.json` (`dependencyChanges` in `project-graph/affected/affected-tasks.js`, `plugins/js/project-graph/affected/lock-file-changes.js`), and the plugin interface has no hook through which a plugin could report moved nodes (`project-graph/plugins/public-api.d.ts`).
+- **A JS lockfile.** After a commit that changed one integrity entry of `pnpm-lock.yaml`, `nx affected` selected every crate target without an `externalDependencies` input, with the reason `external-dependencies`, and none of those with one.
+- **Graph creation.** With the project graph cache on and the daemon off, a change to `Cargo.lock` alone made the next command create the graph again, and the node's hash followed the file.
+
+The daemon was off throughout, the lockfile was written by hand and no cargo ran.
+:::
+
+:::mara evidence EVD-NX-24-LOCKFILE-TASK
+:mid: 01M7ACCPE3Z4TVZ0EBZZVXR4PP
+:title: How a lockfile task keys crates and drives nx affected in Nx 24.0.6
+:status: accepted
+:supports: ADR-LOCKFILE-TASK
+:supports: DES-LOCKFILE-HASHING
+:supports: DES-INPUTS
+:supports: REQ-NO-RUST-TASK-DEPS
+
+Experiments on 13 November 2026 with the versions of [[EVD-NX-24-EXTERNAL-NODES]] and cargo 1.100.0, in two throwaway workspaces outside this repository.
+
+The first was the workspace of that item without its external nodes. A project at `rust/` had a cached `nx:run-commands` target that read `rust/Cargo.lock` and wrote, into a git-ignored folder, one file per crate holding a SHA-256 over the name, version, source and checksum of every package the crate's lockfile entry reaches. Each crate had a cached target that depended on it and declared `{ "dependentTasksOutputFiles": "<folder>/<crate>.digest" }` and `externalDependencies: []` besides its own files and a `^` input over them.
+
+The second held a Cargo workspace at `rust/` whose root manifest also is the package `root`, with the members `a`, which depends on `itoa`, `b`, which depends on `ryu`, and `c`, which depends by path on `a` and on `root`. The project of `root` carried the lockfile task. Every crate had a cached `test` target that depended on it and read the crate's digest as in the first workspace, run by an executor from a local package with a `batchImplementation` and `preferBatch: true` that logged its calls. The lockfile task and the `test` targets named that package in `externalDependencies`. A crate's own files were the input `{projectRoot}/**/*` with `!{projectRoot}/Cargo.lock`, unless a case says otherwise. Bumps came from `cargo update -p <crate> --precise <version>`, and every run was `nx run-many -t test --outputStyle=static` with `NX_DAEMON=false`, except where the daemon was started with `nx daemon --start`.
+
+- **Keys.** A bump changed the keys of exactly the crates that reach the package. In the first workspace, a bump of `serde_derive`, which `a` and `c` reach only through `serde`, ran `a` and `c` and restored `b` from the cache, and a bump of `itoa` did the reverse. In the second, a bump of `itoa` ran `a` and `c`, and one of `ryu` ran `b` only. The lockfile task ran again after every bump.
+- **Affected.** After a commit that changed only the lockfile, `nx affected -t test` selected the lockfile task through `rust/Cargo.lock` and every crate task of the workspace, with the reason `dependent-output` and the lockfile task as producer. Running it executed the crates whose digest had changed and restored the others from the cache.
+- **Batching.** The lockfile task ran first and on its own. The four `test` tasks then reached the executor as one batch, and after a bump only those that had to run did, again as one batch.
+- **Where the digests live.** With the digests in `.nx/workspace-data/nx-rust/<workspace>`, in `node_modules/.cache/nx-rust/<workspace>` or in the artifact directory `rust/target/nx-rust/lockfile`, a second run restored every task from the cache. After the folder was deleted, the next run restored the lockfile task from the cache, its files included, and every crate task with it. `git status` showed nothing new in any of the three. With the folder outside the repository, the lockfile task ran again after a bump of `itoa` and wrote a new digest, but `a` and `c` were restored from the cache: Nx did not hash a dependency's output that lies outside the workspace. With the daemon on and the digests in `.nx/workspace-data`, the runs gave the same results as without it.
+- **Root package.** Without `!{projectRoot}/Cargo.lock`, the files of `root` included `rust/Cargo.lock` and no file of a member, and a bump of `ryu`, which only `b` reaches, ran `root` and `c`, which depends on `root`, besides `b`. With it, only `b` ran.
+- **Git-ignored lockfile.** With `Cargo.lock` listed in `rust/.gitignore` and removed from the index, a plain file input did not see a bump: the lockfile task was restored from the cache with the old digests, and every crate task with it. With `{ "fileset": "{projectRoot}/Cargo.lock", "includeIgnored": true }`, the lockfile task ran again, and `a` and `c` after it.
+
+`nx init` writes `.nx/workspace-data` into `.gitignore` (`command-line/init/implementation/utils.js`), and a comment in `daemon/server/restart-checks.js` calls that folder hardcoded-ignored by the daemon's file watcher; both were read, not run. No cargo build ran inside Nx: the executor only logged.
+:::
+
+:::mara evidence EVD-CARGO-LOCKFILE
+:mid: 01M7ACCPE3XWH5NE1AJ970AVQH
+:title: What Cargo.lock records, and how a build of the whole workspace unifies features
+:status: accepted
+:supports: DES-LOCKFILE-HASHING
+:supports: DES-INPUTS
+
+An experiment on 13 November 2026 with cargo and rustc 1.100.0 on Linux x86-64, outside this repository, with crates.io reachable. The workspace had the members `a`, `b`, `f1` and `f2`. `a` had a normal dependency on `itoa = "1"`, an optional one on `smallvec` that no feature enabled, `ryu` as a dev-dependency, `cfg-if` as a build dependency and `memchr` under `[target.'cfg(windows)'.dependencies]`. `b` depended on `itoa = "0.4"`, on a crate in a local git repository and by path on `v`, a crate outside the workspace that depends on `ryu`. `f1` and `f2` depended by path on `x`, a crate outside the workspace with a feature `f` and a function that returns `cfg!(feature = "f")`. `f2` enabled `f` and `f1` did not; `f1` was a binary that printed the function's result. `cargo generate-lockfile` wrote the lockfile.
+
+- **A member's entry.** The entry of `a` listed `cfg-if`, `itoa 1.0.19`, `memchr`, `ryu` and `smallvec`: its normal, dev and build dependencies, the dependency for another platform and the optional one that nothing enabled. The lockfile records no features.
+- **Several versions.** `itoa` was locked at 0.4.8 and at 1.0.19, and an entry names such a dependency with its version, as in `"itoa 0.4.8"`.
+- **Sources.** A registry package had a `source` and a `checksum`. The git dependency had `source = "git+file:///…#<commit>"`, ending in the commit, and no checksum.
+- **Path packages.** `v` and `x` had neither `source` nor `checksum`, and the entry of `v` listed `ryu`.
+- **Features of another member.** `cargo run -p f1` printed `false`. After `cargo build --workspace`, `target/debug/f1` printed `true`: built together with `f2`, `x` had the feature that `f2` enables.
+
+`x` is a path crate. Cargo's resolver unifies the features of a registry crate in the same way, which this experiment did not run.
 :::
 
 ## Sources

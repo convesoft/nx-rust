@@ -18,7 +18,7 @@ Implements `REQ-INFERRED-PROJECTS`, `REQ-PROJECT-NAMES`, `REQ-CROSS-WORKSPACE-DE
 - [ ] The name-collision error with both manifest paths
 - [ ] The workspace project, or the root crate in that role
 - [ ] Edges for normal, build and dev-dependencies, including across workspaces and through cycles, found through the paths in the `--no-deps` report; no edge for a path dependency without a project
-- [ ] No external nodes yet: they come with nxr-xq9ava (`DES-PROJECT-GRAPH`)
+- [ ] No external nodes: v1 creates none (`DES-PROJECT-GRAPH`, `ADR-LOCKFILE-TASK`)
 - [ ] Commands address crates by real package name and manifest path
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
