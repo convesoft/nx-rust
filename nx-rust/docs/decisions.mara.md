@@ -59,7 +59,7 @@ Repositories that add Rust to an existing monorepo rarely have one Cargo workspa
 :status: accepted
 :justifies: REQ-PROJECT-NAMES
 
-The crate name is what a Rust developer types, so it is the Nx project name. With several workspaces two crates can share a name. Deriving unique names automatically, for example from paths, would make names unpredictable and would change them when a second crate appears. A collision is therefore an error naming both paths, and the user fixes it with a per-crate name or a per-workspace prefix in metadata. Because commands always use the real package name and manifest path, the Nx name is free to differ.
+The crate name is what a Rust developer types, so it is the Nx project name. With several workspaces two crates can share a name. Deriving unique names automatically, for example from paths, would make names unpredictable and would change them when a second crate appears. A collision is therefore an error naming both paths, and the user fixes it with a per-crate name or a per-workspace prefix in metadata. Because commands always use the real package name and manifest path, the Nx name is free to differ. A crate whose folder also is a JS project is the exception. Nx applies `package.json` and `project.json` after every plugin, so the name set there wins, and neither the crate name nor its `name` override can change it ([[EVD-NX-PROJECT-MERGE]]).
 :::
 
 :::mara decision ADR-ALL-DEP-KINDS
@@ -580,6 +580,9 @@ The workspace was a toy, so this says nothing about how long the call takes on a
 :status: accepted
 :supports: RISK-MIXED-PROJECT-MERGE
 :supports: REQ-WORKSPACE-PROJECT
+:supports: REQ-PROJECT-NAMES
+:supports: ADR-PROJECT-NAMES
+:supports: DES-PROJECT-GRAPH
 
 An experiment on 13 November 2026 with `nx` and `@nx/js` 24.0.6, TypeScript 6.0.3, pnpm 12.18.0, Node 26.12.0 and cargo 1.100.0 on Linux, together with a reading of the same `nx` package (`project-graph/utils/project-configuration-utils.js`, `project-configuration/project-nodes-manager.js` and `target-merging.js`, `plugins/package-json/create-nodes.js`).
 
@@ -593,7 +596,7 @@ The throwaway pnpm workspace, outside this repository, had a Cargo workspace at 
 - **Workspace project at the root.** Without a root `project.json` and without an `nx` key in the root `package.json`, the workspace project stood alone under the stand-in's name. With either, it merged into the root project and took that file's name. The root scripts `audit` and `lint` and a `project.json` target `fmt` replaced or joined the workspace targets by the rules above, and the merged project depended on every member.
 - **Collisions.** A crate and a JS package with one name in different folders made Nx fail with its own message, "The following projects are defined in multiple locations", which lists both folders and recommends a `project.json`. A lookup by root in `context.projects` finds only one of two projects that share a name. When the stand-in returned an edge with the missing end undefined, Nx failed with "Cannot read properties of undefined (reading '1')" instead.
 
-For a crate folder that also is a JS project, this contradicts the rule of [[REQ-PROJECT-NAMES]], [[ADR-PROJECT-NAMES]] and [[DES-PROJECT-GRAPH]] that a project is named after its crate or its `name` override: no plugin listed in `nx.json` can set that project's name. The stand-in modelled the planned plugin; the plugin itself and other Nx versions were not tested.
+For a crate folder that also is a JS project, no plugin listed in `nx.json` can set the project's name. [[REQ-PROJECT-NAMES]], [[ADR-PROJECT-NAMES]] and [[DES-PROJECT-GRAPH]] therefore name such a project by its `package.json` or `project.json`; until 13 November 2026 they named every project after its crate or its `name` override. The stand-in modelled the planned plugin; the plugin itself and other Nx versions were not tested.
 :::
 
 :::mara evidence EVD-NX-FORMAT
