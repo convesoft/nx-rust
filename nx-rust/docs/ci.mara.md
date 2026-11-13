@@ -28,10 +28,25 @@ Every job that runs `nx` needs cargo, also a job that only builds JS projects,
 because Nx asks Cargo for the crates when it builds the project graph
 ([Setup](setup.mara.md)).
 
-Set `NX_RUST_LOCKED=true` in pipelines. Every cargo command then passes
-`--locked` and fails if `Cargo.lock` is out of date, instead of updating it as
-plain cargo would. The exceptions are `update`, because changing the lockfile
-is its job, and `fmt` and `fmt-check`, because `cargo fmt` rejects `--locked`.
+Set `NX_RUST_LOCKED=true` in pipelines. Every cargo command that a task runs
+then passes `--locked` and fails if `Cargo.lock` is out of date, instead of
+updating it as plain cargo would. The exceptions are `update`, because changing
+the lockfile is its job, and `fmt` and `fmt-check`, because `cargo fmt` rejects
+`--locked`.
+
+A task that Nx restores from the cache runs no cargo at all, and locked mode is
+not part of its key. A result that a developer stored before cargo updated
+their lockfile therefore passes in CI although the committed `Cargo.lock` is
+out of date. To catch that every time, check each workspace with a command of
+its own, outside Nx:
+
+```sh
+(cd rust && cargo metadata --format-version 1 --locked > /dev/null)
+```
+
+It fails on an outdated `Cargo.lock` without changing it and compiles nothing.
+It resolves the workspace's dependencies, so like a build it needs the
+registry or a filled Cargo home.
 
 To fail a pipeline on compiler and clippy warnings without changing what
 developers get, set `CARGO_BUILD_WARNINGS=deny` in it; Cargo honours it from

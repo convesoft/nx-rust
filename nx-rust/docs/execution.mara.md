@@ -65,6 +65,10 @@ one of three strategies:
 | `cargo`           | You opt in; experimental                       | Cargo's `resolver.feature-unification = "workspace"`                              | Needs a nightly flag until Cargo stabilises it           |
 | `workspace-build` | Fallback                                       | Build the whole workspace, then filter which tests run                            | Compiles unaffected crates; needs a warm build directory |
 
+To choose a strategy yourself, set `featureUnification` in
+`[workspace.metadata.nx]` of one workspace, or in the plugin options for all of
+them ([Configuration](configuration.mara.md#all-settings)).
+
 With `hakari`, the plugin adds what hakari alone does not cover:
 
 - If one workspace member switches on a feature of another member, the plugin
@@ -164,5 +168,5 @@ Whether hakari unifies features between workspace crates is not confirmed ([[RIS
 
 Feature sets are Nx configurations at workspace level: the default features and all features. A crate that needs another set either names single features as `crate/feature` or forms its own group. Because features are target options, Nx hashes them ([[DES-INPUTS]]).
 
-A platform triple for the same kind of artifact is an option of the target. A different kind of artifact gets its own named target ([[ADR-ARTIFACT-TARGET-NAMES]]). A non-host triple is a group of its own and builds only the selected crates, because building a whole workspace for such a triple would include crates that cannot target it. v1 runs tests on the host triple only.
+A platform triple for the same kind of artifact is an option of the target, `targetTriple` ([[DES-PLUGIN-OPTIONS]]). A different kind of artifact gets its own named target ([[ADR-ARTIFACT-TARGET-NAMES]]). A non-host triple is a group of its own and builds only the selected crates, because building a whole workspace for such a triple would include crates that cannot target it. v1 runs tests on the host triple only.
 :::

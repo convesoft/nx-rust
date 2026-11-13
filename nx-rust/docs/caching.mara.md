@@ -27,7 +27,12 @@ cache at all.
 
 The whole crate folder is an input, so a README, a template or a migration
 that a macro or build script reads is covered, at the price that a change to
-any file in the crate runs its tasks again.
+any file in the crate runs its tasks again. You can leave files out with a
+negated pattern in a target's `inputs`
+([Configuration](configuration.mara.md#changing-an-inferred-target)). That is
+your statement that the target does not read them: if a macro such as
+`include_str!`, a build script or a test still reads an excluded file, Nx
+restores results produced with its old content.
 
 If a build script or test reads something outside this list, add it: an
 environment variable, or a command whose output should be part of the key.
@@ -36,9 +41,16 @@ Typical cases are a system library version or a code generator.
 ```toml
 # rust/Cargo.toml
 [workspace.metadata.nx]
-env = ["PROTOC", "DATABASE_URL"]
+envInputs = ["PROTOC", "DATABASE_URL"]
 runtimeInputs = ["protoc --version"]
 ```
+
+`envInputs` and `runtimeInputs` work in the plugin options for every crate, in
+`[workspace.metadata.nx]` for the members of a workspace and in
+`[package.metadata.nx]` for one crate. The three add up, and what a crate adds
+also reaches the keys of the crates that depend on it, because they compile it
+too. An input that you add to one target's `inputs` stays with that target
+([Configuration](configuration.mara.md#changing-an-inferred-target)).
 
 Files **outside** the crate that a build script names with
 `cargo::rerun-if-changed`, or that a macro such as `include_str!` pulls in, are
@@ -63,6 +75,11 @@ are those at the workspace root and above it.
   targets never pass it: `update`, which exists to change the lockfile, and
   `fmt` and `fmt-check`, because `cargo fmt` reads no lockfile and rejects the
   flag. Building the project graph never touches `Cargo.lock`.
+- Locked mode guards only the tasks that run. A task restored from the cache
+  runs no cargo, and its key does not depend on locked mode, so a result that
+  a developer stored before Cargo updated the lockfile can pass in CI. To fail
+  on an outdated `Cargo.lock` every time, run the check under
+  [Continuous integration](ci.mara.md#cache-two-things-in-two-places).
 
 ## What is stored
 
@@ -126,7 +143,7 @@ add an input that tells them apart ([[RISK-HOST-ENVIRONMENT]]).
 :status: accepted
 :satisfies: NEED-CORRECT-CACHE
 
-The cache key of a crate's cached target covers every file in the crate's folder, the workspace files that apply to it, every `rust-toolchain.toml` and `.cargo/config.toml` at any level between the crate and the repository root, the configuration files of the tool the target runs, and the same files of every crate it depends on through normal, build or dev-dependencies. A path dependency that has no Nx project contributes its whole folder to the key of every crate that depends on it. Inputs name real paths per project, because a repository can hold several lockfiles and toolchain files.
+The cache key of a crate's cached target covers every file in the crate's folder, the workspace files that apply to it, every `rust-toolchain.toml` and `.cargo/config.toml` at any level between the crate and the repository root, the configuration files of the tool the target runs, and the same files of every crate it depends on through normal, build or dev-dependencies. A path dependency that has no Nx project contributes its whole folder to the key of every crate that depends on it. Inputs name real paths per project, because a repository can hold several lockfiles and toolchain files. A negated pattern in the repository's own configuration of a target removes the files it matches from that target's key, on the repository's responsibility.
 :::
 
 :::mara requirement REQ-ENV-ALLOWLIST
@@ -190,18 +207,18 @@ Open: how the plugin learns these paths without running the build, and what it d
 
 Every cached target declares its inputs as Nx inputs. The plugin has no custom hasher ([[ADR-DECLARED-INPUTS]]).
 
-| Input                 | Declared as                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Crate files           | One fileset for the crate's project: every file under the crate's folder that belongs to no nested project, without the files an artifact target generates there ([[DES-ARTIFACT-STEPS]]). A list of source folders would miss files that macros and build scripts read, such as a README, templates or migrations ([[ADR-DECLARED-INPUTS]]).                                                                                                |
-| Workspace files       | The real paths of the root `Cargo.toml` of the crate's workspace and of every `rust-toolchain.toml`, `rust-toolchain` and `.cargo/config.toml` between the crate and the repository root. A repository-wide named input cannot point at several lockfiles, so these are per project.                                                                                                                                                         |
-| Dependency sources    | The crate-file inputs of all dependencies, through `^` inputs over the edges in [[DES-PROJECT-GRAPH]].                                                                                                                                                                                                                                                                                                                                       |
-| Path dependencies     | For a path dependency that is no Nx project, because it is excluded, ignored or outside the repository, a fileset for its folder on every crate that depends on it, directly or through other crates. Where Nx cannot see those files, the plugin warns ([[DES-DIAGNOSTICS]]).                                                                                                                                                               |
-| External dependencies | [[REQ-EXTERNAL-DEPS]]; the mechanism is [[DES-LOCKFILE-HASHING]]. Until that is specified, the workspace's whole `Cargo.lock` is an input.                                                                                                                                                                                                                                                                                                   |
-| Tool configuration    | On `lint`, every `clippy.toml` and `.clippy.toml` between the crate and the repository root. On `fmt-check`, every `rustfmt.toml` and `.rustfmt.toml` on the same path. On `test` with the nextest runner, the workspace's `.config/nextest.toml`.                                                                                                                                                                                           |
-| Environment           | One `env` input per variable in the list below, plus the variables the repository adds.                                                                                                                                                                                                                                                                                                                                                      |
-| Toolchain             | A `runtime` input that runs `rustc -Vv` in the root folder of the crate's workspace, where its cargo commands run ([[DES-INVOCATION]]). The toolchain is thereby resolved as cargo will resolve it: through rustup's toolchain files, overrides and `RUSTUP_TOOLCHAIN` where rustup is installed, and through `PATH` where it is not. The folder is part of the command, so workspaces with different toolchains never share one evaluation. |
-| Options               | Features, profile and target triple are target options, which Nx hashes.                                                                                                                                                                                                                                                                                                                                                                     |
-| Extra                 | Runtime commands the repository adds.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Input                 | Declared as                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Crate files           | One fileset for the crate's project: every file under the crate's folder that belongs to no nested project, without the files an artifact target generates there ([[DES-ARTIFACT-STEPS]]). A list of source folders would miss files that macros and build scripts read, such as a README, templates or migrations ([[ADR-DECLARED-INPUTS]]). A negated pattern in the repository's own `inputs` of a target removes files from it, on the repository's responsibility ([[DES-PLUGIN-OPTIONS]]). |
+| Workspace files       | The real paths of the root `Cargo.toml` of the crate's workspace and of every `rust-toolchain.toml`, `rust-toolchain` and `.cargo/config.toml` between the crate and the repository root. A repository-wide named input cannot point at several lockfiles, so these are per project.                                                                                                                                                                                                             |
+| Dependency sources    | The crate-file inputs of all dependencies, through `^` inputs over the edges in [[DES-PROJECT-GRAPH]].                                                                                                                                                                                                                                                                                                                                                                                           |
+| Path dependencies     | For a path dependency that is no Nx project, because it is excluded, ignored or outside the repository, a fileset for its folder on every crate that depends on it, directly or through other crates. Where Nx cannot see those files, the plugin warns ([[DES-DIAGNOSTICS]]).                                                                                                                                                                                                                   |
+| External dependencies | [[REQ-EXTERNAL-DEPS]]; the mechanism is [[DES-LOCKFILE-HASHING]]. Until that is specified, the workspace's whole `Cargo.lock` is an input.                                                                                                                                                                                                                                                                                                                                                       |
+| Tool configuration    | On `lint`, every `clippy.toml` and `.clippy.toml` between the crate and the repository root. On `fmt-check`, every `rustfmt.toml` and `.rustfmt.toml` on the same path. On `test` with the nextest runner, the workspace's `.config/nextest.toml`.                                                                                                                                                                                                                                               |
+| Environment           | One `env` input per variable in the list below, plus the variables the repository adds.                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Toolchain             | A `runtime` input that runs `rustc -Vv` in the root folder of the crate's workspace, where its cargo commands run ([[DES-INVOCATION]]). The toolchain is thereby resolved as cargo will resolve it: through rustup's toolchain files, overrides and `RUSTUP_TOOLCHAIN` where rustup is installed, and through `PATH` where it is not. The folder is part of the command, so workspaces with different toolchains never share one evaluation.                                                     |
+| Options               | Features, profile and target triple are target options, which Nx hashes.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Extra                 | Runtime commands the repository adds.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 The environment list:
 
@@ -212,6 +229,8 @@ The environment list:
 - `OPENSSL_DIR`, `OPENSSL_LIB_DIR`, `OPENSSL_INCLUDE_DIR`, `OPENSSL_STATIC` and `OPENSSL_NO_VENDOR`.
 - `CLIPPY_CONF_DIR`, on `lint` only.
 - `CARGO_BUILD_WARNINGS`, on every target that compiles: `build`, `check`, `lint`, `test`, `bench`, `run`, `doc` and the artifact targets, the uncached `bench` and `run` included. Cargo's `build.warnings` setting turns warnings into failures, so a result that passed with warnings allowed must not be restored where they are denied ([[EVD-CARGO-TARGET-COMMANDS]]).
+
+The variables and commands that the repository adds, with `envInputs` and `runtimeInputs` in the plugin options, in the workspace table or in a crate's table ([[DES-PLUGIN-OPTIONS]]), go into the crate's own named input, the one that its dependents hash through `^` inputs, and not onto single targets. A dependent's key therefore changes with them, also in another workspace, because Nx hashes the `env` and `runtime` entries of a dependency's named input into the dependent's key and those of a dependency's target into no other key ([[EVD-NX-24-OPTION-SEMANTICS]]).
 
 A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate is hashed with the crate's files, although it does not apply to the commands the plugin runs ([[DES-INVOCATION]]). An input the plugin cannot see is the repository's to declare, through the extra environment variables and commands ([[RISK-UNDECLARED-INPUTS]]).
 :::
@@ -264,5 +283,5 @@ Every cargo command of a task starts in the root folder of the crate's workspace
 
 The plugin adds no flag that changes what Cargo builds or where. It sets no build or artifact directory ([[DES-BUILD-DIRS]]) and passes only what the target's options ask for.
 
-By default the plugin does not pass `--locked`. Cargo may then create or update `Cargo.lock` during a task, exactly as it does for the same plain cargo command. That is Cargo's write, not the plugin's. With the `locked` option on, every cargo command of a task passes `--locked` and fails instead of changing the lockfile. Two kinds of command never pass the flag: `update`, whose purpose is to change the lockfile and which `--locked` fails whenever the lockfile would change, and the `cargo fmt` of `fmt` and `fmt-check`, which resolves no dependencies and rejects `--locked`. cargo-deny takes `--locked` like a cargo command, and cargo-audit only reads the lockfile ([[DES-WORKSPACE-TARGETS]]). Creating the graph never touches `Cargo.lock`, with or without the option, because its report is requested with `--no-deps` ([[DES-METADATA-REPORT]]). The environment variable `NX_RUST_LOCKED`, set to `true` or `false`, replaces the option for one run, which is how a pipeline switches it on without changing what developers get.
+By default the plugin does not pass `--locked`. Cargo may then create or update `Cargo.lock` during a task, exactly as it does for the same plain cargo command. That is Cargo's write, not the plugin's. With the `locked` option on, every cargo command of a task passes `--locked` and fails instead of changing the lockfile. Two kinds of command never pass the flag: `update`, whose purpose is to change the lockfile and which `--locked` fails whenever the lockfile would change, and the `cargo fmt` of `fmt` and `fmt-check`, which resolves no dependencies and rejects `--locked`. cargo-deny takes `--locked` like a cargo command, and cargo-audit only reads the lockfile ([[DES-WORKSPACE-TARGETS]]). Creating the graph never touches `Cargo.lock`, with or without the option, because its report is requested with `--no-deps` ([[DES-METADATA-REPORT]]). The environment variable `NX_RUST_LOCKED`, set to `true` or `false`, replaces the option for one run, which is how a pipeline switches it on without changing what developers get. Locked mode is no input of a task's key, so it guards only the tasks that run, and a pipeline that is to fail on an outdated lockfile runs `cargo metadata --format-version 1 --locked` in each workspace root as a command of its own, outside Nx's cache, which fails on such a lockfile without changing it ([[EVD-CARGO-LOCKED-CHECK]]).
 :::

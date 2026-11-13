@@ -37,7 +37,12 @@ Done when: the decision is accepted in Mara and `mara project validate` reports 
   - `run` takes an `args` option, a string. It is split at blanks outside quotes, quotes and backslashes work as in a POSIX shell, nothing is expanded or treated as an operator, and an unterminated quote is an error naming the option. A value that looks like a number arrives from Nx as a number and is rejected, so it needs a blank (`--args=" 3000"`) or `--`.
   - Arguments after `--` still go to the binary, with two limits from Nx: flags before `--` are dropped, and arguments after it are checked as options.
   - `VER-TARGETS` covers them.
-- `RISK-TARGET-DEFAULTS` now names the mitigation. `REQ-TARGET-DEFAULT-GUARD` and `DES-PLUGIN-OPTIONS` are unchanged.
+- `RISK-TARGET-DEFAULTS` now names the mitigation. `REQ-TARGET-DEFAULT-GUARD` is unchanged.
+- Reconciled with #16 (nxr-9f4w3f), which accepted `DES-PLUGIN-OPTIONS`:
+  - `args` is listed next to `bin` in its table of target options and in the guidance table, as `DES-TARGET-COMMANDS` defines it.
+  - Its rule for unknown keys points to `REQ-UNKNOWN-METADATA-OPTIONS` for target options.
+  - `DES-UNKNOWN-OPTIONS` says that Nx's `--verbose` adds no option and draws no line, because no schema declares `verbose` or sets `additionalProperties: true`.
+  - The diagnostics table and `VER-SETUP`'s list of `init` cases hold both pull requests' rows.
 - `DES-DIAGNOSTICS` (`setup.mara.md`, accepted in #9) has two new rows: the task-start warning and the graph-time error. `VER-SETUP` lists the graph-time error among the cases for which `init` fails and leaves `nx.json` unchanged.
 - User guidance: a section "Options that cargo does not use" and the `args` option under "Running binaries" in `targets.mara.md`, and a paragraph on unknown keys under `options` in `configuration.mara.md`.
 - The second task item was reworded for the "warn" outcome.

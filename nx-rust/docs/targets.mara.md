@@ -1,9 +1,6 @@
 # Targets
 
-> **Status:** specified, not implemented yet. Target names, commands, caching
-> and outputs are decided. The options that switch a target's flags have no
-> names yet; they are chosen in the option reference
-> ([Configuration](configuration.mara.md)).
+> **Status:** specified, not implemented yet.
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.
@@ -49,8 +46,7 @@ editor and Nx compile the same things and reuse each other's work
 The flag comes from an option of the target that is on by default. A crate whose
 benches need a nightly compiler, which stable rejects under `--all-targets`, can
 switch it off in its `[package.metadata.nx.targets.check.options]` and
-`[package.metadata.nx.targets.lint.options]`. The option's name is not settled
-yet.
+`[package.metadata.nx.targets.lint.options]` with `allTargets = false`.
 
 ## Warnings
 
@@ -94,10 +90,10 @@ needs a blank, as in `--args=" 3000"`, or goes after `--`, because Nx would
 otherwise read it as a number and reject it.
 
 A crate with several binaries needs to say which one `run` starts: set
-`default-run` in its `[package]` table, or pass the binary through an option of
-the `run` target, on the command line or in the crate's metadata. Without
-either, cargo stops and lists the binaries. The option's name is not settled
-yet.
+`default-run` in its `[package]` table, or pass the binary through the `bin`
+option of the `run` target, on the command line as in `nx run api:run
+--bin=migrate` or in the crate's metadata. Without either, cargo stops and
+lists the binaries.
 
 `run` is not a continuous task: a target that depends on it waits until the
 binary exits, which is what a code generator or a migration needs. A crate that
@@ -128,7 +124,10 @@ these targets:
   artifact directory, as one site with one search index. A cache hit restores
   the whole folder. If two workspaces share one artifact directory, for example
   through a `target-dir` set above both, `doc` runs uncached and the plugin says
-  so: restoring one workspace's folder would delete the other's pages.
+  so: restoring one workspace's folder would delete the other's pages. It
+  passes `--no-deps`; with `noDeps = false` in
+  `[workspace.metadata.nx.project.targets.doc.options]` it documents the
+  dependencies too.
 - **`audit`** runs `cargo audit` against the workspace's `Cargo.lock`, with the
   settings in `.cargo/audit.toml` of the workspace root.
 - **`deny`** runs `cargo deny check`. It exists only where `deny.toml`,
@@ -347,7 +346,7 @@ No inferred target has a `dependsOn` entry that names another Rust crate's targe
 
 Each command starts in the root folder of the crate's workspace, names the crate by its real package name and passes `--locked` as the `locked` option says ([[DES-INVOCATION]]), except `fmt` and `fmt-check`: `cargo fmt` resolves no dependencies and rejects the flag ([[EVD-CARGO-TARGET-COMMANDS]]). Batched tasks share cargo calls as [[DES-BATCH]] groups them; `cargo fmt` takes several `-p` as the cargo commands do.
 
-**Flags as options.** A flag beyond the package selection comes from an option of the target, so that a command passes only what its options ask for ([[DES-INVOCATION]]). `--all-targets` on `check` and `lint` is such an option, on by default. A crate switches it off in the options of the target in its `[package.metadata.nx]` table ([[DES-METADATA-TABLES]]), for example when its benches need a nightly compiler, which stable rejects under `--all-targets`. Tasks whose options differ never share a cargo call ([[TERM-GROUP]]). The name of the option belongs to the option reference ([[DES-PLUGIN-OPTIONS]]). `--all-targets` is what rust-analyzer passes by default, so `check` compiles the units the editor compiles and the two reuse each other's work ([[EVD-CARGO-TARGET-COMMANDS]]).
+**Flags as options.** A flag beyond the package selection comes from an option of the target, so that a command passes only what its options ask for ([[DES-INVOCATION]]). `--all-targets` on `check` and `lint` is such an option, on by default. A crate switches it off in the options of the target in its `[package.metadata.nx]` table ([[DES-METADATA-TABLES]]), for example when its benches need a nightly compiler, which stable rejects under `--all-targets`. Tasks whose options differ never share a cargo call ([[TERM-GROUP]]). The option is `allTargets` ([[DES-PLUGIN-OPTIONS]]). `--all-targets` is what rust-analyzer passes by default, so `check` compiles the units the editor compiles and the two reuse each other's work ([[EVD-CARGO-TARGET-COMMANDS]]).
 
 **Warnings.** No target adds a flag that turns warnings into errors. A task fails on warnings where the repository says so through Cargo: lint levels in `[lints]` and `[workspace.lints]`, `build.warnings` in `.cargo/config.toml` or `CARGO_BUILD_WARNINGS`, which Cargo honours from 1.97 on, and `RUSTFLAGS`, all of which are cache inputs ([[DES-INPUTS]]). Passing `-D warnings` to clippy would differ from plain `cargo clippy` and check every selected member again whenever a developer alternates the two ([[EVD-CARGO-TARGET-COMMANDS]]).
 
@@ -355,7 +354,7 @@ Each command starts in the root folder of the crate's workspace, names the crate
 
 **bench.** The target has `parallelism: false`, so that Nx starts no other task while benchmarks run. Nx never puts such a task into a batch, so each `bench` task is a cargo call of its own ([[EVD-NX-24-TARGETS]]).
 
-**run.** One `run` target per crate. When the crate has several binaries, an option of the target passes `--bin`; it is set on the command line or in the crate's metadata, and its name belongs to the option reference ([[DES-PLUGIN-OPTIONS]]). Without it and without `default-run` in the manifest, cargo fails and lists the binaries. The `args` option, a string, gives the binary its arguments. It is split into words at blanks outside quotes. Single quotes, double quotes and backslashes quote and escape as in a POSIX shell, an empty pair of quotes is an empty word, and nothing is expanded or treated as an operator, so `|`, `;` and `>` are ordinary characters. An unterminated quote, or a backslash at the end, fails the task with a message that names the option. Arguments after `--` on the `nx` command line go to the binary too, after those of `args`, within two limits that come from Nx ([[EVD-NX-OPTION-VALIDATION]]). When the command has `--`, Nx drops the flags before it that Nx does not know itself, so `--bin` and `--args` cannot be combined with `--`. Nx also parses what follows `--` as options of the target and checks them against its schema before the executor runs, so an argument with the name of one of `run`'s options can be rejected. `--args` works in both cases. Nx also reads a value of `--args` that looks like a number as a number, so `--args=3000` and `--args="3000"` fail the schema. `--args=" 3000"`, with a blank, stays a string and gives the one word `3000`, and `-- 3000` passes `3000` as well. `run` uses an executor that has no batch implementation, because `cargo run` accepts one package only, while Nx hands every task of an executor with a batch implementation and `preferBatch` to one batch, also the tasks of `nx run-many -t run` ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `run` is not a continuous task: a task that depends on it waits until the binary exits. A crate that serves something sets `continuous` and `readyWhen` on its `run` in its metadata ([[DES-METADATA-TABLES]]). `nx run <project>` is Nx's own syntax and needs a target, so the short form is `nx run <project>:run`.
+**run.** One `run` target per crate. When the crate has several binaries, an option of the target, `bin`, passes `--bin`; it is set on the command line or in the crate's metadata ([[DES-PLUGIN-OPTIONS]]). Without it and without `default-run` in the manifest, cargo fails and lists the binaries. The `args` option, a string, gives the binary its arguments. It is split into words at blanks outside quotes. Single quotes, double quotes and backslashes quote and escape as in a POSIX shell, an empty pair of quotes is an empty word, and nothing is expanded or treated as an operator, so `|`, `;` and `>` are ordinary characters. An unterminated quote, or a backslash at the end, fails the task with a message that names the option. Arguments after `--` on the `nx` command line go to the binary too, after those of `args`, within two limits that come from Nx ([[EVD-NX-OPTION-VALIDATION]]). When the command has `--`, Nx drops the flags before it that Nx does not know itself, so `--bin` and `--args` cannot be combined with `--`. Nx also parses what follows `--` as options of the target and checks them against its schema before the executor runs, so an argument with the name of one of `run`'s options can be rejected. `--args` works in both cases. Nx also reads a value of `--args` that looks like a number as a number, so `--args=3000` and `--args="3000"` fail the schema. `--args=" 3000"`, with a blank, stays a string and gives the one word `3000`, and `-- 3000` passes `3000` as well. `run` uses an executor that has no batch implementation, because `cargo run` accepts one package only, while Nx hands every task of an executor with a batch implementation and `preferBatch` to one batch, also the tasks of `nx run-many -t run` ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `run` is not a continuous task: a task that depends on it waits until the binary exits. A crate that serves something sets `continuous` and `readyWhen` on its `run` in its metadata ([[DES-METADATA-TABLES]]). `nx run <project>` is Nx's own syntax and needs a target, so the short form is `nx run <project>:run`.
 
 The targets of the workspace project are [[DES-WORKSPACE-TARGETS]].
 :::
@@ -377,7 +376,7 @@ The [[TERM-WORKSPACE-PROJECT]] hosts the targets that concern a whole Cargo work
 
 The coverage baseline target of [[DES-BASELINE]] is on the same project, in a workspace with `affectedTests` only.
 
-**doc.** The workspace is documented in one call and its documentation is one site. rustdoc writes a folder per documented crate and files that every run merges, such as the search index and the list of crates. The output is therefore the whole `doc` folder of the [[TERM-ARTIFACT-DIR]], and a cache hit restores what a run writes. Outputs per crate could not do that: Nx restores a folder output by replacing it, so overlapping folders would delete each other's pages, and a crate's own folder lacks the shared styles and search index ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `--no-deps` comes from an option of the target that is on by default, as the flags of [[DES-TARGET-COMMANDS]] do; where it is set and its name belong to the option reference ([[DES-PLUGIN-OPTIONS]]).
+**doc.** The workspace is documented in one call and its documentation is one site. rustdoc writes a folder per documented crate and files that every run merges, such as the search index and the list of crates. The output is therefore the whole `doc` folder of the [[TERM-ARTIFACT-DIR]], and a cache hit restores what a run writes. Outputs per crate could not do that: Nx restores a folder output by replacing it, so overlapping folders would delete each other's pages, and a crate's own folder lacks the shared styles and search index ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `--no-deps` comes from an option of the target that is on by default, as the flags of [[DES-TARGET-COMMANDS]] do: `noDeps`, set like the other options of the workspace project's targets ([[DES-PLUGIN-OPTIONS]]).
 
 **Existence.** Whether a tool is installed never decides whether a target exists. Every machine thus computes the same graph, and a missing tool cannot make `nx run-many -t audit` leave a workspace out without a word ([[ADR-CARGO-SOURCE-OF-TRUTH]], [[REQ-DIAGNOSTICS]]). A task whose tool is missing fails with the message of [[DES-DIAGNOSTICS]]. `deny` exists only where cargo-deny is configured, because without a configuration file cargo-deny falls back to defaults that reject every license ([[EVD-CARGO-AUDIT-DENY]]).
 
