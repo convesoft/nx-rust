@@ -1,20 +1,21 @@
 # Setup and compatibility
 
 > **Status:** `nx add`, the `library` and `binary` generators and the checks
-> of the Nx and Cargo versions are implemented. `init` stops for each problem
-> that graph creation detects so far: an unsupported Nx or Cargo, an installed
-> Nx whose version cannot be read, a missing cargo, a pinned toolchain that is
-> not installed, a failing `cargo metadata`, two crates with one project name,
-> and invalid `targetNames` or `locked`. Of the tools below it counts only
-> cargo-deny as needed by your settings. Graph creation and `init` print the
+> of the Nx and Cargo versions are implemented. `init` stops for each error
+> that graph creation reports. Of the tools below it counts only cargo-deny as
+> needed by your settings. Graph creation and `init` print the
 > warnings for a newer Nx with `NX_RUST_ALLOW_UNSUPPORTED_NX`, for
 > redirections and path dependencies that reach a crate whose files Nx cannot
-> see or that cargo does not report, and for an artifact directory outside the
-> repository or shared by two workspaces. A task prints those that concern
-> its crate or workspace again, apart from the warnings about redirections and
-> for a newer Nx, and the other warnings are not implemented yet, nor are the
-> errors of a task for a missing tool (nxr-zqvnrh). The package is not published to
-> npm yet.
+> see or that cargo does not report, for redirections from configuration
+> outside the repository and for included configuration files that cannot be
+> read, for `targetDefaults` entries that change the inferred targets, for an
+> artifact directory outside the repository or shared by two workspaces, for
+> a target triple that Cargo's configuration chooses, and for Cargo's build or
+> artifact directory inside the repository where Nx does not ignore it. A task
+> prints again those that concern its crate or workspace, apart from the
+> warnings about redirections, `targetDefaults` and a newer Nx. The errors of a
+> task for a missing tool are not implemented yet (nxr-zqvnrh). The package is
+> not published to npm yet.
 
 ## What you need
 
@@ -325,6 +326,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 | A `targetDefaults` entry that turns on caching that the plugin leaves off, or replaces the `inputs`, `outputs` or `dependsOn` it declares, on a target of the plugin ([[DES-TARGET-DEFAULT-GUARD]])                                               | When the graph is created                          | Error                                                     |
 | A `[patch]` or `paths` entry from a configuration file outside the repository, which Nx does not watch; once per plugin entry ([[ADR-REDIRECTION-EDGES]])                                                                                         | When the graph is created                          | Warning                                                   |
 | A file that `include` names that is no valid TOML, or a crate without a project that `[patch]` or `[replace]` redirects to and `cargo metadata` fails for ([[DES-METADATA-REPORT]])                                                               | When the graph is created                          | Warning                                                   |
+| A path dependency without a project that `cargo metadata` does not report because it is no member of the workspace whose folder holds it ([[DES-METADATA-REPORT]])                                                                                | When the graph is created                          | Warning                                                   |
 | A path dependency without a project whose files Nx cannot see ([[DES-INPUTS]])                                                                                                                                                                    | When the graph is created                          | Warning                                                   |
 | A `targetDefaults` entry that adds a dependency on tasks of other projects, such as `^build`, to a target of the plugin ([[DES-TARGET-DEFAULT-GUARD]])                                                                                            | When the graph is created                          | Warning                                                   |
 | A target of the plugin that differs from what the plugin inferred, where the plugin cannot tell which configuration changed it, such as another plugin ([[DES-TARGET-DEFAULT-GUARD]])                                                             | When the graph is created                          | Warning                                                   |
@@ -357,7 +359,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 
 **Toolchains.** Graph creation and the toolchain input of a task's cache key do not let rustup install a toolchain that a workspace pins and that is missing. Graph creation fails with a message that names the toolchain and the workspace. The toolchain input cannot fail a task, so it gives the task a key that matches no stored result, and the task keeps plain cargo's behaviour ([[ADR-GRAPH-NO-TOOLCHAIN-INSTALL]], [[DES-INPUTS]]).
 
-**Directories that Nx does not ignore.** Nx leaves out only what `.gitignore` and `.nxignore` exclude and a few fixed folders, `target` not among them, and `cargo new --vcs none` writes no `.gitignore` ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]). By default Cargo puts both its directories in the workspace folder, which for a standalone crate is the crate's folder, all of whose files are inputs ([[EVD-CARGO-DIRECTORIES]], [[REQ-INPUT-FILES]]). When Cargo's build or artifact directory lies inside the repository and Nx does not ignore it, the warning names the directory and advises adding it to `.gitignore`.
+**Directories that Nx does not ignore.** Nx leaves out only what `.gitignore` and `.nxignore` exclude and a few fixed folders, `target` not among them, and `cargo new --vcs none` writes no `.gitignore` ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]). By default Cargo puts both its directories in the workspace folder, which for a standalone crate is the crate's folder, all of whose files are inputs ([[EVD-CARGO-DIRECTORIES]], [[REQ-INPUT-FILES]]). When Cargo's build or artifact directory lies inside the repository and Nx does not ignore it, the warning names the directory and advises adding it to `.gitignore`. The plugin applies these rules as Nx itself reads them from the ignore files on disk, so it warns also before Cargo has created the directory, and where the installed Nx lacks that reading it does not warn. A directory that several workspaces use gets one warning, which names them all, and the tasks of each of them print it.
 
 **Missing tools.** The message names the tool, the target or setting that needs it, and how to get it. The plugin installs nothing ([[ADR-V1-SCOPE]]).
 :::

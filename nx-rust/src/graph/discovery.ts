@@ -67,6 +67,13 @@ export interface CargoDiscovery {
   pathDependencyReports: PathDependencyReport[];
   /** What graph creation has to tell the user without failing, one message each. */
   warnings: string[];
+  /**
+   * The warning, also in `warnings`, for each path dependency whose report
+   * cargo refused because the crate is no member of the workspace that holds
+   * it, by the real path of the crate's folder: the projects of the crates
+   * that reach it repeat it at the start of their tasks.
+   */
+  unreportedPathDependencies: Map<string, string>;
 }
 
 /**
@@ -140,14 +147,22 @@ export async function discoverWorkspaces(
       configIncludes: found.includedFiles,
     });
   }
+  const unreportedPathDependencies = new Map<string, string>();
   const pathDependencyReports = await readPathDependencies(
     workspaces,
     workspaceRoot,
     reports,
     warnings,
+    unreportedPathDependencies,
   );
   warnings.push(...outsideRedirectionWarnings(workspaces, workspaceRoot));
-  return { workspaceRoot, workspaces, pathDependencyReports, warnings: [...new Set(warnings)] };
+  return {
+    workspaceRoot,
+    workspaces,
+    pathDependencyReports,
+    warnings: [...new Set(warnings)],
+    unreportedPathDependencies,
+  };
 }
 
 /**
@@ -176,8 +191,8 @@ function outsideRedirectionWarnings(workspaces: CargoWorkspace[], workspaceRoot:
   );
 }
 
-// "the Cargo workspace in rust", or "the Cargo workspaces in rust and shared".
-function describeWorkspaces(folders: string[]): string {
+/** "the Cargo workspace in rust", or "the Cargo workspaces in rust and shared". */
+export function describeWorkspaces(folders: string[]): string {
   const named = folders.map((folder) => (folder === "." ? "the repository root" : folder));
   if (named.length === 1) {
     return folders[0] === "."
@@ -203,7 +218,12 @@ function describeWorkspaces(folders: string[]): string {
  * When cargo fails for a redirected crate, as for a crate inside a
  * workspace's folder that is not its member, which cargo builds as a patch
  * but does not report, graph creation goes on: a warning in `warnings` names
- * the manifest and cargo's message, and the crate has no report.
+ * the manifest and cargo's message, and the crate has no report. So it does
+ * for a path dependency that cargo does not report because it is no member
+ * of the workspace it lies in ({@link isUnreportedNonMember}), which cargo
+ * builds as a dependency all the same; any other failure of a path
+ * dependency's report fails graph creation. Such a path dependency's warning
+ * also goes into `unreported`, by the real path of the crate's folder.
  *
  * A package of a directory source that no workspace report lists as a
  * member gets no report ({@link isDirectorySourcePackage}); like any crate
@@ -215,6 +235,7 @@ async function readPathDependencies(
   workspaceRoot: string,
   reports: ComputationReports,
   warnings: string[],
+  unreported: Map<string, string>,
 ): Promise<PathDependencyReport[]> {
   const withProject = new Set(
     workspaces.flatMap((workspace) => workspace.members.map((pkg) => pkg.manifest_path)),
@@ -229,13 +250,15 @@ async function readPathDependencies(
   const visited = new Set<string>();
   const queue: { pkg: CargoPackage; cwd: string }[] = [];
   // Requests the report of a crate without a project, unless one covers it
-  // already, and queues the crate so that its path dependencies follow. With
-  // `failures`, a report that cargo fails goes there instead of failing.
+  // already, and queues the crate so that its path dependencies follow. A
+  // failure of cargo that graph creation goes on after, for a crate reached
+  // by path or by redirection, becomes a warning and leaves the crate
+  // without a report.
   const reach = async (
     manifest: string,
     cwd: string,
     subject: () => string,
-    failures?: string[],
+    via: "path" | "redirection",
   ) => {
     if (withProject.has(manifest) || visited.has(manifest)) {
       return;
@@ -251,9 +274,13 @@ async function readPathDependencies(
         cwd,
         workspaceRoot,
         reports,
-        failures,
+        via === "path" ? isUnreportedNonMember : () => true,
       );
-      if (report === undefined) {
+      if (typeof report === "string") {
+        warnings.push(report);
+        if (via === "path") {
+          unreported.set(realPath(dirname(manifest)), report);
+        }
         return;
       }
       pathDependencyReports.push({ manifest: repositoryPath(workspaceRoot, manifest), report });
@@ -278,6 +305,7 @@ async function readPathDependencies(
             cwd,
             () =>
               `a path dependency of ${displayPath(workspaceRoot, dependent.manifest_path)} that has no project of its own`,
+            "path",
           );
         }
       }
@@ -304,7 +332,7 @@ async function readPathDependencies(
         workspace.report.workspace_root,
         () =>
           `a crate that ${displayPath(workspaceRoot, file)} redirects dependencies of the Cargo workspace in ${workspace.root} to, which has no project of its own`,
-        warnings,
+        "redirection",
       );
       await drain();
     }
@@ -346,32 +374,40 @@ async function readWorkspace(
   }
 }
 
-// Reads a crate without a project. With `failures`, a failure of cargo
-// itself adds a warning there and gives no report.
+/**
+ * Whether cargo refused the report of a crate because the crate lies in the
+ * folder of a workspace, or names one in `package.workspace`, without being
+ * its member. Cargo checks that only for the crate it reports, never for a
+ * path dependency or patch that it builds for another workspace, so such a
+ * crate builds as before. Cargo 1.91 and later state it with this message.
+ */
+function isUnreportedNonMember(error: CargoError): boolean {
+  return error.stderr.includes("current package believes it's in a workspace when it's not");
+}
+
+// Reads a crate without a project. A failure of cargo itself that `goesOn`
+// accepts gives the warning to print instead of a report.
 async function readPathDependency(
   manifest: string,
   subject: string,
   cwd: string,
   workspaceRoot: string,
   reports: ComputationReports,
-  failures?: string[],
-): Promise<CargoMetadata | undefined> {
+  goesOn: (error: CargoError) => boolean,
+): Promise<CargoMetadata | string> {
   const shown = displayPath(workspaceRoot, manifest);
   const folder = displayPath(workspaceRoot, cwd) || "the repository root";
   try {
     return await reports.request(manifest, cwd);
   } catch (error) {
-    if (failures !== undefined && error instanceof CargoError && !error.notStarted) {
+    if (error instanceof CargoError && !error.notStarted && goesOn(error)) {
       const output = error.stderr.trim();
-      failures.push(
-        [
-          `nx-rust: \`cargo metadata\` failed for ${shown}, ${subject}: ${error.message}.`,
-          ...(output === "" ? [] : [output]),
-          "nx-rust goes on without its report, so it does not follow the path dependencies behind that crate; the crates that may use it take its whole folder into their cache keys.",
-          `To have them followed, fix what cargo reports, so that \`cargo metadata --no-deps --manifest-path ${shown}\` succeeds in ${folder}.`,
-        ].join("\n"),
-      );
-      return undefined;
+      return [
+        `nx-rust: \`cargo metadata\` failed for ${shown}, ${subject}: ${error.message}.`,
+        ...(output === "" ? [] : [output]),
+        "nx-rust goes on without its report, so it does not follow the path dependencies behind that crate; the crates that may use it take its whole folder into their cache keys.",
+        `To have them followed, fix what cargo reports, so that \`cargo metadata --no-deps --manifest-path ${shown}\` succeeds in ${folder}.`,
+      ].join("\n");
     }
     throw new Error(
       failureMessage(error, `${shown}, ${subject}`, [
