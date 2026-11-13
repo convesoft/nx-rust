@@ -680,6 +680,30 @@ describe("init", () => {
         },
         'The file rust/crates/model/project.json sets the option "pluginVersion" on targets that nx-rust infers. Only nx-rust sets this option: it carries the plugin\'s version into the cache key, and another value would take its place, so that Nx could restore results of another version of the plugin. Remove it there. It reaches:\n  - model (rust/crates/model/Cargo.toml): "build"',
       ],
+      [
+        "a fileInputs pattern that resolves into Cargo's directories",
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx]\nfileInputs = ["../../target/debug/model.d"]\n`,
+        },
+        'rust/crates/model/Cargo.toml: the fileInputs pattern "../../target/debug/model.d" resolves into rust/target, Cargo\'s build and artifact directory of the Cargo workspace in rust.',
+      ],
+      [
+        "a fileInputs pattern that resolves outside the repository",
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx]\nfileInputs = ["../../../../outside.txt"]\n`,
+        },
+        "outside.txt, outside the repository, whose files Nx does not track. To key the crate's tasks on such files, add a command to runtimeInputs",
+      ],
+      [
+        "a fileInputs pattern with a .. segment after a glob character",
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx]\nfileInputs = ["../*/../model/README.md"]\n`,
+        },
+        'rust/crates/model/Cargo.toml: the fileInputs pattern "../*/../model/README.md" has a ".." segment after a glob character',
+      ],
       ...(
         [
           ['options = "broken"', 'has to be a table, not "broken".'],

@@ -1,6 +1,6 @@
 import type { TargetConfiguration } from "@nx/devkit";
 import { join, relative } from "node:path";
-import type { CargoPackage } from "../cargo/metadata";
+import type { CargoMetadata, CargoPackage } from "../cargo/metadata";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import { readLocked, readTargetNames, TargetNames } from "./options";
 import { targetFieldProblems } from "./target-fields";
@@ -416,6 +416,38 @@ function readPackageTable(
     artifacts: reader.has("artifacts") ? (artifacts as ArtifactKind[]) : undefined,
     ...readShared(reader, manifest),
   };
+}
+
+/**
+ * The `fileInputs` of a crate that another crate's inputs name by its
+ * folder, beside an edge, such as a path dependency without a project: those
+ * of its workspace's table and of its own, each with its manifest, as
+ * {@link readSettings} reads them for a project (`DES-INPUTS`). Only that key
+ * is read.
+ *
+ * @param report The `cargo metadata` report of the crate's workspace.
+ * @param problems Where a value of the wrong type is reported.
+ */
+// @mara implements DES-INPUTS
+export function readCrateFileInputs(
+  pkg: CargoPackage,
+  report: CargoMetadata,
+  repositoryRoot: string,
+  problems: string[],
+): FileInput[] {
+  const read = (metadata: unknown, manifestPath: string, table: MetadataTable): FileInput[] => {
+    const manifest = relative(repositoryRoot, manifestPath);
+    const parent =
+      table === "[package.metadata.nx]" ? "[package.metadata]" : "[workspace.metadata]";
+    const value = nxTable(metadata, manifest, parent, problems);
+    return new TableReader(manifest, table, value, problems)
+      .strings("fileInputs", "glob patterns")
+      .map((pattern) => ({ pattern, manifest }));
+  };
+  return [
+    ...read(report.metadata, join(report.workspace_root, "Cargo.toml"), "[workspace.metadata.nx]"),
+    ...read(pkg.metadata, pkg.manifest_path, "[package.metadata.nx]"),
+  ];
 }
 
 function readShared(reader: TableReader, manifest: string): SharedTable {

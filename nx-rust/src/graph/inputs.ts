@@ -64,7 +64,7 @@ export interface AddedInputs {
   /**
    * Filesets for the patterns of `fileInputs`, already resolved against the
    * folder of the manifest that holds them, with `includeIgnored`
-   * (nxr-d371vy).
+   * (`declaredFiles` in `declared-files.ts`).
    */
   fileInputs: readonly InputDefinition[];
 }
