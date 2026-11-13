@@ -22,8 +22,8 @@ nx build web          # builds image-codec's wasm package first, if needed
 The plugin reads it from the manifest. A library with
 `crate-type = ["cdylib"]` gets `napi-build` when the crate depends directly on
 `napi`, and `wasm-build` when it depends directly on `wasm-bindgen`. If the
-rule guesses wrong for a crate, name the artifacts yourself (the key name is a
-proposal until [[DES-PLUGIN-OPTIONS]] is accepted):
+rule guesses wrong for a crate, name the artifacts yourself in its own
+`Cargo.toml` ([Configuration](configuration.mara.md#all-settings)):
 
 ```toml
 [package.metadata.nx]

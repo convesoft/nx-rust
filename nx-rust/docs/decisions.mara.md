@@ -160,7 +160,7 @@ Final artifacts are the files that something other than Cargo consumes: executab
 
 Nx deprecates custom hashers and plans to remove them in Nx 25 ([[EVD-NX-24-INSPECTION]]). Task-based affected, the default in Nx 24, selects tasks by matching changed files against their declared inputs, so complete file inputs are also what make `nx affected` correct. Environment and runtime inputs only change keys: a change to them alone makes no task affected ([[EVD-NX-24-INPUT-SEMANTICS]]). All cache inputs are therefore declared: filesets, `^` inputs, environment variables, runtime commands and target options. Environment variables come from a fixed, extendable list, never the whole environment, because a key that includes everything never repeats.
 
-For files the choice goes the other way. The whole folder of a crate is an input, not a list of source folders. A list would invalidate less, but it misses what macros and build scripts read: a README included as crate documentation, templates, migrations, protocol definitions, and sources at a path the manifest names. Running a crate's tasks again after a change that could not affect them is the accepted side of that trade.
+For files the choice goes the other way. The whole folder of a crate is an input, not a list of source folders. A list would invalidate less, but it misses what macros and build scripts read: a README included as crate documentation, templates, migrations, protocol definitions, and sources at a path the manifest names. Running a crate's tasks again after a change that could not affect them is the accepted side of that trade. A negated pattern in the repository's own configuration takes files out of the folder's input, on the repository's responsibility.
 :::
 
 :::mara decision ADR-BATCH-EXECUTOR
@@ -837,6 +837,59 @@ An experiment and a reading of the `nx`, `@nx/js` and `@nx/workspace` 24.0.6 pac
 The targets of the experiment ran no cargo. The points marked with a source file were read, not run.
 :::
 
+:::mara evidence EVD-NX-24-OPTION-SEMANTICS
+:mid: 01M7AD4BCYERDMG40D5WH2XMAK
+:title: What Nx 24.0.6 does with dependency inputs, target merges and its own flags
+:status: accepted
+:supports: DES-PLUGIN-OPTIONS
+:supports: DES-INPUTS
+
+An experiment and a reading of the `nx` 24.0.6 package installed in this repository, on 13 November 2026, with Node.js 26.12.0.
+
+The experiment ran in a throwaway Git repository outside this one, with this repository's `node_modules` linked in. Its `nx.json` defined a named input `crate` as `["{projectRoot}/**/*"]`, and it had two projects with `project.json` files. Project `b` redefined `crate` with an `env` entry `B_NAMED` and a `runtime` entry `echo b-named`, and its `test` target had the inputs `crate`, `^crate`, `{ "env": "B_TARGET" }` and `{ "runtime": "echo b-target" }`. Project `a` had an implicit dependency on `b`, a file `a/docs/readme.md`, and a `test` target with the inputs `crate`, `^crate` and `!{projectRoot}/docs/**`. Nx's `HashPlanInspector` (`hasher/hash-plan-inspector.js`) listed the inputs of each task with `NX_DAEMON=false`. Then `nx run a:test --exclude-task-dependencies --output-style=static` ran with `NX_DAEMON=false` and a fresh `NX_CACHE_DIRECTORY`, after each change of a variable or file.
+
+A second experiment, after the review of the option reference the same day, used rustc 1.100.0 and a throwaway workspace with a stand-in plugin, `stand-in`, that infers for each crate of a Cargo workspace a `test` target running `cargo test` with the input `{projectRoot}/**/*`, and a `probe` target whose executor records the options it receives. A crate's `project.json` laid targets over the inferred ones, which Nx merges with the same function as a plugin's own tables; projects were read back with `nx show project <name> --json`.
+
+- **Inputs of a dependency.** The plan of `a:test` held `B_NAMED` and `echo b-named` from the named input of `b`, and neither `B_TARGET` nor `echo b-target` from the target of `b`. With `B_NAMED` changed, `a:test` ran again; with only `B_TARGET` changed, it was restored from the cache. The source splits a target's inputs the same way: entries of a named input that a `^` input names are hashed for each dependency, and the target's other entries for the task's own project only (`splitInputsIntoSelfAndDependencies` in `hasher/task-hasher.js`).
+- **Negated patterns.** `a/docs/readme.md` was not in the plan of `a:test`, and a change to it was a cache hit. A negated pattern in a target's inputs takes out files that another entry of the same list brings in. In the second experiment a test of crate `a` compared `include_str!("../docs/value.txt")` with `1`, and the crate's `project.json` set the `inputs` of `test` to `["...", "!{projectRoot}/docs/**"]`. After `nx run a:test` passed and the file was changed to `2`, `nx run a:test` restored the passing result from the cache, while `cargo test -p a` in the workspace root failed with exit code 101. With `["..."]` alone, the same change made `nx run a:test` run and fail. An excluded file that a macro reads therefore gives a stale result.
+- **`nx.json`.** `nx.json` was among the files of every task's plan, although no input named it.
+- **Merging two configurations of one target.** `mergeTargetConfigurations` in `project-graph/utils/project-configuration/target-merging.js`, with `getMergeValueResult` and `mergeArrayValue` in `utils.js` beside it: a field that the later configuration sets replaces the earlier value; `options` and `configurations` are merged key by key; a list without the element `"..."` replaces the earlier list, and `"..."` stands for the earlier entries at its place. When both configurations name an executor and the executors differ, or both run `nx:run-commands` with different commands, the targets are incompatible (`isCompatibleTarget`): the later one is used in place of the earlier one, and the earlier options are discarded. A `command` becomes `nx:run-commands` with that command (`resolveCommandSyntacticSugar`). In the second experiment, a `probe` target in `project.json` with the inferred executor and an option `x` kept the inferred inputs and options and added `x`; with the executor `nx:noop`, or with a `command`, the target had no inputs left and only the options of `project.json`.
+- **Nx's own flags.** In the second experiment each flag was passed to `nx run b:probe`, `nx run-many -t probe -p b` and `nx affected -t probe --files=<a file of b>`, and the probe recorded whether the option arrived. `--target`, `--configuration`, `--exclude` and `--parallel` never reached the executor, under any of the three commands, and `--runner=zzz` made all three fail. `--projects` reached it under `run` and `affected` but not under `run-many`, which selects projects with it, and `--project` reached it under `run-many` and `affected` but not under `run`, which takes it as the project to run (`command-line/yargs-utils/shared-options.js`). `--profile=release` reached it under all three: Nx switches its own task profiling on with the environment variable `NX_PROFILE` (`tasks-runner/run-command.js`), not with a flag. So did `--features`, `--allFeatures`, `--noDefaultFeatures`, `--targetTriple`, `--allTargets`, `--noDeps`, `--bin` and `--affectedTests`, the option names of [[DES-PLUGIN-OPTIONS]]. An option named `target`, `configuration`, `exclude`, `parallel` or `runner` could not be given on the command line at all.
+- **`--verbose`.** All three commands consume `--verbose` as Nx's own flag: it is not among a task's overrides. Nx then supplies verbosity to the executor of a single task itself: it adds `verbose: true` to the options when the executor's schema declares a `verbose` property or sets `additionalProperties: true` (`applyVerbosity` in `utils/params.js`). In a third experiment on 13 November 2026, with a stand-in executor recording its options, `nx run`, `nx run-many` and `nx affected` with `--verbose` delivered `"verbose": true` under a schema with `additionalProperties: true` and under one that declares a boolean `verbose`, and no `verbose` under a schema that does neither. A batch implementation with the schema that declares `verbose` and `preferBatch` set received no `verbose` in its tasks' options under any of the three commands. In the same runs `--affectedTests=true` reached the executor under all three commands, as `true` among the options and as `"true"` among the task's overrides in the task graph, in a batch as well.
+- **`env` of `nx:run-commands`.** That executor's `env` option holds "Environment variables that will be made available to the commands" (`executors/run-commands/schema.json`).
+
+In the first experiment the projects came from `project.json` files, not from a plugin. That a plugin's named inputs are hashed in the same way is read from the source, where both reach the hasher as project configuration.
+:::
+
+:::mara evidence EVD-CARGO-NX-TABLES
+:mid: 01M7AD4BCY1KGNGB0BSH140SNV
+:title: How cargo 1.100.0 reports the nx tables of the option reference
+:status: accepted
+:supports: DES-PLUGIN-OPTIONS
+:supports: DES-METADATA-TABLES
+
+An experiment with cargo 1.100.0 and rustc 1.100.0 on 13 November 2026, with an empty Cargo home and `--offline`, in a throwaway workspace outside this repository. Its root `Cargo.toml` listed the members `crates/*` and excluded `tools/x`, and its `[workspace.metadata.nx]` table set `tags`, `namePrefix`, `envInputs` and a `project` sub-table with `name`. The member `api` set `name` and `implicitDependencies` in `[package.metadata.nx]`, `inputs = ["...", { env = "DATABASE_URL" }, "!{projectRoot}/docs/**"]` in `[package.metadata.nx.targets.test]`, and `affectedTests = false` and `features` among that target's options. The excluded crate `tools/x` had a `[workspace.metadata.nx]` table of its own with `testRunner`.
+
+- `cargo metadata --format-version 1 --no-deps --offline` in the workspace root reported both tables as written: the `"..."` string, the inline table inside the list and the booleans kept their types and order, under `metadata.nx` of the workspace and of the package. A member without a table had `null` there.
+- `cargo build --offline` built the workspace without a warning about any of the keys.
+- In `tools/x`, the report named that folder as the workspace root, with one member and the crate's `[workspace.metadata.nx]` table as the workspace's metadata, and `cargo build --offline` built it. A standalone crate can therefore carry workspace settings in its own manifest.
+:::
+
+:::mara evidence EVD-CARGO-LOCKED-CHECK
+:mid: 01M7AD4BCY0KKX34EHF23320MQ
+:title: cargo metadata --locked fails on an outdated lockfile without changing it
+:status: accepted
+:supports: DES-INVOCATION
+
+An experiment with cargo 1.100.0 on 13 November 2026, in the workspace of [[EVD-CARGO-NX-TABLES]] with two members and no registry dependencies, an empty Cargo home and `--offline`. After `cargo generate-lockfile`, a path dependency of `api` on `core` was added to `api`'s manifest, so that `Cargo.lock` was out of date.
+
+- `cargo metadata --format-version 1 --no-deps --locked --offline` succeeded: the report that builds the graph does not notice an outdated lockfile.
+- `cargo metadata --format-version 1 --locked --offline` exited with code 101 and the message "cannot update the lock file … because --locked was passed to prevent this". `Cargo.lock` was byte for byte unchanged.
+- After `cargo generate-lockfile`, the same command succeeded.
+
+`cargo metadata` without `--no-deps` resolves the dependencies, so in a workspace with registry dependencies it needs what the full report needs, the registry or a filled Cargo home ([[EVD-CARGO-NO-DEPS]]). That case was not run here.
+:::
+
 :::mara evidence EVD-NX-PLUGIN-ENTRIES
 :mid: 01M7ABYX5EADNXFRHAA2F17VBK
 :title: How Nx 24.0.6 runs several entries of one plugin
@@ -883,6 +936,35 @@ A reading of the `nx` 24.0.6 package and experiments on 13 November 2026 with ca
 - **Other readers of the type.** Nx's task graph, `affected` and the task hasher follow edges of every type. In the rest of the `nx` package, leaving out the graph viewer and the JS plugin, which were not read, only Nx release tells the types apart: the default `readDependencies` of its `VersionActions` leaves out `implicit` edges, and an implementation can override it (`command-line/release/version/version-actions.js`). In `@nx/eslint-plugin` 24.0.6, read and not run, the rule `enforce-module-boundaries` follows edges of every type when it looks for circular dependencies, for projects reachable under tag constraints and for transitive external dependencies (`buildMatrix` in `dist/src/utils/graph-utils.js`). It reads the type only to find lazy-loaded imports, from `dynamic` edges (`hasDynamicImport` in `dist/src/utils/runtime-lint-utils.js`), and it names the files along a circular path from the files' records, which hold nothing for an `implicit` edge (`findFilesInCircularPath`).
 
 A crate's edges depend on more than its own manifest: on the `[workspace.dependencies]` of its workspace's root manifest, on the ignore files and the plugin entry's options, which decide which crates are projects, and on the members that a glob matches. The plugin therefore returns its edges as `implicit`, and Nx recomputes them on every graph computation. These are Nx internals, to be checked again for another Nx major.
+:::
+
+:::mara evidence EVD-NEXTEST-CARGO-FLAGS
+:mid: 01M7AH88BCFA99QFV4EGE16JHW
+:title: cargo-nextest takes the Cargo profile as --cargo-profile
+:status: accepted
+:supports: DES-PLUGIN-OPTIONS
+
+An experiment on 13 November 2026 with cargo-nextest 0.9.151, the prebuilt binary from `https://get.nexte.st/latest/linux`, and cargo and rustc 1.100.0, in a throwaway crate with a unit test, a doctest, a feature `extra` and a Cargo profile `custom` that inherits from `dev`. No `.config/nextest.toml` existed.
+
+- `cargo nextest run --profile custom` failed with exit code 96 and "profile `custom` not found (known profiles: default, default-miri)": nextest reads `--profile` as a profile of its own configuration.
+- `cargo nextest run --cargo-profile custom` built with Cargo's profile `custom`, into `target/custom`, and ran the test under nextest's profile `default`.
+- `cargo test --doc --profile custom` built with the profile `custom` and ran the doctest.
+- `cargo nextest run` accepted `--features`, `--all-features`, `--no-default-features` and `--target` as cargo does; its help lists them beside `--cargo-profile`.
+:::
+
+:::mara evidence EVD-NX-24-ENTRY-CONTEXT
+:mid: 01M7AH88BCK4ZK4JY2X0N7C9C0
+:title: What each entry of a plugin sees of the others in Nx 24.0.6
+:status: accepted
+:supports: DES-PLUGIN-OPTIONS
+
+An experiment on 13 November 2026 with `nx` 24.0.6 and Node.js 26.12.0, in a throwaway Git repository outside this one. A Cargo workspace in `rust/` had the members `a`, `b` and `hidden`, and `.nxignore` named `rust/crates/hidden`. `nx.json` listed a stand-in plugin twice: one entry with `include` set to `rust/Cargo.toml` and `rust/crates/a/**` and the option `testRunner` set to `cargo`, the other with `include` set to `rust/crates/b/**` and `rust/crates/hidden/**` and `testRunner` set to `nextest`. The stand-in's `createNodes` for `**/Cargo.toml` recorded the files it received, the `plugins` of `context.nxJsonConfiguration`, and, for every entry naming the stand-in, the result of `findMatchingConfigFiles` applied with that entry's `include` and `exclude` to the output of `globWithWorkspaceContext(workspaceRoot, ["**/Cargo.toml"])`. `nx show projects` ran with plugin isolation on (the default), with `NX_ISOLATE_PLUGINS=false`, and with the Nx daemon on.
+
+- **Every entry sees all.** In every mode both entries' contexts held both entries of `plugins`, with their `include` patterns and options. With isolation on, and with the daemon, the two entries ran in two processes; with isolation off, in one.
+- **Nx's assignment can be recomputed.** For each entry, applying its own `include` and `exclude` to the files of the workspace context gave exactly the files that Nx handed to it, also leaving out the manifest under the `.nxignore` path that the second entry's `include` matched. So each entry can tell which entries receive manifests of a workspace, and with which options.
+- **Source.** Nx passes the whole `nx.json` as `nxJsonConfiguration` to each entry's `createNodes` and chooses its files with `findMatchingConfigFiles(files, include, exclude)` (`project-graph/utils/project-configuration-utils.js`). Both that function and `globWithWorkspaceContext` are exported from `nx/src/devkit-internals` only, an interface that can change between majors ([[RISK-UPSTREAM-CHANGES]]).
+
+The stand-in was not the plugin; how the plugin's two entries share reports is [[EVD-NX-PLUGIN-ENTRIES]].
 :::
 
 ## Sources
