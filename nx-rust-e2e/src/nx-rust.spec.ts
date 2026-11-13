@@ -25,6 +25,21 @@ import {
   withoutColours,
 } from "../../nx-rust/test/harness";
 
+const cargoExecutor = "@convesoft/nx-rust:cargo";
+const runExecutor = "@convesoft/nx-rust:run";
+
+/** The empty target defaults that init adds for the plugin's executors. */
+const executorEntries = { [cargoExecutor]: {}, [runExecutor]: {} };
+
+/** The line with which init says which target defaults it added. */
+function addedLine(executors: string[]): string {
+  const entries = executors.map((executor) => `"${executor}": {}`).join(" and ");
+  return `Added ${entries} to targetDefaults in nx.json, keyed by the executors of the targets that nx-rust infers.`;
+}
+
+/** The part of that line that names no entry. */
+const addedAny = "to targetDefaults in nx.json, keyed by the executors";
+
 /** The cargo call with which graph creation reads the workspace in `rust/` of `subfolder-workspace`. */
 const readRustWorkspace: CargoCall = {
   cwd: "rust",
@@ -106,7 +121,9 @@ describe("@convesoft/nx-rust", () => {
     expect(added.changed).toContain("package.json");
     expect(JSON.parse(readFileSync(join(projectDirectory, "nx.json"), "utf8"))).toEqual({
       plugins: ["@convesoft/nx-rust"],
+      targetDefaults: executorEntries,
     });
+    expect(added.output).toContain(addedLine(Object.keys(executorEntries)));
     expect(
       JSON.parse(readFileSync(join(projectDirectory, "package.json"), "utf8")).devDependencies,
     ).toHaveProperty("@convesoft/nx-rust");
@@ -704,6 +721,114 @@ describe("@convesoft/nx-rust", () => {
       },
       HARNESS_TIMEOUT,
     );
+  });
+
+  // init adds an empty target default for each of the plugin's executors
+  // that nx.json lacks, so that entries keyed by a target name or by another
+  // executor keep to the JS projects, and leaves every existing entry alone.
+  describe("nx add in a repository with targetDefaults", () => {
+    /** A JS project beside the crates, with a build that target defaults reach. */
+    const web = {
+      "web/project.json": `${JSON.stringify({ name: "web", targets: { build: { executor: "nx:noop" } } })}\n`,
+    };
+    /** A target default keyed by a target name, as JS repositories have it. */
+    const buildDefault = {
+      build: { cache: true, dependsOn: ["^build"], inputs: ["default", "^default"] },
+    };
+
+    /** Installs the fixture with `targetDefaults` in an nx.json without the plugin. */
+    function prepare(targetDefaults: object): void {
+      installFixture(projectDirectory, "subfolder-workspace", {
+        ...web,
+        "nx.json": `${JSON.stringify({ targetDefaults }, null, 2)}\n`,
+      });
+    }
+
+    function nxAdd(): { status: number | null; output: string } {
+      const result = spawnSync("pnpm", ["exec", "nx", "add", "@convesoft/nx-rust@e2e"], {
+        cwd: projectDirectory,
+        env: cargo.environment(testEnvironment()),
+        encoding: "utf8",
+      });
+      return { status: result.status, output: withoutColours(`${result.stdout}${result.stderr}`) };
+    }
+
+    const readNxJson = () => readFileSync(join(projectDirectory, "nx.json"), "utf8");
+    const show = (project: string) =>
+      JSON.parse(nx(projectDirectory, cargo, ["show", "project", project, "--json"])).targets;
+
+    it("adds the entries beside a build default keyed by the target name, which then reaches only the JS project, and adds nothing when run again", () => {
+      prepare(buildDefault);
+
+      const first = nxAdd();
+
+      expect(first.status).toBe(0);
+      expect(JSON.parse(readNxJson())).toEqual({
+        targetDefaults: { ...buildDefault, ...executorEntries },
+        plugins: ["@convesoft/nx-rust"],
+      });
+      expect(first.output).toContain(addedLine(Object.keys(executorEntries)));
+      expect(first.output).not.toContain("changes targets that nx-rust infers");
+      // The entry keyed "build" reaches the JS project and not the crates.
+      expect(show("web").build).toMatchObject(buildDefault.build);
+      const api = show("api").build;
+      expect(api).not.toHaveProperty("dependsOn");
+      expect(api.inputs).not.toEqual(buildDefault.build.inputs);
+
+      // A second nx add finds the plugin and both entries and writes nothing.
+      const before = readNxJson();
+      const second = nxAdd();
+
+      expect(second.status).toBe(0);
+      expect(readNxJson()).toBe(before);
+      expect(second.output).not.toContain(addedAny);
+    }, 300_000);
+
+    it("adds the entries beside entries keyed by other executors only", () => {
+      const defaults = { "@nx/js:tsc": { cache: true, dependsOn: ["^build"] } };
+      prepare(defaults);
+
+      const { status, output } = nxAdd();
+
+      expect(status).toBe(0);
+      expect(JSON.parse(readNxJson())).toEqual({
+        targetDefaults: { ...defaults, ...executorEntries },
+        plugins: ["@convesoft/nx-rust"],
+      });
+      expect(output).toContain(addedLine(Object.keys(executorEntries)));
+    }, 300_000);
+
+    it("keeps an entry keyed by the plugin's executor as it is, warns about it and adds the other entry", () => {
+      const defaults = { ...buildDefault, [cargoExecutor]: { dependsOn: ["^build"] } };
+      prepare(defaults);
+
+      const { status, output } = nxAdd();
+
+      expect(status).toBe(0);
+      expect(JSON.parse(readNxJson())).toEqual({
+        targetDefaults: { ...defaults, [runExecutor]: {} },
+        plugins: ["@convesoft/nx-rust"],
+      });
+      expect(output).toContain(addedLine([runExecutor]));
+      expect(output).toContain(
+        `The targetDefaults entry "${cargoExecutor}" in nx.json changes targets that nx-rust infers:`,
+      );
+      expect(output).not.toContain('The targetDefaults entry "build"');
+    }, 300_000);
+
+    it("stops and leaves nx.json unchanged for an entry keyed by the plugin's executor that turns on caching", () => {
+      prepare({ ...buildDefault, [cargoExecutor]: { cache: true } });
+      const before = readNxJson();
+
+      const { status, output } = nxAdd();
+
+      expect(status).toBe(1);
+      expect(output).toContain(
+        `The targetDefaults entry "${cargoExecutor}" in nx.json changes targets that nx-rust infers:`,
+      );
+      expect(output).toContain("nx.json is unchanged.");
+      expect(readNxJson()).toBe(before);
+    }, 300_000);
   });
 });
 

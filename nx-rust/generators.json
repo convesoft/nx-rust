@@ -3,7 +3,7 @@
     "init": {
       "factory": "./src/generators/init/init",
       "schema": "./src/generators/init/schema.json",
-      "description": "Register the plugin in nx.json and report missing tools. `nx add @convesoft/nx-rust` runs it."
+      "description": "Register the plugin in nx.json, add empty targetDefaults entries for its executors and report missing tools. `nx add @convesoft/nx-rust` runs it."
     },
     "library": {
       "factory": "./src/generators/crate/crate#libraryGenerator",
