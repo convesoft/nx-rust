@@ -586,10 +586,13 @@ describe("edges to redirected crates", () => {
           "projects",
           "--affected",
           "--files=backend/crates/b/src/lib.rs",
+          // Nx prints JSON by itself only where it detects an AI agent.
+          "--json",
         ]);
 
         expect(edges(graph).filter(([source]) => source !== "backend")).toEqual([["server", "b"]]);
         expect(affected.status).toBe(0);
+        // The JSON is the last line, after any warning of graph creation.
         expect(JSON.parse(affected.output.trim().split("\n").pop()).sort()).toEqual([
           "b",
           "backend",
