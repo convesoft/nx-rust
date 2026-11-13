@@ -1,12 +1,13 @@
 ---
 title: Check runtime inputs, task-based affected and hashing over cycles in Nx 24
-status: in-progress
+status: done
 type: task
 priority: high
 tags:
   - spike
 parent: nxr-w9qa5f
 created_at: 2026-11-12T18:20:01Z
+closed_at: 2026-11-13T09:17:59Z
 ---
 
 Goal: confirm or refute the assumptions in `RISK-NX-INPUT-SEMANTICS` (`nx-rust/docs/decisions.mara.md`). `DES-INPUTS`, `DES-TEST-MODE` and `ADR-ALL-DEP-KINDS` rest on them.
@@ -17,7 +18,7 @@ Goal: confirm or refute the assumptions in `RISK-NX-INPUT-SEMANTICS` (`nx-rust/d
 - [x] Task-based affected and batched tasks select the same tasks as unbatched ones
 - [x] `^` inputs hash stably, and identically on repeated runs, when two projects depend on each other
 - [x] Record the finding as an evidence item (`EVD-`) in `nx-rust/docs/decisions.mara.md` that supports or contradicts the items above
-- [ ] Update the risk (likelihood, consequence, or retire it) and every design or decision the finding changes
+- [x] Update the risk (likelihood, consequence, or retire it) and every design or decision the finding changes
 
 Done when: the evidence item is accepted in Mara, and `mara project validate` reports `valid: true`.
 
@@ -26,3 +27,12 @@ Done when: the evidence item is accepted in Mara, and `mara project validate` re
 - Recorded as `EVD-NX-24-INPUT-SEMANTICS`; `RISK-NX-INPUT-SEMANTICS` is updated (likelihood `unlikely`, consequence `major`, now also threatening `REQ-ENV-ALLOWLIST`). The closing sentences of `ADR-ALL-DEP-KINDS` and `ADR-WORKSPACE-ROOT`, which said the check was still open, now cite the evidence.
 - The finding contradicts `DES-TEST-MODE` and `DES-BATCH` in one case: in a batch, a variable from a per-task dotenv file is in the key but not in the batch process. Changes to `DES-TEST-MODE`, `DES-BATCH` and `VER-BATCHING`, and a clarification of `ADR-DECLARED-INPUTS`, are proposed to the maintainer and not made. The last task item stays open until the maintainer has decided.
 - Throwaway workspace and logs used for the experiments were outside the repository and are not kept; the evidence item names versions, layout and commands.
+
+## Summary of Changes
+
+- Ran the experiments in a throwaway Nx 24.0.6 workspace with two real Cargo workspaces (a dev-dependency cycle, a pinned toolchain), with the daemon off and on, and recorded them as the accepted `EVD-NX-24-INPUT-SEMANTICS`. Runtime inputs are evaluated afresh for every task of every run, through `sh -c` in the repository root, with the environment of the `nx` command plus the task's dotenv files. Batched and unbatched runs select the same affected tasks and share keys, and `^` inputs hash stably over a cycle. Task-based affected ignores `env` and runtime inputs, and a batch process lacks the per-task dotenv files that Nx hashes.
+- `RISK-NX-INPUT-SEMANTICS` rewritten (likelihood `unlikely`, consequence `major`, now also threatening `REQ-ENV-ALLOWLIST`), now mitigated by `DES-BATCH`. `ADR-ALL-DEP-KINDS` and `ADR-WORKSPACE-ROOT` cite the evidence instead of an open check.
+- The maintainer agreed on 2026-11-13 to rebuilding each task's environment in a batch and splitting groups by it, and to the proposed text for `DES-TEST-MODE`, `DES-BATCH` (with `mitigates: RISK-NX-INPUT-SEMANTICS`), `VER-BATCHING`, `VER-TESTING` and the clarification of `ADR-DECLARED-INPUTS`; these were applied as agreed. The "What forms a group" guidance in `execution.mara.md` now says that differing dotenv environments also split a group.
+- Rejected: failing tasks whose environment differs from the batch process's, and only documenting the gap, which would leave wrong cache entries.
+- Follow-up filed: nxr-p5pgkj (caching guide note on what `nx affected` cannot see).
+- Checks run on the final tree: `mara schema validate` (valid), `mara project validate` (`valid: true`, evaluation complete, no errors or warnings), `zban check`, `pnpm nx format:check --all` and `pnpm nx run-many -t build lint test`, all passing. The end-to-end suite was not run, because no plugin behaviour changed.
