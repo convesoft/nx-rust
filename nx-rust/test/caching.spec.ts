@@ -1,5 +1,5 @@
 import type { TargetConfiguration } from "@nx/devkit";
-import { readFileSync, symlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { environmentVariables, toolchainCommand } from "../src/graph/inputs";
 import { listsPackage } from "../src/graph/plugin-package";
@@ -507,28 +507,56 @@ describe("caching", () => {
     );
 
     // Cargo reports the directory as each workspace spells it: here
-    // `<repo>/target` for the root workspace, and for `tools`
-    // `<repo>/tools/../target` or the link `<repo>/tools/target`, which
-    // leads to a folder that no build has created yet.
-    it.each<[string, FileChanges, string | undefined]>([
+    // `<repo>/target` or `<repo>/deep/target` for the root workspace, and for
+    // `tools` `<repo>/tools/../target`, the link `<repo>/tools/target`, which
+    // leads to a folder that no build has created yet, or
+    // `<repo>/tools/link/../target`, where `link` leads to `deep/child`, so
+    // that the system reaches `deep/target`, not `tools/target`.
+    const throughLink = {
+      ".cargo/config.toml": '[build]\ntarget-dir = "deep/target"\n',
+      "tools/.cargo/config.toml": '[build]\ntarget-dir = "link/../target"\n',
+    };
+    it.each<[string, FileChanges, { links?: Record<string, string>; folders?: string[] }, string]>([
       [
         "a configuration at the repository root sets",
         { ".cargo/config.toml": '[build]\ntarget-dir = "target"\n' },
-        undefined,
+        {},
+        "target",
       ],
       [
         "one workspace's configuration reaches through ..",
         { "tools/.cargo/config.toml": '[build]\ntarget-dir = "../target"\n' },
-        undefined,
+        {},
+        "target",
       ],
-      ["one workspace reaches through a symbolic link", {}, "tools/target"],
+      [
+        "one workspace reaches through a symbolic link",
+        {},
+        { links: { "tools/target": "../target" } },
+        "target",
+      ],
+      [
+        "one workspace reaches through .. after a symbolic link",
+        throughLink,
+        { links: { "tools/link": "../deep/child" }, folders: ["deep/child", "deep/target"] },
+        "deep/target",
+      ],
+      [
+        "one workspace reaches through .. after a symbolic link, before the directory exists",
+        throughLink,
+        { links: { "tools/link": "../deep/child" }, folders: ["deep/child"] },
+        "deep/target",
+      ],
     ])(
       "leave doc uncached, and say so, when two workspaces share one artifact directory that %s",
-      async (_case, files, link) => {
+      async (_case, files, { links = {}, folders = [] }, rootDirectory) => {
         const workspace = FixtureWorkspace.create("two-workspaces", files);
         try {
-          if (link !== undefined) {
-            symlinkSync("../target", join(workspace.root, link));
+          for (const folder of folders) {
+            mkdirSync(join(workspace.root, folder), { recursive: true });
+          }
+          for (const [link, target] of Object.entries(links)) {
+            symlinkSync(target, join(workspace.root, link));
           }
           const graph = await workspace.graph();
 
@@ -551,7 +579,7 @@ describe("caching", () => {
             outputs: [],
           });
           expect(graph.projects.app.targets.build.outputs).toEqual([
-            "{workspaceRoot}/target/{options.targetTriple ?? .}/{options.profile ?? debug}/app",
+            `{workspaceRoot}/${rootDirectory}/{options.targetTriple ?? .}/{options.profile ?? debug}/app`,
           ]);
           expect(graph.projects.app.targets.test.cache).toBe(true);
         } finally {

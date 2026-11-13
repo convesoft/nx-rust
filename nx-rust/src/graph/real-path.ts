@@ -19,10 +19,13 @@ export function realPath(path: string): string {
  * that a link before it leads to, and the folders that do not exist yet are
  * added, as written, to the real path of the deepest one that does. A link
  * that leads to a missing folder is followed as well. Links beyond the 40
- * that Linux follows in one path stay as written.
+ * that Linux follows in one path stay as written. No `..` is taken as text
+ * before the links in front of it are followed: Node's JavaScript
+ * `realpathSync` and `resolve` do that, so the system's `realpath` resolves
+ * the folders that exist.
  */
 export function physicalPath(path: string): string {
-  return reachedPath(isAbsolute(path) ? path : resolve(path), { links: 0 });
+  return reachedPath(isAbsolute(path) ? path : `${process.cwd()}${sep}${path}`, { links: 0 });
 }
 
 // Linux's MAXSYMLINKS.
@@ -30,7 +33,7 @@ const maximumLinks = 40;
 
 function reachedPath(path: string, followed: { links: number }): string {
   try {
-    return realpathSync(path);
+    return realpathSync.native(path);
   } catch {
     // Missing, or reached through a link that leads to a missing folder.
   }
@@ -39,7 +42,8 @@ function reachedPath(path: string, followed: { links: number }): string {
     return path;
   }
   const folder = reachedPath(parent, followed);
-  // A real folder's `..` is its parent, so joining as text is right here.
+  // `folder` has its links followed, so its `..` is its parent and joining
+  // as text is right here.
   const reached = join(folder, basename(path));
   if (followed.links >= maximumLinks) {
     return reached;
