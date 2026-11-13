@@ -330,6 +330,17 @@ Ignoring is safe for the cache: Nx keeps the option in the task's key, so a run 
 The plugin's own tables in Cargo manifests are treated differently. The plugin owns that source and knows at graph creation which options its executors have, so an unknown key under a target's `options` or one of its configurations there fails graph creation, the earliest point at which the mistake is known, and names the manifest, the target, the configuration if any, and the key ([[REQ-DIAGNOSTICS]]).
 :::
 
+:::mara decision ADR-NO-ERROR-CODES
+:mid: 01M7A67WRX56A7M56CJZ7VF326
+:title: Name problems in words, without error codes, in v1
+:status: accepted
+:justifies: DES-DIAGNOSTICS
+
+A diagnostic says what is wrong, where, and what to do ([[REQ-DIAGNOSTICS]]). In v1 it carries no code. Nx 24 shows no numbered codes in its diagnostics, and the cargo messages seen while designing the generators carried none either ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]), so a code would stand alone in a user's output. Once published, a code is an interface to keep stable and to document. Tests check the facts a message names instead.
+
+Codes may be introduced later without breaking anything, because adding a code to a message takes away nothing a user or a script relies on. They would serve people or tools that need to refer to one problem across releases: a documentation page per problem, filtering warnings in a pipeline, or wording that changes often. One possible scheme is a stable code for each row of [[DES-DIAGNOSTICS]], listed in the setup guidance and never reused for another problem. Whether to introduce codes, and in what form, is decided when such a need arises.
+:::
+
 ## Risks
 
 Several risks below are assumptions that the design rests on and that nobody
@@ -734,6 +745,75 @@ Inspection of the `nx` 24.0.6 package installed in this repository, and two expe
 - **oxfmt.** Given a `.rs` file and a `Cargo.toml`, oxfmt 0.78.0 ignored the `.rs` file and reported the `Cargo.toml` as unformatted. Its configuration schema has no setting for plugins or external formatters. In a workspace that uses oxfmt, `nx format:write` therefore reformats `Cargo.toml` files and leaves Rust sources alone.
 
 The prototype was not run through `nx format` itself; that Nx filters `.rs` out is read from its source, and that the filter excludes plugin languages was tested against prettier directly. Covering Rust in `nx format` would need Nx to pass the configured plugins to its filter, and would still not reach workspaces that use oxfmt.
+:::
+
+:::mara evidence EVD-CARGO-NEW
+:mid: 01M7A66QH6W8544G03RW7GAX0G
+:title: What cargo new does inside a repository and a workspace
+:status: accepted
+:supports: DES-GENERATORS
+:supports: DES-DIAGNOSTICS
+
+Experiments with cargo 1.100.0 (3acc79c0c 2026-11-05) on Linux, on 13 November 2026, in throwaway git repositories (`git init`, no commit) outside this repository. No folder pinned a toolchain.
+
+- **A git repository inside the crate.** In a repository where `rust/` existed and `rust/crates/` did not, `cargo new rust/crates/core` created `.git` and a `.gitignore` inside the new crate. Where the parent folder existed, `cargo new direct` created neither. `cargo new --vcs none newparent2/a/b`, with no folder of that path present, created neither.
+- **Members.** In a workspace with `members = ["crates/*"]`, `cargo new --lib rust/crates/core` left the workspace manifest unchanged. `cargo new --bin rust/tools/cli` printed "Adding `cli` as member of workspace at …" and appended `"tools/cli"` to `members`, keeping the existing entry. In a workspace without a `members` key, `cargo new --vcs none --lib ws-nomembers/crates/a` added `members = ["crates/a"]`. With a workspace inside another workspace's folder, the crate was added to the nearer workspace only.
+- **Exclude.** In a workspace with `members = ["crates/*"]` and `exclude = ["vendor/*"]`, `cargo new --vcs none --lib ws-exclude/vendor/v` appended `"vendor/v"` to `members` and left `exclude` as it was. `cargo metadata --no-deps --format-version 1` then listed `v` among the members: the explicit member overrode `exclude`.
+- **Inheritance.** In a workspace whose `[workspace.package]` set `edition = "2021"` and `license = "MIT"` and which had `[workspace.lints.rust]`, the new manifest had `edition.workspace = true`, `license.workspace = true` and `[lints] workspace = true`. With `--edition 2024`, it had `edition = "2024"` and still `license.workspace = true`.
+- **Name.** `cargo new --vcs none --bin --name my-tool rust/crates/tool-dir` created the package `my-tool` in the folder `tool-dir`. Without `--name`, the package took the folder's name; for `core`, cargo warned that the name may be confused with the standard library's package.
+- **Outside a workspace.** `cargo new --vcs none --lib standalone-parent/s` wrote `edition = "2024"` and changed no other manifest. Inside the folder of a valid package without a `[workspace]` table, the new crate was its own workspace root, according to `cargo metadata`. When the enclosing package's manifest was invalid, cargo still created the crate and warned that compiling it may not work.
+- **An existing folder.** `cargo new --vcs none --lib rust/crates/ed`, run a second time, failed with "destination `…` already exists" and exit status 101, and changed nothing.
+- **Options.** `cargo new --help` lists `--vcs` (`git`, `hg`, `pijul`, `fossil`, `none`), `--bin` (the default), `--lib`, `--edition` (2015, 2018, 2021, 2024), `--name` and `--registry`.
+
+Only one Cargo version was tried, on Linux. The messages observed carried no error codes.
+:::
+
+:::mara evidence EVD-CARGO-DIRECTORIES
+:mid: 01M7A6739R6CSCWVAQ2JJWDHF2
+:title: Where Cargo puts its two directories, and which versions report them
+:status: accepted
+:supports: DES-GENERATORS
+:supports: DES-DIAGNOSTICS
+
+Experiments on Linux on 13 November 2026, in throwaway folders outside this repository, with `cargo metadata --no-deps --format-version 1`. No folder pinned a toolchain, and the older toolchains were already installed and selected with `cargo +<version>` under `RUSTUP_AUTO_INSTALL=0`.
+
+- **Default.** Without configuration, cargo 1.100.0 reported `build_directory` and `target_directory` both as `<workspace>/target`, inside the workspace folder. For a crate that is its own workspace, that is a folder inside the crate.
+- **Template.** With `[build] build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"` in a `.cargo/config.toml` above the workspace, cargo 1.100.0 reported a `build_directory` below the Cargo home (`~/.cargo/build/21/d5123ee45e798c`) and the same `target_directory` as before.
+- **Versions.** For a one-crate package, the report of cargo 1.89 had no `build_directory` key, and the reports of cargo 1.97.1 and 1.100.0 had it. The other top-level keys were the same in all three: `metadata`, `packages`, `resolve`, `target_directory`, `version`, `workspace_default_members`, `workspace_members` and `workspace_root`.
+
+Cargo's source settles where the field begins. It was added to `cargo metadata` by rust-lang/cargo pull request #15377, merged on 2 April 2025, while `build.build-dir` was unstable. In the Cargo that Rust 1.90.0 ships (rust-lang/cargo commit 840b83a, package version 0.91.0), `src/cargo/ops/cargo_output_metadata.rs` writes `build_directory` only when the unstable `-Zbuild-dir` flag is on, and leaves the key out otherwise; unstable flags work only on nightly. In the Cargo that Rust 1.91.0 ships (commit ea2d978, package version 0.92.0), it always writes the field, and Cargo's changelog lists the stabilisation of `build.build-dir` under 1.91. The report of a stable Cargo therefore has `build_directory` from 1.91 on. The source was read through GitHub, at the cargo commits that the `src/tools/cargo` submodule of rust-lang/rust names at the tags `1.90.0` and `1.91.0`. Cargo 1.90 and 1.91 were not run here, because no toolchain was downloaded.
+:::
+
+:::mara evidence EVD-NX-24-SETUP
+:mid: 01M7A67N99XVQ7ZV6NVRJB0W8N
+:title: How Nx 24.0.6 adds a plugin, runs generators and shows plugin output
+:status: accepted
+:supports: DES-GENERATORS
+:supports: DES-DIAGNOSTICS
+
+Inspection of the `nx`, `@nx/devkit` and `@nx/js` 24.0.6 packages installed in this repository, and experiments with that `nx` package, on 13 November 2026. Paths are relative to `nx/dist/src/` unless another package is named.
+
+Read in the compiled source:
+
+- **`nx add`.** For a package outside Nx's own package group, `nx add <package>` installs `latest` unless a version is given, then runs `nx g <package>:init` with the terminal attached, adding `--keepExistingVersions` or `--updatePackageScripts` only when the init schema declares them. When `init` fails, the command exits with status 1 and the package stays installed (`command-line/add/add.js`, `command-line/init/configure-plugins.js`).
+- **The graph comes first.** `nx g` creates the project graph, with every registered plugin, before it runs any generator, unless `--skipProjectGraph` is given (`command-line/generate/generate.js`).
+- **Dry run.** Nx lists a generator's changes to its file tree after the generator returns, and writes them and runs the callback the generator returns only without `--dry-run` (`generate.js`). It takes `dryRun` out of the options it hands the generator and sets `NX_DRY_RUN` to `true` or `false` for the run (`generate.js`, `command-line/generate/command-object.js`).
+- **Prompts.** Prompts for options appear only when standard output is a terminal and `CI` is not `true` (`utils/params.js`).
+- **Directory.** The devkit helper for project names and roots resolves a generator's `directory` against the folder `nx` runs in, unless the path already starts with that folder (`@nx/devkit`, `generators/project-name-and-root-utils.js`). `@nx/js:library` requires `directory`, takes it from the first positional argument, and has an optional `name` (`@nx/js`, `generators/library/schema.json`).
+- **Plugin output.** Plugin workers run with their standard output and error piped into the process that started them (`project-graph/plugins/isolation/isolated-plugin.js`), and the daemon's standard output and error go to its log file (`daemon/client/client.js`). The plugin interface has no channel for warnings (`project-graph/plugins/public-api.d.ts`).
+- **Environment.** A client's first message carries its environment to the daemon, which applies it, forwards it to the plugin workers and recomputes a graph that was created under other values (`daemon/client/client.js`, `daemon/server/handle-client-env.js`).
+- **Ignored paths.** Besides what `.gitignore` and `.nxignore` exclude, Nx always ignores only `**/node_modules`, `**/.git`, `**/.nx/cache`, `**/.nx/workspace-data` and `**/.yarn/cache`, as printed by calling `getHardcodedIgnorePatterns()` from `nx/src/native`.
+- **Codes.** A search of `nx/dist/src` found no numbered codes for user-facing diagnostics, such as `NX` followed by digits.
+- **TOML.** `nx` depends on `smol-toml`; `@nx/devkit` has no TOML dependency.
+
+Observed in a throwaway git repository outside this one, with that `nx` package linked into its `node_modules`, Node.js 26.12.0, one `Cargo.toml` and a local plugin file listed in `nx.json` whose `createNodes` printed a line with `console.warn`, including the value of an environment variable:
+
+- With `NX_DAEMON=false`, `nx show projects` printed the line in the terminal.
+- With `NX_DAEMON=true`, the terminal showed only the project list, and the line appeared in `.nx/workspace-data/d/daemon.log`. A second run with the same environment did not run the plugin again. A run with the variable changed made the daemon log "Graph recompute necessary due to env variable refresh. Changed keys: …", and the plugin printed the new value there.
+- A second local plugin whose module threw when loaded made `nx run js-app:build`, the `package.json` script of a JS project, fail with "Failed to load 1 Nx plugin(s)" and the thrown message, exit status 1. `nx show projects` and `nx g <package>:init` failed the same way. `nx --version` still worked, and so did `nx g <package>:init --skipProjectGraph`, which ran the generator.
+- A `crate/target` folder that neither `.gitignore` nor `.nxignore` covered was part of the crate's project: Nx's file map listed `crate/target/junk.rs` among the project's files, and the plugin was handed a `Cargo.toml` from `crate/target/package/`. With `target/` in `.nxignore` alone, neither happened. Neither did it for `crate/.nx/cache/target` and `crate/node_modules/target`, which `git check-ignore` confirmed neither ignore file covered, with `.gitignore` holding only `/.nx` and no `.nxignore`: Nx's fixed exclusions kept the files of both out of the file map, and the plugin was not handed the `Cargo.toml` under `crate/.nx/cache/target/package/`.
+
+Observed with pnpm 12.18.0 in a second throwaway repository, whose `package.json` linked that `nx` package, and a local package whose `init` generator threw: `nx add probe-plugin@file:<folder>` added the package to `package.json` and `pnpm-lock.yaml` and installed it, then failed with the generator's message and exit status 1. The package stayed in `package.json` and `node_modules`, and `nx.json` was unchanged.
 :::
 
 :::mara evidence EVD-CARGO-TARGET-COMMANDS
