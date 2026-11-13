@@ -70,10 +70,12 @@ export interface TargetCargoMetadata {
  * The inferred targets that the plugin caches. None until nxr-fy4t4k
  * declares the inputs of `DES-INPUTS`: with Nx's default inputs, a change to
  * `Cargo.lock`, the workspace's manifest, the toolchain or the environment
- * would restore a result produced without it (`GOAL-TRUSTED-CACHE`). The
- * executor fails a task of any other target that its configuration caches
- * after all, such as through a `targetDefaults` entry in `nx.json`, so that
- * Nx stores no result for it.
+ * would restore a result produced without it (`GOAL-TRUSTED-CACHE`). Graph
+ * creation fails for a `targetDefaults` entry in `nx.json` that turns caching
+ * on for another target (`DES-TARGET-DEFAULT-GUARD`, which compares with the
+ * `cache` that {@link inferTargets} sets from this set), and the executor
+ * fails a task of another target that its configuration caches after all, so
+ * that Nx stores no result for it.
  */
 export const cachedTargets: ReadonlySet<InferredTargetName> = new Set<InferredTargetName>();
 
