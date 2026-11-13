@@ -662,6 +662,9 @@ The workspace was a toy, so this says nothing about how long the call takes on a
 :supports: REQ-PROJECT-NAMES
 :supports: ADR-PROJECT-NAMES
 :supports: DES-PROJECT-GRAPH
+:supports: REQ-INFERRED-PROJECTS
+:supports: REQ-METADATA-OVERRIDES
+:supports: DES-METADATA-TABLES
 
 An experiment on 13 November 2026 with `nx` and `@nx/js` 24.0.6, TypeScript 6.0.3, pnpm 12.18.0, Node 26.12.0 and cargo 1.100.0 on Linux, together with a reading of the same `nx` package (`project-graph/utils/project-configuration-utils.js`, `project-configuration/project-nodes-manager.js` and `target-merging.js`, `plugins/package-json/create-nodes.js`).
 
