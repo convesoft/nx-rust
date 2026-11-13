@@ -13,8 +13,7 @@ export type TargetNames = Readonly<Record<string, string>>;
  * Each key has to be the default name of an inferred target that this
  * version of the plugin knows ({@link inferredTargetNames}), whether or not
  * a project has that target, and each value a target name. The other
- * settings of the option reference are read where they take effect
- * (nxr-xyq7c8).
+ * plugin options are read with it (`readPluginOptions` in `settings.ts`).
  *
  * @param options The `options` of the entry, as Nx passes them to `createNodes`.
  * @throws {Error} When `targetNames` is no object, has a key that names no

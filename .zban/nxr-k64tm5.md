@@ -14,6 +14,7 @@ Goal: workspaces with cargo-hakari build only the selected crates, and the exper
 Implements the `hakari` and `cargo` strategies of `DES-UNIFICATION` (`nx-rust/docs/execution.mara.md`). Checked by `VER-BATCHING`.
 
 - [ ] Choose `hakari` when the workspace has a cargo-hakari configuration
+- [ ] In the check of several entries (the "Several entries" paragraph of `DES-PLUGIN-OPTIONS`; `checkEntries` in `nx-rust/src/graph/entries.ts`), count an entry without `featureUnification` as giving the default that this detection finds, so that it also disagrees with `hakari` or `workspace-build` where that is not the default; until then it disagrees only with `cargo`. Remove that sentence from the status note of `nx-rust/docs/configuration.mara.md`. The setting's value is in `WorkspaceSettings.featureUnification` (`nx-rust/src/graph/settings.ts`), `undefined` for the default
 - [ ] Fall back to `workspace-build` when one member enables a feature of another
 - [ ] The cached drift check for a stale hack crate
 - [ ] The optional strict per-crate build target
