@@ -226,6 +226,9 @@ describe("declared files", () => {
       inFixture("declared-files", { "shared/real/schema.sql": "" }, async (workspace) => {
         symlinkSync("real", join(workspace.root, "shared", "linked"));
         symlinkSync("banner.txt", join(workspace.root, "docs", "alias.txt"));
+        // A ".." after this link leaves nested/inner, as the system reads it.
+        mkdirSync(join(workspace.root, "nested", "inner"), { recursive: true });
+        symlinkSync("../nested/inner", join(workspace.root, "shared", "deep"));
         applyFileChanges(
           workspace.root,
           apiDeclares(
@@ -233,6 +236,7 @@ describe("declared files", () => {
             "../../../shared/linked/*.sql",
             "../../../shared/linked/schema.sql",
             "../../../docs/alias.txt",
+            "../../../shared/deep/../b.txt",
             // Below a file: no such file exists, and none is hashed.
             "../../../docs/banner.txt/part",
           ),
@@ -245,10 +249,11 @@ describe("declared files", () => {
             { fileset: "{workspaceRoot}/shared/real/*.sql", includeIgnored: true },
             { fileset: "{workspaceRoot}/shared/real/schema.sql", includeIgnored: true },
             { fileset: "{workspaceRoot}/docs/banner.txt", includeIgnored: true },
+            { fileset: "{workspaceRoot}/nested/b.txt", includeIgnored: true },
             { fileset: "{workspaceRoot}/docs/banner.txt/part", includeIgnored: true },
           ]),
         );
-        expect(JSON.stringify(graph.projects.api.namedInputs)).not.toMatch(/linked|alias/);
+        expect(JSON.stringify(graph.projects.api.namedInputs)).not.toMatch(/linked|alias|deep/);
       }),
     HARNESS_TIMEOUT,
   );

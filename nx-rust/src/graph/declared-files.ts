@@ -1,8 +1,7 @@
-import { lstatSync, readlinkSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
+import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { CargoWorkspace, describeWorkspaces } from "./discovery";
 import type { InputDefinition } from "./inputs";
-import { realPath } from "./real-path";
+import { physicalPath } from "./real-path";
 import type { FileInput } from "./settings";
 
 /** What a project's `fileInputs` give: the filesets for its key, or why graph creation stops. */
@@ -61,24 +60,22 @@ export function declaredFiles(
 ): DeclaredFiles {
   const filesets: InputDefinition[] = [];
   const problems: string[] = [];
-  const realRoot = realPath(repositoryRoot);
+  const realRoot = physicalPath(repositoryRoot);
   const directories = cargoDirectories(workspace);
   for (const input of fileInputs) {
-    const { fixed, glob } = resolvePattern(input, repositoryRoot);
+    const { fixed, glob } = splitPattern(input, repositoryRoot);
     if (parentAfterGlob.test(glob)) {
       problems.push(parentAfterGlobProblem(input));
       continue;
     }
-    const real = realPathOfPrefix(fixed);
+    const real = physicalPath(fixed);
     const path = within(realRoot, real);
     if (path === undefined) {
       problems.push(outsideProblem(input, [real, glob].filter((part) => part !== "").join("/")));
       continue;
     }
     const directory = directories.find(
-      (directory) =>
-        within(directory.path, fixed) !== undefined ||
-        within(directory.realPath, real) !== undefined,
+      (directory) => within(directory.realPath, real) !== undefined,
     );
     if (directory !== undefined) {
       problems.push(cargoDirectoryProblem(input, directory, workspace, repositoryRoot));
@@ -94,63 +91,25 @@ export function declaredFiles(
 }
 
 /**
- * The pattern resolved against its manifest's folder: the absolute path of
- * its segments before the first one with a glob character, without `.` and
- * `..` segments, and the rest of the pattern as written, without `.`
- * segments and empty ones.
+ * The pattern against its manifest's folder: the absolute path of its
+ * segments before the first one with a glob character, as written, for
+ * {@link physicalPath} to resolve `..` and symbolic links in it as the
+ * system does; and the rest of the pattern, without `.` segments and empty
+ * ones.
  */
-function resolvePattern(input: FileInput, repositoryRoot: string): { fixed: string; glob: string } {
-  const start = posix.isAbsolute(input.pattern)
-    ? "/"
-    : join(repositoryRoot, posix.dirname(input.manifest));
-  let fixed = start;
+function splitPattern(input: FileInput, repositoryRoot: string): { fixed: string; glob: string } {
+  const fixed: string[] = [];
   const glob: string[] = [];
   for (const segment of input.pattern.split("/")) {
     if (segment === "" || segment === ".") {
       continue;
     }
-    if (glob.length > 0 || globCharacters.test(segment)) {
-      glob.push(segment);
-    } else {
-      fixed = segment === ".." ? dirname(fixed) : join(fixed, segment);
-    }
+    (glob.length > 0 || globCharacters.test(segment) ? glob : fixed).push(segment);
   }
-  return { fixed, glob: glob.join("/") };
-}
-
-/**
- * The path with the symbolic links of its longest existing prefix
- * resolved, the rest appended as it is. A link whose target does not exist
- * yet is followed too, so that a pattern through it resolves where the
- * files will be.
- */
-function realPathOfPrefix(path: string, links = 0): string {
-  let existing = path;
-  const rest: string[] = [];
-  while (!isPresent(existing) && dirname(existing) !== existing) {
-    rest.unshift(basename(existing));
-    existing = dirname(existing);
-  }
-  try {
-    return join(realpathSync(existing), ...rest);
-  } catch {
-    // A link to a path that does not exist; 40 links, as Linux allows.
-    if (links < 40 && isPresent(existing) && lstatSync(existing).isSymbolicLink()) {
-      const target = resolve(dirname(existing), readlinkSync(existing));
-      return realPathOfPrefix(join(target, ...rest), links + 1);
-    }
-    return path;
-  }
-}
-
-/** Whether the path names a file, a folder or a link, whether or not the link's target exists. */
-function isPresent(path: string): boolean {
-  try {
-    return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
-  } catch {
-    // Such as a path below a file.
-    return false;
-  }
+  const start = posix.isAbsolute(input.pattern)
+    ? ""
+    : join(repositoryRoot, posix.dirname(input.manifest));
+  return { fixed: [start, ...fixed].join(sep) || sep, glob: glob.join("/") };
 }
 
 /** `path` relative to `folder` where it lies in it, `""` for the folder itself; else `undefined`. */
@@ -165,23 +124,19 @@ interface CargoDirectory {
   role: string;
   /** Its absolute path, as cargo reports it. */
   path: string;
-  /** Its real path. */
+  /** The folder that the system reaches through it ({@link physicalPath}). */
   realPath: string;
 }
 
-/**
- * The workspace's build and artifact directories, once each. Cargo creates
- * them on its first build, so each real path resolves only the part that
- * exists.
- */
+/** The workspace's build and artifact directories, once each, also before Cargo creates them. */
 function cargoDirectories(workspace: CargoWorkspace): CargoDirectory[] {
   const { build_directory: build, target_directory: artifact } = workspace.report;
   const directory = (role: string, path: string): CargoDirectory => ({
     role,
     path: resolve(path),
-    realPath: realPathOfPrefix(resolve(path)),
+    realPath: physicalPath(path),
   });
-  if (build === undefined || resolve(build) === resolve(artifact)) {
+  if (build === undefined || physicalPath(build) === physicalPath(artifact)) {
     const role = build === undefined ? "artifact directory" : "build and artifact directory";
     return [directory(role, artifact)];
   }
