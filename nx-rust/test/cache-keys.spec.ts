@@ -1,8 +1,8 @@
 import { describeCacheKeyMatrix, FileChanges } from "./harness";
 
-// The plugin infers no target yet (nxr-fy4t4k declares the inputs), so these
-// rows hash a target written by hand. They show that the matrix tells a key
-// that changes from one that does not.
+// The plugin's targets have no inputs yet (nxr-fy4t4k declares them), so
+// these rows hash a target written by hand, which replaces the inferred one.
+// They show that the matrix tells a key that changes from one that does not.
 const probe: FileChanges = {
   "rust/crates/api/project.json": JSON.stringify({
     name: "api",
