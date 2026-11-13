@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -8,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { testEnvironment } from "./environment";
 
 /**
  * The fixture repositories in `nx-rust/test/fixtures`, one per situation.
@@ -27,6 +29,31 @@ export const fixtureNames = [
 
 export type FixtureName = (typeof fixtureNames)[number];
 
+/**
+ * The toolchain that `different-toolchains/pinned/rust-toolchain.toml`
+ * names. The tests never install it, and without it cargo fails in
+ * `different-toolchains/pinned`.
+ */
+export const pinnedToolchain = "1.91.0";
+
+/**
+ * Whether checks of `different-toolchains` can run: rustup has
+ * {@link pinnedToolchain}, or the tests run in CI, which installs it.
+ */
+export function pinnedToolchainAvailable(): boolean {
+  if (process.env.CI) {
+    return true;
+  }
+  const result = spawnSync("rustup", ["toolchain", "list"], {
+    env: testEnvironment(),
+    encoding: "utf8",
+  });
+  return (
+    result.status === 0 &&
+    result.stdout.split("\n").some((line) => line.startsWith(`${pinnedToolchain}-`))
+  );
+}
+
 /** The folder that holds the fixture repositories. */
 export const fixturesDirectory = join(__dirname, "..", "fixtures");
 
@@ -35,6 +62,21 @@ export const pluginPackageName = "@convesoft/nx-rust";
 
 /** The plugin's entry point in this repository, which Nx can load from source. */
 export const pluginSourceEntry = join(__dirname, "..", "..", "src", "index.ts");
+
+/**
+ * A plugin that behaves as the plugin at {@link pluginSourceEntry} and also
+ * records what each entry's `createDependencies` sees, in the file that the
+ * environment variable `DISCOVERY_PROBE_LOG` names (`discovery-probe.ts`).
+ */
+export const discoveryProbeEntry = join(__dirname, "discovery-probe.ts");
+
+/** What one entry's `createDependencies` saw, as {@link discoveryProbeEntry} records it. */
+export interface ProbeRecord {
+  /** The workspace roots, each with the folders of the members that get a project. */
+  workspaces: [root: string, members: string[]][];
+  /** The manifests of the reports for path dependencies without a project. */
+  pathDependencies: string[];
+}
 
 /**
  * A change to one file: its new content, `null` to delete it, or a function
