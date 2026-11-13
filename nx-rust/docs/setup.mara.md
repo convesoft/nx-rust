@@ -50,28 +50,32 @@ then compute other cache keys than everyone else.
 nx add @convesoft/nx-rust
 ```
 
-This registers the plugin in `nx.json` and changes nothing else in your
-repository: no crate, no Cargo manifest, no `.cargo/config.toml`.
+Nx first installs the package, which adds it to your `package.json` and
+lockfile, and then runs the plugin's `init` generator. `init` registers the
+plugin in `nx.json` and changes nothing else in your repository: no crate, no
+Cargo manifest, no `.cargo/config.toml`.
 
-Before it registers anything, it checks the repository the way Nx will once the
-plugin is active. If Nx could not build the project graph, for example because
-cargo is not installed or two crates have the same name, `nx add` stops with
-that error and `nx.json` stays as it was. Fix the problem and run the command
-again.
+Before it registers anything, `init` checks the repository the way Nx will once
+the plugin is active. If Nx could not build the project graph, for example
+because cargo is not installed or two crates have the same name, `init` stops
+with that error and `nx.json` stays as it was. The package stays installed. Fix
+the problem and run `nx add @convesoft/nx-rust` again.
 
 Then it reports what it found:
 
 - tools from the table above that your settings need and that are missing, as
   warnings, and tools that are missing but not needed by your settings, on one
-  line;
+  line. cargo-audit is always on that line when it is missing, because no
+  setting asks for `audit`; an `audit` task still needs it;
 - the warnings that building the graph gives, such as a `target` folder that Nx
   does not ignore;
 - each Cargo workspace whose build directory is inside the repository, with the
   setting that moves it out ([Caching](caching.mara.md#cargos-two-directories)).
-  `nx add` does not write that setting for you.
+  `init` does not write that setting for you.
 
 In a repository without any `Cargo.toml`, it registers the plugin and tells you
-how to create your first crate.
+how to create your first crate. Running it again leaves your plugin entry in
+`nx.json`, options included, as it is, and prints the report again.
 
 Afterwards:
 
@@ -124,9 +128,9 @@ Migrating from `@monodon/rust` is not part of v1.
 Each message says what is wrong, where (the crate, workspace, manifest, option
 or tool) and what to do. Messages have no error codes.
 
-- An error found while Nx builds the project graph stops every Nx command, JS
-  tasks included, until it is fixed. The plugin never leaves a crate out to get
-  past it.
+- An error found while Nx builds the project graph stops every Nx command that
+  requires the project graph, JS tasks included, until it is fixed. The plugin
+  never leaves a crate out to get past it.
 - A missing tool fails only the task that needs it.
 - A warning found while Nx builds the graph is printed there, but on your
   machine the Nx daemon builds the graph in the background and writes it to its
@@ -134,9 +138,10 @@ or tool) and what to do. Messages have no error codes.
   again when a task of the crate concerned runs, and `nx add` prints it too.
   `NX_DAEMON=false` shows it directly.
 
-Keep Cargo's folders out of what Nx sees. Nx ignores only what `.gitignore` and
-`.nxignore` say, so a `target` folder that is not ignored is hashed with your
-sources, and the plugin warns about it:
+Keep Cargo's folders out of what Nx sees. Apart from a few fixed folders such
+as `node_modules`, Nx ignores only what `.gitignore` and `.nxignore` say, so a
+`target` folder that neither covers is hashed with your sources, and the plugin
+warns about it. Either file will do:
 
 ```gitignore
 target/
@@ -198,10 +203,10 @@ The plugin does not write `Cargo.toml`, `Cargo.lock` or `.cargo/config.toml`. Th
 :satisfies: REQ-INIT
 :satisfies: REQ-CRATE-GENERATORS
 
-**`init`**, which `nx add` runs. It has no options, and the only change it makes is the plugin entry in `nx.json`. It works in three steps.
+**`init`**, which `nx add` runs after Nx has installed the package. In v1 it takes no options of its own: it registers the plugin and reports. Options can be added later without breaking anything. The only change `init` makes is the plugin entry in `nx.json`. It works in three steps.
 
-1. **Check.** It runs the checks that graph creation runs once the plugin is registered ([[DES-DIAGNOSTICS]]): the Nx version and, for the `Cargo.toml` files that Nx would hand the plugin, cargo, the Cargo version and toolchain of each workspace, each workspace's `cargo metadata` report and the project names. A problem that would stop graph creation stops `init` before it writes anything, with the message graph creation would give. A registered plugin whose graph fails stops every Nx command in the repository, the tasks of JS projects and `nx g` included ([[EVD-NX-24-SETUP]]). In a repository without any `Cargo.toml`, only the Nx version is checked and no cargo runs.
-2. **Register.** It adds the plugin to `plugins` in `nx.json`. When the plugin is listed already, the entry stays as it is.
+1. **Check.** It runs the checks that graph creation runs once the plugin is registered ([[DES-DIAGNOSTICS]]): the Nx version and, for the `Cargo.toml` files that Nx would hand the plugin, cargo, the Cargo version and toolchain of each workspace, each workspace's `cargo metadata` report and the project names. A problem that would stop graph creation stops `init` before it writes anything, with the message graph creation would give. A registered plugin whose graph fails stops every Nx command that requires the project graph, the tasks of JS projects and `nx g` included ([[EVD-NX-24-SETUP]]). In a repository without any `Cargo.toml`, only the Nx version is checked and no cargo runs.
+2. **Register.** It adds the plugin to `plugins` in `nx.json`. When `nx.json` lists the plugin already, that entry, with whatever options the user set, stays exactly as it is, and `init` still runs its checks and prints its report.
 3. **Report.** It prints, without writing anything:
    - the warnings that graph creation gives ([[DES-DIAGNOSTICS]]);
    - each tool of the table below that the repository's configuration needs and that is missing, as a warning that names the tool, what needs it and how to get it;
@@ -209,14 +214,15 @@ The plugin does not write `Cargo.toml`, `Cargo.lock` or `.cargo/config.toml`. Th
    - each workspace whose build directory lies inside the repository, with the `build.build-dir` setting that the caching guidance suggests. `init` never writes that setting: where Cargo keeps its files stays the repository's choice ([[DES-BUILD-DIRS]], [[EVD-CARGO-DIRECTORIES]]);
    - in a repository without any `Cargo.toml`, how to create a crate.
 
-| Tool                                       | Needed when                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------- |
-| cargo-nextest                              | A workspace uses the nextest runner ([[DES-TEST-RUN]])              |
-| cargo-affected                             | A workspace has `affectedTests` on ([[REQ-AFFECTED-TESTS]])         |
-| cargo-hakari                               | A workspace uses the `hakari` strategy ([[DES-UNIFICATION]])        |
-| The `wasm-bindgen` CLI and the wasm target | A crate has a `wasm-build` target ([[DES-ARTIFACT-STEPS]])          |
-| The napi CLI                               | A crate has a `napi-build` target ([[DES-ARTIFACT-STEPS]])          |
-| cargo-deny                                 | A workspace project has a `deny` target ([[DES-WORKSPACE-TARGETS]]) |
+| Tool                                       | Needed when                                                                                                                                               |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| cargo-nextest                              | A workspace uses the nextest runner ([[DES-TEST-RUN]])                                                                                                    |
+| cargo-affected                             | A workspace has `affectedTests` on ([[REQ-AFFECTED-TESTS]])                                                                                               |
+| cargo-hakari                               | A workspace uses the `hakari` strategy ([[DES-UNIFICATION]])                                                                                              |
+| The `wasm-bindgen` CLI and the wasm target | A crate has a `wasm-build` target ([[DES-ARTIFACT-STEPS]])                                                                                                |
+| The napi CLI                               | A crate has a `napi-build` target ([[DES-ARTIFACT-STEPS]])                                                                                                |
+| cargo-deny                                 | A workspace root holds a cargo-deny configuration file, which gives its workspace project a `deny` target ([[DES-WORKSPACE-TARGETS]])                     |
+| cargo-audit                                | Never: no setting asks for `audit`, so a missing cargo-audit goes on the informational line. An `audit` task still fails without it ([[DES-DIAGNOSTICS]]) |
 
 **`library` and `binary`.** Each creates one crate with `cargo new`, with `--lib` for `library` and `--bin` for `binary`. They have three options and no others:
 
@@ -267,7 +273,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 
 **Nx version.** When it loads, the plugin compares the major version of the installed `nx` with the majors in its peer dependency range, so an unsupported Nx fails graph creation also in a repository without a crate. The error names the major found and the supported majors. For a newer major, `NX_RUST_ALLOW_UNSUPPORTED_NX=true` turns the error into a warning that says the plugin has not been checked on that major, and the plugin continues ([[REQ-COMPATIBILITY]]). The variable has no effect on an older major. The daemon takes over each client's environment and recomputes the graph when a variable changes, so the variable works with the daemon as well ([[EVD-NX-24-SETUP]]).
 
-**Cargo version.** While a workspace's Cargo is supported, the check adds no cargo call to the one that the workspace costs ([[REQ-MULTI-WORKSPACE]]). The error names the version found. The report of Cargo 1.89 lacks the `build_directory` field that later versions report ([[EVD-CARGO-DIRECTORIES]]).
+**Cargo version.** The `cargo metadata` report of a stable Cargo has a `build_directory` field from 1.91 on ([[EVD-CARGO-DIRECTORIES]]). A report without it therefore tells the check that the workspace's Cargo is too old, and while Cargo is supported the check adds no cargo call to the one that the workspace costs ([[REQ-MULTI-WORKSPACE]]). Only the error makes a second call, to name the version found.
 
 **Toolchains.** Graph creation and the toolchain input of a task's cache key do not let rustup install a toolchain that a workspace pins and that is missing: they fail with a message that names the toolchain and the workspace. Tasks keep plain cargo's behaviour.
 

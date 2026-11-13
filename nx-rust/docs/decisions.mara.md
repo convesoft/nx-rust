@@ -297,9 +297,9 @@ GitHub's hosted macOS runners are in short supply in November 2026, so jobs on t
 :status: accepted
 :justifies: DES-DIAGNOSTICS
 
-A diagnostic says what is wrong, where, and what to do ([[REQ-DIAGNOSTICS]]). In v1 it carries no code. Nx 24 gives its own errors no codes, and the cargo messages seen while designing the generators carried none either ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]), so a code would stand alone in a user's output. Once published, every code is an interface to keep stable and to document. Tests check the facts a message names instead.
+A diagnostic says what is wrong, where, and what to do ([[REQ-DIAGNOSTICS]]). In v1 it carries no code. Nx 24 shows no numbered codes in its diagnostics, and the cargo messages seen while designing the generators carried none either ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]), so a code would stand alone in a user's output. Once published, a code is an interface to keep stable and to document. Tests check the facts a message names instead.
 
-Codes can be introduced later without breaking anything, because adding a code to a message takes away nothing a user or a script relies on. They become worth having when people or tools need to refer to one problem across releases: a documentation page per problem, filtering warnings in a pipeline, or wording that changes often. Introducing them then means one stable code per row of [[DES-DIAGNOSTICS]], listed in the setup guidance, and never reused for another problem.
+Codes may be introduced later without breaking anything, because adding a code to a message takes away nothing a user or a script relies on. They would serve people or tools that need to refer to one problem across releases: a documentation page per problem, filtering warnings in a pipeline, or wording that changes often. One possible scheme is a stable code for each row of [[DES-DIAGNOSTICS]], listed in the setup guidance and never reused for another problem. Whether to introduce codes, and in what form, is decided when such a need arises.
 :::
 
 ## Risks
@@ -635,7 +635,7 @@ Experiments on Linux on 13 November 2026, in throwaway folders outside this repo
 - **Template.** With `[build] build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"` in a `.cargo/config.toml` above the workspace, cargo 1.100.0 reported a `build_directory` below the Cargo home (`~/.cargo/build/21/d5123ee45e798c`) and the same `target_directory` as before.
 - **Versions.** For a one-crate package, the report of cargo 1.89 had no `build_directory` key, and the reports of cargo 1.97.1 and 1.100.0 had it. The other top-level keys were the same in all three: `metadata`, `packages`, `resolve`, `target_directory`, `version`, `workspace_default_members`, `workspace_members` and `workspace_root`.
 
-Cargo's changelog lists the stabilisation of `build.build-dir` under 1.91. The field was added to `cargo metadata` by rust-lang/cargo pull request #15377, merged on 2 April 2025, while the setting was still unstable. Which stable release first reports the field was not checked: no toolchain between 1.89 and 1.97.1 was installed, and none was downloaded for this.
+Cargo's source settles where the field begins. It was added to `cargo metadata` by rust-lang/cargo pull request #15377, merged on 2 April 2025, while `build.build-dir` was unstable. In the Cargo that Rust 1.90.0 ships (rust-lang/cargo commit 840b83a, package version 0.91.0), `src/cargo/ops/cargo_output_metadata.rs` writes `build_directory` only when the unstable `-Zbuild-dir` flag is on, and leaves the key out otherwise; unstable flags work only on nightly. In the Cargo that Rust 1.91.0 ships (commit ea2d978, package version 0.92.0), it always writes the field, and Cargo's changelog lists the stabilisation of `build.build-dir` under 1.91. The report of a stable Cargo therefore has `build_directory` from 1.91 on. The source was read through GitHub, at the cargo commits that the `src/tools/cargo` submodule of rust-lang/rust names at the tags `1.90.0` and `1.91.0`. Cargo 1.90 and 1.91 were not run here, because no toolchain was downloaded.
 :::
 
 :::mara evidence EVD-NX-24-SETUP
@@ -657,14 +657,17 @@ Read in the compiled source:
 - **Plugin output.** Plugin workers run with their standard output and error piped into the process that started them (`project-graph/plugins/isolation/isolated-plugin.js`), and the daemon's standard output and error go to its log file (`daemon/client/client.js`). The plugin interface has no channel for warnings (`project-graph/plugins/public-api.d.ts`).
 - **Environment.** A client's first message carries its environment to the daemon, which applies it, forwards it to the plugin workers and recomputes a graph that was created under other values (`daemon/client/client.js`, `daemon/server/handle-client-env.js`).
 - **Ignored paths.** Besides what `.gitignore` and `.nxignore` exclude, Nx always ignores only `**/node_modules`, `**/.git`, `**/.nx/cache`, `**/.nx/workspace-data` and `**/.yarn/cache`, as printed by calling `getHardcodedIgnorePatterns()` from `nx/src/native`.
-- **Codes.** A search of `nx/dist/src` found no error codes of the form `NX` followed by digits. The only `code:` strings found were five in the validation of release configuration.
+- **Codes.** A search of `nx/dist/src` found no numbered codes for user-facing diagnostics, such as `NX` followed by digits.
 - **TOML.** `nx` depends on `smol-toml`; `@nx/devkit` has no TOML dependency.
 
 Observed in a throwaway git repository outside this one, with that `nx` package linked into its `node_modules`, Node.js 26.12.0, one `Cargo.toml` and a local plugin file listed in `nx.json` whose `createNodes` printed a line with `console.warn`, including the value of an environment variable:
 
 - With `NX_DAEMON=false`, `nx show projects` printed the line in the terminal.
 - With `NX_DAEMON=true`, the terminal showed only the project list, and the line appeared in `.nx/workspace-data/d/daemon.log`. A second run with the same environment did not run the plugin again. A run with the variable changed made the daemon log "Graph recompute necessary due to env variable refresh. Changed keys: …", and the plugin printed the new value there.
-- A second local plugin whose module threw when loaded made `nx run js-app:build`, the `package.json` script of a JS project, fail with "Failed to load 1 Nx plugin(s)" and the thrown message, exit status 1.
+- A second local plugin whose module threw when loaded made `nx run js-app:build`, the `package.json` script of a JS project, fail with "Failed to load 1 Nx plugin(s)" and the thrown message, exit status 1. `nx show projects` and `nx g <package>:init` failed the same way. `nx --version` still worked, and so did `nx g <package>:init --skipProjectGraph`, which ran the generator.
+- A `crate/target` folder that neither `.gitignore` nor `.nxignore` covered was part of the crate's project: Nx's file map listed `crate/target/junk.rs` among the project's files, and the plugin was handed a `Cargo.toml` from `crate/target/package/`. With `target/` in `.nxignore` alone, neither happened.
+
+Observed with pnpm 12.18.0 in a second throwaway repository, whose `package.json` linked that `nx` package, and a local package whose `init` generator threw: `nx add probe-plugin@file:<folder>` added the package to `package.json` and `pnpm-lock.yaml` and installed it, then failed with the generator's message and exit status 1. The package stayed in `package.json` and `node_modules`, and `nx.json` was unchanged.
 :::
 
 ## Sources
