@@ -5,9 +5,11 @@ import { FixtureWorkspace, HARNESS_TIMEOUT, testEnvironment, withoutColours } fr
 
 // Checks with real Nx runs of the plugin's executor what the caching of
 // nxr-fy4t4k stores and restores: the parts of VER-CARGO-UNCHANGED about
-// cache entries and restores, and the missing-toolchain case of
-// VER-CACHE-KEYS. caching.spec.ts checks the declared inputs and outputs,
-// cache-keys.spec.ts the keys.
+// cache entries and restores, the missing-toolchain case of VER-CACHE-KEYS,
+// and the cases of VER-TARGET-DEFAULT-GUARD where the artifact directory
+// lies outside the repository. caching.spec.ts checks the declared inputs
+// and outputs, cache-keys.spec.ts the keys, target-defaults.spec.ts the
+// other cases of the report.
 
 /** Runs Nx in the workspace with static output, its colours removed. */
 async function nx(
@@ -237,7 +239,7 @@ describe("a run with the plugin's executor", () => {
   );
 
   it(
-    "fails a target that the configuration caches where the plugin leaves it uncached in that project",
+    "fails graph creation for a targetDefaults entry that caches a target where the plugin leaves it uncached in that project (VER-TARGET-DEFAULT-GUARD)",
     async () => {
       const workspace = FixtureWorkspace.create("crate-shapes", {
         "nx.json": (text) =>
@@ -249,10 +251,35 @@ describe("a run with the plugin's executor", () => {
 
         expect(result.status).toBe(1);
         expect(result.output).toContain(
+          'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:\n  - It turns on caching for "build", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ',
+        );
+        expect(result.output).toContain("cli (rust/crates/cli/Cargo.toml)");
+        expect(taskCalls(workspace)).toEqual([]);
+        // Where the plugin caches build, the same entry fails nothing.
+        expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails a task whose project.json caches a target where the plugin leaves it uncached in that project, before cargo runs",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "rust/crates/cli/project.json": JSON.stringify({ targets: { build: { cache: true } } }),
+      });
+      try {
+        const env = { CARGO_TARGET_DIR: join(workspace.root, "..", "target-outside") };
+        const result = await nx(workspace, ["run", "cli:build"], env);
+
+        expect(result.status).toBe(1);
+        expect(result.output).toContain(
           'cli:build: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves `build` uncached in this project, because its workspace\'s artifact directory lies outside the repository',
         );
         expect(taskCalls(workspace)).toEqual([]);
-        // Where the plugin caches build, the same entry fails nothing.
+        // Where the plugin caches build, the same file fails nothing.
         expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
       } finally {
         workspace.remove();

@@ -242,8 +242,10 @@ The plugin has to know the folder that cargo writes to:
   artifacts Cargo puts in the folders `debug` and `release`. Leave `profile`
   unset for `dev` and `test`, and use `release` for `bench`.
 - A `targetDefaults` entry in `nx.json` that sets `cache: true` on a target
-  that the plugin leaves uncached makes its task fail before cargo runs, with
-  the reason.
+  that the plugin leaves uncached fails graph creation
+  ([Target defaults that reach Rust targets](targets.mara.md#target-defaults-that-reach-rust-targets)).
+  A `project.json` or `package.json` that does so makes the task fail before
+  cargo runs, with the reason.
 
 ## Cargo's two directories
 
@@ -474,7 +476,7 @@ When the reports of two or more workspaces name the same artifact directory, the
 
 **Paths.** Nx interpolates outputs from a task's options ([[EVD-NX-24-INPUTS-OUTPUTS]]). `build` names its files in `<artifact directory>/{options.targetTriple ?? .}/{options.profile ?? debug}`, the folder of the task's triple and profile, and `doc` names `<artifact directory>/{options.targetTriple ?? .}/doc`. A library's `cdylib` and `staticlib` files are named for Linux and for macOS, and Nx stores the ones that exist. Every other target declares an empty list of outputs, because Nx gives a target called `build` without outputs folders of its own. Nothing is cached where the plugin cannot name these folders. `build` and `doc` reject the profiles `dev`, `test` and `bench`, whose folders Cargo calls `debug`, `debug` and `release`: the executor fails such a task before cargo runs, and its message names the profile to use instead, none for `dev` and `test` and `release` for `bench`. Where Cargo's configuration of a workspace sets `build.target`, its `build` and `doc` targets whose options name no triple are inferred uncached, and the plugin says so when the graph is created, naming the file and the `targetTriple` option. Where `CARGO_BUILD_TARGET` is set in a task's environment and the task names no triple, the executor fails a cached `build` or `doc` before cargo runs, and its message names the `targetTriple` option; Nx stores nothing for a failed task. Issue nxr-3svm6z may replace these two rules with outputs in the triple's folder.
 
-**Per project.** Each inferred target carries in its metadata, under `cargo.uncached`, why the plugin leaves it uncached in its project, for every target that it does not cache: by design, or for one of the reasons above. The executor fails a task whose configuration caches such a target anyway, such as through a `targetDefaults` entry, before cargo runs, so that Nx stores no result for it.
+**Per project.** Each inferred target carries in its metadata, under `cargo.uncached`, why the plugin leaves it uncached in its project, for every target that it does not cache: by design, or for one of the reasons above. A `targetDefaults` entry that caches such a target fails graph creation ([[DES-TARGET-DEFAULT-GUARD]]), and the executor fails a task whose configuration caches it anyway, such as through a `project.json`, before cargo runs, so that Nx stores no result for it.
 :::
 
 :::mara design DES-BUILD-DIRS
