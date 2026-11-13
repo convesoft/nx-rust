@@ -28,15 +28,24 @@ import {
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 const runExecutor = "@convesoft/nx-rust:run";
+const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 
 /** The empty target defaults that init adds for the plugin's executors. */
-const executorEntries = { [cargoExecutor]: {}, [runExecutor]: {} };
+const executorEntries = { [cargoExecutor]: {}, [runExecutor]: {}, [lockfileExecutor]: {} };
 
 /** The line with which init says which target defaults it added. */
 function addedLine(executors: string[]): string {
-  const entries = executors.map((executor) => `"${executor}": {}`).join(" and ");
+  const names = executors.map((executor) => `"${executor}": {}`);
+  const entries =
+    names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
   return `Added ${entries} to targetDefaults in nx.json, keyed by the executors of the targets that nx-rust infers.`;
 }
+
+/** The lockfile task's cargo call in the workspace in `rust/`. */
+const updateRustLockfile: CargoCall = { cwd: "rust", args: ["update", "--workspace"] };
+
+/** The dependency of the crates' cached targets on the lockfile task of `rust`. */
+const lockfileTask = { projects: ["directory:rust"], target: "lockfile" };
 
 /** The part of that line that names no entry. */
 const addedAny = "to targetDefaults in nx.json, keyed by the executors";
@@ -254,7 +263,7 @@ describe("@convesoft/nx-rust", () => {
     );
 
     it(
-      "infers the targets through the installed plugin, with no task dependencies",
+      "infers the targets through the installed plugin, with no task dependencies but those on the lockfile task",
       () => {
         const show = (project: string) =>
           JSON.parse(nx(projectDirectory, cargo, ["show", "project", project, "--json"])).targets;
@@ -262,22 +271,36 @@ describe("@convesoft/nx-rust", () => {
         const rust = show("rust");
 
         expect(Object.keys(api)).toEqual(["build", "check", "lint", "test", "fmt-check", "fmt"]);
-        expect(Object.keys(rust)).toEqual(["doc", "audit", "update"]);
+        expect(Object.keys(rust)).toEqual(["doc", "lockfile", "audit", "update"]);
         const cached = ["build", "check", "lint", "test", "fmt-check", "doc"];
         for (const [name, target] of [...Object.entries(api), ...Object.entries(rust)]) {
-          expect(target).toMatchObject({
-            executor: "@convesoft/nx-rust:cargo",
-            cache: cached.includes(name),
+          expect({ name, target }).toMatchObject({
+            name,
+            target: {
+              executor: name === "lockfile" ? lockfileExecutor : cargoExecutor,
+              cache: cached.includes(name),
+            },
           });
-          expect(target).not.toHaveProperty("dependsOn");
+          expect({ name, dependsOn: (target as { dependsOn?: unknown }).dependsOn }).toEqual({
+            name,
+            dependsOn: cached.includes(name) && name !== "fmt-check" ? [lockfileTask] : undefined,
+          });
         }
 
         // Nx builds the task graph without running a task.
         const file = join(wrapperDirectory, "tasks.json");
         nx(projectDirectory, cargo, ["run-many", "-t", "build", "test", "lint", `--graph=${file}`]);
         const { tasks } = JSON.parse(readFileSync(file, "utf8"));
-        expect(Object.keys(tasks.tasks)).toHaveLength(12);
-        expect(Object.values(tasks.dependencies).flat()).toEqual([]);
+        expect(Object.keys(tasks.tasks)).toHaveLength(13);
+        const dependencies = tasks.dependencies as Record<string, (string | { id: string })[]>;
+        for (const [task, on] of Object.entries(dependencies)) {
+          expect({
+            task,
+            on: on.map((dependency) =>
+              typeof dependency === "string" ? dependency : dependency.id,
+            ),
+          }).toEqual({ task, on: task === "rust:lockfile" ? [] : ["rust:lockfile"] });
+        }
       },
       HARNESS_TIMEOUT,
     );
@@ -298,19 +321,20 @@ describe("@convesoft/nx-rust", () => {
         expect(inputs.external).toContain("npm:@convesoft/nx-rust");
         expect(inputs.external.every((node: string) => node.startsWith("npm:"))).toBe(true);
         expect(inputs.environment).toEqual(
-          expect.arrayContaining(["RUSTFLAGS", "CARGO_BUILD_WARNINGS"]),
+          expect.arrayContaining(["RUSTFLAGS", "CARGO_BUILD_WARNINGS", "NX_RUST_RUN_ID"]),
         );
         expect(inputs.runtime).toEqual([
           "{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true",
         ]);
         expect(inputs.files).toEqual(
           expect.arrayContaining([
-            "rust/Cargo.lock",
             "rust/Cargo.toml",
             "rust/crates/api/Cargo.toml",
             "rust/crates/model/Cargo.toml",
           ]),
         );
+        // Cargo.lock reaches the key through the crate's digest only.
+        expect(inputs.files).not.toContain("rust/Cargo.lock");
       },
       HARNESS_TIMEOUT,
     );
@@ -477,6 +501,7 @@ describe("@convesoft/nx-rust", () => {
           expect(output).toContain("Successfully ran target build for project api");
           expect(cargo.calls(projectDirectory)).toEqual([
             readRustWorkspace,
+            updateRustLockfile,
             { cwd: "rust", args: ["build", "-p", "api"] },
           ]);
         },
@@ -494,7 +519,8 @@ describe("@convesoft/nx-rust", () => {
           expect(output).toMatch(
             /nx run api:build\s+\[(local cache|existing outputs match the cache, left as is)\]/,
           );
-          expect(cargo.calls(projectDirectory)).toEqual([readRustWorkspace]);
+          // The lockfile task, which is not cached, runs in every run.
+          expect(cargo.calls(projectDirectory)).toEqual([readRustWorkspace, updateRustLockfile]);
         },
         HARNESS_TIMEOUT,
       );
@@ -536,8 +562,10 @@ describe("@convesoft/nx-rust", () => {
           );
           expect(cargo.calls(projectDirectory)).toEqual([
             readRustWorkspace,
+            updateRustLockfile,
             { cwd: "rust", args: ["build", "-p", "api"] },
             readRustWorkspace,
+            updateRustLockfile,
             { cwd: "rust", args: ["build", "-p", "api"] },
           ]);
         },
@@ -584,8 +612,9 @@ describe("@convesoft/nx-rust", () => {
           );
           expect(output).toContain("Successfully ran targets build, test, lint for 4 projects");
           expect(output).not.toMatch(compiles);
-          // Each task ran cargo, which found everything up to date.
-          expect(cargo.calls(projectDirectory)).toHaveLength(1 + 3 * crates.length);
+          // Each task ran cargo, which found everything up to date, and so
+          // did the lockfile task, once.
+          expect(cargo.calls(projectDirectory)).toHaveLength(2 + 3 * crates.length);
         },
         HARNESS_TIMEOUT,
       );
@@ -607,6 +636,80 @@ describe("@convesoft/nx-rust", () => {
           ]);
 
           expect(git("status", "--porcelain", "--untracked-files=all")).toEqual("");
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "brings a stale Cargo.lock up to date through the lockfile task, and fails instead in locked mode, changing nothing",
+        () => {
+          const lockfile = join(rustFolder(), "Cargo.lock");
+          const manifest = join(rustFolder(), "crates", "model", "Cargo.toml");
+          const before = readFileSync(lockfile, "utf8");
+          try {
+            // model now depends on codegen, which its lockfile entry lacks.
+            writeFileSync(
+              manifest,
+              `${readFileSync(manifest, "utf8")}\n[dependencies]\ncodegen = { path = "../codegen" }\n`,
+            );
+            cargo.clear();
+            const failed = nxResult(projectDirectory, cargo, ["run", "model:check"], {
+              NX_RUST_LOCKED: "true",
+            });
+
+            expect(failed.status).toBe(1);
+            expect(failed.output).toContain("--locked");
+            expect(readFileSync(lockfile, "utf8")).toBe(before);
+            expect(cargo.calls(projectDirectory)).toEqual([
+              readRustWorkspace,
+              { cwd: "rust", args: ["update", "--workspace", "--locked"] },
+            ]);
+
+            cargo.clear();
+            const updated = nxResult(projectDirectory, cargo, ["run", "model:check"]);
+
+            expect(updated.status).toBe(0);
+            expect(readFileSync(lockfile, "utf8")).not.toBe(before);
+            expect(cargo.calls(projectDirectory)).toEqual([
+              readRustWorkspace,
+              updateRustLockfile,
+              { cwd: "rust", args: ["check", "--all-targets", "-p", "model"] },
+            ]);
+            // Cargo calls the lockfile current now.
+            execFileSync("cargo", ["metadata", "--format-version", "1", "--locked"], {
+              cwd: rustFolder(),
+              env: testEnvironment(),
+              stdio: "pipe",
+            });
+          } finally {
+            git("checkout", "--", "rust");
+          }
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "runs a cached task in a run that excludes task dependencies, and a normal run then restores its own result",
+        () => {
+          const hit =
+            /nx run model:check\s+\[(local cache|existing outputs match the cache, left as is)\]/;
+          expect(nxResult(projectDirectory, cargo, ["run", "model:check"]).status).toBe(0);
+          for (const args of [
+            ["run", "model:check", "--exclude-task-dependencies"],
+            ["run-many", "-t", "check", "-p", "model", "--excludeTaskDependencies"],
+          ]) {
+            cargo.clear();
+            const excluded = nxResult(projectDirectory, cargo, args);
+
+            expect({ args, status: excluded.status }).toEqual({ args, status: 0 });
+            expect(excluded.output).not.toMatch(hit);
+            expect(cargo.calls(projectDirectory)).toEqual([
+              readRustWorkspace,
+              { cwd: "rust", args: ["check", "--all-targets", "-p", "model"] },
+            ]);
+          }
+          const normal = nxResult(projectDirectory, cargo, ["run", "model:check"]);
+          expect(normal.output).toMatch(hit);
         },
         HARNESS_TIMEOUT,
       );
@@ -884,10 +987,10 @@ describe("@convesoft/nx-rust", () => {
       // The entry keyed "build" reaches the JS project and not the crates.
       expect(show("web").build).toMatchObject(buildDefault.build);
       const api = show("api").build;
-      expect(api).not.toHaveProperty("dependsOn");
+      expect(api.dependsOn).toEqual([lockfileTask]);
       expect(api.inputs).not.toEqual(buildDefault.build.inputs);
 
-      // A second nx add finds the plugin and both entries and writes nothing.
+      // A second nx add finds the plugin and the entries and writes nothing.
       const before = readNxJson();
       const second = nxAdd();
 
@@ -910,18 +1013,20 @@ describe("@convesoft/nx-rust", () => {
       expect(output).toContain(addedLine(Object.keys(executorEntries)));
     }, 300_000);
 
-    it("keeps an entry keyed by the plugin's executor as it is, warns about it and adds the other entry", () => {
-      const defaults = { ...buildDefault, [cargoExecutor]: { dependsOn: ["^build"] } };
+    it("keeps an entry keyed by the plugin's executor as it is, warns about it and adds the other entries", () => {
+      // "..." keeps the dependency on the lockfile task, which the entry
+      // would otherwise replace, an error.
+      const defaults = { ...buildDefault, [cargoExecutor]: { dependsOn: ["...", "^build"] } };
       prepare(defaults);
 
       const { status, output } = nxAdd();
 
       expect(status).toBe(0);
       expect(JSON.parse(readNxJson())).toEqual({
-        targetDefaults: { ...defaults, [runExecutor]: {} },
+        targetDefaults: { ...defaults, [runExecutor]: {}, [lockfileExecutor]: {} },
         plugins: ["@convesoft/nx-rust"],
       });
-      expect(output).toContain(addedLine([runExecutor]));
+      expect(output).toContain(addedLine([runExecutor, lockfileExecutor]));
       expect(output).toContain(
         `The targetDefaults entry "${cargoExecutor}" in nx.json changes targets that nx-rust infers:`,
       );
@@ -954,6 +1059,25 @@ function nx(projectDirectory: string, cargo: CargoWrapper, args: string[]): stri
     env: cargo.environment(testEnvironment()),
     encoding: "utf8",
   });
+}
+
+/**
+ * Runs the test project's Nx like {@link nx}, with static output and the
+ * variables of `env` added, and returns its status and output, without
+ * colours, also when it fails.
+ */
+function nxResult(
+  projectDirectory: string,
+  cargo: CargoWrapper,
+  args: string[],
+  env: Record<string, string> = {},
+): { status: number | null; output: string } {
+  const result = spawnSync("pnpm", ["exec", "nx", "--output-style=static", ...args], {
+    cwd: projectDirectory,
+    env: cargo.environment(testEnvironment(env)),
+    encoding: "utf8",
+  });
+  return { status: result.status, output: withoutColours(`${result.stdout}${result.stderr}`) };
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { TargetConfiguration } from "@nx/devkit";
 import { statSync } from "node:fs";
 import { join } from "node:path";
+import type { PackageVersion } from "../cargo/lockfile";
 import type { CargoPackage } from "../cargo/metadata";
 import { cargoDenyConfigurationFiles } from "../tools/optional-tools";
 import { CacheContext, CacheOptions, configureCaching } from "./caching";
@@ -9,10 +10,16 @@ import { memberManifests } from "./inputs";
 import type { TargetNames } from "./options";
 
 /**
- * The plugin's cargo executor, which runs every inferred target but `run`.
- * It has a batch implementation (`DES-BATCH`).
+ * The plugin's cargo executor, which runs every inferred target but `run`
+ * and `lockfile`. It has a batch implementation (`DES-BATCH`).
  */
 export const cargoExecutor = "@convesoft/nx-rust:cargo";
+
+/**
+ * The executor of the lockfile task, which has no batch implementation, so
+ * that the task never joins a batch (`DES-LOCKFILE-HASHING`).
+ */
+export const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 
 /**
  * The executor of `run`, which has no batch implementation: `cargo run`
@@ -37,6 +44,7 @@ export const inferredTargetNames = [
   "bench",
   "run",
   "doc",
+  "lockfile",
   "audit",
   "deny",
   "update",
@@ -79,6 +87,18 @@ export interface TargetCargoMetadata {
    * whose run names no triple (`DES-OUTPUTS`).
    */
   buildTargetFile?: string;
+  /**
+   * On the lockfile task: the workspace's members, whose digests it writes
+   * (`DES-LOCKFILE-HASHING`).
+   */
+  members?: PackageVersion[];
+  /**
+   * On a cached target that depends on the lockfile task: the members whose
+   * digests its key holds, the crate itself or, on `doc`, every member. The
+   * executor computes them again after cargo's call (`DES-LOCKFILE-HASHING`,
+   * "Post-check").
+   */
+  digests?: PackageVersion[];
 }
 
 /**
@@ -120,15 +140,16 @@ export interface TargetSubject {
  *
  * A crate gets `build`, `check`, `lint`, `test`, `fmt-check` and `fmt`, `run`
  * when it has a binary target and `bench` when it has a bench target. The
- * workspace project gets `doc`, `audit` and `update`, and `deny` where a
- * cargo-deny configuration file is in the workspace root; a root manifest's
- * crate gets both sets. Whether a tool is installed decides nothing.
+ * workspace project gets `doc`, `lockfile`, `audit` and `update`, and `deny`
+ * where a cargo-deny configuration file is in the workspace root; a root
+ * manifest's crate gets both sets. Whether a tool is installed decides
+ * nothing.
  *
- * No target depends on another task, so no target of a crate depends on one
- * of another crate (`REQ-NO-RUST-TASK-DEPS`). Only the targets in
- * {@link cachedTargets} are cached; their inputs and outputs, and the
- * exceptions for the artifact directory, come from `configureCaching` in
- * `caching.ts`.
+ * Only the targets in {@link cachedTargets} are cached; their inputs and
+ * outputs, the exceptions for the artifact directory, and the dependency of
+ * every cached target but `fmt-check` on the lockfile task of its workspace,
+ * which is the one task dependency of a crate's target
+ * (`REQ-NO-RUST-TASK-DEPS`), come from `configureCaching` in `caching.ts`.
  *
  * @param context What the caching of the graph's projects shares.
  * @param caching What the project's settings change in its caching.
@@ -188,6 +209,13 @@ export function inferTargets(
         noDeps: true,
       }),
     );
+    targets.set("lockfile", {
+      ...target(
+        "lockfile",
+        "Lets cargo update --workspace bring Cargo.lock up to date and writes a digest of each member's locked dependencies.",
+      ),
+      executor: lockfileExecutor,
+    });
     targets.set("audit", {
       ...target("audit", "Checks Cargo.lock for security advisories with cargo audit."),
       inputs: [lockfile, manifest, "{projectRoot}/.cargo/audit.toml"],

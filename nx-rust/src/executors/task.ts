@@ -2,8 +2,15 @@ import type { ExecutorContext, Task } from "@nx/devkit";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { PackageVersion } from "../cargo/lockfile";
 import { nxVerdictFor } from "../compatibility/nx-version";
 import { cargoMetadataOf } from "../graph/collisions";
+import {
+  commandDigestFolder,
+  commandIdVariable,
+  digestFolder,
+  runIdVariable,
+} from "../graph/lockfile-task";
 import { uncachedByDesign } from "../graph/outputs";
 import {
   cachedTargets,
@@ -19,6 +26,7 @@ import {
   requireTool,
 } from "../tools/optional-tools";
 import { cargoArguments, type CargoTargetOptions, pluginVersionOption } from "./command";
+import { checkDigests, DigestCheck, DigestWrite, writeDigests } from "./digests";
 import { recordedNxCommand } from "./nx-command";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
 
@@ -72,7 +80,16 @@ export interface CargoInvocation {
 export interface TaskInvocation extends CargoInvocation {
   /** One warning line per option that the task ignores (`DES-UNKNOWN-OPTIONS`). */
   warnings: string[];
+  /**
+   * What the task does with the workspace's lockfile once cargo has succeeded
+   * (`DES-LOCKFILE-HASHING`): the lockfile task writes the members' digests,
+   * and a task whose key holds digests checks them again.
+   */
+  digests?: DigestStep;
 }
+
+/** What a task does with digests after its cargo call ({@link TaskInvocation.digests}). */
+export type DigestStep = ({ kind: "write" } & DigestWrite) | ({ kind: "check" } & DigestCheck);
 
 /**
  * Runs one task of an inferred target as one cargo command: in the root
@@ -113,7 +130,21 @@ export async function runTask(
   for (const warning of invocation.warnings) {
     console.warn(warning);
   }
-  return { success: await runCargo(invocation) };
+  if (!(await runCargo(invocation))) {
+    return { success: false };
+  }
+  const step = invocation.digests;
+  const failure =
+    step === undefined
+      ? undefined
+      : step.kind === "write"
+        ? writeDigests(`${context.projectName ?? ""}:${context.targetName ?? ""}`, step)
+        : checkDigests(step);
+  if (failure !== undefined) {
+    console.error(failure);
+    return { success: false };
+  }
+  return { success: true };
 }
 
 /**
@@ -122,8 +153,8 @@ export async function runTask(
  * project, and locked mode, together with the warning lines for the options
  * that it ignores.
  *
- * @param env The task's environment, with `NX_RUST_LOCKED` and the record of
- *   the `nx` command ({@link recordedNxCommand}).
+ * @param env The task's environment, with `NX_RUST_LOCKED`, `NX_RUST_RUN_ID`
+ *   and the record of the `nx` command ({@link recordedNxCommand}).
  * @throws {TaskError} When the target is no inferred target of this
  *   executor, when its configuration caches a target that the plugin leaves
  *   uncached in this project, when `build` or `doc` gets the profile `dev`,
@@ -132,8 +163,13 @@ export async function runTask(
  *   task's options name none (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
  *   `false`, when `args` does not split into words, when the run gives
  *   `pluginVersion` another value than the target's (`DES-PLUGIN-OPTIONS`),
- *   or when the tool that the target runs besides cargo is not installed
- *   where `env` and the workspace root say (`DES-DIAGNOSTICS`).
+ *   when a task whose target hashes digests does not depend on its
+ *   workspace's lockfile task in a run that does not exclude task
+ *   dependencies (`DES-LOCKFILE-HASHING`), or when the tool that the target
+ *   runs besides cargo is not installed where `env` and the workspace root
+ *   say (`DES-DIAGNOSTICS`). The checks of what reaches the task's key, the
+ *   cache guard, `pluginVersion` and the lockfile dependency, all run before
+ *   the cargo command is built, and the check for the tool after them.
  */
 // @mara implements DES-OUTPUTS
 // @mara implements DES-PLUGIN-OPTIONS
@@ -224,11 +260,38 @@ export function taskInvocation(
       `${task}: this run gives the option "pluginVersion" the value ${JSON.stringify(given)}, but only @convesoft/nx-rust sets that option, to carry its version into the cache key. The value comes from the command line, such as --pluginVersion, or from a task that forwards its options to this one: leave it out. The task does not run, so that Nx stores no result for it.`,
     );
   }
-  const folder = dirname(cargo.workspaceManifest);
-  const cwd = join(context.root, folder);
+  // Whether the key holds the lockfile task's digests, which the task then
+  // checks after cargo's call; a key without them fails the task here.
+  const workspaceRoot = dirname(cargo.workspaceManifest);
+  const cwd = join(context.root, workspaceRoot);
+  const lockfile = join(cwd, "Cargo.lock");
+  const folder = join(context.root, digestFolder(workspaceRoot));
+  // The private copies of this nx command's lockfile tasks.
+  const commandId = (env[commandIdVariable] ?? "").replace(/[^A-Za-z0-9-]/g, "");
+  const commandFolder =
+    commandId === ""
+      ? undefined
+      : join(context.root, commandDigestFolder(workspaceRoot, commandId));
+  let digests: DigestStep | undefined;
+  if (metadata.target === "lockfile") {
+    digests = { kind: "write", lockfile, folder, commandFolder, members: metadata.members ?? [] };
+  } else if (
+    metadata.digests !== undefined &&
+    keyHoldsDigests(context, cargo.workspaceManifest, env)
+  ) {
+    digests = {
+      kind: "check",
+      task,
+      lockfile,
+      folder,
+      commandFolder,
+      members: metadata.digests,
+      workspace: workspaceRoot,
+    };
+  }
   const tool = targetTools[metadata.target];
   if (tool !== undefined) {
-    const neededBy = `the ${targetName} target of the Cargo workspace in ${describeFolder(folder)}`;
+    const neededBy = `the ${targetName} target of the Cargo workspace in ${describeFolder(workspaceRoot)}`;
     try {
       requireTool(tool, neededBy, {
         workspaceRoot: context.root,
@@ -249,7 +312,67 @@ export function taskInvocation(
     },
     examined.options,
   );
-  return { args, cwd, warnings: examined.warnings };
+  return {
+    args,
+    cwd,
+    warnings: examined.warnings,
+    ...(digests === undefined ? {} : { digests }),
+  };
+}
+
+/**
+ * Whether the key of a task whose target hashes digests holds them, so that
+ * the task checks them after cargo's call (`DES-LOCKFILE-HASHING`,
+ * "Post-check"). A run that excludes task dependencies, which the plugin's
+ * hook marks with a new `NX_RUST_RUN_ID`, runs no lockfile task, and the
+ * task's key, which holds that value, is never computed again, so nothing
+ * is checked. A task invoked outside a task graph that holds it, such as
+ * through another executor, is keyed as that graph says and is not checked
+ * either.
+ *
+ * @throws {TaskError} When the task graph holds the task without its
+ *   dependency on the lockfile task of its workspace while the run does not
+ *   exclude task dependencies: its key then holds no digest, and the task
+ *   fails before cargo runs, so that Nx stores no result for it.
+ */
+// @mara implements DES-LOCKFILE-HASHING
+function keyHoldsDigests(
+  context: ExecutorContext,
+  workspaceManifest: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if ((env[runIdVariable] ?? "") !== "") {
+    return false;
+  }
+  const graphTask = graphTaskOf(context);
+  if (graphTask === undefined) {
+    return false;
+  }
+  const projects = context.projectsConfigurations?.projects ?? {};
+  // An edge is an object with the task's id; older task graphs held the id itself.
+  const edges: unknown[] = context.taskGraph?.dependencies?.[graphTask.id] ?? [];
+  const dependsOnLockfile = edges.some((edge) => {
+    const id = typeof edge === "string" ? edge : (edge as { id?: string } | null)?.id;
+    const dependency = id === undefined ? undefined : context.taskGraph?.tasks?.[id]?.target;
+    const project = dependency === undefined ? undefined : projects[dependency.project];
+    const target = project?.targets?.[dependency?.target ?? ""];
+    return (
+      targetMetadata(target?.metadata?.[targetCargoMetadataKey])?.target === "lockfile" &&
+      project !== undefined &&
+      cargoMetadataOf(project)?.workspaceManifest === workspaceManifest
+    );
+  });
+  if (!dependsOnLockfile) {
+    const task = `${context.projectName ?? ""}:${context.targetName ?? ""}`;
+    const folder = dirname(workspaceManifest);
+    throw new TaskError(
+      [
+        `${task}: this task does not depend on the lockfile task of its Cargo workspace, ${folder === "." ? "at the repository root" : `in ${folder}`}, so its cache key holds no digest of the crate's locked dependencies, and Nx could restore its result after Cargo.lock has changed. The task does not run, so that Nx stores no result for it.`,
+        `Make sure that the workspace's folder is an Nx project with the plugin's lockfile target, and that no configuration replaces the dependsOn of ${task}: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry. A run with --exclude-task-dependencies runs the task without the lockfile task, and Nx never restores what it stores then.`,
+      ].join("\n"),
+    );
+  }
+  return true;
 }
 
 /**
@@ -361,7 +484,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
-  const { target, locked, uncached, buildTargetFile } = value as Partial<
+  const { target, locked, uncached, buildTargetFile, members, digests } = value as Partial<
     Record<keyof TargetCargoMetadata, unknown>
   >;
   return (inferredTargetNames as readonly unknown[]).includes(target)
@@ -370,6 +493,21 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
         locked: locked === true,
         ...(typeof uncached === "string" ? { uncached } : {}),
         ...(typeof buildTargetFile === "string" ? { buildTargetFile } : {}),
+        ...(isPackageList(members) ? { members } : {}),
+        ...(isPackageList(digests) ? { digests } : {}),
       }
     : undefined;
+}
+
+function isPackageList(value: unknown): value is PackageVersion[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        typeof (entry as PackageVersion).name === "string" &&
+        typeof (entry as PackageVersion).version === "string",
+    )
+  );
 }

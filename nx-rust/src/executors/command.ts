@@ -119,7 +119,8 @@ const crateCommands: Partial<Record<InferredTargetName, readonly string[]>> = {
  * a flag comes only from an option that the target takes
  * ({@link optionTargets}), so that the command is the one that a developer
  * types in the workspace root (`DES-INVOCATION`); `run` passes the binary's
- * arguments after `--`. In locked mode every command passes `--locked`,
+ * arguments after `--`, and the lockfile task runs `cargo update
+ * --workspace` (`DES-LOCKFILE-HASHING`). In locked mode every command passes `--locked`,
  * apart from `update`, whose purpose is to change `Cargo.lock`, `fmt` and
  * `fmt-check`, because `cargo fmt` rejects the flag, and `audit`, because
  * cargo-audit only reads the lockfile and has no such flag; cargo-deny takes
@@ -169,6 +170,8 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
       return ["deny", ...flag(locked, "--locked"), "check"];
     case "update":
       return ["update"];
+    case "lockfile":
+      return ["update", "--workspace", ...flag(locked, "--locked")];
   }
   throw new Error(`nx-rust has no command for the target "${target}".`);
 }

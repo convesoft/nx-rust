@@ -8,6 +8,8 @@ import {
   FixtureName,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  lockfileCalls,
+  taskCalls,
   testEnvironment,
   ToolFolders,
   withoutColours,
@@ -29,11 +31,6 @@ async function nx(
 ): Promise<{ status: number | null; output: string }> {
   const { status, output } = await workspace.nx([...args, "--output-style=static"], env);
   return { status, output: withoutColours(output) };
-}
-
-/** The cargo calls of tasks: every logged call but graph creation's `cargo metadata`. */
-function taskCalls(workspace: FixtureWorkspace): CargoCall[] {
-  return workspace.cargoCalls().filter((call) => call.args[0] !== "metadata");
 }
 
 /** Calls in a stable order, for runs whose tasks run in parallel. */
@@ -386,6 +383,8 @@ describe("the cargo executor", () => {
             args: expect.arrayContaining(["metadata"]),
             env: { RUSTUP_AUTO_INSTALL: "0" },
           }),
+          // The lockfile task's cargo and the task's own get the task's environment.
+          { cwd: "rust", args: ["update", "--workspace"], env: { RUSTUP_AUTO_INSTALL: null } },
           {
             cwd: "rust",
             args: ["check", "--all-targets", "-p", "core-lib"],
@@ -585,7 +584,7 @@ describe("locked mode", () => {
       ),
     );
     expect(result.status).toBe(0);
-    return taskCalls(workspace)
+    return [...taskCalls(workspace), ...lockfileCalls(workspace)]
       .map((call) => {
         expect(call.cwd).toBe("rust");
         return call.args.join(" ");
@@ -612,6 +611,8 @@ describe("locked mode", () => {
     "test -p cli",
     "test -p perf",
     "update",
+    // The lockfile task, once in the run.
+    "update --workspace",
   ];
   const locked = [
     "audit",
@@ -632,6 +633,7 @@ describe("locked mode", () => {
     "test -p cli --locked",
     "test -p perf --locked",
     "update",
+    "update --workspace --locked",
   ];
 
   it.each<[string, object, Env, string[]]>([

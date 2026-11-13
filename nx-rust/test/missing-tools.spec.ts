@@ -9,7 +9,13 @@ import {
   ToolContext,
   wasmTriple,
 } from "../src/tools/optional-tools";
-import { FixtureWorkspace, HARNESS_TIMEOUT, ToolFolders, withoutColours } from "./harness";
+import {
+  FixtureWorkspace,
+  HARNESS_TIMEOUT,
+  taskCalls,
+  ToolFolders,
+  withoutColours,
+} from "./harness";
 
 // The check that the executors make when a task that runs a tool starts
 // (DES-DIAGNOSTICS), over the same table of tools that init reports, and the
@@ -168,9 +174,6 @@ describe("a task whose tool is missing", () => {
     return { status, output: withoutColours(output) };
   }
 
-  /** The cargo calls of tasks: every logged call but graph creation's `cargo metadata`. */
-  const taskCalls = () => workspace.cargoCalls().filter((call) => call.args[0] !== "metadata");
-
   it.each<[string, OptionalToolId]>([
     ["audit", "cargo-audit"],
     ["deny", "cargo-deny"],
@@ -185,7 +188,7 @@ describe("a task whose tool is missing", () => {
       expect(missing.output).toContain(
         `rust:${target}: ${missingToolMessage(tool, [`the ${target} target of the Cargo workspace in rust`])}`,
       );
-      expect(taskCalls()).toEqual([]);
+      expect(taskCalls(workspace)).toEqual([]);
       expect(readdirSync(tools.path)).toEqual([]);
       expect(readdirSync(join(tools.cargoHome, "bin"))).toEqual([]);
 
@@ -196,7 +199,7 @@ describe("a task whose tool is missing", () => {
 
       expect(present.status).toBe(0);
       expect(present.output).not.toContain("is not installed");
-      expect(taskCalls()).toEqual([
+      expect(taskCalls(workspace)).toEqual([
         { cwd: "rust", args: [target, ...(target === "deny" ? ["check"] : [])] },
       ]);
     },
@@ -216,7 +219,7 @@ describe("a task whose tool is missing", () => {
       expect(missing.output).toContain(
         "rust:audit: cargo-audit is not installed, but the audit target of the Cargo workspace in rust needs it.",
       );
-      expect(taskCalls()).toEqual([]);
+      expect(taskCalls(workspace)).toEqual([]);
 
       // In rust/tools, cargo finds it, and so does the check.
       tools.install(join(workspace.root, "rust", "tools"), "cargo-audit", "the stand-in ran");
@@ -224,7 +227,7 @@ describe("a task whose tool is missing", () => {
 
       expect(present.status).toBe(0);
       expect(present.output).toContain("the stand-in ran");
-      expect(taskCalls()).toEqual([{ cwd: "rust", args: ["audit"] }]);
+      expect(taskCalls(workspace)).toEqual([{ cwd: "rust", args: ["audit"] }]);
     },
     HARNESS_TIMEOUT,
   );
