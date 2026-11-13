@@ -1,5 +1,4 @@
 import type { Task } from "@nx/devkit";
-import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { InferredTargetName } from "../graph/targets";
 import { type CargoTargetOptions, targetTakes } from "./command";
@@ -297,14 +296,4 @@ function nxCamelCase(name: string): string {
   return name.indexOf("-") > 1
     ? name.toLowerCase().replace(/-(.)/g, (_match, letter: string) => letter.toUpperCase())
     : name;
-}
-
-/** The names of the options that an executor's schema file declares. */
-export function declaredOptions(schemaFile: string): ReadonlySet<string> {
-  const schema: unknown = JSON.parse(readFileSync(schemaFile, "utf8"));
-  const properties = (schema as { properties?: unknown } | null)?.properties;
-  if (typeof properties !== "object" || properties === null) {
-    throw new Error(`The executor schema ${schemaFile} declares no properties.`);
-  }
-  return new Set(Object.keys(properties));
 }

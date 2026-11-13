@@ -1,3 +1,5 @@
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   type CargoCall,
   type Env,
@@ -297,7 +299,7 @@ describe("the binary of a run task", () => {
 
 describe("settings from a crate's own targets tables", () => {
   it(
-    "give run its args and make it continuous, and an option that a target does not take gets a line",
+    "give run its args and make it continuous; an option that a target does not take fails graph creation there and gets a line from a project.json",
     () =>
       inFixture(
         "crate-shapes",
@@ -324,10 +326,11 @@ dependsOn = [{ projects = ["server"], target = "run" }]
 
 [package.metadata.nx.targets.run.options]
 args = "--name 'a b'"
-
-[package.metadata.nx.targets.build.options]
-allTargets = true
 `,
+          // A source that the plugin does not own, which graph creation does not check.
+          "rust/crates/cli/project.json": JSON.stringify({
+            targets: { build: { options: { allTargets: true } } },
+          }),
         },
         async (workspace) => {
           const graph = await workspace.graph();
@@ -345,8 +348,8 @@ allTargets = true
           ]);
           expect(linesWith(ran.output, "ignoring")).toEqual([]);
 
-          // Graph creation accepts the option until nxr-95kg91 rejects it
-          // there; the task leaves it out and says where it came from.
+          // From the project.json, the task leaves the option out and says
+          // where it came from.
           workspace.cargo.clear();
           const built = await runNx(workspace, ["run", "cli:build"]);
           expect(built.status).toBe(0);
@@ -354,6 +357,15 @@ allTargets = true
           expect(linesWith(built.output, "ignoring")).toEqual([
             'cli:build: ignoring option `allTargets`, which this target does not take. It comes from the workspace\'s configuration: run `nx show target cli:build --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by "@convesoft/nx-rust:cargo".',
           ]);
+
+          // In the crate's own table, the same option fails graph creation.
+          appendFileSync(
+            join(workspace.root, "rust/crates/cli/Cargo.toml"),
+            "\n[package.metadata.nx.targets.build.options]\nallTargets = true\n",
+          );
+          await expect(workspace.graph()).rejects.toThrow(
+            'rust/crates/cli/Cargo.toml: [package.metadata.nx.targets.build.options] sets the option "allTargets", which the inferred target "build" does not take.',
+          );
         },
       ),
     HARNESS_TIMEOUT,
