@@ -395,6 +395,9 @@ Options of inferred targets are set under `targets.<name>.options`, in a configu
 | `bin`               | `--bin`                                                                                       | `run` ([[DES-TARGET-COMMANDS]])                                                          | none: `default-run` or the only binary, as Cargo chooses |
 | `args`              | the binary's arguments, after `--`: a string split into words as [[DES-TARGET-COMMANDS]] says | `run` ([[DES-TARGET-COMMANDS]])                                                          | none                                                     |
 | `affectedTests`     | none                                                                                          | `test`                                                                                   | the workspace's `affectedTests`                          |
+| `pluginVersion`     | none                                                                                          | every target the plugin infers, where Nx has no node for the plugin's package            | the plugin's version                                     |
+
+`pluginVersion` is set by the plugin and not meant to be set by hand. It is the one target option that the plugin sets itself and that comes from no cargo flag: it carries the plugin's version into each task's key where Nx has no npm node for the plugin ([[DES-INPUTS]]), and each executor's schema declares it ([[DES-UNKNOWN-OPTIONS]]).
 
 `profile` names a Cargo profile. With the nextest runner, `test` passes it to `cargo nextest run` as `--cargo-profile`, because nextest takes `--profile` for a profile of its own configuration, and to the doctest step, `cargo test --doc`, as `--profile` ([[DES-TEST-RUN]], [[EVD-NEXTEST-CARGO-FLAGS]]). nextest takes the other flags of the table as cargo does.
 

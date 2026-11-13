@@ -35,10 +35,12 @@ the lockfile is its job, and `fmt` and `fmt-check`, because `cargo fmt` rejects
 `--locked`.
 
 A task that Nx restores from the cache runs no cargo at all, and locked mode is
-not part of its key. A result that a developer stored before cargo updated
-their lockfile therefore passes in CI although the committed `Cargo.lock` is
-out of date. To catch that every time, check each workspace with a command of
-its own, outside Nx:
+not part of its key. The `lockfile` task of each workspace is not cached,
+though, and passes `--locked`: every run in which it runs fails on an outdated
+`Cargo.lock`, even when every crate task is restored. A job that runs only
+`fmt` or `fmt-check`, excludes task dependencies or runs no Rust task does not
+check the lockfile. To check it there as well, run a command of its own in
+each workspace, outside Nx:
 
 ```sh
 (cd rust && cargo metadata --format-version 1 --locked > /dev/null)
