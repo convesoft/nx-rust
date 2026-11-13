@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import { cargoSubcommandInstalled } from "../src/tools/optional-tools";
 import {
   CargoCall,
   FileChanges,
@@ -8,6 +9,7 @@ import {
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   testEnvironment,
+  ToolFolders,
   withoutColours,
 } from "./harness";
 
@@ -52,6 +54,24 @@ async function inFixture(
     await test(workspace);
   } finally {
     workspace.remove();
+  }
+}
+
+/**
+ * Runs `test` with a `PATH` that starts with stand-ins for cargo-audit and
+ * cargo-deny, which print an empty line and succeed, so that `audit` and
+ * `deny` pass the executor's check for their tool and reach cargo. The tools
+ * are installed neither here nor in CI, and the tests install neither;
+ * missing-tools.spec.ts checks the tasks without them.
+ */
+async function withToolStandIns<T>(test: (env: Env) => Promise<T>): Promise<T> {
+  const tools = new ToolFolders();
+  try {
+    tools.install(tools.path, "cargo-audit");
+    tools.install(tools.path, "cargo-deny");
+    return await test({ PATH: [tools.path, testEnvironment().PATH].join(delimiter) });
+  } finally {
+    tools.remove();
   }
 }
 
@@ -248,25 +268,21 @@ describe("the cargo executor", () => {
   it(
     "runs the workspace project's targets in the workspace root",
     () =>
-      inFixture("crate-shapes", { "rust/deny.toml": "" }, async (workspace) => {
-        expect((await nx(workspace, ["run", "rust:doc"])).status).toBe(0);
-        expect((await nx(workspace, ["run", "rust:update"])).status).toBe(0);
-        // cargo-audit and cargo-deny are not installed here or in CI, so
-        // cargo fails, and so do the tasks.
-        const audit = await nx(workspace, ["run", "rust:audit"]);
-        const deny = await nx(workspace, ["run", "rust:deny"]);
+      inFixture("crate-shapes", { "rust/deny.toml": "" }, (workspace) =>
+        withToolStandIns(async (env) => {
+          for (const task of ["rust:doc", "rust:update", "rust:audit", "rust:deny"]) {
+            const { status } = await nx(workspace, ["run", task], env);
+            expect({ task, status }).toEqual({ task, status: 0 });
+          }
 
-        expect(taskCalls(workspace)).toEqual([
-          rust(["doc", "--no-deps", "--workspace"]),
-          rust(["update"]),
-          rust(["audit"]),
-          rust(["deny", "check"]),
-        ]);
-        expect(audit.status).toBe(1);
-        expect(audit.output).toContain("no such command: `audit`");
-        expect(deny.status).toBe(1);
-        expect(deny.output).toContain("no such command: `deny`");
-      }),
+          expect(taskCalls(workspace)).toEqual([
+            rust(["doc", "--no-deps", "--workspace"]),
+            rust(["update"]),
+            rust(["audit"]),
+            rust(["deny", "check"]),
+          ]);
+        }),
+      ),
     HARNESS_TIMEOUT,
   );
 
@@ -557,19 +573,18 @@ describe("locked mode", () => {
   const targets = ["build", "check", "lint", "test", "fmt-check", "fmt", "bench", "run"];
   const workspaceTargets = ["doc", "update", "audit", "deny"];
 
-  // Every target of perf, cli and the workspace project, with cargo-deny configured.
+  // Every target of perf, cli and the workspace project, with cargo-deny
+  // configured and stand-ins for cargo-audit and cargo-deny.
   async function runAll(workspace: FixtureWorkspace, env: Env): Promise<string[]> {
     workspace.cargo.clear();
-    const result = await nx(
-      workspace,
-      ["run-many", "-t", ...targets, ...workspaceTargets, "-p", "perf", "cli", "rust"],
-      env,
+    const result = await withToolStandIns((standIns) =>
+      nx(
+        workspace,
+        ["run-many", "-t", ...targets, ...workspaceTargets, "-p", "perf", "cli", "rust"],
+        { ...env, ...standIns },
+      ),
     );
-    // audit and deny fail: the tools are not installed.
-    expect(result.output).toContain("Failed tasks:");
-    expect(result.output).toContain("- rust:audit");
-    expect(result.output).toContain("- rust:deny");
-    expect(result.output.match(/^[ \t]*- \S+:\S+$/gm)).toHaveLength(2);
+    expect(result.status).toBe(0);
     return taskCalls(workspace)
       .map((call) => {
         expect(call.cwd).toBe("rust");
@@ -730,6 +745,35 @@ describe("locked mode", () => {
       ),
     HARNESS_TIMEOUT,
   );
+
+  // Only the real cargo-deny reads Cargo.lock through cargo, and the tests
+  // install none, so this runs only where cargo-deny is installed.
+  if (cargoSubcommandInstalled("deny", testEnvironment())) {
+    it.each<[string, object, Env]>([
+      ["the locked option", { locked: true }, {}],
+      ["NX_RUST_LOCKED=true", {}, { NX_RUST_LOCKED: "true" }],
+    ])(
+      "fails deny against a stale Cargo.lock with %s and leaves the file as it is",
+      (_case, options, env) =>
+        inFixture(
+          "crate-shapes",
+          { ...newDependency, "nx.json": pluginOptions(options), "rust/deny.toml": "" },
+          async (workspace) => {
+            const before = lockfile(workspace);
+            const deny = await nx(workspace, ["run", "rust:deny"], env);
+
+            expect(deny.status).toBe(1);
+            expect(taskCalls(workspace)).toEqual([rust(["deny", "--locked", "check"])]);
+            expect(lockfile(workspace)).toEqual(before);
+          },
+        ),
+      HARNESS_TIMEOUT,
+    );
+  } else {
+    it.todo(
+      "fails deny against a stale Cargo.lock in locked mode and leaves the file as it is: install cargo-deny to check it",
+    );
+  }
 });
 
 describe("fmt", () => {

@@ -2,6 +2,7 @@ import type { ExecutorContext, Task } from "@nx/devkit";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { nxVerdictFor } from "../compatibility/nx-version";
 import { cargoMetadataOf } from "../graph/collisions";
 import { uncachedByDesign } from "../graph/outputs";
 import {
@@ -11,6 +12,12 @@ import {
   type TargetCargoMetadata,
   targetCargoMetadataKey,
 } from "../graph/targets";
+import {
+  describeFolder,
+  MissingToolError,
+  type OptionalToolId,
+  requireTool,
+} from "../tools/optional-tools";
 import { cargoArguments, type CargoTargetOptions, pluginVersionOption } from "./command";
 import { recordedNxCommand } from "./nx-command";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
@@ -25,6 +32,15 @@ const renamedProfiles: Readonly<Record<string, string>> = {
   test: "no profile, which builds the dev profile into the same folder, debug, or a custom profile that inherits from test",
   bench:
     "the profile release, whose folder cargo uses for bench too, or a custom profile that inherits from bench",
+};
+
+/**
+ * The tool besides cargo that a target runs, by the target's default name:
+ * a cargo subcommand that the plugin never installs (`ADR-V1-SCOPE`).
+ */
+const targetTools: Partial<Record<InferredTargetName, OptionalToolId>> = {
+  audit: "cargo-audit",
+  deny: "cargo-deny",
 };
 
 /** A problem that stops a task before cargo runs; its message is what the task prints. */
@@ -68,9 +84,10 @@ export interface TaskInvocation extends CargoInvocation {
  * A problem found before cargo starts fails the task with a message that
  * names it and runs no cargo. An option that the task ignores gets a warning
  * line at the top of its output. Before anything else, the task prints the
- * warnings that graph creation found for its project, which the Nx daemon
- * keeps out of the terminal (`DES-DIAGNOSTICS`, "Warnings where they are
- * seen").
+ * warnings that graph creation found for its project, and the warning for
+ * an Nx major newer than the supported ones that `NX_RUST_ALLOW_UNSUPPORTED_NX`
+ * lets the plugin run with, which the Nx daemon keeps out of the terminal
+ * (`DES-DIAGNOSTICS`, "Warnings where they are seen").
  */
 // @mara implements DES-INVOCATION
 // @mara implements REQ-CARGO-UNCHANGED
@@ -80,7 +97,7 @@ export async function runTask(
   options: CargoTargetOptions,
   context: ExecutorContext,
 ): Promise<{ success: boolean }> {
-  for (const warning of projectWarnings(context)) {
+  for (const warning of [...nxWarnings(context.root), ...projectWarnings(context)]) {
     console.warn(warning);
   }
   let invocation: TaskInvocation;
@@ -113,11 +130,14 @@ export async function runTask(
  *   `test` or `bench`, or is cached while `CARGO_BUILD_TARGET` or
  *   `build.target` in Cargo's configuration chooses its triple and the
  *   task's options name none (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
- *   `false`, when `args` does not split into words, or when the run gives
- *   `pluginVersion` another value than the target's (`DES-PLUGIN-OPTIONS`).
+ *   `false`, when `args` does not split into words, when the run gives
+ *   `pluginVersion` another value than the target's (`DES-PLUGIN-OPTIONS`),
+ *   or when the tool that the target runs besides cargo is not installed
+ *   where `env` and the workspace root say (`DES-DIAGNOSTICS`).
  */
 // @mara implements DES-OUTPUTS
 // @mara implements DES-PLUGIN-OPTIONS
+// @mara implements DES-DIAGNOSTICS
 export function taskInvocation(
   executor: PluginExecutor,
   options: CargoTargetOptions,
@@ -204,6 +224,22 @@ export function taskInvocation(
       `${task}: this run gives the option "pluginVersion" the value ${JSON.stringify(given)}, but only @convesoft/nx-rust sets that option, to carry its version into the cache key. The value comes from the command line, such as --pluginVersion, or from a task that forwards its options to this one: leave it out. The task does not run, so that Nx stores no result for it.`,
     );
   }
+  const folder = dirname(cargo.workspaceManifest);
+  const cwd = join(context.root, folder);
+  const tool = targetTools[metadata.target];
+  if (tool !== undefined) {
+    const neededBy = `the ${targetName} target of the Cargo workspace in ${describeFolder(folder)}`;
+    try {
+      requireTool(tool, neededBy, {
+        workspaceRoot: context.root,
+        workspaces: [],
+        env,
+        folder: cwd,
+      });
+    } catch (error) {
+      throw error instanceof MissingToolError ? new TaskError(`${task}: ${error.message}`) : error;
+    }
+  }
   const args = cargoArguments(
     {
       target: metadata.target,
@@ -213,11 +249,7 @@ export function taskInvocation(
     },
     examined.options,
   );
-  return {
-    args,
-    cwd: join(context.root, dirname(cargo.workspaceManifest)),
-    warnings: examined.warnings,
-  };
+  return { args, cwd, warnings: examined.warnings };
 }
 
 /**
@@ -303,6 +335,15 @@ export function runCargo({ args, cwd }: CargoInvocation): Promise<boolean> {
     });
     child.on("close", (code) => finish(code === 0));
   });
+}
+
+// The warning for an unsupported Nx that the plugin runs with, which graph
+// creation printed where the daemon may have kept it from the terminal. An
+// unsupported Nx without the variable has failed graph creation already.
+// @mara implements DES-DIAGNOSTICS
+function nxWarnings(workspaceRoot: string): string[] {
+  const verdict = nxVerdictFor(workspaceRoot, process.env);
+  return verdict.kind === "warning" ? [verdict.message] : [];
 }
 
 // The warnings that graph creation recorded for the task's project.

@@ -9,11 +9,14 @@ import {
   ToolContext,
   wasmTriple,
 } from "../src/tools/optional-tools";
-import { ToolFolders } from "./harness";
+import { FixtureWorkspace, HARNESS_TIMEOUT, ToolFolders, withoutColours } from "./harness";
 
 // The check that the executors make when a task that runs a tool starts
-// (DES-DIAGNOSTICS). The executors do not exist yet (nxr-kmdpgj), so this
-// checks the check itself, over the same table of tools that init reports.
+// (DES-DIAGNOSTICS), over the same table of tools that init reports, and the
+// tasks that run such a tool today, audit and deny, through the real Nx and
+// cargo (the fifth paragraph of VER-SETUP, and the missing tools of
+// VER-TARGETS). The targets that run the other tools of the table do not
+// exist yet; the issues that add them add their tasks here.
 
 /** For each tool, what a test installs to make it present. */
 const installs: Record<OptionalToolId, (tools: ToolFolders, root: string) => void> = {
@@ -117,4 +120,55 @@ describe("a task's check for the tool it runs", () => {
       /^The napi CLI is not installed, but the napi-build target of the crate addon needs it\./,
     );
   });
+});
+
+describe("a task whose tool is missing", () => {
+  it.each<[string, OptionalToolId]>([
+    ["audit", "cargo-audit"],
+    ["deny", "cargo-deny"],
+  ])(
+    "fails %s before cargo runs, naming the tool, the target and how to get it, and installs nothing",
+    async (target, id) => {
+      const tool = optionalTools.find((candidate) => candidate.id === id)!;
+      // An empty PATH and Cargo home hide the tools that the machine has.
+      const tools = new ToolFolders();
+      const workspace = FixtureWorkspace.create("crate-shapes", { "rust/deny.toml": "" });
+      try {
+        const run = async () => {
+          const { status, output } = await workspace.nx(
+            ["run", `rust:${target}`, "--output-style=static"],
+            tools.env(),
+          );
+          return { status, output: withoutColours(output) };
+        };
+        const taskCalls = () =>
+          workspace.cargoCalls().filter((call) => call.args[0] !== "metadata");
+
+        const missing = await run();
+
+        expect(missing.status).toBe(1);
+        expect(missing.output).toContain(
+          `rust:${target}: ${missingToolMessage(tool, [`the ${target} target of the Cargo workspace in rust`])}`,
+        );
+        expect(taskCalls()).toEqual([]);
+        expect(readdirSync(tools.path)).toEqual([]);
+        expect(readdirSync(join(tools.cargoHome, "bin"))).toEqual([]);
+
+        // The positive control: with a stand-in for the tool, the same task
+        // runs cargo, so Nx replays nothing that the failed run left.
+        installs[id](tools, workspace.root);
+        const present = await run();
+
+        expect(present.status).toBe(0);
+        expect(present.output).not.toContain("is not installed");
+        expect(taskCalls()).toEqual([
+          { cwd: "rust", args: [target, ...(target === "deny" ? ["check"] : [])] },
+        ]);
+      } finally {
+        workspace.remove();
+        tools.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
 });

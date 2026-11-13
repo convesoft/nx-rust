@@ -22,6 +22,7 @@ import {
   installProbeExecutor,
   repositoryFiles,
   testEnvironment,
+  ToolFolders,
   withoutColours,
 } from "../../nx-rust/test/harness";
 
@@ -704,6 +705,53 @@ describe("@convesoft/nx-rust", () => {
             );
           } finally {
             spawnSync("pnpm", ["exec", "nx", "daemon", "--stop"], { cwd: projectDirectory, env });
+          }
+        },
+        HARNESS_TIMEOUT,
+      );
+    });
+
+    // DES-DIAGNOSTICS, missing tools: the installed executor checks for the
+    // tool that a task runs before cargo runs, and installs nothing.
+    describe("when the tool that a task runs is missing", () => {
+      beforeAll(() => {
+        installFixture(projectDirectory, "subfolder-workspace");
+      });
+
+      it(
+        "fails audit before cargo runs, naming the tool, the target and how to get it",
+        () => {
+          // An empty PATH and Cargo home hide the tools that the machine has,
+          // so the test runs the linked Nx itself, which pnpm finds on PATH.
+          const tools = new ToolFolders();
+          try {
+            const result = spawnSync(
+              process.execPath,
+              [
+                join(projectDirectory, "node_modules", "nx", "dist", "bin", "nx.js"),
+                "run",
+                "rust:audit",
+                "--output-style=static",
+              ],
+              {
+                cwd: projectDirectory,
+                env: { ...cargo.environment(testEnvironment(tools.env())), NX_TUI: "false" },
+                encoding: "utf8",
+              },
+            );
+            const output = withoutColours(`${result.stdout}${result.stderr}`);
+
+            expect(result.status).toBe(1);
+            expect(output).toContain(
+              "rust:audit: cargo-audit is not installed, but the audit target of the Cargo workspace in rust needs it. Install it with `cargo install --locked cargo-audit` (https://crates.io/crates/cargo-audit).",
+            );
+            expect(
+              cargo.calls(projectDirectory).filter((call) => call.args[0] !== "metadata"),
+            ).toEqual([]);
+            expect(readdirSync(tools.path)).toEqual([]);
+            expect(readdirSync(join(tools.cargoHome, "bin"))).toEqual([]);
+          } finally {
+            tools.remove();
           }
         },
         HARNESS_TIMEOUT,
