@@ -10,9 +10,7 @@
 > 0.2 and 0.3, and `artifacts` until milestone 0.4. Until the plugin detects
 > cargo-hakari configurations (nxr-k64tm5), the check of several entries
 > treats an entry without `featureUnification` as agreeing with one that sets
-> `hakari` or `workspace-build`. A key under a target's `options` or
-> `configurations` in a metadata table that the executor does not know is not
-> rejected yet (nxr-95kg91).
+> `hakari` or `workspace-build`.
 
 Most repositories need no configuration. When a crate or workspace needs
 something other than the default, you say so in the `Cargo.toml` that already
@@ -465,5 +463,5 @@ When a task starts, the executor compares the keys of the task's options with th
 
 Known limitation: Nx checks the types of the declared options in the same place. A target default or `project.json` that gives a declared option a value of the wrong type, such as `profile: 1`, fails every task that Nx hands to the batch implementation with it, in every group, with Nx's own message, an unhandled `SchemaError` that names no option. With `--batch=false`, and on `run`, only the tasks that receive the value fail, each with Nx's message `Property '<option>' does not match the schema`. The types stay in the schema, because Nx converts values from the command line by them.
 
-Options in the plugin's own tables are checked when the graph is created. While reading `[package.metadata.nx]`, `[workspace.metadata.nx]` and its `project` table ([[DES-METADATA-TABLES]]), the plugin compares the keys under `options` and under each configuration of each `targets.<name>` table whose target runs one of its executors with the options that executor declares. An unknown key stops graph creation with a message that names the manifest, the target, the configuration if any, and the key, as [[REQ-DIAGNOSTICS]] prescribes for problems found at that point.
+Options in the plugin's own tables are checked when the graph is created. While reading `[package.metadata.nx]`, `[workspace.metadata.nx]` and its `project` table ([[DES-METADATA-TABLES]]), the plugin compares the keys under `options` and under each configuration of each `targets.<name>` table whose target runs one of its executors with the options that executor declares. An unknown key stops graph creation with a message that names the manifest, the target, the configuration if any, and the key, as [[REQ-DIAGNOSTICS]] prescribes for problems found at that point. On an inferred target, so does a key that the executor declares but the option reference of [[DES-PLUGIN-OPTIONS]] does not give that target, such as `targetTriple` on `test`, with a message that says that the target does not take it.
 :::

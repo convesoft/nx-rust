@@ -556,7 +556,7 @@ describe("@convesoft/nx-rust", () => {
     beforeAll(() => {
       installFixture(projectDirectory, "subfolder-workspace", {
         "rust/Cargo.toml": (manifest) =>
-          `${manifest}\n[workspace.metadata.nx]\nnamePrefix = "be-"\ntags = ["lang:rust"]\n\n[workspace.metadata.nx.targets.test]\ninputs = ["...", { env = "DATABASE_URL" }]\n`,
+          `${manifest}\n[workspace.metadata.nx]\nnamePrefix = "be-"\ntags = ["lang:rust"]\n\n[workspace.metadata.nx.targets.test]\ninputs = ["...", { env = "DATABASE_URL" }]\noptions = { noDefaultFeatures = true }\n`,
         "rust/crates/model/Cargo.toml": (manifest) =>
           `${manifest}\n[package.metadata.nx]\nname = "backend"\n`,
       });
@@ -579,6 +579,8 @@ describe("@convesoft/nx-rust", () => {
         ]);
         expect(api.tags).toEqual(["lang:rust"]);
         expect(api.targets.test.inputs).toEqual([{ env: "DATABASE_URL" }]);
+        // Checked against the schema that the installed package's executors.json names.
+        expect(api.targets.test.options).toMatchObject({ noDefaultFeatures: true });
       },
       HARNESS_TIMEOUT,
     );

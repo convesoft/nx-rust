@@ -1,10 +1,10 @@
-import type { InferredTargetName } from "../graph/targets";
+import { type InferredTargetName, inferredTargetNames } from "../graph/targets";
 
 /**
  * The options of the plugin's targets that its executors declare
- * (`DES-PLUGIN-OPTIONS`). Each option that switches a flag of the cargo
- * command takes effect only on the targets that the option reference gives
- * it; on any other target the command leaves it out.
+ * (`DES-PLUGIN-OPTIONS`). Each takes effect only on the targets that the
+ * option reference gives it ({@link optionTargets}); on any other target the
+ * command leaves it out.
  */
 export interface CargoTargetOptions {
   /** `--features`, joined with commas. */
@@ -27,6 +27,52 @@ export interface CargoTargetOptions {
   affectedTests?: boolean;
   /** The plugin's version, which the plugin sets for the cache key; no flag. */
   pluginVersion?: string;
+}
+
+/** The name of an option of the plugin's targets. */
+export type TargetOptionName = keyof CargoTargetOptions;
+
+// The targets that take the feature and profile options, and those that
+// also take `targetTriple`.
+const compilingTargets: readonly InferredTargetName[] = [
+  "build",
+  "check",
+  "lint",
+  "test",
+  "bench",
+  "run",
+  "doc",
+];
+const tripleTargets = compilingTargets.filter((target) => target !== "test");
+
+/**
+ * The targets that take each option, by their default names, as the option
+ * reference of `DES-PLUGIN-OPTIONS` gives them. The cargo command of another
+ * target leaves the option out, also where its executor's schema declares
+ * it, because one schema serves every target of the cargo executor; a
+ * target table in Cargo metadata that sets it fails graph creation
+ * (`DES-UNKNOWN-OPTIONS`).
+ */
+// @mara implements DES-PLUGIN-OPTIONS
+export const optionTargets: Readonly<Record<TargetOptionName, ReadonlySet<InferredTargetName>>> = {
+  features: new Set(compilingTargets),
+  allFeatures: new Set(compilingTargets),
+  noDefaultFeatures: new Set(compilingTargets),
+  profile: new Set(compilingTargets),
+  targetTriple: new Set(tripleTargets),
+  allTargets: new Set(["check", "lint"]),
+  noDeps: new Set(["doc"]),
+  bin: new Set(["run"]),
+  affectedTests: new Set(["test"]),
+  pluginVersion: new Set(inferredTargetNames),
+};
+
+/** Whether the target with this default name takes the option `name`. */
+export function targetTakes(target: InferredTargetName, name: string): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(optionTargets, name) &&
+    optionTargets[name as TargetOptionName].has(target)
+  );
 }
 
 /** What a task's cargo command depends on besides the target's options. */
@@ -52,34 +98,15 @@ const crateCommands: Partial<Record<InferredTargetName, readonly string[]>> = {
   run: ["run"],
 };
 
-// The targets that take the feature and profile options, and those that
-// also take `targetTriple` (`DES-PLUGIN-OPTIONS`).
-const compilingTargets = new Set<InferredTargetName>([
-  "build",
-  "check",
-  "lint",
-  "test",
-  "bench",
-  "run",
-  "doc",
-]);
-const tripleTargets = new Set<InferredTargetName>([
-  "build",
-  "check",
-  "lint",
-  "bench",
-  "run",
-  "doc",
-]);
-
 /**
  * The arguments after `cargo` of the command that a task of an inferred
  * target runs in its workspace's root folder.
  *
  * A crate's targets select it with `-p` and its real package name, and the
  * workspace project's targets address the whole workspace. Apart from that,
- * a flag comes only from an option of the target, so that the command is the
- * one that a developer types in the workspace root (`DES-INVOCATION`). In
+ * a flag comes only from an option that the target takes
+ * ({@link optionTargets}), so that the command is the one that a developer
+ * types in the workspace root (`DES-INVOCATION`). In
  * locked mode every command passes `--locked`, apart from `update`, whose
  * purpose is to change `Cargo.lock`, `fmt` and `fmt-check`, because
  * `cargo fmt` rejects the flag, and `audit`, because cargo-audit only reads
@@ -93,6 +120,9 @@ const tripleTargets = new Set<InferredTargetName>([
 // @mara implements REQ-TEST-RUNNER
 export function cargoArguments(subject: CommandSubject, options: CargoTargetOptions): string[] {
   const { target, packageName, locked } = subject;
+  const taken: CargoTargetOptions = Object.fromEntries(
+    Object.entries(options).filter(([name]) => targetTakes(target, name)),
+  );
   const crateCommand = crateCommands[target];
   if (crateCommand !== undefined) {
     if (packageName === undefined) {
@@ -101,11 +131,11 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
     const formatting = target === "fmt" || target === "fmt-check";
     return [
       ...crateCommand,
-      ...flag((target === "check" || target === "lint") && options.allTargets, "--all-targets"),
+      ...flag(taken.allTargets, "--all-targets"),
       "-p",
       packageName,
-      ...compilingFlags(target, options),
-      ...(target === "run" && options.bin !== undefined ? ["--bin", options.bin] : []),
+      ...compilingFlags(taken),
+      ...(taken.bin !== undefined ? ["--bin", taken.bin] : []),
       ...flag(locked && !formatting, "--locked"),
     ];
   }
@@ -113,9 +143,9 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
     case "doc":
       return [
         "doc",
-        ...flag(options.noDeps, "--no-deps"),
+        ...flag(taken.noDeps, "--no-deps"),
         "--workspace",
-        ...compilingFlags(target, options),
+        ...compilingFlags(taken),
         ...flag(locked, "--locked"),
       ];
     case "audit":
@@ -128,20 +158,15 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
   throw new Error(`nx-rust has no command for the target "${target}".`);
 }
 
-// The feature, profile and triple flags, on the targets that take them.
-function compilingFlags(target: InferredTargetName, options: CargoTargetOptions): string[] {
-  if (!compilingTargets.has(target)) {
-    return [];
-  }
-  const features = options.features ?? [];
+// The feature, profile and triple flags, from the options that the target takes.
+function compilingFlags(taken: CargoTargetOptions): string[] {
+  const features = taken.features ?? [];
   return [
     ...(features.length > 0 ? ["--features", features.join(",")] : []),
-    ...flag(options.allFeatures, "--all-features"),
-    ...flag(options.noDefaultFeatures, "--no-default-features"),
-    ...(options.profile !== undefined ? ["--profile", options.profile] : []),
-    ...(tripleTargets.has(target) && options.targetTriple !== undefined
-      ? ["--target", options.targetTriple]
-      : []),
+    ...flag(taken.allFeatures, "--all-features"),
+    ...flag(taken.noDefaultFeatures, "--no-default-features"),
+    ...(taken.profile !== undefined ? ["--profile", taken.profile] : []),
+    ...(taken.targetTriple !== undefined ? ["--target", taken.targetTriple] : []),
   ];
 }
 

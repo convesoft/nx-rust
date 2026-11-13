@@ -1,9 +1,16 @@
 import type { CreateDependenciesContext, TargetConfiguration } from "@nx/devkit";
+import { targetTakes } from "../executors/command";
+import { declaredExecutorOptions } from "../executors/declared-options";
 import { nxGraphInternals } from "./nx-internals";
 import type { CargoGraph } from "./projects";
 import { ProjectSettings, TargetTable, targetHeader } from "./settings";
 import type { TargetNames } from "./options";
-import { cargoExecutor, inferredTargetNames, targetCargoMetadataKey } from "./targets";
+import {
+  cargoExecutor,
+  type InferredTargetName,
+  inferredTargetNames,
+  targetCargoMetadataKey,
+} from "./targets";
 
 /** What laying the target tables over a project's targets needs to know about the project. */
 export interface TableSubject {
@@ -91,11 +98,9 @@ export function applyTargetTables(
  * the selection of affected tests. A table under a name that the project
  * has no inferred target for defines an extra target, which may run
  * anything; one that names an executor of the plugin fails when its task
- * starts (`DES-TARGETS`).
- *
- * The check of the keys under `options` and `configurations` against the
- * `properties` of the executor's schema (`REQ-UNKNOWN-METADATA-OPTIONS`,
- * nxr-95kg91) belongs here as well.
+ * starts (`DES-TARGETS`). On a target of one of the plugin's executors, the
+ * keys under `options` and `configurations` are checked as well
+ * ({@link optionProblems}).
  *
  * @param inferred The inferred target under the table's name, if the project has one.
  */
@@ -105,7 +110,7 @@ function tableProblems(
   settings: ProjectSettings,
 ): string[] {
   if (inferred === undefined) {
-    return [];
+    return optionProblems(table, undefined);
   }
   const { target, manifest, name } = table;
   const header = targetHeader(table.table, name);
@@ -143,7 +148,107 @@ function tableProblems(
       );
     }
   }
+  if (
+    target.command === undefined &&
+    (target.executor ?? inferred.executor) === inferred.executor
+  ) {
+    problems.push(...optionProblems(table, inferred));
+  }
   return problems;
+}
+
+/**
+ * What is wrong with the keys under `options` and under each configuration
+ * of a target table whose target runs one of the plugin's executors
+ * (`REQ-UNKNOWN-METADATA-OPTIONS`), each problem a message that names the
+ * manifest, the table, which names the target and the configuration, and
+ * the key.
+ *
+ * The executors' options are those that their schemas declare
+ * ({@link declaredExecutorOptions}), and on an inferred target only those
+ * that the target takes ({@link targetTakes}), which the cargo command uses
+ * as well. On an extra target that names one of the executors, which fails
+ * when its task starts, a key is checked against the executor's schema
+ * alone, because the option reference gives options to inferred targets
+ * only. An extra target of another executor, or with a `command`, has Nx's
+ * options, which are not the plugin's to check, and so does an inferred
+ * target that the table gives another executor or a command, which is an
+ * error of its own ({@link tableProblems}).
+ *
+ * @param inferred The inferred target under the table's name, if the
+ *   project has one and the table keeps its executor.
+ */
+// @mara implements REQ-UNKNOWN-METADATA-OPTIONS
+// @mara implements DES-UNKNOWN-OPTIONS
+function optionProblems(table: TargetTable, inferred: TargetConfiguration | undefined): string[] {
+  const { target, manifest, name } = table;
+  const executor =
+    inferred?.executor ?? (target.command === undefined ? target.executor : undefined);
+  const declared = executor === undefined ? undefined : declaredExecutorOptions().get(executor);
+  if (executor === undefined || declared === undefined) {
+    return [];
+  }
+  const inferredName: InferredTargetName | undefined =
+    inferred?.metadata?.[targetCargoMetadataKey]?.target;
+  const takes = (option: string) =>
+    declared.has(option) && (inferredName === undefined || targetTakes(inferredName, option));
+  // `pluginVersion` is the plugin's own (`DES-PLUGIN-OPTIONS`), so no message offers it.
+  const offered = [...declared].filter((option) => takes(option) && option !== "pluginVersion");
+  const subject =
+    inferredName === undefined
+      ? `the target "${name}"`
+      : inferredName === name
+        ? `the inferred target "${name}"`
+        : `the inferred target "${inferredName}", named "${name}" by targetNames`;
+  // The comma that closes the clause about targetNames before the verb.
+  const pause = inferredName !== undefined && inferredName !== name ? "," : "";
+  const offeredBy = inferredName === undefined ? `${executor} knows` : `"${name}" takes`;
+  const places: [string, Record<string, unknown>][] = [
+    [targetHeader(table.table, name, "options"), target.options ?? {}],
+    ...Object.entries(target.configurations ?? {}).map(
+      ([configuration, options]): [string, Record<string, unknown>] => [
+        targetHeader(table.table, name, "configurations", configuration),
+        options ?? {},
+      ],
+    ),
+  ];
+  const problems: string[] = [];
+  for (const [place, options] of places) {
+    for (const key of Object.keys(options)) {
+      if (takes(key)) {
+        continue;
+      }
+      const similar = offered.find((option) => looseName(option) === looseName(key));
+      problems.push(
+        [
+          declared.has(key)
+            ? `${manifest}: ${place} sets the option ${JSON.stringify(key)}, which ${subject}${pause} does not take.`
+            : `${manifest}: ${place} sets the option ${JSON.stringify(key)}, which ${executor}, the executor of ${subject}, does not know.`,
+          similar === undefined ? undefined : `Did you mean "${similar}"?`,
+          `The options that ${offeredBy} are ${list(offered.map((option) => `"${option}"`))}.`,
+          inferredName === undefined
+            ? `${executor} runs only the targets that nx-rust infers; to run another cargo command, define a target with a "command" instead.`
+            : undefined,
+        ]
+          .filter((sentence) => sentence !== undefined)
+          .join(" "),
+      );
+    }
+  }
+  return problems;
+}
+
+// An option's name without case, dashes and underscores, so that
+// `no-default-features` and `no_default_features` find `noDefaultFeatures`.
+function looseName(name: string): string {
+  return name.toLowerCase().replace(/[-_]/g, "");
+}
+
+// `a`, `a and b`, `a, b and c`
+function list(items: readonly string[]): string {
+  return items.length <= 1
+    ? items.join("")
+    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 /**

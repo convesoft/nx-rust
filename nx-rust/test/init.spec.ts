@@ -556,6 +556,14 @@ describe("init", () => {
         },
         'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test] sets "inputs" without "..." on the inferred target "test".',
       ],
+      [
+        "a key under the options of a target table that the executor does not know",
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx.targets.test.configurations.ci]\ncoverage = true\n`,
+        },
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.configurations.ci] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the inferred target "test", does not know.',
+      ],
       ...(
         [
           ['options = "broken"', 'has to be a table, not "broken".'],
