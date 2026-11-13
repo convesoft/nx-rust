@@ -1,6 +1,6 @@
 // The module object itself, which the harness calls through.
 import fs from "node:fs";
-import { FixtureWorkspace, testRunSocketFolder } from "./harness";
+import { FixtureWorkspace, HARNESS_TIMEOUT, inFixture, testRunSocketFolder } from "./harness";
 
 describe("fixture workspace", () => {
   let folders: string[] = [];
@@ -31,4 +31,26 @@ describe("fixture workspace", () => {
     expect(folders).toHaveLength(testRunSocketFolder() === undefined ? 1 : 2);
     expect(folders.filter((folder) => fs.existsSync(folder))).toEqual([]);
   });
+
+  it(
+    "has a daemon that installs no other Nx",
+    () =>
+      // `CI=false`, so that the daemon asks its start-up questions in CI too,
+      // where Nx would otherwise skip them.
+      inFixture("standalone-crate", undefined, async (workspace) => {
+        const env = { NX_DAEMON: "true", CI: "false" };
+        try {
+          const result = await workspace.nx(["show", "projects", "--json"], env);
+
+          expect(result.status).toBe(0);
+        } finally {
+          await workspace.nx(["daemon", "--stop"], env);
+        }
+        const log = workspace.daemonLog();
+        // The daemon asked, and the installed Nx answered.
+        expect(log).toContain("[AI-AGENTS]: Using local implementation");
+        expect(log).not.toContain("[LATEST-NX]");
+      }),
+    HARNESS_TIMEOUT,
+  );
 });
