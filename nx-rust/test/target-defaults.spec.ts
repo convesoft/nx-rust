@@ -556,6 +556,167 @@ describe("combinations", () => {
   );
 });
 
+/**
+ * Another inference plugin, registered after nx-rust, that adds the tag
+ * `extra` to api and contributes a `build` target with the cargo executor,
+ * with `cache: true` if `cache`, as the review of pull request #32 set it up.
+ */
+function otherPlugin(cache: boolean, defaults: object | undefined): FileChanges {
+  return {
+    "other.cjs": `exports.name = "other";
+exports.createNodes = [
+  "**/Cargo.toml",
+  async (files) =>
+    files
+      .filter((file) => file === "rust/crates/api/Cargo.toml")
+      .map((file) => [file, { projects: { "rust/crates/api": { name: "api", tags: ["extra"], targets: { build: ${JSON.stringify({ executor: cargoExecutor, ...(cache ? { cache: true } : {}) })} } } } }]),
+];
+`,
+    "nx.json": (nxJson) => {
+      const config = JSON.parse(nxJson ?? "{}");
+      return JSON.stringify({
+        ...config,
+        plugins: [...config.plugins, "./other.cjs"],
+        ...(defaults === undefined ? {} : { targetDefaults: defaults }),
+      });
+    },
+  };
+}
+
+/** The warning for a change of api's build that the plugin cannot attribute. */
+const unattributedBuild = [
+  'The target "build" of the Rust project api (rust/crates/api/Cargo.toml) differs from what nx-rust infers in "cache", and nx-rust cannot tell which configuration changed it: it sees the targetDefaults of nx.json and the project\'s own project.json and package.json, but not, for example, another plugin listed in nx.json.',
+  `Run \`nx show target api:build --json\` and look under "sourceMap" for the file and entry behind each of these fields. If it is a targetDefaults entry, narrow it as ${targetDefaultsGuide} shows.`,
+].join("\n");
+
+describe("a change that the plugin cannot attribute", () => {
+  it(
+    "where another plugin adds a tag that an entry's filter selects: a warning, not a silent pass",
+    async () => {
+      const { status, output, workspace } = await showProjects(
+        otherPlugin(false, { build: [{ filter: { projects: ["tag:extra"] }, cache: true }] }),
+      );
+      try {
+        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+        expect(output).toContain(unattributedBuild);
+        expect(output).not.toContain("The targetDefaults entry");
+        // Nx did apply the entry.
+        expect((await workspace.graph()).projects.api.targets?.build.cache).toBe(true);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "where another plugin caches the target and adds a tag that an entry's filter excludes: a warning, not a failure",
+    async () => {
+      const { status, output, workspace } = await showProjects(
+        otherPlugin(true, {
+          build: [{ filter: { projects: ["api", "!tag:extra"] }, cache: true }],
+        }),
+      );
+      workspace.remove();
+
+      expect(status).toBe(0);
+      expect(output).toContain(unattributedBuild);
+      expect(output).not.toContain("The targetDefaults entry");
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "where another plugin adds a tag that takes the target away from the executor's entry: a warning for it, not the wrong key",
+    async () => {
+      const output = await failed(
+        {},
+        otherPlugin(false, {
+          [cargoExecutor]: [{ filter: { projects: ["api", "!tag:extra"] }, cache: true }],
+          build: { cache: true },
+        }),
+      );
+
+      expect(output).toContain(unattributedBuild);
+      expect(output).not.toContain(`The targetDefaults entry "${cargoExecutor}"`);
+      // The other crates have no tag extra, and Nx takes the entry keyed build for them.
+      expect(output).toContain(
+        '  - It turns on caching for "build", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In codegen (rust/crates/codegen/Cargo.toml), model (rust/crates/model/Cargo.toml) and testkit (rust/crates/testkit/Cargo.toml).',
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "is nothing where another plugin changes a Rust target and targetDefaults is empty",
+    async () => {
+      const { status, output, workspace } = await showProjects(otherPlugin(true, undefined));
+      try {
+        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+        expect(output).not.toContain("nx-rust");
+        expect((await workspace.graph()).projects.api.targets?.build.cache).toBe(true);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe('object-level "..."', () => {
+  it(
+    'in the folder\'s project.json, after the inputs it lists: the entry that replaces the inputs is reported, because Nx keeps the value below for a field before "..."',
+    async () => {
+      const output = await failed(
+        { update: { inputs: ["default"] } },
+        {
+          "rust/project.json": JSON.stringify({
+            targets: { update: { inputs: ["local"], "...": true } },
+          }),
+        },
+      );
+
+      expect(output).toContain(
+        '  - It replaces the inputs that nx-rust declares for "update", so that the cache key and nx affected miss files or settings that the task depends on. In rust (rust/Cargo.toml).',
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "in a later element of an entry's list, after cache: false: Nx keeps cache: true, and the entry is reported",
+    async () => {
+      const output = await failed({ build: [{ cache: true }, { cache: false, "...": true }] });
+
+      expect(output).toContain(
+        [
+          'The targetDefaults entry "build" in nx.json (its elements 0 and 1) changes targets that nx-rust infers:',
+          `  - It turns on caching for "build", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ${allCrates}.`,
+        ].join("\n"),
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "in a later element of an entry's list, after an empty dependsOn: Nx keeps the dependency, and the entry draws the warning",
+    async () => {
+      const { output, projects } = await created({
+        build: [{ dependsOn: ["^lint"] }, { dependsOn: [], "...": true }],
+      });
+
+      expect(projects.api.targets?.build.dependsOn).toEqual(["^lint"]);
+      expect(output).toContain(
+        [
+          'The targetDefaults entry "build" in nx.json (its elements 0 and 1) changes targets that nx-rust infers:',
+          `  - It adds "^lint" to the dependsOn of "build", so that the task waits for tasks of other projects. Cargo builds what a crate depends on itself, so these only queue more cargo processes behind its build lock. In ${allCrates}.`,
+        ].join("\n"),
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
 describe("init", () => {
   /** Runs `init` in a copy of `subfolder-workspace` whose `nx.json` has only `defaults`. */
   async function init(defaults: object): Promise<{
@@ -669,8 +830,17 @@ describe("the check on targets the plugin declares more for", () => {
   const repositoryRoot = join(__dirname, "..", "..");
   const internals = loadTargetDefaultsInternals(repositoryRoot);
 
+  /** What the check attributes with `defaults` when Nx merged the targets of api to `merged`. */
+  async function findings(
+    defaults: Record<string, unknown>,
+    merged: Record<string, TargetConfiguration>,
+    load: () => TargetDefaultsInternals = () => internals,
+  ) {
+    return (await changes(defaults, merged, load)).findings;
+  }
+
   /** What the check finds with `defaults` when Nx merged the targets of api to `merged`. */
-  function findings(
+  function changes(
     defaults: Record<string, unknown>,
     merged: Record<string, TargetConfiguration>,
     load: () => TargetDefaultsInternals = () => internals,
@@ -758,11 +928,11 @@ describe("the check on targets the plugin declares more for", () => {
     ]);
   });
 
-  it("blames no element that Nx drops for naming another executor or a command", async () => {
+  it("blames no element that Nx drops for naming another executor or a command, and cannot tell who changed the target", async () => {
     const merged = { build: { ...inferred.build, outputs: ["{projectRoot}/dist"] } };
 
     expect(
-      await findings(
+      await changes(
         {
           build: [
             { executor: "@nx/js:tsc", outputs: ["{projectRoot}/dist"] },
@@ -772,23 +942,41 @@ describe("the check on targets the plugin declares more for", () => {
         },
         merged,
       ),
-    ).toEqual([]);
+    ).toEqual({
+      findings: [],
+      unattributed: [
+        { target: "build", project: "api", manifest: crates.api, fields: ["outputs"] },
+      ],
+    });
   });
 
-  it("leaves a change alone that the applying entry does not make", async () => {
+  it("blames no entry for a change that it does not make, and says that it cannot tell who made it", async () => {
     expect(
-      await findings(
+      await changes(
         { build: { options: { release: true } } },
         { build: { ...inferred.build, outputs: ["{projectRoot}/dist"], dependsOn: [] } },
       ),
-    ).toEqual([]);
+    ).toEqual({
+      findings: [],
+      unattributed: [
+        {
+          target: "build",
+          project: "api",
+          manifest: crates.api,
+          fields: ["outputs", "dependsOn"],
+        },
+      ],
+    });
   });
 
   it("asks Nx for nothing when no target differs", async () => {
     const unused = () => {
       throw new Error("internals loaded");
     };
-    expect(await findings({ build: { cache: true } }, {}, unused)).toEqual([]);
+    expect(await changes({ build: { cache: true } }, {}, unused)).toEqual({
+      findings: [],
+      unattributed: [],
+    });
   });
 });
 

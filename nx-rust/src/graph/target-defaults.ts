@@ -37,6 +37,24 @@ export interface TargetDefaultFinding {
   added?: unknown[];
 }
 
+/**
+ * An inferred target that differs from what the plugin inferred, where the
+ * plugin could not tell which configuration made the difference.
+ */
+export interface UnattributedChange {
+  target: string;
+  project: string;
+  manifest: string;
+  /** The fields that differ: `cache`, `inputs`, `outputs` or `dependsOn`. */
+  fields: string[];
+}
+
+/** What {@link findTargetDefaultChanges} found. */
+export interface TargetDefaultChanges {
+  findings: TargetDefaultFinding[];
+  unattributed: UnattributedChange[];
+}
+
 /** What {@link checkTargetDefaults} found: warnings to print and an error to fail with. */
 export interface TargetDefaultReport {
   warnings: string[];
@@ -52,6 +70,9 @@ interface RootMapProject {
   targets?: Record<string, TargetConfiguration>;
 }
 
+/** Nx's source maps: by project root, the file and plugin behind each key. */
+type SourceMaps = Record<string, Record<string, [string | null, string]>>;
+
 /** A dependency as Nx's task graph normalises a `dependsOn` entry. */
 interface NormalisedDependency {
   target?: string;
@@ -65,8 +86,8 @@ interface DependencyGraph {
 }
 
 /**
- * The parts of the installed Nx that the check runs, so that it decides as
- * Nx does (`DES-TARGET-DEFAULT-GUARD`). None is public API.
+ * The parts of the installed Nx that the check runs, so that it rebuilds a
+ * target as Nx does (`DES-TARGET-DEFAULT-GUARD`). None is public API.
  */
 export interface TargetDefaultsInternals {
   /**
@@ -79,14 +100,23 @@ export interface TargetDefaultsInternals {
     specifiedPluginRootMap: Record<string, RootMapProject>,
     defaultPluginRootMap: Record<string, RootMapProject>,
     nxJson: { targetDefaults?: unknown },
-    specifiedSourceMaps: Record<string, Record<string, [string | null, string]>>,
+    specifiedSourceMaps: SourceMaps,
   ): [string, string, { projects?: Record<string, RootMapProject> }][];
-  /** What Nx's default plugins make of the `package.json` and `project.json` files given. */
-  defaultLayer(
-    files: string[],
-    nxJson: object,
-    workspaceRoot: string,
-  ): Promise<Record<string, RootMapProject>>;
+  /** Nx's merge of one project node into a root map, as graph creation merges every layer. */
+  mergeProject(
+    rootMap: Record<string, RootMapProject>,
+    project: RootMapProject,
+    sourceMaps: SourceMaps | undefined,
+    sourceInformation: [string | null, string] | undefined,
+    deferSpreadsWithoutBase: boolean,
+  ): void;
+  /**
+   * The project nodes that Nx's default plugins make of the `package.json`
+   * and `project.json` files given, in the order in which Nx merges them.
+   */
+  defaultNodes(files: string[], nxJson: object, workspaceRoot: string): Promise<RootMapProject[]>;
+  /** Whether a `targetDefaults` key can reach a target of this name and executor at all. */
+  keyMayApply(key: string, targetName: string, executor: string | undefined): boolean;
   /** A `dependsOn` entry as the task graph normalises it. */
   normaliseDependency(
     entry: unknown,
@@ -101,6 +131,10 @@ export const targetDefaultsGuide =
 
 const spread = "...";
 
+/** The fields of a target whose changes the check looks at. */
+const checkedFields = ["cache", "inputs", "outputs", "dependsOn"] as const;
+type CheckedField = (typeof checkedFields)[number];
+
 /** What `createDependencies` receives, as far as the check reads it. */
 export type TargetDefaultsContext = Pick<
   CreateDependenciesContext,
@@ -111,21 +145,26 @@ export type TargetDefaultsContext = Pick<
  * Checks what the `targetDefaults` of `nx.json` did to the inferred targets
  * of one plugin entry's projects (`DES-TARGET-DEFAULT-GUARD`).
  *
- * Each inferred target is compared with the target that Nx made of it, as
- * `createDependencies` receives it: dependencies on other projects' tasks
- * that were added, inferred `dependsOn`, `inputs` or `outputs` entries that
- * are missing, and caching that is on where the plugin left it off. A
- * target whose executor is no longer the inferred one was replaced by
- * another file and is left alone.
+ * What changed is read from the targets that Nx merged, as
+ * `createDependencies` receives them, and from nothing else: caching that
+ * is on where the plugin left it off, inferred `dependsOn`, `inputs` or
+ * `outputs` entries that are missing, and `dependsOn` entries that Nx's task
+ * graph resolves to other projects' tasks. A target without such a
+ * difference, or one that no `targetDefaults` key can reach, is not
+ * reported, and neither is a target whose executor is no longer the
+ * inferred one, which another file replaced.
  *
- * Only where something differs does the check learn who made the
- * difference, from Nx's own code: Nx's default plugins give what the
- * `package.json` and `project.json` in the project's folder declare, and
- * Nx's synthesis of target defaults, given the plugin's projects and those
- * declarations, gives the elements of `targetDefaults` that Nx laid over
- * the target. A field that the folder's files set without `"..."` is theirs
- * and is not reported; otherwise a difference is reported when the applied
- * elements set that field.
+ * Who made a difference is learned by rebuilding the target with Nx's own
+ * code: the plugin's projects as its `createNodes` returned them, the
+ * elements of `targetDefaults` that Nx's synthesis lays over them, and what
+ * Nx's default plugins make of the `package.json` and `project.json` in the
+ * project's folder, each merged with Nx's merge of project nodes. The
+ * rebuild must give the target's `cache`, `inputs`, `outputs` and
+ * `dependsOn` and the project's name and tags as Nx merged them; where it
+ * does not, as where another plugin contributes, the change is
+ * unattributed. Otherwise a difference that the rebuild without the
+ * `targetDefaults` layer does not have is the entry's; the others are the
+ * folder's files' and are not reported.
  *
  * @param plugin The name under which Nx knows this plugin entry, which
  *   `filter.plugin` of an entry compares with.
@@ -138,16 +177,23 @@ export async function findTargetDefaultChanges(
   context: TargetDefaultsContext,
   plugin: string | undefined,
   internals: () => TargetDefaultsInternals,
-): Promise<TargetDefaultFinding[]> {
+): Promise<TargetDefaultChanges> {
+  const none: TargetDefaultChanges = { findings: [], unattributed: [] };
   const nxJson = context.nxJsonConfiguration ?? {};
   const targetDefaults: unknown = nxJson.targetDefaults;
   if (!isRecord(targetDefaults) || Object.keys(targetDefaults).length === 0) {
-    return [];
+    return none;
   }
   const byRoot = new Map<string, ProjectConfiguration>();
   for (const project of Object.values(context.projects)) {
     byRoot.set(project.root, project);
   }
+  const dependencyGraph: DependencyGraph = {
+    nodes: Object.fromEntries(
+      Object.entries(context.projects).map(([name, data]) => [name, { name, type: "lib", data }]),
+    ),
+  };
+  let nx: TargetDefaultsInternals | undefined;
   const pending: Pending[] = [];
   for (const project of graph.projects) {
     const merged = byRoot.get(project.root);
@@ -159,67 +205,77 @@ export async function findTargetDefaultChanges(
       if (target === undefined || target.executor !== inferred.executor) {
         continue;
       }
-      const added = (target.dependsOn ?? []).filter(
+      const lostEntries = {
+        dependsOn: lostFrom(inferred.dependsOn, target.dependsOn),
+        inputs: lostFrom(inferred.inputs, target.inputs),
+        outputs: lostFrom(inferred.outputs, target.outputs),
+      };
+      const cacheOn = inferred.cache !== true && target.cache === true;
+      const undeclared = (target.dependsOn ?? []).filter(
         (entry) => entry !== spread && !includes(inferred.dependsOn, entry),
       );
-      const differs = {
-        // The plugin's `cache` comes from `cachedTargets`, the set that the
-        // executor's check reads, and is off as well where `DES-OUTPUTS`
-        // leaves a target of that set uncached.
-        cache: inferred.cache !== true && target.cache === true,
-        dependsOn: lost(inferred.dependsOn, target.dependsOn),
-        inputs: lost(inferred.inputs, target.inputs),
-        outputs: lost(inferred.outputs, target.outputs),
-      };
-      if (added.length > 0 || Object.values(differs).some(Boolean)) {
-        pending.push({ project, merged, name, inferred, target, added, differs });
+      if (
+        !cacheOn &&
+        Object.values(lostEntries).every((lost) => lost.length === 0) &&
+        undeclared.length === 0
+      ) {
+        continue;
       }
+      nx ??= internals();
+      const loaded = nx;
+      if (
+        !Object.keys(targetDefaults).some((key) => loaded.keyMayApply(key, name, target.executor))
+      ) {
+        continue;
+      }
+      const added = undeclared.filter((entry) =>
+        reachesOtherProjects(
+          loaded.normaliseDependency(entry, merged.name as string, dependencyGraph),
+          merged.name as string,
+        ),
+      );
+      if (
+        !cacheOn &&
+        Object.values(lostEntries).every((lost) => lost.length === 0) &&
+        added.length === 0
+      ) {
+        continue;
+      }
+      pending.push({ project, merged, name, target, cacheOn, lostEntries, added });
     }
   }
-  if (pending.length === 0) {
-    return [];
+  if (pending.length === 0 || nx === undefined) {
+    return none;
   }
-  const nx = internals();
-  const roots = [...new Set(pending.map(({ project }) => project.root))];
-  const defaults = await nx.defaultLayer(
-    declarationFiles(roots, context.fileMap),
-    nxJson,
-    context.workspaceRoot,
-  );
-  const applied = appliedElements(
-    nx.createTargetDefaultsResults(
-      specifiedLayer(graph.projects.filter(({ root }) => roots.includes(root))),
-      Object.fromEntries(roots.flatMap((root) => (defaults[root] ? [[root, defaults[root]]] : []))),
-      nxJson,
-      sourceMaps(
-        graph.projects.filter(({ root }) => roots.includes(root)),
-        plugin,
-      ),
-    ),
-    targetDefaults,
-  );
-  const dependencyGraph: DependencyGraph = {
-    nodes: Object.fromEntries(
-      Object.entries(context.projects).map(([name, data]) => [name, { name, type: "lib", data }]),
-    ),
-  };
-  const findings: TargetDefaultFinding[] = [];
-  for (const { project, merged, name, target, added, differs } of pending) {
+  const projects = [...new Set(pending.map(({ project }) => project))];
+  const roots = projects.map(({ root }) => root);
+  const layers = await rebuildLayers(nx, projects, plugin, context, roots);
+  const applied = appliedElements(layers.targetDefaults, targetDefaults);
+  const changes: TargetDefaultChanges = { findings: [], unattributed: [] };
+  for (const { project, merged, name, target, cacheOn, lostEntries, added } of pending) {
+    const withDefaults = rebuild(nx, layers, project.root, true);
+    const withoutDefaults = rebuild(nx, layers, project.root, false);
+    const fields = [
+      ...(cacheOn ? ["cache"] : []),
+      ...(["inputs", "outputs"] as const).filter((field) => lostEntries[field].length > 0),
+      ...(lostEntries.dependsOn.length > 0 || added.length > 0 ? ["dependsOn"] : []),
+    ];
+    if (!reproduces(withDefaults, merged, name)) {
+      changes.unattributed.push({
+        target: name,
+        project: merged.name as string,
+        manifest: project.manifest,
+        fields,
+      });
+      continue;
+    }
     const entry = applied.get(project.root)?.get(name);
+    const without = withoutDefaults.targets?.[name] ?? {};
     if (entry === undefined) {
       continue;
     }
-    const declared = defaults[project.root]?.targets?.[name];
-    // Whether the folder's files set the field themselves, so that the
-    // value is theirs; with "..." they keep what lies below them.
-    const theirs = (field: keyof TargetConfiguration) => {
-      const value: unknown = declared?.[field];
-      return value !== undefined && !(Array.isArray(value) && value.includes(spread));
-    };
-    const fromEntry = (field: keyof TargetConfiguration) =>
-      theirs(field) ? undefined : layered(entry.elements, field);
     const finding = (change: TargetDefaultChange, extra: Partial<TargetDefaultFinding> = {}) =>
-      findings.push({
+      changes.findings.push({
         change,
         severity: change === "adds-dependencies" ? "warning" : "error",
         key: entry.key,
@@ -230,32 +286,28 @@ export async function findTargetDefaultChanges(
         manifest: project.manifest,
         ...extra,
       });
-    const dependsOn = fromEntry("dependsOn");
-    if (differs.dependsOn && replaces(dependsOn)) {
+    // A difference is the entry's where the rebuild without the entries of
+    // targetDefaults does not have it.
+    const keptWithout = (field: "dependsOn" | "inputs" | "outputs") =>
+      lostEntries[field].some((entryValue) => includes(without[field], entryValue));
+    if (keptWithout("dependsOn")) {
       finding("replaces-dependsOn");
     }
-    if (differs.inputs && replaces(fromEntry("inputs"))) {
+    if (keptWithout("inputs")) {
       finding("replaces-inputs");
     }
-    if (differs.outputs && replaces(fromEntry("outputs"))) {
+    if (keptWithout("outputs")) {
       finding("replaces-outputs");
     }
-    if (differs.cache && fromEntry("cache") === true) {
+    if (cacheOn && without.cache !== true) {
       finding("turns-on-cache");
     }
-    const reaching = added.filter(
-      (dependency) =>
-        includes(Array.isArray(dependsOn) ? dependsOn : undefined, dependency) &&
-        reachesOtherProjects(
-          nx.normaliseDependency(dependency, merged.name as string, dependencyGraph),
-          merged.name as string,
-        ),
-    );
-    if (reaching.length > 0) {
-      finding("adds-dependencies", { added: reaching });
+    const fromEntry = added.filter((dependency) => !includes(without.dependsOn, dependency));
+    if (fromEntry.length > 0) {
+      finding("adds-dependencies", { added: fromEntry });
     }
   }
-  return findings;
+  return changes;
 }
 
 /** An inferred target that differs from what Nx made of it, waiting to learn why. */
@@ -263,11 +315,113 @@ interface Pending {
   project: CargoProject;
   merged: ProjectConfiguration;
   name: string;
-  inferred: TargetConfiguration;
   target: TargetConfiguration;
-  /** The `dependsOn` entries of the merged target that the plugin did not declare. */
+  /** Whether caching is on where the plugin left it off. */
+  cacheOn: boolean;
+  /** The entries that the plugin declared and the merged target lacks. */
+  lostEntries: Record<"dependsOn" | "inputs" | "outputs", unknown[]>;
+  /** The `dependsOn` entries that the plugin did not declare and that reach other projects. */
   added: unknown[];
-  differs: { cache: boolean; dependsOn: boolean; inputs: boolean; outputs: boolean };
+}
+
+/** The layers of the projects concerned, as Nx merges them, by root. */
+interface Layers {
+  /** The plugin's own projects, as its `createNodes` returned them, merged. */
+  specified: Record<string, RootMapProject>;
+  /** What Nx's synthesis of target defaults lays over them, result by result. */
+  targetDefaults: ReturnType<TargetDefaultsInternals["createTargetDefaultsResults"]>;
+  /** What Nx's default plugins make of the folders' files, node by node. */
+  defaults: RootMapProject[];
+}
+
+// The three layers of the projects at `roots`, built with Nx's own code.
+async function rebuildLayers(
+  nx: TargetDefaultsInternals,
+  projects: readonly CargoProject[],
+  plugin: string | undefined,
+  context: TargetDefaultsContext,
+  roots: readonly string[],
+): Promise<Layers> {
+  const nxJson = context.nxJsonConfiguration ?? {};
+  const specified: Record<string, RootMapProject> = {};
+  const sourceMaps: SourceMaps = {};
+  for (const [manifest, result] of projectNodes(projects)) {
+    for (const [root, project] of Object.entries(result.projects ?? {})) {
+      nx.mergeProject(
+        specified,
+        structuredClone({ ...project, root }) as RootMapProject,
+        sourceMaps,
+        [manifest, plugin ?? ""],
+        false,
+      );
+    }
+  }
+  const defaults = await nx.defaultNodes(
+    declarationFiles(roots, context.fileMap),
+    nxJson,
+    context.workspaceRoot,
+  );
+  // The default layer as Nx stages it for the synthesis.
+  const staged: Record<string, RootMapProject> = {};
+  for (const node of defaults) {
+    nx.mergeProject(staged, structuredClone(node), undefined, undefined, true);
+  }
+  return {
+    specified,
+    targetDefaults: nx.createTargetDefaultsResults(
+      structuredClone(specified),
+      staged,
+      nxJson,
+      sourceMaps,
+    ),
+    defaults,
+  };
+}
+
+// The project at `root` as Nx merges its layers, with or without the
+// entries of targetDefaults.
+function rebuild(
+  nx: TargetDefaultsInternals,
+  layers: Layers,
+  root: string,
+  withTargetDefaults: boolean,
+): RootMapProject {
+  const rootMap: Record<string, RootMapProject> = {};
+  const merge = (project: RootMapProject | undefined) => {
+    if (project !== undefined) {
+      nx.mergeProject(rootMap, structuredClone({ ...project, root }), undefined, undefined, false);
+    }
+  };
+  merge(layers.specified[root]);
+  if (withTargetDefaults) {
+    for (const [, , result] of layers.targetDefaults) {
+      merge(result.projects?.[root]);
+    }
+  }
+  for (const node of layers.defaults) {
+    if (node.root === root) {
+      merge(node);
+    }
+  }
+  return rootMap[root] ?? { root };
+}
+
+// Whether the rebuilt project gives what Nx merged: the target's checked
+// fields, and the project's name and tags, which filters read.
+function reproduces(rebuilt: RootMapProject, merged: ProjectConfiguration, name: string): boolean {
+  const ours = rebuilt.targets?.[name] ?? {};
+  const theirs = merged.targets?.[name] ?? {};
+  const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
+  const sorted = (tags: string[] | undefined) => [...new Set(tags ?? [])].sort(compare);
+  return (
+    checkedFields.every((field: CheckedField) =>
+      field === "cache"
+        ? (ours.cache === true) === (theirs.cache === true)
+        : same(ours[field] ?? [], theirs[field] ?? []),
+    ) &&
+    (rebuilt.name === undefined || rebuilt.name === merged.name) &&
+    same(sorted(rebuilt.tags), sorted(merged.tags))
+  );
 }
 
 /**
@@ -283,13 +437,13 @@ export async function checkTargetDefaults(
   loadInternals: () => TargetDefaultsInternals,
 ): Promise<TargetDefaultReport> {
   let internals: TargetDefaultsInternals | undefined;
-  const findings = await findTargetDefaultChanges(
+  const changes = await findTargetDefaultChanges(
     graph,
     context,
     plugin,
     () => (internals ??= loadInternals()),
   );
-  return describeTargetDefaultChanges(findings);
+  return describeTargetDefaultChanges(changes.findings, changes.unattributed);
 }
 
 /**
@@ -321,8 +475,9 @@ export async function failOnTargetDefaults(
 /**
  * The parts of the Nx installed in the repository, which is the Nx that
  * creates the graph, that the check runs: from `nx/src/devkit-internals`,
- * `createTargetDefaultsResults`, `expandDependencyConfigSyntaxSugar` and
- * `normalizeDependencyConfigProjects` and `mergeTargetConfigurations`, and
+ * `createTargetDefaultsResults`, `findMatchingTargetNames`,
+ * `expandDependencyConfigSyntaxSugar` and `normalizeDependencyConfigProjects`;
+ * `mergeProjectConfigurationIntoRootMap`, Nx's merge of project nodes; and
  * the `createNodes` of Nx's default plugins for `package.json` and
  * `project.json`.
  *
@@ -360,6 +515,11 @@ export function loadTargetDefaultsInternals(
     internalsPath,
     "createTargetDefaultsResults",
   );
+  const matchingTargetNames = part<(pattern: string, names: string[]) => string[]>(
+    devkit,
+    internalsPath,
+    "findMatchingTargetNames",
+  );
   const expand = part<(entry: unknown, graph: DependencyGraph, project: string) => unknown>(
     devkit,
     internalsPath,
@@ -368,9 +528,17 @@ export function loadTargetDefaultsInternals(
   const normalise = part<
     (entry: unknown, project: string, graph: DependencyGraph) => NormalisedDependency
   >(devkit, internalsPath, "normalizeDependencyConfigProjects");
-  const mergeTargets = part<
-    (target: TargetConfiguration, base: TargetConfiguration) => TargetConfiguration
-  >(devkit, internalsPath, "mergeTargetConfigurations");
+  const nodesPath = "nx/src/project-graph/utils/project-configuration/project-nodes-manager";
+  const mergeIntoRootMap = part<
+    (
+      rootMap: Record<string, RootMapProject>,
+      project: RootMapProject,
+      sourceMaps: SourceMaps | undefined,
+      sourceInformation: [string | null, string] | undefined,
+      skipTargetNormalization: boolean | undefined,
+      deferSpreadsWithoutBase: boolean,
+    ) => unknown
+  >(module(nodesPath), nodesPath, "mergeProjectConfigurationIntoRootMap");
   const packageJsonPath = "nx/src/plugins/package-json";
   const packageJson = createNodesOf(module(packageJsonPath).createNodes, packageJsonPath);
   const projectJsonPath = "nx/src/plugins/project-json/build-nodes/project-json";
@@ -389,10 +557,20 @@ export function loadTargetDefaultsInternals(
   }
   return {
     createTargetDefaultsResults,
-    async defaultLayer(files, nxJson, root) {
+    mergeProject(rootMap, project, sourceMaps, sourceInformation, deferSpreadsWithoutBase) {
+      mergeIntoRootMap(
+        rootMap,
+        project,
+        sourceMaps,
+        sourceInformation,
+        undefined,
+        deferSpreadsWithoutBase,
+      );
+    },
+    async defaultNodes(files, nxJson, root) {
       const context = { nxJsonConfiguration: nxJson, workspaceRoot: root };
-      const layer: Record<string, RootMapProject> = {};
-      // In the order in which Nx runs its default plugins; the later wins.
+      const nodes: RootMapProject[] = [];
+      // In the order in which Nx runs its default plugins.
       for (const [createNodes, given] of [
         [packageJson, files],
         [projectJson, files.filter((file) => file.endsWith("project.json"))],
@@ -402,39 +580,21 @@ export function loadTargetDefaultsInternals(
         }
         for (const [, result] of await createNodes(given, undefined, context)) {
           for (const [projectRoot, project] of Object.entries(result?.projects ?? {})) {
-            layer[projectRoot] = mergeDeclared(layer[projectRoot], {
-              ...project,
-              root: projectRoot,
-            });
+            nodes.push({ ...project, root: projectRoot });
           }
         }
       }
-      return layer;
+      return nodes;
+    },
+    keyMayApply(key, targetName, executor) {
+      return (
+        key === executor || key === targetName || matchingTargetNames(key, [targetName]).length > 0
+      );
     },
     normaliseDependency(entry, project, graph) {
       return normalise(expand(structuredClone(entry), graph, project), project, graph);
     },
   };
-
-  // `project` declared on top of `base`, target by target as Nx merges them.
-  function mergeDeclared(
-    base: RootMapProject | undefined,
-    project: RootMapProject,
-  ): RootMapProject {
-    if (base === undefined) {
-      return project;
-    }
-    const targets: Record<string, TargetConfiguration> = { ...base.targets };
-    for (const [name, target] of Object.entries(project.targets ?? {})) {
-      targets[name] = targets[name] === undefined ? target : mergeTargets(target, targets[name]);
-    }
-    return {
-      root: project.root,
-      name: project.name ?? base.name,
-      tags: [...new Set([...(base.tags ?? []), ...(project.tags ?? [])])],
-      targets,
-    };
-  }
 }
 
 /** The `createNodes` function of one of Nx's default plugins. */
@@ -480,49 +640,16 @@ function declarationFiles(
     .filter((file) => seen.has(file));
 }
 
-// What the plugin's createNodes returned for `projects`, by root, as Nx
-// holds the layer of the plugins listed in nx.json.
-function specifiedLayer(projects: readonly CargoProject[]): Record<string, RootMapProject> {
-  const layer: Record<string, RootMapProject> = {};
-  for (const [, result] of projectNodes(projects)) {
-    for (const [root, project] of Object.entries(result.projects ?? {})) {
-      layer[root] = { ...project, root } as RootMapProject;
-    }
-  }
-  return layer;
-}
-
-// Which plugin each inferred target comes from, as Nx's source maps say it
-// for `filter.plugin`.
-function sourceMaps(
-  projects: readonly CargoProject[],
-  plugin: string | undefined,
-): Record<string, Record<string, [string | null, string]>> {
-  return Object.fromEntries(
-    projects.map((project) => [
-      project.root,
-      Object.fromEntries(
-        Object.keys(project.targets).flatMap((name) => [
-          [`targets.${name}`, [project.manifest, plugin ?? ""]],
-          [`targets.${name}.executor`, [project.manifest, plugin ?? ""]],
-        ]),
-      ),
-    ]),
-  );
-}
-
 /** The elements of one `targetDefaults` key that Nx laid over one target. */
 interface AppliedEntry {
   key: string;
   /** Their positions in the key's list, where its value is a list. */
   indices?: number[];
-  /** What they set, in the order Nx merges them, the later winning. */
-  elements: TargetConfiguration[];
 }
 
-// The results of Nx's synthesis, by root and target. Each result's file
-// names the key and, for a list, the element: `nx.json#targetDefaults.<key>`
-// or `nx.json#targetDefaults.<key>[<index>]`.
+// The key and elements of Nx's synthesis, by root and target. Each result's
+// file names them: `nx.json#targetDefaults.<key>` or
+// `nx.json#targetDefaults.<key>[<index>]`.
 function appliedElements(
   results: ReturnType<TargetDefaultsInternals["createTargetDefaultsResults"]>,
   targetDefaults: Record<string, unknown>,
@@ -542,9 +669,8 @@ function appliedElements(
     for (const [root, project] of Object.entries(result.projects ?? {})) {
       const byTarget = applied.get(root) ?? new Map<string, AppliedEntry>();
       applied.set(root, byTarget);
-      for (const [name, target] of Object.entries(project.targets ?? {})) {
-        const entry = byTarget.get(name) ?? { key, elements: [] };
-        entry.elements.push(target);
+      for (const name of Object.keys(project.targets ?? {})) {
+        const entry = byTarget.get(name) ?? { key };
         if (index !== undefined) {
           entry.indices = [...(entry.indices ?? []), index];
         }
@@ -555,26 +681,6 @@ function appliedElements(
   return applied;
 }
 
-// What the elements set for `field` together, merged as Nx merges them: a
-// later element wins, and a list with "..." keeps the earlier one in its place.
-function layered(
-  elements: readonly TargetConfiguration[],
-  field: keyof TargetConfiguration,
-): unknown {
-  let value: unknown;
-  for (const element of elements) {
-    const next: unknown = element[field];
-    if (next === undefined) {
-      continue;
-    }
-    value =
-      Array.isArray(next) && Array.isArray(value) && next.includes(spread)
-        ? next.flatMap((item) => (item === spread ? (value as unknown[]) : [item]))
-        : next;
-  }
-  return value;
-}
-
 /**
  * The user-facing report of {@link findTargetDefaultChanges}: one paragraph
  * per entry and severity, which says what the entry does to which targets
@@ -582,6 +688,7 @@ function layered(
  */
 export function describeTargetDefaultChanges(
   findings: readonly TargetDefaultFinding[],
+  unattributed: readonly UnattributedChange[] = [],
 ): TargetDefaultReport {
   const byEntry = groupBy(findings, (finding) =>
     JSON.stringify([finding.severity, finding.key, finding.elements ?? null]),
@@ -593,9 +700,17 @@ export function describeTargetDefaultChanges(
       .map(paragraph);
   const errors = paragraphs("error");
   return {
-    warnings: paragraphs("warning"),
+    warnings: [...paragraphs("warning"), ...unattributed.map(unattributedWarning)],
     ...(errors.length === 0 ? {} : { error: errors.join("\n\n") }),
   };
+}
+
+// The warning for a target whose change the plugin could not attribute.
+function unattributedWarning({ target, project, manifest, fields }: UnattributedChange): string {
+  return [
+    `The target "${target}" of the Rust project ${project} (${manifest}) differs from what nx-rust infers in ${list(fields.map((field) => `"${field}"`))}, and nx-rust cannot tell which configuration changed it: it sees the targetDefaults of nx.json and the project's own project.json and package.json, but not, for example, another plugin listed in nx.json.`,
+    `Run \`nx show target ${project}:${target} --json\` and look under "sourceMap" for the file and entry behind each of these fields. If it is a targetDefaults entry, narrow it as ${targetDefaultsGuide} shows.`,
+  ].join("\n");
 }
 
 const changeOrder: readonly TargetDefaultChange[] = [
@@ -708,14 +823,12 @@ function elements(indices: number[] | undefined): string {
   return ` (its element${indices.length === 1 ? "" : "s"} ${list(indices.map(String))})`;
 }
 
-// Whether an entry's list replaces the inferred one: it is a list without "...".
-function replaces(list: unknown): boolean {
-  return Array.isArray(list) && !list.includes(spread);
-}
-
-// Whether a list the plugin inferred has an entry that the merged list lacks.
-function lost(inferred: readonly unknown[] | undefined, merged: readonly unknown[] | undefined) {
-  return (inferred ?? []).some((entry) => !includes(merged, entry));
+// The entries of a list the plugin inferred that the merged list lacks.
+function lostFrom(
+  inferred: readonly unknown[] | undefined,
+  merged: readonly unknown[] | undefined,
+): unknown[] {
+  return (inferred ?? []).filter((entry) => !includes(merged, entry));
 }
 
 // Whether a dependency, as Nx's task graph normalises it, reaches tasks of
