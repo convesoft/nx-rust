@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -7,6 +7,8 @@ import {
   FixtureName,
   fixtureNames,
   HARNESS_TIMEOUT,
+  pinnedToolchain,
+  pinnedToolchainAvailable,
   pluginPackageName,
   testEnvironment,
 } from "./harness";
@@ -47,13 +49,9 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
   },
 };
 
-// The toolchain that `different-toolchains/pinned/rust-toolchain.toml` names.
-// The tests never install it. Without it, that fixture is not checked, except
-// in CI, which installs it.
-const pinnedToolchain = "1.91.0";
-const pinnedToolchainAvailable = hasRustupToolchain(pinnedToolchain) || Boolean(process.env.CI);
+// Without the pinned toolchain, different-toolchains is not checked.
 const checkedFixtures = fixtureNames.filter(
-  (fixture) => fixture !== "different-toolchains" || pinnedToolchainAvailable,
+  (fixture) => fixture !== "different-toolchains" || pinnedToolchainAvailable(),
 );
 
 describe("fixtures", () => {
@@ -95,7 +93,7 @@ describe("fixtures", () => {
     HARNESS_TIMEOUT,
   );
 
-  if (pinnedToolchainAvailable) {
+  if (pinnedToolchainAvailable()) {
     it(
       "different-toolchains uses two toolchains",
       () => {
@@ -135,17 +133,6 @@ function cargoMetadata(cwd: string): CargoMetadata {
 
 function rustcVersion(cwd: string): string {
   return execFileSync("rustc", ["-V"], { cwd, env: testEnvironment(), encoding: "utf8" }).trim();
-}
-
-function hasRustupToolchain(toolchain: string): boolean {
-  const result = spawnSync("rustup", ["toolchain", "list"], {
-    env: testEnvironment(),
-    encoding: "utf8",
-  });
-  return (
-    result.status === 0 &&
-    result.stdout.split("\n").some((line) => line.startsWith(`${toolchain}-`))
-  );
 }
 
 function manifestFolders(root: string, folder = "."): string[] {
