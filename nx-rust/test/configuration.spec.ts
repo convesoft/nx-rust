@@ -1385,8 +1385,14 @@ describe("tasks of targets that the tables configure", () => {
   }
 
   /** The cargo calls of tasks: every logged call but graph creation's `cargo metadata`. */
+  // The cargo calls of tasks, without graph creation's and the lockfile task's.
   function taskCalls(workspace: FixtureWorkspace): { cwd: string; args: string[] }[] {
-    return workspace.cargoCalls().filter((call) => call.args[0] !== "metadata");
+    return workspace
+      .cargoCalls()
+      .filter(
+        (call) =>
+          call.args[0] !== "metadata" && !(call.args[0] === "update" && call.args[1] === "--workspace"),
+      );
   }
 
   it(

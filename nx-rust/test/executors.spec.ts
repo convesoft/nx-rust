@@ -367,6 +367,8 @@ describe("the cargo executor", () => {
             args: expect.arrayContaining(["metadata"]),
             env: { RUSTUP_AUTO_INSTALL: "0" },
           }),
+          // The lockfile task's cargo and the task's own get the task's environment.
+          { cwd: "rust", args: ["update", "--workspace"], env: { RUSTUP_AUTO_INSTALL: null } },
           {
             cwd: "rust",
             args: ["check", "--all-targets", "-p", "core-lib"],
