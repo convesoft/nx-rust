@@ -75,7 +75,10 @@ names a fixture, an optional `base` state that both states share, a `before`
 and an `after` state (`files`, `env`, and `overrides` for options passed on
 the command line), and a verdict per task. Both states are built from a
 fresh copy in the same folder and hashed with Nx's own task hasher, the way
-`nx run` hashes the task. A failing row says which inputs changed.
+`nx run` hashes the task: with the root dotenv files loaded, and with each
+task's own dotenv files, such as a `.env` in a crate's folder, in the
+environment that its runtime inputs see. A failing row says which inputs
+changed.
 
 ```ts
 describeCacheKeyMatrix("cache keys", [
@@ -88,9 +91,15 @@ describeCacheKeyMatrix("cache keys", [
 ]);
 ```
 
-This row shows the intended use: it needs the inputs of the `test` target,
-which the plugin does not declare yet (nxr-fy4t4k). `compareCacheKeys(row)` returns the hashes
-instead of failing.
+[`cache-keys.spec.ts`](cache-keys.spec.ts) holds the rows of
+`VER-CACHE-KEYS` that the plugin's inputs decide. `compareCacheKeys(row)`
+returns the hashes instead of failing.
+
+**`pnpmLockfile(version, integrity)`** writes a `pnpm-lock.yaml` that lists
+the plugin's package at `version`, with `tslib` behind it, and `left-pad`
+beside it. With a root `package.json` and an empty
+`node_modules/.modules.yaml`, without which Nx refuses a pnpm lockfile, Nx
+makes npm nodes of them, as in a repository that installs the plugin.
 
 **`FixtureWorkspace.create(fixture, files)`** is the copy both helpers use:
 `graph()`, `hashTasks(tasks, { env, overrides })`, `nx(args, env)`, which

@@ -35,6 +35,12 @@ const allTools = optionalTools.map((tool) => tool.name);
 /** A repository that does not know the plugin yet. */
 const unregistered: FileChanges = { "nx.json": "{}\n" };
 
+/** The empty `targetDefaults` entries that init adds for the plugin's executors. */
+const executorEntries = { "@convesoft/nx-rust:cargo": {}, "@convesoft/nx-rust:run": {} };
+
+/** `nx.json` after init in a repository that did not know the plugin. */
+const registeredNxJson = { plugins: [pluginName], targetDefaults: executorEntries };
+
 /** The call that reads the workspace whose root manifest is in `root`. */
 function workspaceCall(root: string): CargoCall {
   return {
@@ -109,14 +115,17 @@ describe("init", () => {
   });
 
   it(
-    "registers the plugin in nx.json and changes no other file",
+    "registers the plugin and adds the executors' target defaults in nx.json, and changes no other file",
     () =>
       runInit("subfolder-workspace", {}, (workspace, { status, output, changed }) => {
         expect(status).toBe(0);
         expect(changed).toEqual(["nx.json"]);
-        expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual({
-          plugins: [pluginName],
-        });
+        expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual(
+          registeredNxJson,
+        );
+        expect(output).toContain(
+          'Added "@convesoft/nx-rust:cargo": {} and "@convesoft/nx-rust:run": {} to targetDefaults in nx.json',
+        );
         // Its check read the workspace as graph creation does.
         expect(workspace.cargoCalls()).toEqual([workspaceCall("rust")]);
         // No tool is installed and none is needed.
@@ -183,7 +192,7 @@ describe("init", () => {
   );
 
   it(
-    "leaves an existing entry with its options as it is and reports again",
+    "leaves an existing entry with its options and the executors' target defaults as they are and reports again",
     async () => {
       const nxJson = `${JSON.stringify(
         {
@@ -195,6 +204,7 @@ describe("init", () => {
             },
           ],
           namedInputs: { default: ["{projectRoot}/**/*"] },
+          targetDefaults: { build: { cache: true }, ...executorEntries },
         },
         null,
         4,
@@ -220,6 +230,53 @@ describe("init", () => {
   );
 
   it(
+    "adds only the missing executors' target defaults where the plugin is registered already",
+    async () => {
+      const plugins = [{ plugin: pluginName, options: { targetNames: { test: "unit-test" } } }];
+      const targetDefaults = { build: { cache: true }, "@convesoft/nx-rust:run": {} };
+      await runInit(
+        "subfolder-workspace",
+        { "nx.json": `${JSON.stringify({ plugins, targetDefaults }, null, 2)}\n` },
+        (workspace, { status, output, changed }) => {
+          expect(status).toBe(0);
+          expect(changed).toEqual(["nx.json"]);
+          expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual({
+            plugins,
+            targetDefaults: { ...targetDefaults, "@convesoft/nx-rust:cargo": {} },
+          });
+          expect(output).toContain(
+            'Added "@convesoft/nx-rust:cargo": {} to targetDefaults in nx.json',
+          );
+        },
+        ["--skipProjectGraph"],
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "writes the combined target defaults into nx.json where only the file it extends has them",
+    () =>
+      runInit(
+        "subfolder-workspace",
+        {
+          "nx.json": `${JSON.stringify({ extends: "./nx-base.json" })}\n`,
+          "nx-base.json": `${JSON.stringify({ targetDefaults: { build: { cache: true } } })}\n`,
+        },
+        (workspace, { status, changed }) => {
+          expect(status).toBe(0);
+          expect(changed).toEqual(["nx.json"]);
+          expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual({
+            extends: "./nx-base.json",
+            plugins: [pluginName],
+            targetDefaults: { build: { cache: true }, ...executorEntries },
+          });
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "changes nothing with --dry-run and still reports",
     () =>
       runInit(
@@ -241,9 +298,9 @@ describe("init", () => {
     () =>
       runInit("subfolder-workspace", { rust: null }, async (workspace, { status, output }) => {
         expect(status).toBe(0);
-        expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual({
-          plugins: [pluginName],
-        });
+        expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual(
+          registeredNxJson,
+        );
         expect(workspace.cargoCalls()).toEqual([]);
         expect(output).toContain("The repository has no Cargo.toml yet.");
         expect(output).toContain(`nx g ${pluginName}:library <directory>`);
@@ -277,9 +334,9 @@ describe("init", () => {
         (workspace, { status, output, changed }) => {
           expect(status).toBe(0);
           expect(changed).toEqual(["nx.json"]);
-          expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual({
-            plugins: [pluginName],
-          });
+          expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual(
+            registeredNxJson,
+          );
           const warning = `nx-rust has not been checked with Nx ${newerNx}, which is installed in this repository: this version of ${pluginName} supports Nx ${installedMajor}.`;
           expect(output.split(warning)).toHaveLength(2);
           expect(output).toContain(

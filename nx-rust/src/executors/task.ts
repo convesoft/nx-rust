@@ -2,6 +2,7 @@ import type { ExecutorContext, Task } from "@nx/devkit";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { cargoMetadataOf } from "../graph/collisions";
+import { uncachedByDesign } from "../graph/outputs";
 import {
   cachedTargets,
   type InferredTargetName,
@@ -12,6 +13,18 @@ import {
 import { cargoArguments, type CargoTargetOptions } from "./command";
 import { recordedNxCommand } from "./nx-command";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
+
+/**
+ * The profiles whose artifacts Cargo puts in another profile's folder, which
+ * the outputs of `build` and `doc` cannot name (`DES-OUTPUTS`), with what to
+ * build with instead.
+ */
+const renamedProfiles: Readonly<Record<string, string>> = {
+  dev: "no profile: dev is cargo's default profile, whose folder is debug",
+  test: "no profile, which builds the dev profile into the same folder, debug, or a custom profile that inherits from test",
+  bench:
+    "the profile release, whose folder cargo uses for bench too, or a custom profile that inherits from bench",
+};
 
 /** A problem that stops a task before cargo runs; its message is what the task prints. */
 export class TaskError extends Error {
@@ -53,7 +66,10 @@ export interface TaskInvocation extends CargoInvocation {
  *
  * A problem found before cargo starts fails the task with a message that
  * names it and runs no cargo. An option that the task ignores gets a warning
- * line at the top of its output.
+ * line at the top of its output. Before anything else, the task prints the
+ * warnings that graph creation found for its project, which the Nx daemon
+ * keeps out of the terminal (`DES-DIAGNOSTICS`, "Warnings where they are
+ * seen").
  */
 // @mara implements DES-INVOCATION
 // @mara implements REQ-CARGO-UNCHANGED
@@ -63,6 +79,9 @@ export async function runTask(
   options: CargoTargetOptions,
   context: ExecutorContext,
 ): Promise<{ success: boolean }> {
+  for (const warning of projectWarnings(context)) {
+    console.warn(warning);
+  }
   let invocation: TaskInvocation;
   try {
     invocation = taskInvocation(executor, options, context, process.env);
@@ -88,10 +107,14 @@ export async function runTask(
  * @param env The task's environment, with `NX_RUST_LOCKED` and the record of
  *   the `nx` command ({@link recordedNxCommand}).
  * @throws {TaskError} When the target is no inferred target of this
- *   executor, when its configuration caches a target that the plugin does
- *   not cache, when `NX_RUST_LOCKED` is neither `true` nor `false`, or when
- *   `args` does not split into words.
+ *   executor, when its configuration caches a target that the plugin leaves
+ *   uncached in this project, when `build` or `doc` gets the profile `dev`,
+ *   `test` or `bench`, or is cached while `CARGO_BUILD_TARGET` or
+ *   `build.target` in Cargo's configuration chooses its triple and the
+ *   task's options name none (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
+ *   `false`, or when `args` does not split into words.
  */
+// @mara implements DES-OUTPUTS
 export function taskInvocation(
   executor: PluginExecutor,
   options: CargoTargetOptions,
@@ -107,13 +130,44 @@ export function taskInvocation(
       `${task}: ${executor.name} runs only the targets that @convesoft/nx-rust infers for a crate or a Cargo workspace, and ${task} is not one of them. To run another cargo command, define a target with a "command" under a name of its own.`,
     );
   }
-  if (context.target?.cache === true && !cachedTargets.has(metadata.target)) {
+  // What the plugin decided for this project's target; a graph from before
+  // that decision was recorded falls back to the target's default name.
+  const uncached =
+    metadata.uncached ??
+    (cachedTargets.has(metadata.target)
+      ? undefined
+      : (uncachedByDesign[metadata.target] ?? "the plugin does not cache this target"));
+  if (context.target?.cache === true && uncached !== undefined) {
     throw new TaskError(
       [
-        `${task}: the configuration of this target sets "cache": true, but @convesoft/nx-rust does not declare the cache inputs of its targets yet, so Nx would restore results that miss changes to Cargo.lock, the toolchain or the environment. The task does not run, so that Nx stores no result for it.`,
+        `${task}: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves \`${metadata.target}\` uncached in this project, because ${uncached}. The task does not run, so that Nx stores no result for it.`,
         `The setting comes from the workspace's configuration: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry. If it is a \`targetDefaults\` entry in nx.json, add a \`filter\` to it or add an empty entry keyed by "${context.target.executor ?? executor.name}".`,
       ].join("\n"),
     );
+  }
+  if (metadata.target === "build" || metadata.target === "doc") {
+    const replacement =
+      options.profile === undefined ? undefined : renamedProfiles[options.profile];
+    if (replacement !== undefined) {
+      throw new TaskError(
+        `${task}: the profile ${options.profile} puts cargo's artifacts in the folder of another profile, which @convesoft/nx-rust cannot name for the cache. Build with ${replacement}.`,
+      );
+    }
+    // The outputs name the triple's folder only through the option; where
+    // the environment or Cargo's configuration chooses the triple instead,
+    // cargo writes elsewhere and Nx would store no artifact.
+    const namesTriple = typeof options.targetTriple === "string" && options.targetTriple !== "";
+    const triple = env.CARGO_BUILD_TARGET;
+    if (context.target?.cache === true && !namesTriple && triple !== undefined && triple !== "") {
+      throw new TaskError(
+        `${task}: CARGO_BUILD_TARGET is ${JSON.stringify(triple)}, and @convesoft/nx-rust cannot cache ${metadata.target} for a target triple that comes from the environment, because it cannot name the folder where cargo puts the artifacts. Give the triple as the targetTriple option instead: --targetTriple=${triple} on the command line, or in the crate's or the workspace's configuration. The task does not run, so that Nx stores no result for it.`,
+      );
+    }
+    if (context.target?.cache === true && !namesTriple && metadata.buildTargetFile !== undefined) {
+      throw new TaskError(
+        `${task}: build.target in ${metadata.buildTargetFile} chooses the target triple, and this run of the cached ${metadata.target} names none in the targetTriple option, so @convesoft/nx-rust cannot name the folder where cargo puts the artifacts. Run it with the triple that the target's options give, and remove what clears the option for this run, such as a configuration, a project.json, a targetDefaults entry or a value on the command line; \`nx show target ${task} --json\` shows where each option comes from. The task does not run, so that Nx stores no result for it.`,
+      );
+    }
   }
   const project = context.projectsConfigurations?.projects?.[projectName];
   const cargo = project === undefined ? undefined : cargoMetadataOf(project);
@@ -238,13 +292,30 @@ export function runCargo({ args, cwd }: CargoInvocation): Promise<boolean> {
   });
 }
 
+// The warnings that graph creation recorded for the task's project.
+// @mara implements DES-DIAGNOSTICS
+function projectWarnings(context: ExecutorContext): string[] {
+  const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];
+  const warnings = project === undefined ? undefined : cargoMetadataOf(project)?.warnings;
+  return Array.isArray(warnings)
+    ? warnings.filter((warning): warning is string => typeof warning === "string")
+    : [];
+}
+
 // The target's metadata from the plugin, or undefined where it is missing.
 function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
-  const { target, locked } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
+  const { target, locked, uncached, buildTargetFile } = value as Partial<
+    Record<keyof TargetCargoMetadata, unknown>
+  >;
   return (inferredTargetNames as readonly unknown[]).includes(target)
-    ? { target: target as InferredTargetName, locked: locked === true }
+    ? {
+        target: target as InferredTargetName,
+        locked: locked === true,
+        ...(typeof uncached === "string" ? { uncached } : {}),
+        ...(typeof buildTargetFile === "string" ? { buildTargetFile } : {}),
+      }
     : undefined;
 }

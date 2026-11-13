@@ -7,16 +7,10 @@
 > dependency on it are not implemented yet and arrive with nxr-xq9ava; until
 > then `targetNames` rejects the key `lockfile`. Without cargo-audit or
 > cargo-deny, `audit` and `deny` fail with cargo's own message for an unknown
-> command. None of the targets is cached until its inputs are declared
-> (nxr-fy4t4k). A `targetDefaults` entry in `nx.json` that turns caching on
-> for one of them fails graph creation
-> ([Target defaults that reach Rust targets](#target-defaults-that-reach-rust-targets)),
-> and a task whose configuration caches it anyway, such as through a
-> `project.json`, fails before cargo runs and says where the setting comes
-> from: Nx's default inputs miss `Cargo.lock`, the toolchain and the
-> environment, so it would restore results that no longer hold. The warnings
-> of that section are printed when the graph is created and by `nx add`, not
-> yet in the output of a task (nxr-rxzgbq).
+> command. The warnings of
+> [Target defaults that reach Rust targets](#target-defaults-that-reach-rust-targets)
+> are printed when the graph is created and by `nx add`, not yet in the output
+> of a task (nxr-rxzgbq).
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.
@@ -187,7 +181,8 @@ build lock. In one repository that inherited `^build` onto its Rust crates, a
 52-second test run took 40 minutes ([[EVD-NXRUST-BUILD-DEPS]]).
 
 Check your `nx.json`: a target default keyed by a bare target name applies to
-Rust targets with that name too.
+Rust targets with that name too, unless an entry keyed by their executor comes
+first, as the one that `nx add` adds does.
 
 ```json
 {
@@ -214,9 +209,15 @@ A `targetDefaults` entry in `nx.json` keyed by a target's name, such as
 one keyed by `@convesoft/nx-rust:cargo` to every target of that executor. Nx
 lays the entry over what the plugin infers: its `dependsOn`, `inputs`,
 `outputs` and `cache` replace the plugin's values, unless a list keeps them
-with `"..."` ([[EVD-NX-TARGET-DEFAULTS]]). The plugin checks its targets when Nx
-creates the project graph, and `nx add` checks them before it registers the
-plugin ([[DES-TARGET-DEFAULT-GUARD]]):
+with `"..."` ([[EVD-NX-TARGET-DEFAULTS]]).
+
+`nx add` adds `"@convesoft/nx-rust:cargo": {}` and `"@convesoft/nx-rust:run": {}`
+where `targetDefaults` lacks them ([Setup](setup.mara.md#adding-the-plugin)).
+Nx chooses an entry keyed by a target's executor before one keyed by its name
+or a glob, so with these entries in place only an entry keyed by one of the two
+executors reaches Rust targets. The plugin checks its targets when Nx creates
+the project graph, and `nx add` checks them before it writes anything
+([[DES-TARGET-DEFAULT-GUARD]]):
 
 | What the entry does to a Rust target                               | Report  |
 | ------------------------------------------------------------------ | ------- |
@@ -224,6 +225,15 @@ plugin ([[DES-TARGET-DEFAULT-GUARD]]):
 | Replaces the `inputs` or `outputs` that the plugin declares        | Error   |
 | Replaces its `dependsOn`, which loses the dependency on `lockfile` | Error   |
 | Adds a dependency on tasks of other projects, such as `^build`     | Warning |
+
+Caching counts only on a target that the plugin leaves uncached: `fmt`, `bench`,
+`run`, `audit`, `deny` and `update`, and `build` and `doc` where
+[Caching](caching.mara.md#what-is-stored) says they run uncached, such as
+in a workspace whose artifact directory lies outside the repository. Turning on
+caching for a target that the plugin caches changes nothing and is not
+reported. A `project.json` or `package.json` in a crate's folder that turns on
+caching for an uncached target is not reported here either; its task fails
+before cargo runs and says why the plugin leaves the target uncached.
 
 An error stops every Nx command that needs the project graph until the entry is
 narrowed: Nx would otherwise restore results that the task would not produce,
@@ -234,10 +244,11 @@ fit:
 
 ```text
 The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:
-  - It turns on caching for "build", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In api (rust/crates/api/Cargo.toml).
+  - It replaces the inputs that nx-rust declares for "build", so that the cache key and nx affected miss files or settings that the task depends on. In api (rust/crates/api/Cargo.toml).
 To narrow the entry (https://github.com/convesoft/nx-rust/blob/main/nx-rust/docs/targets.mara.md#target-defaults-that-reach-rust-targets), do one of these:
   - Give the entry a "filter" that leaves these projects out, ...
   - Add an empty entry keyed by the executor of these targets, "@convesoft/nx-rust:cargo": {}. ...
+  - Keep what nx-rust declares by putting "..." into the entry's "inputs" list, as in ["...", <your entries>].
 ```
 
 Where something else changes a Rust target as well, such as another plugin
@@ -246,8 +257,8 @@ the change. It then reports no entry, but warns, naming the target and the
 fields that differ, and points to `nx show target <project>:<target> --json`,
 whose `sourceMap` names the file and entry behind each field.
 
-Neither the plugin nor `nx add` edits the entry. Narrow it in one of these
-ways:
+Neither the plugin nor `nx add` changes an entry that is there. Narrow it in one
+of these ways:
 
 - Give it a `filter`, which needs the entry written as a list. This one assumes
   that your crates carry the tag `lang:rust`, for example through
@@ -270,8 +281,11 @@ ways:
 
 - Add an empty entry keyed by the executor of the Rust targets,
   `"@convesoft/nx-rust:cargo": {}`, and `"@convesoft/nx-rust:run": {}` for
-  `run`. Nx chooses an entry keyed by a target's executor before one keyed by
-  its name, so no entry keyed by a target name reaches those targets.
+  `run`, as `nx add` does where they are missing. Nx chooses an entry keyed by a
+  target's executor before one keyed by its name, so no entry keyed by a target
+  name reaches those targets.
+- Where the entry is keyed by one of those executors, remove the field that the
+  message names.
 - Where the entry replaces a list, keep the plugin's values with `"..."`, as in
   `"inputs": ["...", "{workspaceRoot}/.tool-versions"]`.
 
@@ -324,9 +338,9 @@ tag `lang:rust`, for example through `[workspace.metadata.nx]`:
 
 Or add an empty entry keyed by the target's executor, the `executor` that
 `nx show project <crate> --json` shows for it: `@convesoft/nx-rust:cargo`, or
-`@convesoft/nx-rust:run` for `run`. Nx prefers an entry keyed by the executor
-to one keyed by the target name, so then no entry keyed by a target name
-reaches the targets of that executor.
+`@convesoft/nx-rust:run` for `run`. `nx add` adds both where they are missing.
+Nx prefers an entry keyed by the executor to one keyed by the target name, so
+then no entry keyed by a target name reaches the targets of that executor.
 
 A Rust option with a value of the wrong type, such as a number for `profile`,
 is not ignored: Nx rejects it before the plugin sees it. Rust tasks normally run
@@ -501,7 +515,7 @@ The coverage baseline target of [[DES-BASELINE]] is on the same project, in a wo
 :status: accepted
 :satisfies: REQ-TARGET-DEFAULT-GUARD
 
-**Where.** `createDependencies` receives the projects after Nx has laid the `targetDefaults` of `nx.json` over the plugin's targets, while the plugin entry that created them still holds what it inferred ([[EVD-NX-TARGET-DEFAULTS]]). For each inferred target the plugin compares the two. A target whose executor is no longer the inferred one was replaced by another file and is left alone. `init` runs the same check through the plugin's `createDependencies` ([[DES-GENERATORS]]).
+**Where.** `createDependencies` receives the projects after Nx has laid the `targetDefaults` of `nx.json` over the plugin's targets, while the plugin entry that created them still holds what it inferred ([[EVD-NX-TARGET-DEFAULTS]]). For each inferred target the plugin compares the two. A target whose executor is no longer the inferred one was replaced by another file and is left alone. `init` runs the same check through the plugin's `createDependencies`, on `nx.json` with the empty entries keyed by the plugin's executors that it adds where they are missing ([[DES-GENERATORS]]). In a repository set up that way, Nx lays no entry keyed by a target's name or a glob over the plugin's targets, so the check reports entries keyed by the plugin's executors there; it stays the check for repositories that were set up by hand or lost those entries later, and its message names the same fix.
 
 **What counts.** Each row compares the target as Nx merged it with the target as the plugin inferred it.
 
@@ -513,11 +527,11 @@ The coverage baseline target of [[DES-BASELINE]] is on the same project, in a wo
 | Lacks a `dependsOn` entry that the plugin declared, such as the one on the workspace's lockfile task ([[DES-LOCKFILE-HASHING]])                                                                                          | Error    |
 | Has a `dependsOn` entry that the plugin did not declare and that Nx's task graph resolves to tasks of other projects: `^<target>`, `dependencies: true`, or `projects` or `<project>:<target>` that name another project | Warning  |
 
-The differences are read from the targets that Nx merged, and from nothing else: a target that does not differ is not reported, whatever `targetDefaults` holds, and neither is one that no key of `targetDefaults` can reach, by its executor, its name or a glob. A difference counts against an entry only where the plugin can tell that the entry made it (**Which layer**). The comparison is with what the plugin infers for the target at the time: where it declares no inputs, outputs or `dependsOn`, there is nothing to lose, and while it leaves every target uncached, caching turned on for any of them counts.
+The differences are read from the targets that Nx merged, and from nothing else: a target that does not differ is not reported, whatever `targetDefaults` holds, and neither is one that no key of `targetDefaults` can reach, by its executor, its name or a glob. A difference counts against an entry only where the plugin can tell that the entry made it (**Which layer**). The comparison is with what the plugin infers for the target at the time: where it declares no inputs, outputs or `dependsOn`, there is nothing to lose, and caching turned on counts only for a target that it leaves uncached in that project, by design or for a reason of [[DES-OUTPUTS]] such as an artifact directory outside the repository.
 
 **Severity.** An entry that only adds dependencies costs time and leaves results correct ([[EVD-NXRUST-BUILD-DEPS]]), so it is a warning. The other rows let Nx restore a result that the task would not produce, or let `nx affected` miss a crate, so they are errors ([[GOAL-TRUSTED-CACHE]]). A `dependsOn` that loses the lockfile task drops the crate's digest from its key ([[DES-LOCKFILE-HASHING]]).
 
-**Which layer.** `createDependencies` receives no record of which layer set a value, so where a target differs, the plugin rebuilds it with Nx's own code. The layers are the plugin's projects as its `createNodes` returned them; the elements of `targetDefaults` that Nx's synthesis (`createTargetDefaultsResults` from `nx/src/devkit-internals`) lays over them, given what Nx's default plugins make of the `package.json` and `project.json` in the project's folder and the name under which Nx knows the plugin's entry; and those default-plugin results. Each layer is merged with Nx's merge of project nodes, so `"..."` in lists and in objects, and the elements of an entry's list, behave as in Nx. The rebuild must give the target's `cache`, `inputs`, `outputs` and `dependsOn` and the project's name and tags, which filters read, as Nx merged them. Where it does, a difference that the same rebuild without the `targetDefaults` layer lacks is reported against the entry that Nx's synthesis names, with the severity below. A difference that the rebuild has without that layer was made by the folder's `project.json` or `package.json` and is not reported. Where the rebuild does not give what Nx merged, as when another plugin listed in `nx.json` contributes to the project, the plugin does not conclude: it warns that it cannot tell which configuration changed the target, names the project, the target and the fields that differ, and points to `nx show target <project>:<target> --json` and its `sourceMap`. For caching, the executor's check of a task's merged configuration stays the second line. Nx's normalisation of `dependsOn` for the task graph decides which projects an added entry reaches. These parts of Nx are not public API. They are loaded only when a target differs, and where the installed Nx lacks one, graph creation fails with the error of [[DES-DIAGNOSTICS]].
+**Which layer.** `createDependencies` receives no record of which layer set a value, so where a target differs, the plugin rebuilds it with Nx's own code. The layers are the plugin's projects as its `createNodes` returned them; the elements of `targetDefaults` that Nx's synthesis (`createTargetDefaultsResults` from `nx/src/devkit-internals`) lays over them, given what Nx's default plugins make of the `package.json` and `project.json` in the project's folder and the name under which Nx knows the plugin's entry; and those default-plugin results. Each layer is merged with Nx's merge of project nodes, so `"..."` in lists and in objects, and the elements of an entry's list, behave as in Nx. The rebuild must give the target's `cache`, `inputs`, `outputs` and `dependsOn` and the project's name and tags, which filters read, as Nx merged them. Where it does, a difference that the same rebuild without the `targetDefaults` layer lacks is reported against the entry that Nx's synthesis names, with the severity below. A difference that the rebuild has without that layer was made by the folder's `project.json` or `package.json` and is not reported. Where the rebuild does not give what Nx merged, as when another plugin listed in `nx.json` contributes to the project, the plugin does not conclude: it warns that it cannot tell which configuration changed the target, names the project, the target and the fields that differ, and points to `nx show target <project>:<target> --json` and its `sourceMap`. For caching, the executor's check of a task's merged configuration stays the second line: it fails a task that caches a target which the plugin leaves uncached in its project, whichever layer turned caching on. Nx's normalisation of `dependsOn` for the task graph decides which projects an added entry reaches. These parts of Nx are not public API. They are loaded only when a target differs, and where the installed Nx lacks one, graph creation fails with the error of [[DES-DIAGNOSTICS]].
 
-**Message.** One paragraph per entry and severity names the key and its elements, says what the entry does to which targets of which projects, with their manifests, and lists the ways to narrow the entry that fit: a `filter` on `projects` or `executor`; an empty entry keyed by the targets' executor, which Nx chooses before an entry keyed by the target's name; removing the field from an entry keyed by the plugin's executor; and `"..."` in a list that replaces. Errors stop graph creation, and warnings are printed where [[DES-DIAGNOSTICS]] says. The plugin never edits `targetDefaults`.
+**Message.** One paragraph per entry and severity names the key and its elements, says what the entry does to which targets of which projects, with their manifests, and lists the ways to narrow the entry that fit: a `filter` on `projects` or `executor`; an empty entry keyed by the targets' executor, which Nx chooses before an entry keyed by the target's name; removing the field from an entry keyed by the plugin's executor; and `"..."` in a list that replaces. Errors stop graph creation, and warnings are printed where [[DES-DIAGNOSTICS]] says. Graph creation never edits `targetDefaults`, and `init` only adds the empty entries that are missing.
 :::

@@ -1,5 +1,6 @@
 import type { CreateNodes, NxJsonConfiguration } from "@nx/devkit";
 import { checkNxForGraph } from "../compatibility/nx-version";
+import { cacheContext } from "./caching";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
 import { checkEntries } from "./entries";
@@ -49,6 +50,8 @@ export class Registration {
         );
         // Nx's plugin interface has no channel for warnings; standard error
         // reaches the terminal without the daemon and its log file with it.
+        // The warnings of the projects' caching are printed where they are
+        // found (`cacheContext` in `caching.ts`).
         for (const warning of graph.discovery.warnings) {
           console.warn(warning);
         }
@@ -73,7 +76,10 @@ export class Registration {
    *
    * @param options The entry's plugin options.
    * @param nxJson `nx.json`, whose `plugins` name the entries of the plugin
-   *   that have to agree on the settings of a workspace (`checkEntries` in `entries.ts`).
+   *   that have to agree on the settings of a workspace (`checkEntries` in
+   *   `entries.ts`), which says whether Nx analyses the JS lockfile
+   *   (`pluginInput` in `plugin-package.ts`), and whose `namedInputs` give
+   *   the repository's `default` (`cacheContext` in `caching.ts`).
    * @throws {Error} When the installed Nx is not supported (see
    *   {@link checkNxForGraph}), when the options are invalid, when discovery
    *   fails (see {@link discoverWorkspaces}), when a metadata table is
@@ -97,7 +103,8 @@ export class Registration {
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
       const settings = readSettings(discovery, pluginOptions);
       await checkEntries(discovery, settings, nxJson);
-      graph = { discovery, projects: inferProjects(discovery, settings) };
+      const context = await cacheContext(discovery, nxJson);
+      graph = { discovery, projects: inferProjects(discovery, settings, context) };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {
