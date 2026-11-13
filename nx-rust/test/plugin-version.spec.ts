@@ -5,6 +5,7 @@ import {
   type FileChanges,
   HARNESS_TIMEOUT,
   inFixture,
+  lockfileCalls,
   pnpmLockfile,
   runNx,
   taskCalls,
@@ -21,6 +22,7 @@ import {
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 const runExecutor = "@convesoft/nx-rust:run";
+const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 const pluginVersion: string = JSON.parse(
   readFileSync(join(__dirname, "..", "package.json"), "utf8"),
 ).version;
@@ -63,7 +65,11 @@ describe("a pluginVersion that the plugin did not set fails graph creation", () 
     "from a targetDefaults entry keyed by the executors, naming the entry and every target it reaches",
     async () => {
       const output = await failed({
-        "nx.json": withTargetDefaults({ [cargoExecutor]: options, [runExecutor]: options }),
+        "nx.json": withTargetDefaults({
+          [cargoExecutor]: options,
+          [runExecutor]: options,
+          [lockfileExecutor]: options,
+        }),
       });
 
       expect(output).toContain(
@@ -74,6 +80,13 @@ describe("a pluginVersion that the plugin did not set fails graph creation", () 
           `  - model (rust/crates/model/Cargo.toml): ${crateTargets}`,
           `  - testkit (rust/crates/testkit/Cargo.toml): ${crateTargets}`,
           '  - rust (rust/Cargo.toml): "doc", "audit" and "update"',
+        ].join("\n"),
+      );
+      // The lockfile task carries the plugin's version like every inferred target.
+      expect(output).toContain(
+        [
+          `The targetDefaults entry "${lockfileExecutor}" in nx.json sets the option "pluginVersion" on targets that nx-rust infers. ${reason} Remove it there. It reaches:`,
+          '  - rust (rust/Cargo.toml): "lockfile"',
         ].join("\n"),
       );
     },
@@ -243,6 +256,19 @@ describe("a pluginVersion that only the run gives", () => {
           'core-lib:check: this run gives the option "pluginVersion" the value "0.0.0", but only @convesoft/nx-rust sets that option, to carry its version into the cache key. The value comes from the command line, such as --pluginVersion, or from a task that forwards its options to this one: leave it out. The task does not run, so that Nx stores no result for it.',
         );
         expect(taskCalls(workspace)).toEqual([]);
+
+        // The lockfile task, which has an executor of its own, alike.
+        workspace.cargo.clear();
+        const lockfileRun = await runNx(workspace, [
+          "run",
+          "rust:lockfile",
+          "--pluginVersion=0.0.0",
+        ]);
+        expect(lockfileRun.status).toBe(1);
+        expect(lockfileRun.output).toContain(
+          'rust:lockfile: this run gives the option "pluginVersion" the value "0.0.0", but only @convesoft/nx-rust sets that option',
+        );
+        expect(lockfileCalls(workspace)).toEqual([]);
 
         const ownValue = await runNx(workspace, [
           "run",

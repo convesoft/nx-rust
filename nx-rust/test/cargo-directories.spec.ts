@@ -194,11 +194,19 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
     (_case, env, printed) =>
       inFixture("subfolder-workspace", unignored, async (workspace) => {
         try {
-          for (const task of ["api:fmt-check", "rust:doc"]) {
+          // rust:doc runs after rust:lockfile, a task of the same project,
+          // which prints it as well.
+          for (const [task, tasks] of [
+            ["api:fmt-check", 1],
+            ["rust:doc", 2],
+          ] as const) {
             const { status, output } = await runNx(workspace, ["run", task], env);
 
             expect({ task, status }).toEqual({ task, status: 0 });
-            expect({ task, printed: occurrences(output, rustTarget) }).toEqual({ task, printed });
+            expect({ task, printed: occurrences(output, rustTarget) }).toEqual({
+              task,
+              printed: printed - 1 + tasks,
+            });
           }
           // Only the daemon has a log, where graph creation printed it.
           expect(occurrences(workspace.daemonLog(), rustTarget) > 0).toBe(env.NX_DAEMON === "true");
