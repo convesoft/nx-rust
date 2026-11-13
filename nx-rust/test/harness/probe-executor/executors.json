@@ -1,0 +1,10 @@
+{
+  "executors": {
+    "cargo": {
+      "implementation": "./cargo.cjs",
+      "batchImplementation": "./cargo.cjs#batch",
+      "schema": "./schema.json",
+      "description": "Runs cargo --version, or cargo -V for each task of a batch"
+    }
+  }
+}

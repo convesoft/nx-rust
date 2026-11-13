@@ -1,7 +1,15 @@
 import { NX_VERSION } from "@nx/devkit";
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { join } from "path";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
+import {
+  CargoWrapper,
+  cargoProbeProject,
+  HARNESS_TIMEOUT,
+  installFixture,
+  installProbeExecutor,
+  testEnvironment,
+} from "../../nx-rust/test/harness";
 
 describe("@convesoft/nx-rust", () => {
   let projectDirectory: string;
@@ -40,7 +48,137 @@ describe("@convesoft/nx-rust", () => {
       }),
     ).not.toThrow();
   });
+
+  describe("with a fixture", () => {
+    // Outside the test project, so that Nx does not see the wrapper.
+    const wrapperDirectory = join(process.cwd(), "tmp", "cargo-wrapper");
+    let cargo: CargoWrapper;
+
+    beforeAll(() => {
+      installFixture(projectDirectory, "subfolder-workspace");
+      rmSync(wrapperDirectory, { recursive: true, force: true });
+      cargo = CargoWrapper.install(wrapperDirectory);
+      // Ahead of Node's folder on the PATH that nx:run-commands builds.
+      cargo.placeIn(join(projectDirectory, "node_modules", ".bin"));
+      installProbeExecutor(projectDirectory);
+    });
+
+    beforeEach(() => cargo.clear());
+
+    afterAll(() => {
+      rmSync(wrapperDirectory, { recursive: true, force: true });
+    });
+
+    it(
+      "loads the fixture through the installed plugin",
+      () => {
+        const projects = JSON.parse(nx(projectDirectory, cargo, ["show", "projects", "--json"]));
+
+        // The plugin infers no project yet (nxr-7n0nqf).
+        expect(projects).toEqual([]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "logs the cargo invocations in the fixture",
+      () => {
+        const metadata = JSON.parse(
+          execFileSync("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
+            cwd: join(projectDirectory, "rust"),
+            env: cargo.environment(testEnvironment()),
+            encoding: "utf8",
+          }),
+        );
+
+        expect(metadata.packages.map((p: { name: string }) => p.name).sort()).toEqual([
+          "api",
+          "codegen",
+          "model",
+          "testkit",
+        ]);
+        expect(cargo.calls(projectDirectory)).toEqual([
+          { cwd: "rust", args: ["metadata", "--no-deps", "--format-version", "1"] },
+        ]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    // Nx starts cargo in two ways: from an nx:run-commands task, which
+    // rebuilds PATH with Node's folder ahead of the inherited one, and from an
+    // executor process, which inherits Nx's PATH, alone or in a batch.
+    describe("when a task runs cargo", () => {
+      beforeAll(() => {
+        installFixture(projectDirectory, "subfolder-workspace", {
+          "rust/crates/api/project.json": cargoProbeProject("api"),
+          "rust/crates/model/project.json": cargoProbeProject("model"),
+        });
+      });
+
+      it(
+        "logs cargo that an nx:run-commands task starts, ahead of Node's folder",
+        () => {
+          const output = nx(projectDirectory, cargo, [
+            "run",
+            "api:probe-command",
+            "--skip-nx-cache",
+            "--output-style=static",
+          ]);
+
+          expect(output).toContain(join(projectDirectory, "node_modules", ".bin", "cargo"));
+          expect(cargo.calls(projectDirectory)).toContainEqual({
+            cwd: "rust/crates/api",
+            args: ["--version"],
+          });
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "logs cargo that an executor starts",
+        () => {
+          nx(projectDirectory, cargo, ["run", "api:probe-executor", "--skip-nx-cache"]);
+
+          expect(cargo.calls(projectDirectory)).toContainEqual({
+            cwd: "rust/crates/api",
+            args: ["--version"],
+          });
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "logs cargo that a batched executor starts",
+        () => {
+          nx(projectDirectory, cargo, [
+            "run-many",
+            "-t",
+            "probe-executor",
+            "--batch",
+            "--skip-nx-cache",
+          ]);
+
+          const calls = cargo.calls(projectDirectory);
+          expect(calls).toContainEqual({ cwd: "rust/crates/api", args: ["-V"] });
+          expect(calls).toContainEqual({ cwd: "rust/crates/model", args: ["-V"] });
+        },
+        HARNESS_TIMEOUT,
+      );
+    });
+  });
 });
+
+/**
+ * Runs the test project's Nx with the cargo wrapper first on `PATH` and
+ * returns its standard output.
+ */
+function nx(projectDirectory: string, cargo: CargoWrapper, args: string[]): string {
+  return execFileSync("pnpm", ["exec", "nx", ...args], {
+    cwd: projectDirectory,
+    env: cargo.environment(testEnvironment()),
+    encoding: "utf8",
+  });
+}
 
 /**
  * Creates an empty Nx workspace by hand and installs Nx into it.
