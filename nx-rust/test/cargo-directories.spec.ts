@@ -1,10 +1,15 @@
+import type { ProjectConfiguration } from "@nx/devkit";
+import { spawnSync } from "node:child_process";
+import { cargoMetadataOf } from "../src/graph/collisions";
 import {
   Env,
+  expectCacheKeys,
   FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   inFixture,
   runNx,
+  testEnvironment,
   withoutColours,
 } from "./harness";
 
@@ -12,8 +17,9 @@ import {
 // directories inside the repository that Nx does not ignore
 // (DES-DIAGNOSTICS): the warning when the graph is created, its absence where
 // an ignore file or a folder that Nx always ignores leaves the directory out,
-// and its repetition at the start of a task. init.spec.ts checks that `init`
-// prints it.
+// its repetition at the start of a task, its place among the other warnings
+// that a project records, and that recording it changes no cache key.
+// init.spec.ts checks that `init` prints it.
 
 /** The warning about `directory`, Cargo's directory in `role` for `workspaces`. */
 function directoryWarning(directory: string, role: string, workspaces: string): string {
@@ -49,6 +55,21 @@ async function showProjects(...files: FileChanges[]): Promise<string> {
 /** How often `text` occurs in `output`. */
 function occurrences(output: string, text: string): number {
   return output.split(text).length - 1;
+}
+
+/** The host's target triple, as the toolchain of the tests reports it. */
+function hostTriple(): string {
+  const { stdout } = spawnSync("rustc", ["-vV"], { env: testEnvironment(), encoding: "utf8" });
+  const host = /^host: (.+)$/m.exec(stdout)?.[1];
+  if (host === undefined) {
+    throw new Error(`rustc -vV names no host:\n${stdout}`);
+  }
+  return host;
+}
+
+/** The warnings that a project records in its metadata, if any. */
+function projectWarnings(project: ProjectConfiguration): string[] | undefined {
+  return cargoMetadataOf(project)?.warnings;
 }
 
 describe("a Cargo directory inside the repository that Nx does not ignore", () => {
@@ -150,10 +171,7 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
         );
         expect(
           Object.fromEntries(
-            Object.entries(projects).map(([name, project]) => [
-              name,
-              project.metadata?.cargo?.warnings,
-            ]),
+            Object.entries(projects).map(([name, project]) => [name, projectWarnings(project)]),
           ),
         ).toEqual({
           "cargo-workspace": undefined,
@@ -190,6 +208,125 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
           }
         }
       }),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "appears beside the warnings about a shared artifact directory and a configured triple, each once, when the graph is created and at the start of a task",
+    () =>
+      // The configuration at the root puts the artifacts of both workspaces
+      // into target/, and tools/ chooses a triple.
+      inFixture(
+        "two-workspaces",
+        {
+          ...unignored,
+          ".cargo/config.toml": '[build]\ntarget-dir = "target"\n',
+          "tools/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
+        },
+        async (workspace) => {
+          const sharedTarget = directoryWarning(
+            "target",
+            "build and artifact directory",
+            "the Cargo workspaces in the repository root and tools",
+          );
+          // Each line that starts a warning, named by the warning it starts.
+          const warnings = (output: string) =>
+            output
+              .split("\n")
+              .filter((line) => line.startsWith("nx-rust:"))
+              .map((line) =>
+                sharedTarget.startsWith(line)
+                  ? "unignored target"
+                  : line.startsWith("nx-rust: the Cargo workspace at the repository root shares")
+                    ? "root shares target"
+                    : line.startsWith("nx-rust: the Cargo workspace in tools shares")
+                      ? "tools shares target"
+                      : line.startsWith("nx-rust: tools/.cargo/config.toml sets build.target")
+                        ? "tools sets build.target"
+                        : line,
+              )
+              .sort();
+
+          const shown = await runNx(workspace, ["show", "projects"]);
+          const { projects } = await workspace.graph();
+
+          expect(shown.status).toBe(0);
+          expect(warnings(shown.output)).toEqual([
+            "root shares target",
+            "tools sets build.target",
+            "tools shares target",
+            "unignored target",
+          ]);
+          expect(warnings(projectWarnings(projects.scaffold)?.join("\n") ?? "")).toEqual([
+            "tools sets build.target",
+            "tools shares target",
+            "unignored target",
+          ]);
+          expect(warnings(projectWarnings(projects.app)?.join("\n") ?? "")).toEqual([
+            "root shares target",
+            "unignored target",
+          ]);
+          const daemon = { NX_DAEMON: "true" };
+          try {
+            const task = await runNx(workspace, ["run", "scaffold:fmt-check"], daemon);
+
+            expect(task.status).toBe(0);
+            expect(warnings(task.output)).toEqual([
+              "tools sets build.target",
+              "tools shares target",
+              "unignored target",
+            ]);
+          } finally {
+            await workspace.nx(["daemon", "--stop"], daemon);
+          }
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "changes no cache key when it joins a project's metadata",
+    async () => {
+      // Both states put Cargo's directory into cache/cargo. In the first,
+      // cache/.gitignore ignores it and itself, so no file that Nx reads
+      // differs between the states: only the projects' metadata does.
+      const base: FileChanges = {
+        "rust/.cargo/config.toml": '[build]\ntarget-dir = "../cache/cargo"\n',
+      };
+      const ignored: FileChanges = { "cache/.gitignore": "*\n" };
+      const recorded = async (...files: FileChanges[]) => {
+        const workspace = FixtureWorkspace.create("subfolder-workspace", ...files);
+        try {
+          const { projects } = await workspace.graph();
+          return [projects.api, projects.rust].map(projectWarnings);
+        } finally {
+          workspace.remove();
+        }
+      };
+      const cacheCargo = directoryWarning(
+        "cache/cargo",
+        "build and artifact directory",
+        "the Cargo workspace in rust",
+      );
+
+      expect(await recorded(base, ignored)).toEqual([undefined, undefined]);
+      expect(await recorded(base)).toEqual([[cacheCargo], [cacheCargo]]);
+      await expectCacheKeys({
+        change: "the warning about cache/cargo in the metadata of api and rust",
+        fixture: "subfolder-workspace",
+        base: { files: base },
+        before: { files: ignored },
+        after: {},
+        keys: {
+          "api:build": "must not differ",
+          "api:check": "must not differ",
+          "api:lint": "must not differ",
+          "api:test": "must not differ",
+          "api:fmt-check": "must not differ",
+          "rust:doc": "must not differ",
+        },
+      });
+    },
     HARNESS_TIMEOUT,
   );
 });

@@ -20,6 +20,13 @@ async function main() {
   let result;
   try {
     const request = JSON.parse(readFileSync(requestFile, "utf8"));
+    // As the nx command line does: it loads the root dotenv files when it
+    // starts, and `nx run` lets each task load its own dotenv files, which
+    // its key's runtime inputs then see, unless the environment says not to.
+    require("nx/src/utils/dotenv").loadRootEnvFiles(process.cwd());
+    if (process.env.NX_LOAD_DOT_ENV_FILES !== "false") {
+      process.env.NX_LOAD_DOT_ENV_FILES = "true";
+    }
     const { createProjectGraphAsync } = require("nx/src/project-graph/project-graph");
     const graph = await createProjectGraphAsync({ exitOnError: false });
     result =
