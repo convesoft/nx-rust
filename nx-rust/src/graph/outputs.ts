@@ -2,11 +2,12 @@ import type { CargoPackage } from "../cargo/metadata";
 import type { InferredTargetName } from "./targets";
 
 /**
- * Where a workspace's artifact directory lies, as far as caching cares
- * (`DES-OUTPUTS`).
+ * Where a workspace's artifact directory lies, as far as caching cares: the
+ * folder that the system reaches through the path that cargo reports, with
+ * every symbolic link followed (`DES-OUTPUTS`).
  */
 export type ArtifactDirectory =
-  /** Inside the repository, at `path` relative to its root; `shared` when it is another workspace's too. */
+  /** Inside the repository, at `path` relative to its real path; `shared` when it is another workspace's too. */
   | { inside: true; path: string; shared: boolean }
   /** Outside the repository, where Nx cannot store files. */
   | { inside: false };
