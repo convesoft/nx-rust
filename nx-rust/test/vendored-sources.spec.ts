@@ -12,7 +12,7 @@ import {
   GraphCreationError,
   HARNESS_TIMEOUT,
   LocalRegistry,
-  pluginSourceEntry,
+  pluginEntry,
   RegistryCrate,
   testEnvironment,
 } from "./harness";
@@ -289,8 +289,8 @@ describe("crates that cargo vendor writes", () => {
         applyFileChanges(copy.root, {
           "nx.json": `${JSON.stringify({
             plugins: [
-              { plugin: pluginSourceEntry, exclude: ["rust/vendor/**"] },
-              { plugin: pluginSourceEntry, include: ["rust/vendor/**"] },
+              { plugin: pluginEntry(), exclude: ["rust/vendor/**"] },
+              { plugin: pluginEntry(), include: ["rust/vendor/**"] },
             ],
           })}\n`,
         });

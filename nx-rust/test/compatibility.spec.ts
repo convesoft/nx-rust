@@ -18,6 +18,7 @@ import {
   FixtureWorkspace,
   GraphCreationError,
   HARNESS_TIMEOUT,
+  pluginWorkers,
   testEnvironment,
   withoutColours,
 } from "./harness";
@@ -247,7 +248,7 @@ describe("graph creation with an unsupported Nx", () => {
   );
 
   it.each([
-    ["in a plugin worker", {}],
+    ["in a plugin worker", pluginWorkers],
     ["in Nx's own process", { NX_ISOLATE_PLUGINS: "false" }],
   ])(
     "succeeds with a newer major and NX_RUST_ALLOW_UNSUPPORTED_NX=true and warns once, %s",
@@ -332,7 +333,7 @@ describe("graph creation with an unsupported Nx", () => {
 describe("a task with an Nx major newer than the supported ones", () => {
   it.each<[string, Record<string, string>, number]>([
     // Graph creation prints the warning in the terminal, and the task again.
-    ["without the daemon", {}, 2],
+    ["without the daemon", pluginWorkers, 2],
     // The daemon writes graph creation's warning to its log.
     ["with the daemon", { NX_DAEMON: "true" }, 1],
   ])(

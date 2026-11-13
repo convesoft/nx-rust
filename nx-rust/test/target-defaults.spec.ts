@@ -14,7 +14,7 @@ import {
   FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
-  pluginSourceEntry,
+  pluginEntry,
   repositoryFiles,
   withoutColours,
 } from "./harness";
@@ -357,9 +357,9 @@ describe("a target default that fails graph creation", () => {
   it(
     "is filtered to the plugin by the name Nx knows it by",
     async () => {
-      // The harness loads the plugin from its source, so Nx knows it by that path.
+      // The harness loads the plugin by the path of its entry point, so Nx knows it by that path.
       const output = await failed({
-        fmt: [{ filter: { plugin: pluginSourceEntry }, cache: true }],
+        fmt: [{ filter: { plugin: pluginEntry() }, cache: true }],
       });
 
       expect(output).toContain(
@@ -481,7 +481,7 @@ describe("the layer that made a change", () => {
     async () => {
       const output = await failed(
         {
-          [cargoExecutor]: [{ filter: { plugin: pluginSourceEntry }, options: {} }],
+          [cargoExecutor]: [{ filter: { plugin: pluginEntry() }, options: {} }],
           fmt: { cache: true },
         },
         {

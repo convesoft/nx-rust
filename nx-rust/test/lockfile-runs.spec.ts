@@ -11,6 +11,7 @@ import {
   holdCargo,
   LocalRegistry,
   lockfileCalls,
+  pluginWorkers,
   pnpmLockfile,
   runNx,
   taskCalls,
@@ -338,7 +339,7 @@ describe("the lockfile task", () => {
 
 describe("nx affected after a change to Cargo.lock", () => {
   it.each<[string, Env]>([
-    ["without the daemon", {}],
+    ["without the daemon", pluginWorkers],
     ["with the daemon", { NX_DAEMON: "true" }],
   ])(
     "selects the cached targets of that workspace's crates and none of the other workspace, runs those whose dependencies changed and restores the others, %s",
@@ -700,7 +701,7 @@ describe("the check after cargo's call", () => {
 
 describe("a run that excludes task dependencies", () => {
   it.each<[string, Env]>([
-    ["without the daemon", {}],
+    ["without the daemon", pluginWorkers],
     ["with the daemon", { NX_DAEMON: "true" }],
   ])(
     "runs every cached crate task that depends on the lockfile task, also with the files of an earlier run, and a normal run then restores its own results, %s",
