@@ -15,7 +15,7 @@ Goal: the `fileInputs` key in `[package.metadata.nx]` and `[workspace.metadata.n
 Implements `REQ-BUILD-SCRIPT-INPUTS` and `REQ-FILE-INPUTS-HASHABLE` through the "Declared files" row and paragraph of `DES-INPUTS` (`nx-rust/docs/caching.mara.md`), the `fileInputs` row of `DES-METADATA-TABLES` and the graph-time row for a bad pattern in `DES-DIAGNOSTICS`. Decision: `ADR-DECLARED-FILE-INPUTS`. Checked by the parts of `VER-CACHE-KEYS` that name declared files.
 
 - [ ] Turn the `fileInputs` of both tables, which nxr-xyq7c8 reads as `DES-PLUGIN-OPTIONS` gives them, into filesets as the "Declared files" row and paragraph of `DES-INPUTS` say
-- [ ] Put the filesets into `InputSettings.added.fileInputs` (`nx-rust/src/graph/inputs.ts`), which `namedInputs` adds to the crate's named input `default` after its path dependencies, so that its dependents hash them through `^default`
+- [ ] Put the filesets for `ProjectSettings.fileInputs` into `InputSettings.added.fileInputs` (`inputSettings` in `nx-rust/src/graph/projects.ts`, empty for now; `nx-rust/src/graph/inputs.ts`), which `namedInputs` adds to the crate's named input `default` after its path dependencies, so that its dependents hash them through `^default`
 - [ ] The graph-creation error of `REQ-FILE-INPUTS-HASHABLE`, worded as its row in `DES-DIAGNOSTICS`
 - [ ] A fixture crate that reads files outside its folder, as "How the plugin is tested" in `verification.mara.md` lists
 - [ ] The declared-file cases of `VER-CACHE-KEYS`: keys, affected selection and the ignored and linked files

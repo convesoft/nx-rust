@@ -24,6 +24,11 @@ export interface ProjectCargoMetadata {
   /** The crate's real package name; absent for a workspace project without a crate. */
   packageName?: string;
   /**
+   * `true` where the `name` of the crate's `[package.metadata.nx]` gave the
+   * name, which `namePrefix` then does not change; absent otherwise.
+   */
+  nameOverride?: true;
+  /**
    * The warnings that graph creation found for the project, which the
    * executor prints again at the start of each of its tasks
    * (`DES-DIAGNOSTICS`, "Warnings where they are seen"); absent without any.
@@ -38,6 +43,9 @@ export function cargoMetadata(project: CargoProject): ProjectCargoMetadata {
     manifest: project.manifest,
     workspaceManifest: project.workspace.rootManifest,
     ...(project.pkg === undefined ? {} : { packageName: project.pkg.name }),
+    ...(project.pkg !== undefined && project.settings.name !== undefined
+      ? { nameOverride: true }
+      : {}),
   };
 }
 
@@ -187,8 +195,15 @@ function describeProject(project: ProjectCargoMetadata): string {
     : `the crate ${project.packageName} in ${project.manifest}`;
 }
 
+// The settings that rename the project, offered only where they apply to it
+// (DES-PLUGIN-OPTIONS): `namePrefix` does not change a crate with a `name`
+// of its own, nor a workspace project.
 function remedy(project: ProjectCargoMetadata): string {
-  return project.packageName === undefined
-    ? "set `name` under [workspace.metadata.nx.project] in that manifest."
-    : `set \`name\` under [package.metadata.nx] in that manifest, or \`namePrefix\` under [workspace.metadata.nx] in ${project.workspaceManifest} for every member of its workspace.`;
+  if (project.packageName === undefined) {
+    return "set `name` under [workspace.metadata.nx.project] in that manifest.";
+  }
+  if (project.nameOverride === true) {
+    return "change `name` under [package.metadata.nx] in that manifest.";
+  }
+  return `set \`name\` under [package.metadata.nx] in that manifest, or \`namePrefix\` under [workspace.metadata.nx] in ${project.workspaceManifest} for every member of its workspace.`;
 }

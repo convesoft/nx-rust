@@ -198,6 +198,18 @@ describeCacheKeyMatrix("keys must differ after", [
     keys: { "api:lint": "must differ", "api:test": "must not differ" },
   },
   {
+    change: "a change in .config/nextest.toml, for a test that nextest runs",
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        "rust/Cargo.toml": appended('\n[workspace.metadata.nx]\ntestRunner = "nextest"\n'),
+        "rust/.config/nextest.toml": "# a\n",
+      },
+    },
+    after: { files: { "rust/.config/nextest.toml": "# b\n" } },
+    keys: { "api:test": "must differ", "api:build": "must not differ" },
+  },
+  {
     change: "a change in a rustfmt.toml, for fmt-check",
     fixture: "subfolder-workspace",
     after: { files: { "rust/rustfmt.toml": "# changed\n" } },
@@ -484,6 +496,98 @@ describe("keys with the environment", () => {
     HARNESS_TIMEOUT,
   );
 });
+
+/** The options of the plugin's entry in `nx.json`. */
+const pluginEntryOptions =
+  (options: object) =>
+  (text: string | undefined): string => {
+    const nxJson = JSON.parse(text ?? "{}");
+    nxJson.plugins = nxJson.plugins.map((entry: string | { plugin: string }) => ({
+      plugin: typeof entry === "string" ? entry : entry.plugin,
+      options,
+    }));
+    return JSON.stringify(nxJson);
+  };
+
+describeCacheKeyMatrix("keys with what the repository adds", [
+  ...(
+    [
+      [
+        "the crate's own table",
+        {
+          "rust/crates/model/Cargo.toml": appended(
+            '\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n',
+          ),
+        },
+      ],
+      [
+        "the workspace table",
+        {
+          "rust/Cargo.toml": appended('\n[workspace.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n'),
+        },
+      ],
+      ["the plugin options", { "nx.json": pluginEntryOptions({ envInputs: ["REVIEW_ADDED"] }) }],
+    ] as const
+  ).map(([where, files]): CacheKeyRow => ({
+    change: `a change of a variable that envInputs adds in ${where}, for the crate and the crates that depend on it`,
+    fixture: "subfolder-workspace",
+    base: { files },
+    before: { env: { REVIEW_ADDED: "a" } },
+    after: { env: { REVIEW_ADDED: "b" } },
+    keys: { "model:test": "must differ", "model:build": "must differ", "api:test": "must differ" },
+  })),
+  {
+    change:
+      "a change of the output of a command that runtimeInputs adds in the crate's table, for the crate and the crates that depend on it, and no other",
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        "rust/crates/model/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nruntimeInputs = ["echo $REVIEW_RUNTIME"]\n',
+        ),
+      },
+    },
+    before: { env: { REVIEW_RUNTIME: "a" } },
+    after: { env: { REVIEW_RUNTIME: "b" } },
+    keys: {
+      "model:test": "must differ",
+      "api:test": "must differ",
+      "testkit:test": "must not differ",
+    },
+  },
+  {
+    change:
+      "a change of a variable that the workspace table adds, for a crate that adds one of its own",
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        "rust/Cargo.toml": appended(
+          '\n[workspace.metadata.nx]\nenvInputs = ["REVIEW_WORKSPACE"]\n',
+        ),
+        "rust/crates/model/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nenvInputs = ["REVIEW_CRATE"]\n',
+        ),
+      },
+    },
+    before: { env: { REVIEW_WORKSPACE: "a" } },
+    after: { env: { REVIEW_WORKSPACE: "b" } },
+    keys: { "model:test": "must differ", "testkit:test": "must differ" },
+  },
+  {
+    change: "a change of a variable that a dependency in another workspace adds",
+    fixture: "cross-workspace-path",
+    base: {
+      files: {
+        "shared/crates/model/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n',
+        ),
+      },
+    },
+    before: { env: { REVIEW_ADDED: "a" } },
+    after: { env: { REVIEW_ADDED: "b" } },
+    keys: { "server:test": "must differ", "model:test": "must differ" },
+  },
+]);
 
 /** `nx.json` with `namedInputs` of the repository's own. */
 const repositoryInputs =

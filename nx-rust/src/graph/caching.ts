@@ -104,6 +104,17 @@ export async function cacheContext(
 /** What caching needs to know about a project. */
 export type CacheSubject = InputSubject;
 
+/** What a project's settings change in the caching of its targets. */
+export interface CacheOptions {
+  /** The settings that change the project's inputs. */
+  settings: InputSettings;
+  /**
+   * Whether the project's target tables name a target triple for the
+   * target with this default name, which the inferred options do not.
+   */
+  namesTriple?: (target: InferredTargetName) => boolean;
+}
+
 /**
  * Gives each of a project's inferred targets its caching: whether it is
  * cached, its inputs and its outputs (`DES-INPUTS`, `DES-OUTPUTS`), and the
@@ -122,14 +133,19 @@ export function configureCaching(
   targets: Map<InferredTargetName, TargetConfiguration>,
   subject: CacheSubject,
   context: CacheContext,
-  settings: InputSettings = defaultInputSettings,
+  options: CacheOptions = { settings: defaultInputSettings },
 ): void {
+  const { settings } = options;
   const artifacts = context.artifactDirectories.get(subject.workspace.root) ?? { inside: false };
   const place = { artifacts, buildTargetFiles: subject.workspace.buildTargetFiles ?? [] };
   for (const [name, target] of targets) {
     const reason =
       target.cache === true
-        ? uncachedReason(name, place, configuredTriples(target).length > 0)
+        ? uncachedReason(
+            name,
+            place,
+            configuredTriples(target).length > 0 || options.namesTriple?.(name) === true,
+          )
         : (uncachedByDesign[name] ?? "the plugin does not cache this target");
     target.cache = reason === undefined;
     const metadata = target.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;

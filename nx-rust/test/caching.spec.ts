@@ -83,13 +83,11 @@ describe("caching", () => {
       expect(api.namedInputs).toEqual({
         default: ["{projectRoot}/**/*", "{workspaceRoot}/rust/Cargo.toml"],
       });
-      const workspaceFiles = [
-        ...["rust/crates", "rust", ""].flatMap((folder) =>
-          ["rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml", ".cargo/config"].map(
-            (file) => `{workspaceRoot}/${folder === "" ? "" : `${folder}/`}${file}`,
-          ),
+      const workspaceFiles = ["rust/crates", "rust", ""].flatMap((folder) =>
+        ["rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml", ".cargo/config"].map(
+          (file) => `{workspaceRoot}/${folder === "" ? "" : `${folder}/`}${file}`,
         ),
-      ];
+      );
       // The other members' manifests, under the workspace-build strategy.
       const members = ["codegen", "model", "testkit"].map(
         (crate) => `{workspaceRoot}/rust/crates/${crate}/Cargo.toml`,
@@ -454,6 +452,20 @@ describe("caching", () => {
             /rust\/.cargo\/config.toml sets build.target for the Cargo workspace in rust, .*targetTriple/,
           ),
         ]);
+
+        // A triple in the crate's table names the folder again.
+        const named = await loadFixtureGraph("crate-shapes", {
+          files: {
+            "rust/.cargo/config.toml": '[build]\ntarget = "x86_64-unknown-linux-gnu"\n',
+            "rust/crates/cli/Cargo.toml": (manifest) =>
+              `${manifest}\n[package.metadata.nx.targets.build.options]\ntargetTriple = "x86_64-unknown-linux-gnu"\n`,
+          },
+        });
+        expect(named.projects.cli.targets.build).toMatchObject({
+          cache: true,
+          options: { targetTriple: "x86_64-unknown-linux-gnu" },
+        });
+        expect(named.projects["core-lib"].targets.build.cache).toBe(false);
       },
       HARNESS_TIMEOUT,
     );

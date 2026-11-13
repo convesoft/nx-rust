@@ -3,8 +3,9 @@ import { checkNxForGraph } from "../compatibility/nx-version";
 import { cacheContext } from "./caching";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
-import { readLocked, readTargetNames } from "./options";
+import { checkEntries } from "./entries";
 import { CargoGraph, inferProjects, projectNodes } from "./projects";
+import { readPluginOptions, readSettings } from "./settings";
 
 /** What the `createNodes` call that started last found. */
 interface Outcome {
@@ -73,14 +74,18 @@ export class Registration {
    * all its manifests in one call, so each call is taken as a computation of
    * its own.
    *
-   * @param options The entry's plugin options, of which `targetNames` and
-   *   `locked` are read.
-   * @param nxJson `nx.json`, which says whether Nx analyses the JS lockfile
-   *   (`pluginInput` in `plugin-package.ts`).
+   * @param options The entry's plugin options.
+   * @param nxJson `nx.json`, whose `plugins` name the entries of the plugin
+   *   that have to agree on the settings of a workspace (`checkEntries` in
+   *   `entries.ts`), which says whether Nx analyses the JS lockfile
+   *   (`pluginInput` in `plugin-package.ts`), and whose `namedInputs` give
+   *   the repository's `default` (`cacheContext` in `caching.ts`).
    * @throws {Error} When the installed Nx is not supported (see
    *   {@link checkNxForGraph}), when the options are invalid, when discovery
-   *   fails (see {@link discoverWorkspaces}) or when `targetNames` gives two
-   *   targets of one project the same name.
+   *   fails (see {@link discoverWorkspaces}), when a metadata table is
+   *   invalid (see {@link readSettings}), when entries disagree on the
+   *   settings of a workspace, or when the targets cannot be given their
+   *   names and tables (see {@link inferProjects}).
    */
   async discover(
     manifests: readonly string[],
@@ -94,11 +99,12 @@ export class Registration {
     let graph: CargoGraph | undefined;
     try {
       checkNxForGraph(workspaceRoot, reports);
-      const targetNames = readTargetNames(options);
-      const locked = readLocked(options);
+      const pluginOptions = readPluginOptions(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
+      const settings = readSettings(discovery, pluginOptions);
+      await checkEntries(discovery, settings, nxJson);
       const context = await cacheContext(discovery, nxJson);
-      graph = { discovery, projects: inferProjects(discovery, targetNames, context, locked) };
+      graph = { discovery, projects: inferProjects(discovery, settings, context) };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {

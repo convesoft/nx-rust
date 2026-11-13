@@ -211,9 +211,12 @@ describe("inferred targets", () => {
 
       for (const project of Object.values(graph.projects)) {
         for (const [name, target] of Object.entries(project.targets ?? {})) {
-          expect({ name, cargo: target.metadata?.cargo }).toEqual({
+          // An uncached target also carries why (caching.spec.ts).
+          const { uncached, ...cargo } = target.metadata?.cargo ?? {};
+          expect({ name, cargo }).toEqual({ name, cargo: { target: name, locked: true } });
+          expect({ name, explained: typeof uncached === "string" }).toEqual({
             name,
-            cargo: { target: name, locked: true },
+            explained: target.cache !== true,
           });
         }
       }

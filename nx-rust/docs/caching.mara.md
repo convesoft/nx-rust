@@ -8,10 +8,10 @@
 > the crate's digest: any change to the lockfile changes the keys of every
 > crate of that workspace, and a lockfile that cargo would still change is not
 > handled, so a task can be keyed on the lockfile before its own cargo command
-> updates it. `fileInputs`, `envInputs` and `runtimeInputs` are not read yet
-> (nxr-xyq7c8, nxr-d371vy), every workspace counts as using the
-> `workspace-build` strategy, and the check of a build's dependency files is
-> not implemented (nxr-agyqmz).
+> updates it. `envInputs` and `runtimeInputs` work; the files of `fileInputs`
+> are not hashed yet (nxr-d371vy), every workspace counts as using the
+> `workspace-build` strategy (nxr-k64tm5), and the check of a build's
+> dependency files is not implemented (nxr-agyqmz).
 
 Nx caches the **result** of a Rust task and, for a few targets, its **final
 artifacts**. It never stores or restores Cargo's intermediate files: Cargo owns

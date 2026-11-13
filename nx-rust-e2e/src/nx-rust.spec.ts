@@ -611,6 +611,78 @@ describe("@convesoft/nx-rust", () => {
       );
     });
   });
+
+  // The installed package lays target tables over the inferred targets and
+  // compares its entries in nx.json through parts of the installed Nx.
+  describe("with settings in Cargo.toml and nx.json", () => {
+    beforeAll(() => {
+      installFixture(projectDirectory, "subfolder-workspace", {
+        "rust/Cargo.toml": (manifest) =>
+          `${manifest}\n[workspace.metadata.nx]\nnamePrefix = "be-"\ntags = ["lang:rust"]\n\n[workspace.metadata.nx.targets.test]\ninputs = ["...", { env = "DATABASE_URL" }]\n`,
+        "rust/crates/model/Cargo.toml": (manifest) =>
+          `${manifest}\n[package.metadata.nx]\nname = "backend"\n`,
+      });
+    });
+
+    it(
+      "names the projects and applies the tables through the installed plugin",
+      () => {
+        const projects = JSON.parse(nx(projectDirectory, cargo, ["show", "projects", "--json"]));
+        const api = JSON.parse(
+          nx(projectDirectory, cargo, ["show", "project", "be-api", "--json"]),
+        );
+
+        expect([...projects].sort()).toEqual([
+          "backend",
+          "be-api",
+          "be-codegen",
+          "be-testkit",
+          "rust",
+        ]);
+        expect(api.tags).toEqual(["lang:rust"]);
+        expect(api.targets.test.inputs).toEqual([{ env: "DATABASE_URL" }]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "fails graph creation when two entries give the workspace different test runners",
+      () => {
+        writeFileSync(
+          join(projectDirectory, "nx.json"),
+          `${JSON.stringify({
+            plugins: [
+              {
+                plugin: "@convesoft/nx-rust",
+                include: ["rust/Cargo.toml", "rust/crates/api/**"],
+                options: { testRunner: "nextest" },
+              },
+              {
+                plugin: "@convesoft/nx-rust",
+                include: [
+                  "rust/crates/model/**",
+                  "rust/crates/codegen/**",
+                  "rust/crates/testkit/**",
+                ],
+              },
+            ],
+          })}\n`,
+        );
+
+        const { status, stdout, stderr } = spawnSync("pnpm", ["exec", "nx", "show", "projects"], {
+          cwd: projectDirectory,
+          env: cargo.environment(testEnvironment()),
+          encoding: "utf8",
+        });
+
+        expect(status).toBe(1);
+        expect(withoutColours(`${stdout}${stderr}`)).toContain(
+          'give it different values of "testRunner": plugins[0] sets "nextest"; plugins[1] does not set it, which gives the default "cargo"',
+        );
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
 });
 
 /**

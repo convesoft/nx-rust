@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
 import { cargoDenyConfigurationFiles } from "../tools/optional-tools";
-import { CacheContext, configureCaching } from "./caching";
+import { CacheContext, CacheOptions, configureCaching } from "./caching";
 import type { CargoWorkspace } from "./discovery";
 import { memberManifests } from "./inputs";
 import type { TargetNames } from "./options";
@@ -122,6 +122,7 @@ export interface TargetSubject {
  * `caching.ts`.
  *
  * @param context What the caching of the graph's projects shares.
+ * @param caching What the project's settings change in its caching.
  * @param locked The `locked` option of the plugin entry, which each target
  *   carries in its metadata for the executor ({@link TargetCargoMetadata}).
  */
@@ -132,6 +133,7 @@ export function inferTargets(
   subject: TargetSubject,
   context: CacheContext,
   locked = false,
+  caching?: CacheOptions,
 ): Map<InferredTargetName, TargetConfiguration> {
   const targets = new Map<InferredTargetName, TargetConfiguration>();
   const { pkg, workspace } = subject;
@@ -197,7 +199,7 @@ export function inferTargets(
       inputs: [lockfile, manifest],
     });
   }
-  configureCaching(targets, subject, context);
+  configureCaching(targets, subject, context, caching);
   return targets;
 }
 
