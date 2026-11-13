@@ -7,6 +7,8 @@ parent: nxr-w9qa5f
 blocked_by:
   - nxr-t1ht7j
   - nxr-5p9zq5
+related:
+  - nxr-1ydrfd
 created_at: 2026-11-12T18:20:01Z
 ---
 
@@ -19,6 +21,7 @@ Implements `REQ-INPUT-FILES`, `REQ-ENV-ALLOWLIST`, `REQ-TOOLCHAIN-KEY`, `REQ-CAC
 - [ ] `^` inputs over normal, build and dev-dependency edges
 - [ ] The environment allowlist and the inputs the repository adds, placed as `DES-INPUTS` says
 - [ ] The toolchain runtime input, run in the workspace root
+- [ ] What the toolchain input does when the pinned toolchain is missing: Nx 24 does not fail a key whose runtime input fails (`EVD-RUSTUP-MISSING-TOOLCHAIN`). nxr-1ydrfd settles it with the maintainer; implement what `DES-INPUTS` and `DES-DIAGNOSTICS` say once it is closed
 - [ ] Outputs: executables, `cdylib` and `staticlib` files for `build`, the whole doc folder of the artifact directory for the workspace project's `doc`, none elsewhere; nothing inside the build directory; no caching of `build` and `doc` when the artifact directory is outside the repository, and none of `doc` when two workspaces share one artifact directory
 - [ ] The cache-key matrix rows for all of the above
 

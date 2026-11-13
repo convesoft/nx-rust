@@ -47,6 +47,11 @@ including the repository root, and there can be any number of them.
 - Building the graph needs no network and downloads no crates. The plugin asks
   Cargo only about the workspace itself (`cargo metadata --no-deps`), which
   also never touches `Cargo.lock`.
+- Building the graph installs no toolchain either. The plugin runs Cargo in
+  each workspace's root folder, so the `rust-toolchain.toml` that applies there
+  counts. If it names a toolchain that is not installed, the graph fails with
+  rustup's message, which names the toolchain. Run `rustup toolchain install`
+  in that folder to install it. Plain `cargo` still installs it as before.
 
 Everything Cargo scopes to a workspace stays per workspace: the lockfile, the
 build directory, the toolchain, the batches and the coverage baseline. That is
@@ -277,7 +282,7 @@ Discovery repeats one step until no manifest is unclaimed: take the shallowest u
 
 A member whose manifest was left out or removed gets no project, although the report lists it.
 
-When cargo cannot be started, or `cargo metadata` fails for a manifest, graph creation fails with an error that names the manifest and carries cargo's message. The plugin never leaves a workspace out of the graph to get past such a failure ([[ADR-CARGO-SOURCE-OF-TRUTH]]). A manifest matched by `exclude` gets no project and is not read as a workspace, but a crate that depends on it by path still makes the plugin request one report for it, because its files are inputs of that crate.
+When cargo cannot be started, or `cargo metadata` fails for a manifest, graph creation fails with an error that names the manifest and carries cargo's message. A toolchain that the folder pins and that is not installed is such a failure, and rustup's message names the toolchain ([[DES-METADATA-REPORT]]). The plugin never leaves a workspace out of the graph to get past such a failure ([[ADR-CARGO-SOURCE-OF-TRUTH]]). A manifest matched by `exclude` gets no project and is not read as a workspace, but a crate that depends on it by path still makes the plugin request one report for it, because its files are inputs of that crate.
 :::
 
 :::mara design DES-METADATA-REPORT
@@ -292,6 +297,8 @@ Nodes, targets and edges of a workspace all come from one `cargo metadata` repor
 The report is requested with `--no-deps` ([[ADR-METADATA-NO-DEPS]]). It then holds the members of the workspace with their targets, their declared dependencies and the metadata tables, and Cargo's two directories. It needs no network, downloads nothing and never creates or changes `Cargo.lock` ([[EVD-CARGO-NO-DEPS]]). A dependency on another crate in the repository is recognised by the path its entry carries. Dependencies are not resolved in this report, so the locked versions of external crates come from `Cargo.lock` itself ([[DES-LOCKFILE-HASHING]]).
 
 A path dependency that is no member of the workspace appears only as that path. When such a crate has no project of its own, the plugin requests a report for its manifest as well, to learn the path dependencies behind it ([[DES-INPUTS]]). These calls come on top of the one per workspace.
+
+Every cargo call of graph creation starts in the root folder of a workspace, where rustup and Cargo choose the toolchain file and the configuration files that the workspace's tasks use ([[DES-INVOCATION]]): the report of a workspace in the folder of its root manifest, and the report of a path dependency without a project in the root folder of the workspace whose member depends on it, directly or through other such crates. When discovery first reads a workspace from another folder, such as that of a member whose root manifest Nx does not hand to the plugin, the plugin requests the report again in the root folder. Each call runs with `RUSTUP_AUTO_INSTALL=0`, set for these calls only, so a toolchain that the folder pins and that is not installed fails the call and graph creation instead of being installed ([[ADR-GRAPH-NO-TOOLCHAIN-INSTALL]], [[DES-DISCOVERY]]).
 :::
 
 :::mara design DES-PROJECT-GRAPH

@@ -1,6 +1,6 @@
 ---
 title: Decide whether the plugin lets rustup install a missing toolchain
-status: todo
+status: in-progress
 type: task
 tags:
   - spec
@@ -21,6 +21,9 @@ Options:
 - Set `RUSTUP_AUTO_INSTALL=0` for the plugin's graph-time commands (`cargo metadata`, the `rustc -Vv` input) only, so that a missing toolchain fails graph creation or hashing with a message that names it, while tasks keep plain cargo's behaviour.
 - Set it for tasks as well.
 
-- [ ] Agree the option with the maintainer
-- [ ] Record the decision in Mara and update `DES-DISCOVERY`, `DES-INPUTS`, `DES-DIAGNOSTICS` and the user guidance it changes
-- [ ] File the implementation work, or add it to nxr-7n0nqf and nxr-fy4t4k
+- [x] Agree the option with the maintainer
+- [x] Record the decision for graph creation in Mara (`ADR-GRAPH-NO-TOOLCHAIN-INSTALL`, `EVD-RUSTUP-MISSING-TOOLCHAIN`), with the folders of the graph-time calls, and update `DES-DISCOVERY`, `DES-METADATA-REPORT`, `VER-SETUP` and the workspaces guide
+- [x] File the graph-time implementation (nxr-66wa7d)
+- [ ] Agree with the maintainer what the toolchain input of a task's key does when the pinned toolchain is missing. Nx 24 keys a task on the output of a failing runtime input and runs it (`EVD-RUSTUP-MISSING-TOOLCHAIN`), so the accepted error "when a task's key is computed" in `DES-DIAGNOSTICS` and `VER-SETUP` cannot come from Nx
+- [ ] Record that answer: `ADR-GRAPH-NO-TOOLCHAIN-INSTALL` or a decision of its own, `DES-INPUTS`, `DES-DIAGNOSTICS`, `VER-SETUP`, a case in `VER-CACHE-KEYS`, and the caching and setup guidance it changes
+- [ ] Add the agreed toolchain-input work to the step that nxr-fy4t4k holds for it

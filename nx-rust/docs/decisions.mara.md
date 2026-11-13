@@ -339,6 +339,17 @@ Three alternatives were rejected:
 A declaration also covers what no record shows: a file that a proc macro opens by itself, which Cargo does not track either. Its cost is that the repository has to state the files. To catch what it forgot, a `build` task that ran cargo compares the dependency files Cargo wrote with its inputs, and fails when one names a repository file that no input covers ([[REQ-BUILD-INPUT-CHECK]]). It fails instead of warning because Nx stores every successful result and an executor cannot report success without it being stored, so a warning would leave a result under a key known to miss a file ([[EVD-NX-24-FILE-INPUTS]]). Nx Cloud can record the files a task reads, but nothing records them without it, so that is no substitute.
 :::
 
+:::mara decision ADR-GRAPH-NO-TOOLCHAIN-INSTALL
+:mid: 01M7AN094P6S3K7M62DNC8P15H
+:title: Let rustup install no toolchain while the graph is created
+:status: accepted
+:justifies: DES-METADATA-REPORT
+
+A workspace's `rust-toolchain.toml` can pin a toolchain that the machine lacks, and rustup installs such a toolchain the first time a command needs it, unless `RUSTUP_AUTO_INSTALL=0` is set ([[EVD-RUSTUP-MISSING-TOOLCHAIN]]). The plugin runs cargo whenever Nx creates the project graph, also on a machine that only works on JS projects. It therefore runs every cargo command of graph creation with `RUSTUP_AUTO_INSTALL=0`: a pinned toolchain that is missing fails graph creation with rustup's message, which names it, and creating the graph downloads nothing ([[ADR-V1-SCOPE]]). Where cargo is no rustup proxy, the variable has no effect. The cargo commands of tasks get no such setting, so a task installs a missing toolchain exactly when the same plain cargo command would ([[REQ-CARGO-UNCHANGED]]).
+
+Leaving rustup's default was rejected, because `nx graph`, or any Nx command that creates the graph, could then download a toolchain unasked. Setting the variable for tasks as well was rejected, because a task would then fail where the same plain cargo command succeeds.
+:::
+
 ## Risks
 
 Several risks below are assumptions that the design rests on and that nobody
@@ -759,6 +770,25 @@ Experiments on Linux on 13 November 2026, in throwaway folders outside this repo
 - **Versions.** For a one-crate package, the report of cargo 1.89 had no `build_directory` key, and the reports of cargo 1.97.1 and 1.100.0 had it. The other top-level keys were the same in all three: `metadata`, `packages`, `resolve`, `target_directory`, `version`, `workspace_default_members`, `workspace_members` and `workspace_root`.
 
 Cargo's source settles where the field begins. It was added to `cargo metadata` by rust-lang/cargo pull request #15377, merged on 2 April 2025, while `build.build-dir` was unstable. In the Cargo that Rust 1.90.0 ships (rust-lang/cargo commit 840b83a, package version 0.91.0), `src/cargo/ops/cargo_output_metadata.rs` writes `build_directory` only when the unstable `-Zbuild-dir` flag is on, and leaves the key out otherwise; unstable flags work only on nightly. In the Cargo that Rust 1.91.0 ships (commit ea2d978, package version 0.92.0), it always writes the field, and Cargo's changelog lists the stabilisation of `build.build-dir` under 1.91. The report of a stable Cargo therefore has `build_directory` from 1.91 on. The source was read through GitHub, at the cargo commits that the `src/tools/cargo` submodule of rust-lang/rust names at the tags `1.90.0` and `1.91.0`. Cargo 1.90 and 1.91 were not run here, because no toolchain was downloaded.
+:::
+
+:::mara evidence EVD-RUSTUP-MISSING-TOOLCHAIN
+:mid: 01M7AN00P9TZ5VQQT8SSXTHC4V
+:title: What rustup 1.29.3 and Nx 24.0.6 do when a pinned toolchain is missing
+:status: accepted
+:supports: DES-METADATA-REPORT
+:supports: RISK-NX-INPUT-SEMANTICS
+:supports: ADR-GRAPH-NO-TOOLCHAIN-INSTALL
+
+Experiments on 13 November 2026 on Linux x86-64 with rustup 1.29.3, whose proxies came first on `PATH`, and with `nx` 24.0.6, in throwaway folders outside this repository. A folder's `rust-toolchain.toml` named the toolchain `1.92.0`, which was not installed. Every command that could reach rustup ran with `RUSTUP_AUTO_INSTALL=0`, and rustup listed the same toolchains afterwards.
+
+- **rustup's default.** Earlier that day, while the test fixtures were built and with the variable unset, a plain `rustup show active-toolchain` in a folder whose toolchain file named `1.91.0`, missing then, downloaded and installed that toolchain without asking. That case was not run again.
+- **Missing toolchain.** In the pinned folder, `cargo metadata --no-deps --format-version 1` and `rustc -Vv` each wrote nothing to standard output, wrote `error: toolchain '1.92.0-x86_64-unknown-linux-gnu' is not installed` and ``help: run `rustup toolchain install` to install it`` to standard error, and exited with status 1. So did `sh -c 'cd pinned && RUSTUP_AUTO_INSTALL=0 rustc -Vv'`, the form a runtime input takes, started in the parent folder with the variable unset.
+- **Folder.** In a workspace whose root pinned nothing, a member and a path dependency outside the workspace each pinned `1.92.0` in their own folder. `cargo metadata` started in the root folder succeeded, for the workspace and with `--manifest-path` naming the path dependency, while the same calls started in the member's and in the dependency's folder failed as above. The folder a command starts in decides which toolchain file applies, not the manifest it reads.
+- **Without rustup.** With the cargo and rustc 1.99.1 of the Arch Linux `rust` package first on `PATH`, which are no rustup proxies, both commands succeeded in the pinned folder with the variable set: cargo reported the package, and `rustc -Vv` reported 1.99.1. Such a toolchain ignores the toolchain file and the variable.
+- **Nx.** In a workspace whose cached `nx:run-commands` target had the runtime input `cd ../pinned && RUSTUP_AUTO_INSTALL=0 rustc -Vv` as its only input, `nx run` with the daemon off ran the task, succeeded and printed nothing about the failed command, and a second run restored the task from the cache. With `1.93.0`, also missing, pinned instead, the key changed. With runtime commands such as `echo A >&2; exit 1`, the key followed what the command wrote to standard error, and neither its exit status nor its text: `exit 1`, `exit 2` and `exit 0` after the same `echo A >&2` gave one key, and so did `exit 3` and `exit 4` without output.
+
+So `RUSTUP_AUTO_INSTALL=0` turns rustup's download of a pinned toolchain into a failure whose message names the toolchain, and it changes nothing where cargo is no rustup proxy. Nx 24.0.6 does not fail a task whose runtime input fails: it keys the task on the command's output, for a missing toolchain rustup's message, and runs the task. A runtime input therefore cannot make the computation of a key fail, as the toolchain row of [[DES-DIAGNOSTICS]] and [[VER-SETUP]] expect, and such a key names the toolchain only as the toolchain file does: for a channel such as `stable`, not the release that cargo would install.
 :::
 
 :::mara evidence EVD-NX-24-SETUP
