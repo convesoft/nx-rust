@@ -115,10 +115,31 @@ all show up in the log, and the `nx:run-commands` task finds the copy in
 `node_modules/.bin`. The executor is a stand-in for the plugin's own:
 `cargoProbeProject(name)` writes a `project.json` with a target of each kind,
 and `installProbeExecutor(root)` installs the stand-in into
-`root/node_modules`. A cargo that is not looked up on `PATH` bypasses the
-wrapper: one started by an absolute path, an `nx:run-commands` task whose
-`cwd` lies outside the workspace or whose `env` replaces `PATH`, and the
-processes that cargo itself starts through the `CARGO` variable it sets.
+`root/node_modules`.
+
+The log, and so `cargoCalls`, holds exactly the calls that resolve to the
+wrapper. These do not, and run without being logged:
+
+- a cargo started by an absolute path;
+- an `nx:run-commands` task whose `cwd` lies outside the workspace, whose
+  `PATH` then holds none of the workspace's `node_modules/.bin`;
+- a cargo in a `node_modules/.bin` nearer to the task's folder than the
+  workspace's, such as one local to a crate's folder, which
+  `nx:run-commands` puts first;
+- cargo's own descendants: those that use the `CARGO` variable cargo sets,
+  and those that run a bare `cargo`, such as a build script's nested cargo,
+  which find the real cargo first because the wrapper puts its folder first
+  on `PATH`.
+
+An `env` option that sets `PATH` on an `nx:run-commands` target does not
+bypass it: Nx 24 replaces that `PATH` with the one it computes.
+
+Two consequences for tests. A test that expects no cargo call needs a
+positive control, a call in the same setting that does show up in the log,
+or it cannot tell "not run" from "not logged". And a nested cargo, run by a
+build script or a cargo subcommand, belongs to the call that started it, not
+to the plugin: a test that counts the plugin's invocations must not count it,
+whether or not it shows up in the log.
 
 **`installFixture(projectDirectory, fixture)`** replaces the content of the
 end-to-end test project with a fixture, keeping the installed packages, and
