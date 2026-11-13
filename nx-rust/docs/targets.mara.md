@@ -178,7 +178,8 @@ task runs as if an option it does not know were absent, such as Jest's
 `passWithNoTests` or `--coverage`, and its output says so in one line per
 option: which option, which task, and whether it came from a `targetDefaults`
 key, from a `project.json` or `package.json`, or from the command line. Such an
-option fails no task ([[REQ-UNKNOWN-OPTIONS]]).
+option fails no task ([[REQ-UNKNOWN-OPTIONS]]). On `run`, the command line's
+arguments go to the binary instead.
 
 To keep a target default away from Rust targets, and so silence the warning,
 narrow the entry with a `filter`. This one assumes that your crates carry the
@@ -197,10 +198,10 @@ tag `lang:rust`, for example through `[workspace.metadata.nx]`:
 }
 ```
 
-Or add an empty entry keyed by the plugin's executor, the `executor` that
-`nx show project <crate> --json` shows for the target. Nx prefers an entry
-keyed by the executor to one keyed by the target name, so then no entry keyed
-by a target name reaches the Rust targets.
+Or add an empty entry keyed by the target's executor, the `executor` that
+`nx show project <crate> --json` shows for it. Nx prefers an entry keyed by the
+executor to one keyed by the target name, so then no entry keyed by a target
+name reaches the targets of that executor.
 
 A Rust option with a value of the wrong type, such as a number for `profile`,
 is not ignored: Nx rejects it before the plugin sees it, and fails the Rust

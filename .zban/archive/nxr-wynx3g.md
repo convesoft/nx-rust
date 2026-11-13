@@ -23,8 +23,8 @@ Done when: the decision is accepted in Mara and `mara project validate` reports 
 
 - The maintainer answered the decision brief on 13 November 2026. Recorded as accepted items:
   - `REQ-UNKNOWN-OPTIONS` (`configuration.mara.md`): an option the executor does not know, from a target default, `project.json`, `package.json` or the command line, is ignored with one warning line per option in the task's output. It satisfies `NEED-CLEAR-FAILURES` and mitigates `RISK-TARGET-DEFAULTS`.
-  - `REQ-UNKNOWN-METADATA-OPTIONS`: an unknown key under a target's `options` in a metadata table fails graph creation.
-  - `DES-UNKNOWN-OPTIONS`: open schema with typed options; the warning names the source (command line, `targetDefaults` key in Nx's order, or the crate folder's own files) and suggests a `filter` or an empty executor-keyed entry; a wrongly typed declared option failing the whole batch is a known limitation.
+  - `REQ-UNKNOWN-METADATA-OPTIONS`: an unknown key under a target's `options` or under one of its configurations in a metadata table fails graph creation. Configurations were settled on 13 November 2026 as following from answer 5, on the same ground: the plugin owns that source and knows its option list when the graph is built.
+  - `DES-UNKNOWN-OPTIONS`: open schemas with typed options; the warning names the source (command line, `targetDefaults` key in Nx's order, or the crate folder's own files) and suggests a `filter` or an empty entry keyed by the target's executor. A wrongly typed declared option, which fails every task that Nx hands to the batch implementation, is a known limitation. On `run`, options from the command line go to the binary, as the accepted `DES-TARGET-COMMANDS` says, and get no warning.
   - `ADR-UNKNOWN-OPTIONS` (`decisions.mara.md`), with the rejected alternatives.
   - `EVD-NX-OPTION-VALIDATION`: the experiments and source reading on Nx 24.0.6 behind the decision.
   - `VER-UNKNOWN-OPTIONS` (`verification.mara.md`), which verifies both requirements.
@@ -35,7 +35,6 @@ Done when: the decision is accepted in Mara and `mara project validate` reports 
   - nxr-wea5vt: implement the warning.
   - nxr-95kg91: implement the graph-time check.
   - nxr-ctke0y: rows for `DES-DIAGNOSTICS`, which waits for nxr-dp5q0f because PR #9 has not merged.
-  - nxr-a5qw2t: unknown keys in a target's configurations in Cargo metadata, a question for the maintainer.
   - nxr-26t4qt: Nx hashes `nx.json` and the project configuration into every task.
 - Checks:
   - `pnpm nx format:write`.
