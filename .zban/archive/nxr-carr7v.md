@@ -57,7 +57,7 @@ Generator mechanics and fixtures (`crate-generators.spec.ts`):
 Diagnostic content:
 - Already tested, now stated in `VER-SETUP`: the warning that the Nx major has not been checked (`compatibility.spec.ts`, `init.spec.ts`); the variable changing while a daemon runs ("follows NX_RUST_ALLOW_UNSUPPORTED_NX as it changes while the Nx daemon creates the graph"); exactly one more `cargo --version` with an older Cargo (`compatibility.spec.ts`, `init.spec.ts`); no directory warning where only `.gitignore` covers the directory (`cargo-directories.spec.ts`).
 - Collision with another plugin's project: graph creation was already tested (`graph.spec.ts`, "leave a collision of %s with a JS project to Nx's own error", which `VER-GRAPH` states). `VER-SETUP` now requires `init` to stop for it, and a new `init.spec.ts` case checks that.
-- No error codes: `VER-SETUP` requires it, and the new `error-codes.spec.ts` scans every string and template literal in `nx-rust/src` for forms such as `NXR001`, `E0001` and `NXR-001`, with positive controls. A code added to a real message made it fail.
+- No error codes: `VER-SETUP` requires that no diagnostic carries one. The new `error-codes.spec.ts` scans every string and template literal in `nx-rust/src` for a code-shaped token (such as `NXR001`, `E0001` or `NXR-001`) where a message would carry it: before a colon, in brackets, after "error" or "warning", or at the start before a dash. Positive and negative examples cover the pattern: `ISO8601`, `UTF8`, `SHA256` and version-like words pass. A code added to a real message made it fail. After review, the first scan, which flagged such a token anywhere in a string, was narrowed to this.
 - Remedies: `VER-SETUP` requires that each message it names says what the user can do. Assertions added for the failing `cargo metadata` and the missing toolchain (`init.spec.ts`, `missing-toolchain.spec.ts`); the `targetNames` collision, inputs without `"..."` and an unknown key in the plugin options (`init.spec.ts`); `executor` or `command` on an inferred target, `!` in `implicitDependencies` and `affectedTests` in stored configuration (`configuration.spec.ts`); the target-default error and warning in `init` (`target-defaults.spec.ts`); a path dependency that Nx cannot see (`caching.spec.ts`); shared and outside artifact directories (`caching-runs.spec.ts`); redirections from outside the repository and an unreported redirected crate (`redirections.spec.ts`); and the lockfile task in locked mode, through cargo's own help line (`lockfile-runs.spec.ts`).
 - Remedies that tests already asserted: cargo missing from `PATH`, the Cargo and Nx versions, name collisions, unknown keys and options, `pluginVersion`, the Nx internals, missing tools, a target that was not inferred, per-workspace settings, the Cargo directory warning, a workspace without a lockfile task, and `targetNames` keys.
 - `fileInputs` (#49, merged into this branch): `declared-files.spec.ts` asserts the full message of each of its three errors, remedy included, and the `init` cases in `init.spec.ts` now assert the remedy as well. The messages that #50 added (a missing tool at task start, the Nx and redirection warnings repeated at task start) carry the remedies asserted above; #53 adds no message.
@@ -77,6 +77,14 @@ Checks run:
 After merging `origin/main` at bd9ceae, these checks ran again, one after another:
 - The ten changed spec files with every `CLAUDE*`, `CODEX*` and `AI_AGENT` variable removed: 315 tests passed.
 - `pnpm nx run-many -t build lint test`: 30 suites, 860 tests passed, 1 todo.
+- `pnpm nx format:check --all`: passed.
+- `mara schema validate`: valid.
+- `mara project validate`: `valid: true`, complete evaluation.
+- `zban check`: no findings.
+
+After review (merging `origin/main` at 2765657, #54, whose messages add none and whose new toolchain case asserts its advice), these checks ran again, one after another:
+- The ten changed spec files with `CI=true GITHUB_ACTIONS=true` and every `CLAUDE*`, `CODEX*` and `AI_AGENT` variable removed: 343 tests passed.
+- `pnpm nx run-many -t build lint test`: 30 suites, 889 tests passed, 1 todo.
 - `pnpm nx format:check --all`: passed.
 - `mara schema validate`: valid.
 - `mara project validate`: `valid: true`, complete evaluation.
