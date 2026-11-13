@@ -241,8 +241,9 @@ restore `rlib` files or anything else Cargo would need to continue compiling;
 the next real compile uses whatever is in the build directory.
 
 Nx can store only files inside the repository. If Cargo's artifact directory
-lies outside it, for example through `CARGO_TARGET_DIR`, `build` and `doc` run
-uncached, and the plugin says so. `doc` also runs uncached, with the same
+lies outside it, for example through `CARGO_TARGET_DIR` or a symbolic link,
+`build` and `doc` run uncached, and the plugin says so. The plugin follows
+symbolic links to the folder that cargo writes to, and names that folder. `doc` also runs uncached, with the same
 notice, when two workspaces share one artifact directory: restoring one
 workspace's doc folder would delete the other's pages.
 
@@ -487,7 +488,7 @@ The executor checks a `build` task after every cargo call that builds the task's
 
 `build` does not list `rlib` or `dylib` files or other files that only Cargo consumes, so a cache hit never puts such files back ([[ADR-RESULTS-ONLY-CACHE]]).
 
-Nx can store only files inside the repository. The `cargo metadata` report names the artifact directory of each workspace. When it lies outside the repository, the `build` and `doc` targets of that workspace are not cached, and the plugin says so when the graph is created ([[DES-DIAGNOSTICS]]). Targets that store only a result stay cached, and so do the artifact targets, whose outputs lie outside Cargo's directories ([[DES-ARTIFACT-STEPS]]).
+Nx can store only files inside the repository. The `cargo metadata` report names the artifact directory of each workspace, as cargo's configuration or `CARGO_TARGET_DIR` spells it, and cargo writes to the folder that the system reaches through that path ([[EVD-CARGO-DIRECTORIES]]). Where a symbolic link comes before a `..`, that is not the folder that the path names as text. The plugin therefore follows every symbolic link of the path, also one to a folder that does not exist yet, and takes the folder it reaches, relative to the repository's real path: that folder decides whether the directory lies inside the repository, whatever the reported path says, and the outputs and the plugin's warnings name it. When it lies outside the repository, the `build` and `doc` targets of that workspace are not cached, and the plugin says so when the graph is created ([[DES-DIAGNOSTICS]]). Targets that store only a result stay cached, and so do the artifact targets, whose outputs lie outside Cargo's directories ([[DES-ARTIFACT-STEPS]]).
 
 When the reports of two or more workspaces name the same artifact directory, the `doc` targets of those workspaces are not cached either, and the plugin says so in the same way. Nx restores a folder output by replacing it, so restoring one workspace's `doc` folder would delete the pages of the others ([[EVD-NX-24-TARGETS]]). Cargo reports the directory as its configuration or `CARGO_TARGET_DIR` spells it, `..` segments, symbolic links and a trailing separator included ([[EVD-CARGO-DIRECTORIES]]). Two reports therefore name the same directory where their paths agree once `.` and `..` are taken as text, or once every symbolic link is followed as well, a link to a folder that does not exist yet included. Either agreement counts: two folders taken for one only cost `doc` its caching, while one folder taken for two lets a restore delete pages.
 

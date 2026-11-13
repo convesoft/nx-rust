@@ -213,6 +213,25 @@ describe("workspace discovery through Nx", () => {
     HARNESS_TIMEOUT,
   );
 
+  it(
+    "reads a workspace whose root manifest Nx does not hand to the plugin once more in its root folder",
+    async () => {
+      // The first call starts in the folder of the shallowest manifest that
+      // the plugin receives and names the workspace root, where the
+      // workspace's tasks run cargo.
+      const graph = await loadFixtureGraph("subfolder-workspace", {
+        files: { "nx.json": pluginEntry({ exclude: ["rust/Cargo.toml"] }) },
+      });
+
+      expect(graph.cargoCalls).toEqual([
+        metadataCall("rust/crates/api", "rust/crates/api/Cargo.toml"),
+        workspaceCall("rust"),
+      ]);
+      expect(Object.keys(graph.projects).sort()).toEqual(["api", "codegen", "model", "testkit"]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
   describe("skips crates that Nx does not hand to the plugin", () => {
     // standalone-crate reads tools/xtask without these changes (see above).
     it.each([
@@ -754,11 +773,14 @@ describe.each([
           },
         ]),
       );
-      // Isolated plugin workers are separate processes, which cannot share a report.
+      // Isolated plugin workers are separate processes, which cannot share a
+      // report, and the second entry reads the workspace once more in its
+      // root folder.
       expect(calls).toEqual(
         isolation === "false"
           ? [workspaceCall("rust")]
           : sortedByJson([
+              workspaceCall("rust"),
               workspaceCall("rust"),
               metadataCall("rust/crates/api", "rust/crates/api/Cargo.toml"),
             ]),

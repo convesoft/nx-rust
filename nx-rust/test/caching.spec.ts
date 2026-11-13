@@ -1,6 +1,6 @@
 import type { TargetConfiguration } from "@nx/devkit";
 import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { environmentVariables, toolchainCommand } from "../src/graph/inputs";
 import { listsPackage } from "../src/graph/plugin-package";
 import {
@@ -305,6 +305,88 @@ describe("caching", () => {
         expect(api.metadata.cargo.warnings).toBeUndefined();
       },
       HARNESS_TIMEOUT,
+    );
+
+    // The first report of the entry without the root manifest starts in
+    // rust/crates/cli, the shallowest manifest it receives, while the tasks
+    // run cargo in rust/ (nxr-xrfd50).
+    describe.each<[string, FileChanges, Record<string, string>, string]>([
+      [
+        "a member's Cargo configuration sets",
+        { "rust/crates/cli/.cargo/config.toml": '[build]\ntarget-dir = "member-target"\n' },
+        {},
+        "rust/target",
+      ],
+      [
+        "a relative CARGO_TARGET_DIR gives",
+        {},
+        { CARGO_TARGET_DIR: "env-target" },
+        "rust/env-target",
+      ],
+    ])(
+      "where %s another artifact directory in the folder of the first manifest that an entry receives",
+      (_case, files, env, directory) => {
+        it.each([
+          ["in plugin workers", "true"],
+          ["in one process", "false"],
+        ])(
+          "names the directory of the workspace root, where the tasks run cargo, %s",
+          async (_mode, isolation) => {
+            const graph = await loadFixtureGraph("crate-shapes", {
+              files: {
+                ...files,
+                "nx.json": entries(
+                  { exclude: ["rust/Cargo.toml"] },
+                  { include: ["rust/Cargo.toml"] },
+                ),
+              },
+              env: { ...env, NX_ISOLATE_PLUGINS: isolation },
+            });
+            const folder = `{workspaceRoot}/${directory}/{options.targetTriple ?? .}/{options.profile ?? debug}`;
+
+            expect(graph.projects.cli.targets.build).toMatchObject({
+              cache: true,
+              outputs: [`${folder}/cli`],
+            });
+            expect(graph.projects.rust.targets.doc.outputs).toEqual([
+              `{workspaceRoot}/${directory}/{options.targetTriple ?? .}/doc`,
+            ]);
+            // The entry without the root manifest reads the workspace once
+            // more in its root folder, unless it shares the report requested
+            // there by the entry that receives the root manifest.
+            expect(graph.cargoCalls.map((call) => call.cwd).sort()).toEqual(
+              isolation === "true"
+                ? ["rust", "rust", "rust/crates/cli"]
+                : ["rust", "rust/crates/cli"],
+            );
+          },
+          HARNESS_TIMEOUT,
+        );
+
+        it(
+          "reads the directory of the workspace root where no entry receives the root manifest",
+          async () => {
+            const graph = await loadFixtureGraph("crate-shapes", {
+              files: {
+                ...files,
+                ".gitignore": "",
+                "nx.json": entries({ exclude: ["rust/Cargo.toml"] }),
+              },
+              env,
+            });
+
+            // The one directory that Nx would read, named by its warning.
+            expect(graph.projects.cli.metadata.cargo.warnings).toEqual([
+              expect.stringContaining(
+                `nx-rust: ${directory}, Cargo's build and artifact directory of the Cargo workspace in rust, lies inside the repository`,
+              ),
+              warning,
+            ]);
+            expect(graph.cargoCalls.map((call) => call.cwd)).toEqual(["rust/crates/cli", "rust"]);
+          },
+          HARNESS_TIMEOUT,
+        );
+      },
     );
   });
 
@@ -731,8 +813,9 @@ describe("caching", () => {
               cache: false,
               outputs: [],
             });
+            // Both name the folder that the system reaches (nxr-5gzr0n).
             expect(graph.projects[project].metadata.cargo.warnings).toEqual([
-              expect.stringContaining(`shares Cargo's artifact directory `),
+              expect.stringContaining(`shares Cargo's artifact directory ${rootDirectory} with `),
             ]);
             expect(graph.projects[project].metadata.cargo.warnings[0]).toContain(` with ${other}.`);
           }
@@ -740,10 +823,81 @@ describe("caching", () => {
             cache: true,
             outputs: [],
           });
-          expect(graph.projects.app.targets.build.outputs).toEqual([
-            `{workspaceRoot}/${rootDirectory}/{options.targetTriple ?? .}/{options.profile ?? debug}/app`,
-          ]);
+          const folder = `{workspaceRoot}/${rootDirectory}/{options.targetTriple ?? .}/{options.profile ?? debug}`;
+          expect(graph.projects.app.targets.build.outputs).toEqual([`${folder}/app`]);
+          // Where cargo writes the binary of tools, whichever way its
+          // configuration spells the directory.
+          expect(graph.projects.tools.targets.build).toMatchObject({
+            cache: true,
+            outputs: [`${folder}/tools`],
+          });
           expect(graph.projects.app.targets.test.cache).toBe(true);
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    // The physical path decides where the directory lies, whatever the path
+    // that cargo reports says (nxr-5gzr0n). The fixture copy lies in "repo"
+    // inside a temporary folder, so "../outside" lies next to the repository.
+    it(
+      "leave build and doc uncached, and say so, when a symbolic link inside the repository leads the artifact directory outside",
+      async () => {
+        const workspace = FixtureWorkspace.create("two-workspaces", {
+          "tools/.cargo/config.toml": '[build]\ntarget-dir = "out"\n',
+          // The repository ignores the link as it would a directory there.
+          ".gitignore": (text) => `${text ?? ""}/tools/out\n`,
+        });
+        try {
+          symlinkSync("../../outside/target", join(workspace.root, "tools", "out"));
+          const graph = await workspace.graph();
+          const { tools, scaffold } = graph.projects;
+          const outside = join(dirname(workspace.root), "outside", "target");
+
+          expect(tools.targets.build).toMatchObject({ cache: false, outputs: [] });
+          expect(tools.targets.doc).toMatchObject({ cache: false, outputs: [] });
+          expect(tools.targets.build.metadata.cargo.uncached).toMatch(
+            /artifact directory lies outside/,
+          );
+          expect(tools.targets.test.cache).toBe(true);
+          const warning = `nx-rust: Cargo's artifact directory of the Cargo workspace in tools is ${outside}, outside the repository, where Nx cannot store files.`;
+          expect(tools.metadata.cargo.warnings).toEqual([expect.stringContaining(warning)]);
+          expect(scaffold.metadata.cargo.warnings).toEqual(tools.metadata.cargo.warnings);
+          expect(graph.projects.app.targets.build.cache).toBe(true);
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "name the folder inside the repository that a symbolic link outside it leads the artifact directory to",
+      async () => {
+        const workspace = FixtureWorkspace.create("two-workspaces", {
+          "tools/.cargo/config.toml": '[build]\ntarget-dir = "../../outside-link"\n',
+        });
+        try {
+          symlinkSync(
+            join(workspace.root, "inside", "target"),
+            join(dirname(workspace.root), "outside-link"),
+          );
+          const graph = await workspace.graph();
+          const { tools } = graph.projects;
+
+          expect(tools.targets.build).toMatchObject({
+            cache: true,
+            outputs: [
+              "{workspaceRoot}/inside/target/{options.targetTriple ?? .}/{options.profile ?? debug}/tools",
+            ],
+          });
+          expect(tools.targets.doc).toMatchObject({
+            cache: true,
+            outputs: ["{workspaceRoot}/inside/target/{options.targetTriple ?? .}/doc"],
+          });
+          expect(tools.metadata.cargo.warnings).toBeUndefined();
         } finally {
           workspace.remove();
         }
