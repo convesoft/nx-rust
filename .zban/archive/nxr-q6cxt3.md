@@ -36,7 +36,7 @@ Done when: the parts of the cited verification that cover this work pass, and `p
 - Harness: `fakeNxPackage` and `FixtureWorkspace.useNx` (a hard-linked copy of Nx that reports another version), `daemonLog`, `NX_RUST_TEST_CARGO_VERSION` in the cargo wrapper, `ToolFolders`. New `test/compatibility.spec.ts` and `test/missing-tools.spec.ts`; new `init` cases; end-to-end checks of the installed peer range and of the installed plugin with a newer Nx, with and without the variable.
 - Mara: new `EVD-NX-24-VERSION-CHECK`; the "Nx version" paragraph of `DES-DIAGNOSTICS` says that the plugin compares again on each graph creation and cites it; status note of the setup page and the testing section of the verification page updated.
 
-After the review: merged `origin/main` (target inference, `RUSTUP_AUTO_INSTALL=0` for graph-time cargo); `registration.ts` conflicted and keeps both the Nx check and `readTargetNames`. Added `init` tests for an unreadable Nx version and for `targetNames` that give two targets one name.
+After the review: merged `origin/main` (target inference, `RUSTUP_AUTO_INSTALL=0` for graph-time cargo, the end-to-end setup scripts); `registration.ts` conflicted and keeps both the Nx check and `readTargetNames`. Added `init` tests for an unreadable Nx version and for `targetNames` that give two targets one name.
 
 Checks run: `pnpm nx run-many -t build lint test` (after the merge, uncached: 12 suites, 279 tests passed), `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e` (14 passed), `mara schema validate` and `mara project validate` (valid, evaluation complete, no errors or warnings), `mara related REQ-COMPATIBILITY` and `DES-DIAGNOSTICS` (the implementing declarations are linked), `zban check`.
 
