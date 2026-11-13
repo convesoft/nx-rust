@@ -672,6 +672,43 @@ describe("@convesoft/nx-rust", () => {
         HARNESS_TIMEOUT,
       );
     });
+
+    // DES-DIAGNOSTICS, "Warnings where they are seen": the installed
+    // executor finds graph creation's warning in the project's metadata,
+    // also where the daemon created the graph and printed it to its log.
+    describe("when no ignore file covers Cargo's directory", () => {
+      beforeAll(() => {
+        installFixture(projectDirectory, "subfolder-workspace", { ".gitignore": null });
+      });
+
+      it(
+        "prints graph creation's warning again in a task's output with the Nx daemon on",
+        () => {
+          const env = { ...cargo.environment(testEnvironment()), NX_DAEMON: "true" };
+          try {
+            const result = spawnSync(
+              "pnpm",
+              ["exec", "nx", "run", "api:fmt-check", "--output-style=static"],
+              { cwd: projectDirectory, env, encoding: "utf8" },
+            );
+            const output = withoutColours(`${result.stdout}${result.stderr}`);
+
+            expect(result.status).toBe(0);
+            expect(
+              output.split(
+                "nx-rust: rust/target, Cargo's build and artifact directory of the Cargo workspace in rust, lies inside the repository",
+              ),
+            ).toHaveLength(2);
+            expect(output).toContain(
+              "Add the line /rust/target/ to the .gitignore at the repository root.",
+            );
+          } finally {
+            spawnSync("pnpm", ["exec", "nx", "daemon", "--stop"], { cwd: projectDirectory, env });
+          }
+        },
+        HARNESS_TIMEOUT,
+      );
+    });
   });
 
   // The installed package lays target tables over the inferred targets and

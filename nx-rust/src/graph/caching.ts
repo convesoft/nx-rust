@@ -16,6 +16,7 @@ import { pluginInput } from "./plugin-package";
 import { realPath } from "./real-path";
 import { redirectedUses } from "./redirected-uses";
 import { InferredTargetName, TargetCargoMetadata, targetCargoMetadataKey } from "./targets";
+import { unignoredDirectoryWarnings } from "./unignored-directories";
 
 /** What the caching of every project of one graph computation shares. */
 export interface CacheContext extends InputContext {
@@ -31,9 +32,10 @@ export interface CacheContext extends InputContext {
  * the crates without a project that path dependencies and redirections
  * reach, the redirected crates whose edges are left out, and where each
  * workspace's artifact directory lies; and the warnings of `DES-DIAGNOSTICS`
- * that these give, which it also prints. A path dependency whose report
- * cargo refused adds its warning to the crates that reach it; discovery has
- * printed that one already.
+ * that these give, together with those about Cargo directories that Nx reads
+ * ({@link unignoredDirectoryWarnings}), which it also prints, each once. A
+ * path dependency whose report cargo refused adds its warning to the crates
+ * that reach it; discovery has printed that one already.
  *
  * The redirected uses come from `redirectedUses`, which `createDependencies`
  * asks again with the projects of every plugin and entry. Here it knows only
@@ -90,10 +92,12 @@ export async function cacheContext(
     }
   }
   const artifactDirectories = locateArtifactDirectories(discovery);
+  const directoryWarnings = unignoredDirectoryWarnings(discovery.workspaces, workspaceRoot);
   for (const workspace of discovery.workspaces) {
     const messages = [
       artifactDirectoryWarning(workspace, discovery, artifactDirectories),
       buildTargetWarning(workspace, workspaceRoot),
+      ...(directoryWarnings.get(workspace) ?? []),
     ];
     for (const message of messages.filter((message) => message !== undefined)) {
       for (const manifest of workspaceManifests(workspace)) {

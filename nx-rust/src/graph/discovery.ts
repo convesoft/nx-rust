@@ -191,8 +191,8 @@ function outsideRedirectionWarnings(workspaces: CargoWorkspace[], workspaceRoot:
   );
 }
 
-// "the Cargo workspace in rust", or "the Cargo workspaces in rust and shared".
-function describeWorkspaces(folders: string[]): string {
+/** "the Cargo workspace in rust", or "the Cargo workspaces in rust and shared". */
+export function describeWorkspaces(folders: string[]): string {
   const named = folders.map((folder) => (folder === "." ? "the repository root" : folder));
   if (named.length === 1) {
     return folders[0] === "."
