@@ -1,10 +1,11 @@
 ---
 title: The lockfile task hashes every npm node, so a change to the JS lockfile selects every crate task in nx affected
-status: todo
+status: done
 type: bug
 parent: nxr-w9qa5f
 discovered_from: nxr-2ermb0
 created_at: 2026-11-13T20:47:02Z
+closed_at: 2026-11-13T21:03:10Z
 ---
 
 Goal: after a commit that changes only the JS lockfile, outside the plugin's package and what it depends on, `nx affected` selects no lockfile task and, through it, no crate task where `VER-CACHE-KEYS` (its end-to-end paragraph) says it selects none.
@@ -21,6 +22,12 @@ From the source, not run: the workspace targets `audit`, `deny` and `update` (`n
 
 The cases that show it are in `nx-rust/test/lockfile-runs.spec.ts`, "nx affected after a change to the JS lockfile", on the branch of nxr-2ermb0.
 
-- [ ] Decide in Mara which `externalDependencies` input the lockfile target (and the uncached workspace targets) declare, `[]` or the plugin input of `DES-INPUTS`, and update `DES-LOCKFILE-HASHING`
-- [ ] Declare it, and check with Nx's hasher that the lockfile task's plan no longer holds every external node
-- [ ] The JS lockfile cases of nxr-2ermb0 that this cause fails pass, for the workspace outside the repository root
+- [x] Decide in Mara which `externalDependencies` input the lockfile target (and the uncached workspace targets) declare, `[]` or the plugin input of `DES-INPUTS`, and update `DES-LOCKFILE-HASHING`
+- [x] Declare it, and check through `nx affected` that the lockfile task's hash plan no longer holds every external node
+- [x] The JS lockfile cases of nxr-2ermb0 that this cause fails pass, for the workspace outside the repository root
+
+## Summary of Changes
+
+The maintainer decided that every inferred target without the plugin input gets it: `lockfile`, `audit`, `deny` and `update`. Every other inferred target, `fmt`, `bench` and `run` included, already had it. `pluginVersionInput` in `nx-rust/src/graph/inputs.ts` (formerly the private `pluginInput`) gives `externalDependencies` naming `@convesoft/nx-rust` where Nx has an npm node for it, and `[]` otherwise. `lockfileInputs` now ends with it, and `configureCaching` adds it to the inputs `inferTargets` gives `audit`, `deny` and `update`. These targets are not cached, so the input only decides what `nx affected` selects. Recorded in `DES-INPUTS` ("Plugin"), `DES-WORKSPACE-TARGETS` ("Caching"), `DES-LOCKFILE-HASHING` ("Inputs") and a dated bullet in `EVD-NX-24-PLUGIN-VERSION`.
+
+Checks: `nx affected --explain` in a fixture copy no longer reports `external-dependencies` for the lockfile tasks. In `lockfile-runs.spec.ts`, the JS lockfile cases select nothing of the workspace in `tools/` where VER-CACHE-KEYS expects nothing. `caching.spec.ts` checks the input on every target, with and without an npm node; `targets.spec.ts` and `target-defaults.spec.ts` were updated for the added input. `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache`, `mara schema validate`, `mara project validate` and `zban check` pass.
