@@ -187,7 +187,8 @@ build lock. In one repository that inherited `^build` onto its Rust crates, a
 52-second test run took 40 minutes ([[EVD-NXRUST-BUILD-DEPS]]).
 
 Check your `nx.json`: a target default keyed by a bare target name applies to
-Rust targets with that name too.
+Rust targets with that name too, unless an entry keyed by their executor comes
+first, as the one that `nx add` adds does.
 
 ```json
 {
@@ -214,9 +215,15 @@ A `targetDefaults` entry in `nx.json` keyed by a target's name, such as
 one keyed by `@convesoft/nx-rust:cargo` to every target of that executor. Nx
 lays the entry over what the plugin infers: its `dependsOn`, `inputs`,
 `outputs` and `cache` replace the plugin's values, unless a list keeps them
-with `"..."` ([[EVD-NX-TARGET-DEFAULTS]]). The plugin checks its targets when Nx
-creates the project graph, and `nx add` checks them before it registers the
-plugin ([[DES-TARGET-DEFAULT-GUARD]]):
+with `"..."` ([[EVD-NX-TARGET-DEFAULTS]]).
+
+`nx add` adds `"@convesoft/nx-rust:cargo": {}` and `"@convesoft/nx-rust:run": {}`
+where `targetDefaults` lacks them ([Setup](setup.mara.md#adding-the-plugin)).
+Nx chooses an entry keyed by a target's executor before one keyed by its name
+or a glob, so with these entries in place only an entry keyed by one of the two
+executors reaches Rust targets. The plugin checks its targets when Nx creates
+the project graph, and `nx add` checks them before it writes anything
+([[DES-TARGET-DEFAULT-GUARD]]):
 
 | What the entry does to a Rust target                               | Report  |
 | ------------------------------------------------------------------ | ------- |
@@ -246,8 +253,8 @@ the change. It then reports no entry, but warns, naming the target and the
 fields that differ, and points to `nx show target <project>:<target> --json`,
 whose `sourceMap` names the file and entry behind each field.
 
-Neither the plugin nor `nx add` edits the entry. Narrow it in one of these
-ways:
+Neither the plugin nor `nx add` changes an entry that is there. Narrow it in one
+of these ways:
 
 - Give it a `filter`, which needs the entry written as a list. This one assumes
   that your crates carry the tag `lang:rust`, for example through
@@ -270,8 +277,11 @@ ways:
 
 - Add an empty entry keyed by the executor of the Rust targets,
   `"@convesoft/nx-rust:cargo": {}`, and `"@convesoft/nx-rust:run": {}` for
-  `run`. Nx chooses an entry keyed by a target's executor before one keyed by
-  its name, so no entry keyed by a target name reaches those targets.
+  `run`, as `nx add` does where they are missing. Nx chooses an entry keyed by a
+  target's executor before one keyed by its name, so no entry keyed by a target
+  name reaches those targets.
+- Where the entry is keyed by one of those executors, remove the field that the
+  message names.
 - Where the entry replaces a list, keep the plugin's values with `"..."`, as in
   `"inputs": ["...", "{workspaceRoot}/.tool-versions"]`.
 
@@ -324,9 +334,9 @@ tag `lang:rust`, for example through `[workspace.metadata.nx]`:
 
 Or add an empty entry keyed by the target's executor, the `executor` that
 `nx show project <crate> --json` shows for it: `@convesoft/nx-rust:cargo`, or
-`@convesoft/nx-rust:run` for `run`. Nx prefers an entry keyed by the executor
-to one keyed by the target name, so then no entry keyed by a target name
-reaches the targets of that executor.
+`@convesoft/nx-rust:run` for `run`. `nx add` adds both where they are missing.
+Nx prefers an entry keyed by the executor to one keyed by the target name, so
+then no entry keyed by a target name reaches the targets of that executor.
 
 A Rust option with a value of the wrong type, such as a number for `profile`,
 is not ignored: Nx rejects it before the plugin sees it. Rust tasks normally run
@@ -501,7 +511,7 @@ The coverage baseline target of [[DES-BASELINE]] is on the same project, in a wo
 :status: accepted
 :satisfies: REQ-TARGET-DEFAULT-GUARD
 
-**Where.** `createDependencies` receives the projects after Nx has laid the `targetDefaults` of `nx.json` over the plugin's targets, while the plugin entry that created them still holds what it inferred ([[EVD-NX-TARGET-DEFAULTS]]). For each inferred target the plugin compares the two. A target whose executor is no longer the inferred one was replaced by another file and is left alone. `init` runs the same check through the plugin's `createDependencies` ([[DES-GENERATORS]]).
+**Where.** `createDependencies` receives the projects after Nx has laid the `targetDefaults` of `nx.json` over the plugin's targets, while the plugin entry that created them still holds what it inferred ([[EVD-NX-TARGET-DEFAULTS]]). For each inferred target the plugin compares the two. A target whose executor is no longer the inferred one was replaced by another file and is left alone. `init` runs the same check through the plugin's `createDependencies`, on `nx.json` with the empty entries keyed by the plugin's executors that it adds where they are missing ([[DES-GENERATORS]]). In a repository set up that way, Nx lays no entry keyed by a target's name or a glob over the plugin's targets, so the check reports entries keyed by the plugin's executors there; it stays the check for repositories that were set up by hand or lost those entries later, and its message names the same fix.
 
 **What counts.** Each row compares the target as Nx merged it with the target as the plugin inferred it.
 
@@ -519,5 +529,5 @@ The differences are read from the targets that Nx merged, and from nothing else:
 
 **Which layer.** `createDependencies` receives no record of which layer set a value, so where a target differs, the plugin rebuilds it with Nx's own code. The layers are the plugin's projects as its `createNodes` returned them; the elements of `targetDefaults` that Nx's synthesis (`createTargetDefaultsResults` from `nx/src/devkit-internals`) lays over them, given what Nx's default plugins make of the `package.json` and `project.json` in the project's folder and the name under which Nx knows the plugin's entry; and those default-plugin results. Each layer is merged with Nx's merge of project nodes, so `"..."` in lists and in objects, and the elements of an entry's list, behave as in Nx. The rebuild must give the target's `cache`, `inputs`, `outputs` and `dependsOn` and the project's name and tags, which filters read, as Nx merged them. Where it does, a difference that the same rebuild without the `targetDefaults` layer lacks is reported against the entry that Nx's synthesis names, with the severity below. A difference that the rebuild has without that layer was made by the folder's `project.json` or `package.json` and is not reported. Where the rebuild does not give what Nx merged, as when another plugin listed in `nx.json` contributes to the project, the plugin does not conclude: it warns that it cannot tell which configuration changed the target, names the project, the target and the fields that differ, and points to `nx show target <project>:<target> --json` and its `sourceMap`. For caching, the executor's check of a task's merged configuration stays the second line. Nx's normalisation of `dependsOn` for the task graph decides which projects an added entry reaches. These parts of Nx are not public API. They are loaded only when a target differs, and where the installed Nx lacks one, graph creation fails with the error of [[DES-DIAGNOSTICS]].
 
-**Message.** One paragraph per entry and severity names the key and its elements, says what the entry does to which targets of which projects, with their manifests, and lists the ways to narrow the entry that fit: a `filter` on `projects` or `executor`; an empty entry keyed by the targets' executor, which Nx chooses before an entry keyed by the target's name; removing the field from an entry keyed by the plugin's executor; and `"..."` in a list that replaces. Errors stop graph creation, and warnings are printed where [[DES-DIAGNOSTICS]] says. The plugin never edits `targetDefaults`.
+**Message.** One paragraph per entry and severity names the key and its elements, says what the entry does to which targets of which projects, with their manifests, and lists the ways to narrow the entry that fit: a `filter` on `projects` or `executor`; an empty entry keyed by the targets' executor, which Nx chooses before an entry keyed by the target's name; removing the field from an entry keyed by the plugin's executor; and `"..."` in a list that replaces. Errors stop graph creation, and warnings are printed where [[DES-DIAGNOSTICS]] says. Graph creation never edits `targetDefaults`, and `init` only adds the empty entries that are missing.
 :::
