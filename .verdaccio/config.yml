@@ -8,6 +8,13 @@ uplinks:
     maxage: 60m
 
 packages:
+  # The end-to-end setup asks for a file of this package that it put in the
+  # storage, to tell its own registry from another run's on the same port
+  # (tools/scripts/local-registry.ts). Without an uplink, a registry that
+  # lacks the file says so at once.
+  "nx-rust-e2e-registry-probe":
+    access: $all
+
   "**":
     # give all users (including non-authenticated users) full access
     # because it is a local registry
