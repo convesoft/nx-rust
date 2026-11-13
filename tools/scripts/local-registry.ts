@@ -18,7 +18,7 @@
  */
 
 import { workspaceRoot } from "@nx/devkit";
-import { type ChildProcess, execFileSync, fork } from "child_process";
+import { type ChildProcess, fork } from "child_process";
 import { randomBytes } from "crypto";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { get } from "http";
@@ -37,7 +37,10 @@ const maxAttempts = 5;
 /** How long the registry may take to stop before the tests stop waiting. */
 const stopTimeoutMs = 30 * 1000;
 const listenAddress = "localhost";
-/** Verdaccio lets anyone publish; npm and pnpm only need some token. */
+/**
+ * Verdaccio lets anyone publish, but `npm publish` refuses to send a package
+ * to a registry for which it has no token. Any token will do.
+ */
 const authToken = "secretVerdaccioToken";
 /**
  * The package whose files the setup puts in the storage to recognise its own
@@ -79,12 +82,7 @@ export async function startLocalRegistry(
       );
       continue;
     }
-    try {
-      useRegistry(port);
-    } catch (error) {
-      await run.stop();
-      throw error;
-    }
+    useRegistry(port);
     void run.exited.then((status) => {
       if (!run.stopRequested) {
         console.error(
@@ -92,7 +90,7 @@ export async function startLocalRegistry(
         );
       }
     });
-    return () => stopRegistry(run, port);
+    return () => run.stop();
   }
   throw startError(
     target,
@@ -286,42 +284,26 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Points npm and pnpm, in this process and the ones it starts, at the registry. */
+/**
+ * Points npm and pnpm, in this process and the ones it starts, at the registry
+ * and gives them its token.
+ *
+ * Both take the token from the environment, so the setup writes no
+ * configuration file. The user's `~/.npmrc` in particular is shared by every
+ * checkout, and `npm config` rewrites it whole without a lock: two runs that
+ * wrote their tokens there at the same moment could lose one of them.
+ */
 function useRegistry(port: number) {
   const registry = `http://${listenAddress}:${port}`;
   console.log(`Local registry started on ${registry}`);
+  const tokenKey = `//${listenAddress}:${port}/:_authToken`;
+  // npm turns `_` into `-` in the names of `npm_config_*` variables, but it
+  // leaves keys that start with `//`, such as this one, as they are.
   process.env.npm_config_registry = registry;
-  // npm reads registry tokens only from its configuration files. The setup
-  // writes the token only for a port its own registry holds, so that it never
-  // takes over the token of another run.
-  execFileSync("npm", ["config", "set", tokenKey(port), authToken, "--ws=false"]);
+  process.env[`npm_config_${tokenKey}`] = authToken;
   // pnpm reads `pnpm_config_*` variables rather than `npm_config_*` ones.
   process.env.pnpm_config_registry = registry;
-  process.env[`pnpm_config_${tokenKey(port)}`] = authToken;
-}
-
-function tokenKey(port: number): string {
-  return `//${listenAddress}:${port}/:_authToken`;
-}
-
-/**
- * Removes the registry's token from npm's user configuration and stops the
- * registry. The token goes first: while this registry holds the port, no
- * other run can have written a token for it, so removing it cannot remove
- * another run's.
- */
-async function stopRegistry(run: NxRun, port: number): Promise<void> {
-  try {
-    if (run.exitStatus === undefined) {
-      execFileSync("npm", ["config", "delete", tokenKey(port), "--ws=false"]);
-    } else {
-      console.error(
-        `Left ${tokenKey(port)} in npm's user configuration: the local registry has already stopped, so another run may use port ${port} and that token now.`,
-      );
-    }
-  } finally {
-    await run.stop();
-  }
+  process.env[`pnpm_config_${tokenKey}`] = authToken;
 }
 
 /**
