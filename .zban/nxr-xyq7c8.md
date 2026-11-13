@@ -17,7 +17,7 @@ Implements `REQ-METADATA-OVERRIDES`, `DES-METADATA-TABLES` and `DES-PLUGIN-OPTIO
 - [ ] Workspace defaults, with precedence defaults, plugin options, workspace table, package table; tags, `implicitDependencies`, `envInputs` and `runtimeInputs` added up
 - [ ] The settings of `DES-PLUGIN-OPTIONS` read from the places it gives for each: `namePrefix`, `featureUnification`, `testRunner`, `affectedTests`, `artifacts`, `implicitDependencies`, `envInputs`, `runtimeInputs`, and `targetNames` and `locked` from the plugin options
 - [ ] `targets.<name>` merged by Nx's rule with `"..."`; errors for `inputs` without `"..."` and for an `executor` or `command` on an inferred target
-- [ ] Errors for unknown top-level keys of both tables, the `project` sub-table and the plugin options, for an `implicitDependencies` entry starting with `!` that would remove a Cargo edge, and for `affectedTests = true` as a `test` option without the workspace setting
+- [ ] Errors for unknown top-level keys of both tables, the `project` sub-table and the plugin options, for any `implicitDependencies` entry starting with `!`, and for `affectedTests = true` as a `test` option without the workspace setting
 - [ ] The name override and `namePrefix` resolve a collision; the prefix is used as it is and does not apply to a crate with `name` or to the workspace project
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

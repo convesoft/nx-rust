@@ -84,7 +84,7 @@ it with `envInputs` instead ([Caching](caching.mara.md#what-is-in-a-cache-key)).
 
 `implicitDependencies` adds edges to projects that Cargo does not know about,
 such as a JS project whose output a test reads. It only adds: an entry starting
-with `!` that would remove a Cargo dependency's edge is an error.
+with `!` is an error.
 
 ```toml
 [package.metadata.nx]
@@ -334,7 +334,7 @@ Three environment variables act on a run and are no options: `NX_RUST_TEST_MODE`
 
 **Targets.** A `targets.<name>` table is merged over the target the plugin infers under that name by Nx's own rule for laying one configuration of a target over another, in the order of precedence ([[EVD-NX-24-OPTION-SEMANTICS]]). A field the table sets replaces the inferred one, `options` and `configurations` are merged key by key, and a list replaces the inferred list unless it contains `"..."`, which stands for the inferred entries at that place. For a name under which the plugin infers no target, the table defines an extra target. Two cases fail graph creation with a message that names the manifest, the target and the field: `inputs` without `"..."` on an inferred target, because it would drop inferred inputs such as the toolchain, the environment and the dependencies' files from the key; and an `executor` other than the inferred one, or a `command`, on an inferred target, which Nx would treat as another target and use in place of the inferred one. Another command runs as an extra target under another name. A negated pattern beside `"..."`, such as `"!{projectRoot}/docs/**"`, takes files out of the inferred inputs ([[EVD-NX-24-OPTION-SEMANTICS]]).
 
-**Implicit dependencies.** Each entry of `implicitDependencies` adds an edge from the crate to the project it names, which may be a project of another plugin. The key holds additions only: an entry starting with `!` that would remove an edge that a Cargo dependency gives fails graph creation, because the dependency's files would leave the crate's cache key ([[REQ-DEPENDENCY-EDGES]]).
+**Implicit dependencies.** Each entry of `implicitDependencies` adds an edge from the crate to the project it names, which may be a project of another plugin. The key only adds, so an entry starting with `!` fails graph creation, whatever it names.
 
 **Added inputs.** `envInputs` and `runtimeInputs` of all three levels go into the crate's own named input, which its dependents hash through `^` inputs ([[DES-INPUTS]]). A variable or command added for one crate therefore also reaches the keys of the crates that depend on it, in other workspaces too. The names pair with Nx's input kinds `env` and `runtime`: a plain `env` would read as the option of `nx:run-commands` that sets variables for a command, and an extra target with a `command` is such a target ([[EVD-NX-24-OPTION-SEMANTICS]]).
 
