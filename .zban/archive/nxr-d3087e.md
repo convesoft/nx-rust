@@ -80,3 +80,22 @@ Review of pull request #32 (four findings, fixed in one round):
   - `mara schema validate`: valid.
   - `mara project validate`: `valid: true`, evaluation complete, no diagnostics, every policy check passed.
   - `zban check`: no problems.
+
+Second review round (three cases in the rebuilt layering; the control plane's decision changed the guard's shape):
+
+- **Ground truth first.** What changed is read only from the merged targets that `createDependencies` receives: caching turned on, lost `inputs`/`outputs`/`dependsOn` entries, and added `dependsOn` entries that Nx's normalisation resolves to other projects. No difference means no report. A target that no `targetDefaults` key can reach, by executor, name or glob, is not looked at.
+- **The rebuild only attributes.** It merges the plugin's `createNodes` result, Nx's synthesised target-default elements and Nx's default-plugin results for the folder, each with Nx's `mergeProjectConfigurationIntoRootMap`, so object-level `"..."` and list elements behave as in Nx.
+- **Check.** The rebuild must give the target's four fields and the project's name and tags as Nx merged them. A difference that the rebuild without the `targetDefaults` layer lacks is reported against the entry, and other differences belong to the folder's files. Where the rebuild does not match, the guard warns that it cannot tell which configuration changed the target, naming the project, the target and the fields, and pointing to `nx show target <project>:<target> --json`.
+- **The cases now:**
+  - Case 1, another plugin adding the tag `extra`. Filter `tag:extra`: a warning. The other plugin caching while the filter excludes `tag:extra`: a warning, no failure. The executor key excluding `tag:extra`: a warning for `api`, and the `build` entry is reported for the other crates.
+  - Case 2, a local object-level `"..."`: the `update` entry is reported.
+  - Case 3, list elements with object-level `"..."`: an error for `cache`, and a warning for `^lint`.
+  - Another plugin with empty `targetDefaults`: nothing.
+- Mara: `DES-TARGET-DEFAULT-GUARD` ("What counts", "Which layer"), a warning row in `DES-DIAGNOSTICS`, `VER-TARGET-DEFAULT-GUARD` with the cases, and one sentence of guidance in `targets.mara.md`.
+- Checks after merging `origin/main` at de8540c (#35):
+  - `pnpm nx run-many -t build lint test`: 20 suites, 568 tests passed.
+  - `pnpm nx format:check --all`: passed.
+  - `pnpm nx e2e nx-rust-e2e`: 20 of 20 passed.
+  - `mara schema validate`: valid.
+  - `mara project validate`: `valid: true`, evaluation complete, no diagnostics, every policy check passed.
+  - `zban check`: no problems.
