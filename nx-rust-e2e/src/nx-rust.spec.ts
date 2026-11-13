@@ -1,7 +1,13 @@
 import { NX_VERSION } from "@nx/devkit";
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { join } from "path";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
+import {
+  CargoWrapper,
+  HARNESS_TIMEOUT,
+  installFixture,
+  testEnvironment,
+} from "../../nx-rust/test/harness";
 
 describe("@convesoft/nx-rust", () => {
   let projectDirectory: string;
@@ -40,7 +46,72 @@ describe("@convesoft/nx-rust", () => {
       }),
     ).not.toThrow();
   });
+
+  describe("with a fixture", () => {
+    // Outside the test project, so that Nx does not see the wrapper.
+    const wrapperDirectory = join(process.cwd(), "tmp", "cargo-wrapper");
+    let cargo: CargoWrapper;
+
+    beforeAll(() => {
+      installFixture(projectDirectory, "subfolder-workspace");
+      rmSync(wrapperDirectory, { recursive: true, force: true });
+      cargo = CargoWrapper.install(wrapperDirectory);
+    });
+
+    beforeEach(() => cargo.clear());
+
+    afterAll(() => {
+      rmSync(wrapperDirectory, { recursive: true, force: true });
+    });
+
+    it(
+      "loads the fixture through the installed plugin",
+      () => {
+        const projects = JSON.parse(nx(projectDirectory, cargo, ["show", "projects", "--json"]));
+
+        // The plugin infers no project yet (nxr-7n0nqf).
+        expect(projects).toEqual([]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "logs the cargo invocations in the fixture",
+      () => {
+        const metadata = JSON.parse(
+          execFileSync("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
+            cwd: join(projectDirectory, "rust"),
+            env: cargo.environment(testEnvironment()),
+            encoding: "utf8",
+          }),
+        );
+
+        expect(metadata.packages.map((p: { name: string }) => p.name).sort()).toEqual([
+          "api",
+          "codegen",
+          "model",
+          "testkit",
+        ]);
+        expect(cargo.calls(projectDirectory)).toEqual([
+          { cwd: "rust", args: ["metadata", "--no-deps", "--format-version", "1"] },
+        ]);
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
 });
+
+/**
+ * Runs the test project's Nx with the cargo wrapper first on `PATH` and
+ * returns its standard output.
+ */
+function nx(projectDirectory: string, cargo: CargoWrapper, args: string[]): string {
+  return execFileSync("pnpm", ["exec", "nx", ...args], {
+    cwd: projectDirectory,
+    env: cargo.environment(testEnvironment()),
+    encoding: "utf8",
+  });
+}
 
 /**
  * Creates an empty Nx workspace by hand and installs Nx into it.
