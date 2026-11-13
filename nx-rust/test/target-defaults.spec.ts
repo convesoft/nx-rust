@@ -395,6 +395,7 @@ describe("nothing is reported", () => {
       expect(workspaceProject?.targets?.update.inputs).toEqual([
         "{projectRoot}/Cargo.lock",
         "{projectRoot}/Cargo.toml",
+        { externalDependencies: [] },
         "{workspaceRoot}/.tool-versions",
       ]);
     },
@@ -502,7 +503,13 @@ describe("the layer that made a change", () => {
 
   // The entry keeps exactly the inputs that the plugin declares for update.
   const harmless = {
-    update: { inputs: ["{projectRoot}/Cargo.lock", "{projectRoot}/Cargo.toml"] },
+    update: {
+      inputs: [
+        "{projectRoot}/Cargo.lock",
+        "{projectRoot}/Cargo.toml",
+        { externalDependencies: [] },
+      ],
+    },
   };
 
   it.each<[string, FileChanges]>([
@@ -690,6 +697,7 @@ describe("combinations", () => {
         expect(workspaceProject?.targets?.update.inputs).toEqual([
           "{projectRoot}/Cargo.lock",
           "{projectRoot}/Cargo.toml",
+          { externalDependencies: [] },
           "{projectRoot}/extra.toml",
           "{workspaceRoot}/.tool-versions",
         ]);
