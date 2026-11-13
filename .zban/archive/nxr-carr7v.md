@@ -39,7 +39,7 @@ Done when: `VER-SETUP` covers each point above, the user has agreed to any chang
 
 ## Summary of Changes
 
-`VER-SETUP` gained a check only where an implementation that breaks a stated promise of `DES-GENERATORS`, `DES-DIAGNOSTICS` or `DES-PROJECT-GRAPH` could pass it before. Each new check follows a promise those design items already make, so what the product is required to do did not change; the maintainer's review of the pull request confirms that.
+`VER-SETUP` gained a check only where an implementation that breaks a stated promise of `DES-GENERATORS`, `DES-DIAGNOSTICS` or `DES-PROJECT-GRAPH` could pass it before. Each new check follows a promise those design items already make, so what the product is required to do did not change. The control plane agreed on the maintainer's behalf, also to the remedy requirement, and decided against the cross-references and for cargo's own line as the remedy of the lockfile task in locked mode.
 
 Stop before writing:
 - `VER-SETUP` now requires that a failing `init` changes no file of the repository, not only `nx.json`, also for the Nx-internals failure, and that a second run on an `nx.json` that lists the plugin without the executors' empty entries stops all the same.
@@ -60,7 +60,8 @@ Diagnostic content:
 - No error codes: `VER-SETUP` requires it, and the new `error-codes.spec.ts` scans every string and template literal in `nx-rust/src` for forms such as `NXR001`, `E0001` and `NXR-001`, with positive controls. A code added to a real message made it fail.
 - Remedies: `VER-SETUP` requires that each message it names says what the user can do. Assertions added for the failing `cargo metadata` and the missing toolchain (`init.spec.ts`, `missing-toolchain.spec.ts`); the `targetNames` collision, inputs without `"..."` and an unknown key in the plugin options (`init.spec.ts`); `executor` or `command` on an inferred target, `!` in `implicitDependencies` and `affectedTests` in stored configuration (`configuration.spec.ts`); the target-default error and warning in `init` (`target-defaults.spec.ts`); a path dependency that Nx cannot see (`caching.spec.ts`); shared and outside artifact directories (`caching-runs.spec.ts`); redirections from outside the repository and an unreported redirected crate (`redirections.spec.ts`); and the lockfile task in locked mode, through cargo's own help line (`lockfile-runs.spec.ts`).
 - Remedies that tests already asserted: cargo missing from `PATH`, the Cargo and Nx versions, name collisions, unknown keys and options, `pluginVersion`, the Nx internals, missing tools, a target that was not inferred, per-workspace settings, the Cargo directory warning, a workspace without a lockfile task, and `targetNames` keys.
-- Not testable yet: `affectedTests` without nextest, `fileInputs` and the cargo-affected warning, which are not implemented; their own issues bring their tests.
+- `fileInputs` (#49, merged into this branch): `declared-files.spec.ts` asserts the full message of each of its three errors, remedy included, and the `init` cases in `init.spec.ts` now assert the remedy as well. The messages that #50 added (a missing tool at task start, the Nx and redirection warnings repeated at task start) carry the remedies asserted above; #53 adds no message.
+- Not testable yet: `affectedTests` without nextest and the cargo-affected warning, which are not implemented; their own issues bring their tests.
 - Filed: bug nxr-vqnsn1, because the warning about an included configuration file that is no valid TOML names no remedy, and nxr-wwm6br for the remedies of diagnostics that only other verification items name.
 
 Cross-references: not added. `VER-TESTING` ("any other value fails the task") and `VER-ARTIFACTS` ("fails with a message that names both versions") already check both diagnostics, so a reference from `VER-SETUP` would add no check. Their remedies are part of nxr-wwm6br.
@@ -72,3 +73,11 @@ Checks run:
 - `mara project validate`: `valid: true`, complete evaluation, no errors or warnings, 20 of 20 policies passed.
 - `zban check`: no findings.
 - The end-to-end suite did not run: neither product code nor the suite changed.
+
+After merging `origin/main` at bd9ceae, these checks ran again, one after another:
+- The ten changed spec files with every `CLAUDE*`, `CODEX*` and `AI_AGENT` variable removed: 315 tests passed.
+- `pnpm nx run-many -t build lint test`: 30 suites, 860 tests passed, 1 todo.
+- `pnpm nx format:check --all`: passed.
+- `mara schema validate`: valid.
+- `mara project validate`: `valid: true`, complete evaluation.
+- `zban check`: no findings.
