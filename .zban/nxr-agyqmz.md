@@ -14,11 +14,9 @@ Goal: after every successful cargo call, fresh or not, a `build` task compares t
 
 Implements `REQ-BUILD-INPUT-CHECK` through `DES-BUILD-INPUT-CHECK` (`nx-rust/docs/caching.mara.md`) and the task-time row in `DES-DIAGNOSTICS`. Evidence on the `.d` files: `EVD-CARGO-DEP-INFO`. Checked by `VER-BUILD-INPUT-CHECK`, apart from its batch paragraph, which needs the batch executor (nxr-s12cpg) and has its own issue.
 
-- [ ] Name the records that `cargo build -p <crate>` exports from the metadata report and the task's features, profile and triple, skipping those the design cannot name with certainty, and parse them, with escaped spaces and `build.dep-info-basedir`
-- [ ] Resolve recorded paths (links, case) and compare them with Nx's matching of the task's inputs
-- [ ] Leave out paths outside the repository and in the workspace's build or artifact directory
-- [ ] Compare the rest with the task's file inputs, enumerating recorded directories with Cargo's directories and what Nx ignores pruned
-- [ ] Fail the task with the files and the `fileInputs` line to add
-- [ ] End-to-end fixture for the cases of `VER-BUILD-INPUT-CHECK`
+- [ ] Name the records as point 1 of `DES-BUILD-INPUT-CHECK` gives them, skipping those of point 2, and read them as point 3 describes
+- [ ] Resolve and filter the recorded paths as points 4 and 5 say, links, case and directories included
+- [ ] Compare them with Nx's matching of the task's inputs and fail the task as points 6 and 7 say
+- [ ] The cases of `VER-BUILD-INPUT-CHECK` apart from its batch paragraph, in an end-to-end fixture
 
 Done when: `VER-BUILD-INPUT-CHECK` passes without its batch paragraph, and `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all` and `pnpm nx e2e nx-rust-e2e` pass.

@@ -87,13 +87,13 @@ Leaving files out, as `docs` above, is your statement that the target does not
 read them. Nx then ignores changes to them, so if a macro such as
 `include_str!`, a build script or a test still reads an excluded file, Nx
 restores a result produced with the file's old content, a pass where plain
-`cargo` would fail or the reverse. Only an exclusion on `build` is caught, and
-only for a read that Cargo records through an include macro or a build script's
-`rerun-if-changed` in the crate's library or binaries: the check after the
-build then fails the task instead of caching it
-([Caching](caching.mara.md#files-outside-the-crate)). On `check`, `lint`,
-`test` and the artifact targets nothing catches it, nor on `build` a file that
-a proc macro opens itself.
+`cargo` would fail or the reverse. The check after a build catches this only
+for an exclusion on `build`, and only for a read that Cargo records through an
+include macro or a build script's `rerun-if-changed` in the crate's library or
+binaries, by failing the task instead of caching it
+([Caching](caching.mara.md#files-outside-the-crate)); an exclusion on `check`,
+`lint`, `test` or an artifact target, and a file that a proc macro opens
+itself, stay unprotected.
 
 An input on one target stays with that target. If a build script reads the
 variable, so that crates which depend on this one compile differently too, add

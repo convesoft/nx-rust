@@ -14,10 +14,9 @@ Goal: the `fileInputs` key in `[package.metadata.nx]` and `[workspace.metadata.n
 
 Implements `REQ-BUILD-SCRIPT-INPUTS` and `REQ-FILE-INPUTS-HASHABLE` through the "Declared files" row and paragraph of `DES-INPUTS` (`nx-rust/docs/caching.mara.md`), the `fileInputs` row of `DES-METADATA-TABLES` and the graph-time row for a bad pattern in `DES-DIAGNOSTICS`. Decision: `ADR-DECLARED-FILE-INPUTS`. Checked by the parts of `VER-CACHE-KEYS` that name declared files.
 
-- [ ] Read `fileInputs` from both tables; the two add up
-- [ ] Resolve each pattern against the folder of its manifest and add it to the crate-file input as a fileset with `includeIgnored`
-- [ ] Fail graph creation for a pattern that resolves outside the repository (pointing to `runtimeInputs`) or into the workspace's build or artifact directory
-- [ ] Add a fixture crate that reads files outside its folder, as `verification.mara.md` lists
-- [ ] Cache-key matrix and affected cases for declared files
+- [ ] Turn the `fileInputs` of both tables, which nxr-xyq7c8 reads as `DES-PLUGIN-OPTIONS` gives them, into filesets as the "Declared files" row and paragraph of `DES-INPUTS` say
+- [ ] The graph-creation error of `REQ-FILE-INPUTS-HASHABLE`, worded as its row in `DES-DIAGNOSTICS`
+- [ ] A fixture crate that reads files outside its folder, as "How the plugin is tested" in `verification.mara.md` lists
+- [ ] The declared-file cases of `VER-CACHE-KEYS`: keys, affected selection and the ignored and linked files
 
 Done when: the parts of `VER-CACHE-KEYS` that name declared files pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
