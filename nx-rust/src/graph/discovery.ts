@@ -68,11 +68,19 @@ export interface CargoDiscovery {
  * members. A crate outside every workspace, or excluded by the workspace
  * around it, is still unclaimed after that workspace's step and becomes a
  * workspace of one. Each workspace's redirections are read from its root
- * manifest and the configuration files that apply to it. Afterwards, every
- * path dependency without a project, and every crate without a project that
- * `[patch]` or `[replace]` redirects to, whose crate no report covers yet
- * gets a report of its own, so that the path dependencies behind it are
- * known.
+ * manifest and the configuration files that apply to it.
+ *
+ * A manifest whose folder holds `.cargo-checksum.json` belongs to a package
+ * of a directory source, such as a crate that `cargo vendor` wrote, and is
+ * never read: such a crate gets a project only as a member of a workspace
+ * that another manifest's report describes, as when a path dependency makes
+ * cargo enrol it ({@link isDirectorySourcePackage}).
+ *
+ * Afterwards, every path dependency without a project, and every crate
+ * without a project that `[patch]` or `[replace]` redirects to, whose crate
+ * no report covers yet gets a report of its own, so that the path
+ * dependencies behind it are known. A package of a directory source gets
+ * none.
  *
  * @param manifests The `Cargo.toml` files, relative to `workspaceRoot`.
  * @param workspaceRoot The absolute path of the repository root.
@@ -91,7 +99,10 @@ export async function discoverWorkspaces(
   const claimed = new Set<string>();
   const workspaces: CargoWorkspace[] = [];
   const warnings: string[] = [];
-  for (const manifest of [...manifests].sort(shallowestFirst)) {
+  const readable = manifests.filter(
+    (manifest) => !isDirectorySourcePackage(join(workspaceRoot, manifest)),
+  );
+  for (const manifest of readable.sort(shallowestFirst)) {
     if (claimed.has(manifest)) {
       continue;
     }
@@ -181,6 +192,10 @@ function describeWorkspaces(folders: string[]): string {
  * workspace's folder that is not its member, which cargo builds as a patch
  * but does not report, graph creation goes on: a warning in `warnings` names
  * the manifest and cargo's message, and the crate has no report.
+ *
+ * A package of a directory source that no workspace report lists as a
+ * member gets no report ({@link isDirectorySourcePackage}); like any crate
+ * without a project, its folder is an input of the crates that use it.
  */
 // @mara implements DES-METADATA-REPORT
 async function readPathDependencies(
@@ -214,6 +229,9 @@ async function readPathDependencies(
       return;
     }
     visited.add(manifest);
+    if (!known.has(manifest) && isDirectorySourcePackage(manifest)) {
+      return;
+    }
     if (!known.has(manifest)) {
       const report = await readPathDependency(
         manifest,
@@ -280,6 +298,19 @@ async function readPathDependencies(
     }
   }
   return pathDependencyReports;
+}
+
+/**
+ * Whether the crate of a manifest, by its absolute path, is a package of a
+ * directory source, such as one that `cargo vendor` wrote: its folder holds
+ * `.cargo-checksum.json`, which `cargo vendor` writes for every crate it
+ * vendors and without which cargo refuses such a package. It is a package of
+ * the source that the directory replaces, not a crate of the repository,
+ * whatever configuration names the folder and wherever it lies.
+ */
+// @mara implements DES-DISCOVERY
+function isDirectorySourcePackage(manifest: string): boolean {
+  return existsSync(join(dirname(manifest), ".cargo-checksum.json"));
 }
 
 // Reads the workspace of a manifest that Nx handed to the plugin, in the
