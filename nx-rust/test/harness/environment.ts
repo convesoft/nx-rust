@@ -14,6 +14,27 @@ const unsetVariables = [
   "CARGO_BUILD_BUILD_DIR",
 ];
 
+/**
+ * Variables that tell a command an AI agent runs it: those that `isAiAgent()`
+ * in the native code of Nx 24.0.6 reads, of which Cursor's two count only
+ * together with `PAGER`, and `AI_AGENT`, which agents such as Claude Code set
+ * for any tool and which Nx 24 does not read.
+ */
+export const agentVariables = [
+  "AI_AGENT",
+  "CLAUDECODE",
+  "CLAUDE_CODE",
+  "CODEX_THREAD_ID",
+  "COMPOSER_NO_INTERACTION",
+  "COPILOT_CLI",
+  "CURSOR_TRACE_ID",
+  "GEMINI_CLI",
+  "OPENCODE",
+  "REPL_ID",
+  "SUPERSET_AGENT_ID",
+  "VSCODE_AGENT",
+];
+
 /** How long a test that runs Nx or cargo in a fixture may take. */
 export const HARNESS_TIMEOUT = 120_000;
 
@@ -42,6 +63,26 @@ export const HARNESS_TIMEOUT = 120_000;
  * the task's process (`Check failed: current == end_slot_index.`). The cache
  * files of the fixtures' random folders were also never removed.
  *
+ * Nx sees neither an AI agent nor CI, wherever the tests run, so that a test
+ * sees the same Nx in an agent's session, on a developer's machine and in
+ * GitHub Actions. A test that needs either sets the variables itself.
+ *
+ * - Nx has no setting that turns its agent detection off, so the
+ *   {@link agentVariables} are left out. With an agent, `nx show` prints JSON
+ *   without `--json`, and the output style that `nx run` takes by default is
+ *   `summary`, which prints no task output.
+ * - `CI=false` overrides every variable from which Nx, pnpm and npm conclude
+ *   that they run in CI. In CI, Nx turns the daemon off unless `NX_DAEMON`
+ *   is `true`, `nx run` applies no sync generators, a daemon asks no
+ *   start-up questions, Nx warns about cache artifacts it has no record of,
+ *   and its performance report suggests distributing tasks; pnpm requires a
+ *   lockfile.
+ * - `GITHUB_ACTIONS` is left out. With it, Nx wraps each task's output in a
+ *   log group, which starts its `> nx run` line with `::group::` and a
+ *   status icon, and appends its performance report to the job's summary
+ *   page for every command: `NX_TASK_TARGET_PROJECT`, by which Nx tells a
+ *   nested run, is among the `NX_` variables left out.
+ *
  * `NX_USE_LOCAL` keeps an Nx daemon from installing `nx@latest`. Outside CI,
  * a daemon that starts asks the latest Nx whether to offer Nx Console and
  * whether the workspace's AI agent configuration is outdated, and for that
@@ -49,9 +90,7 @@ export const HARNESS_TIMEOUT = 120_000;
  * daemon. It removes the installation when it stops, but not one that is
  * still in progress. With the variable, the installed Nx answers both
  * questions; it also makes `nx migrate`, `nx init` and
- * `nx configure-ai-agents` run the installed Nx, which no test runs. `CI`
- * would stop the download too, but changes more, such as whether `nx run`
- * applies sync generators and whether pnpm requires a lockfile.
+ * `nx configure-ai-agents` run the installed Nx, which no test runs.
  *
  * Nx keeps two caches in `/tmp/.nx/<uid>`, whatever `TMPDIR` says, and on
  * some machines `/tmp` is memory. One holds a copy of its native binary per
@@ -69,10 +108,17 @@ export function testEnvironment(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (value !== undefined && !name.startsWith("NX_") && !unsetVariables.includes(name)) {
+    if (
+      value !== undefined &&
+      !name.startsWith("NX_") &&
+      !unsetVariables.includes(name) &&
+      !agentVariables.includes(name) &&
+      name !== "GITHUB_ACTIONS"
+    ) {
       env[name] = value;
     }
   }
+  env.CI = "false";
   const rustup = findExecutable("rustup", env.PATH ?? "");
   if (rustup) {
     const folder = resolve(rustup, "..");

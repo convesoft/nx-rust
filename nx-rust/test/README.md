@@ -157,9 +157,7 @@ tests, so that a test can compare the text.
 
 **`runNx(workspace, args, env)`** runs Nx with static output, put before
 `args` so that it stays Nx's own option when `args` holds `--`, and returns
-the output without colours. It sets `NX_SKIP_LOG_GROUPING`, so that the output
-is the same in GitHub Actions, where Nx would otherwise group each task's
-output and start its `> nx run` line with `::group::` and a status icon. **`taskCalls(workspace)`** returns the logged
+the output without colours. **`taskCalls(workspace)`** returns the logged
 cargo calls of tasks, without graph creation's `cargo metadata` and without
 the lockfile task's `cargo update --workspace`, which
 **`lockfileCalls(workspace)`** returns, and
@@ -254,7 +252,16 @@ folder first on `PATH`: Nx runs this repository's tests through
 a system cargo would otherwise shadow rustup. It sets `NX_USE_LOCAL`, so
 that an Nx daemon outside CI asks the installed Nx about Nx Console and AI
 agent configuration instead of installing `nx@latest` from the npm registry
-into `~/.nx/tmp`, which it does on every start. It also keeps Nx's caches out
+into `~/.nx/tmp`, which it does on every start. Nx sees neither an AI agent
+nor CI, wherever the tests run, so that a test sees the same Nx in an agent's
+session, on a developer's machine and in GitHub Actions: the environment
+leaves out the variables from which Nx concludes that an agent runs it
+(`agentVariables`), sets `CI=false` and leaves out `GITHUB_ACTIONS`. An
+agent would make `nx show` print JSON and `nx run` print no task output by
+default; CI turns off the daemon, sync generators before tasks and the
+daemon's start-up questions; and in GitHub Actions Nx wraps each task's
+output in a log group and writes to the job's summary page. A test that
+needs CI or an agent sets the variables itself. It also keeps Nx's caches out
 of `/tmp/.nx/<uid>`, which Nx uses whatever `TMPDIR` says and which is
 memory on some machines: Nx loads its native binary where it is installed
 instead of copying it there, and Node's compile cache, whose entries are
