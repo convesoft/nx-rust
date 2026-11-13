@@ -591,7 +591,7 @@ A pull request compared against an older baseline has a wider diff and selects m
 :threatens: NEED-EFFICIENT-BUILDS
 :threatens: NEED-FAST-TESTS
 
-Several things the plugin uses are not stable: Cargo's `resolver.feature-unification`, whose name or values could still change; the layout of the build directory, which changed in Cargo 1.100; cargo-affected's commands and report format; and Nx's batch executor interface. The plugin avoids the build directory layout entirely, keeps the `cargo` strategy experimental and the selector replaceable, and supports only the Nx majors it has been verified on ([[ADR-COMPATIBILITY]]). To track Cargo's stabilisation.
+Several things the plugin uses are not stable: Cargo's `resolver.feature-unification`, whose name or values could still change; the layout of the build directory, which changed in Cargo 1.100; cargo-affected's commands and report format; Nx's batch executor interface; and the functions that `init` and graph creation take from `nx/src/devkit-internals`, which Nx does not count as public API. The plugin avoids the build directory layout entirely, keeps the `cargo` strategy experimental and the selector replaceable, and supports only the Nx majors it has been verified on ([[ADR-COMPATIBILITY]]). To track Cargo's stabilisation.
 :::
 
 :::mara risk RISK-MIXED-PROJECT-MERGE
