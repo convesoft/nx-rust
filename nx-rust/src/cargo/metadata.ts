@@ -1,3 +1,4 @@
+import { checkCargoReport } from "../compatibility/cargo-version";
 import { runCargoForGraph } from "./run-cargo";
 
 /**
@@ -57,6 +58,7 @@ export function metadataArguments(manifest: string): string[] {
  * @param cwd The folder cargo starts in.
  * @throws {CargoError} When cargo cannot be started or fails.
  * @throws {SyntaxError} When cargo's output is no report.
+ * @throws {UnsupportedCargoError} When the report comes from a Cargo older than 1.91.
  */
 // @mara implements DES-METADATA-REPORT
 export async function requestMetadata(manifest: string, cwd: string): Promise<CargoMetadata> {
@@ -69,5 +71,6 @@ export async function requestMetadata(manifest: string, cwd: string): Promise<Ca
   ) {
     throw new SyntaxError("the output has no workspace_root, packages or workspace_members");
   }
+  await checkCargoReport(report, cwd);
   return report;
 }

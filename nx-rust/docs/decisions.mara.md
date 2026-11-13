@@ -904,6 +904,34 @@ Observed in a throwaway git repository outside this one, with that `nx` package 
 Observed with pnpm 12.18.0 in a second throwaway repository, whose `package.json` linked that `nx` package, and a local package whose `init` generator threw: `nx add probe-plugin@file:<folder>` added the package to `package.json` and `pnpm-lock.yaml` and installed it, then failed with the generator's message and exit status 1. The package stayed in `package.json` and `node_modules`, and `nx.json` was unchanged.
 :::
 
+:::mara evidence EVD-NX-24-VERSION-CHECK
+:mid: 01M7AR5NQ71CB4YNT6NRTYWHJZ
+:title: How Nx 24.0.6 and pnpm 12.18.0 treat a plugin that checks the Nx version
+:status: accepted
+:supports: DES-DIAGNOSTICS
+:supports: DES-GENERATORS
+
+Inspection of the `nx` 24.0.6 package installed in this repository, and experiments with it and with pnpm 12.18.0, on 13 November 2026, while implementing the version checks of [[DES-DIAGNOSTICS]]. Paths are relative to `nx/dist/src/`.
+
+Read in the compiled source:
+
+- **The installed Nx.** Nx takes the version of the installed Nx from the `nx/package.json` that resolves from `.nx/installation` and then from the repository root (`utils/installed-nx-version.js`, `utils/installation-directory.js`), and finds the repository root from the folder it runs in, or from `NX_WORKSPACE_ROOT_PATH` (`utils/workspace-root.js`). When that version differs from the version of the Nx that runs, the client does not use the daemon (`daemon/client/client.js`, `daemon/is-nx-version-mismatch.js`).
+- **Hooks without files.** Graph creation calls each plugin entry's `createNodes`, also when none of the repository's files matches the entry's pattern, `include` and `exclude`: it then hands the entry an empty list (`project-graph/utils/project-configuration-utils.js`).
+- **Reloads.** A plugin in a worker, the default, whose last hook is `createDependencies` has its worker shut down after that hook, and the next hook call starts a new worker that loads the module again (`project-graph/plugins/isolation/isolated-plugin.js`, `plugin-lifecycle-manager.js`). A plugin loaded into Nx's own process, with `NX_ISOLATE_PLUGINS=false`, stays loaded. When a client's environment changes, the daemon forwards it to the workers and discards its graph, but it loads no plugin again (`daemon/server/handle-client-env.js`). A failed load is not kept: the next graph creation loads the plugin again (`project-graph/plugins/get-plugins.js`, `isolation/load-isolated-plugin.js`).
+- **Errors of `createDependencies`.** When `createNodes` fails, graph creation still calls `createDependencies` with the projects it has, and then reports the errors of both, an error of `createDependencies` as `The "<plugin>" plugin threw an error while creating dependencies: <message>` (`project-graph/project-graph.js`, `project-graph/build-project-graph.js`, `project-graph/error-types.js`). Graph creation merges the projects of the plugins of `nx.json` with those of Nx's default plugins for `package.json` and `project.json` before it calls `createDependencies` with them by name.
+- **Internals.** The `exports` of `nx/package.json` include `./src/*`, so `nx/src/project-graph/plugins/get-plugins` and `nx/src/project-graph/utils/retrieve-workspace-files`, which load the plugins of `nx.json` and read the files of the repository by project, can be required alongside `nx/src/devkit-internals`.
+
+Observed in a throwaway git repository outside this one, with one `Cargo.toml` and a local plugin file in `nx.json` that printed a line when it loaded and when its hooks ran, and could throw from either, run with a copy of that `nx` package whose `package.json` gave the version 25.0.0, linked as the repository's `node_modules/nx`:
+
+- `nx --version` reported the local Nx as 25.0.0, and the copy created the graph, with the plugin in a worker and in Nx's own process.
+- A throw when the module loaded made `nx show projects` fail with "Failed to load 1 Nx plugin(s)" and the message.
+- With `NX_DAEMON=true`, the daemon log showed Nx 25.0.0. Changing a variable between runs made the daemon log "Graph recompute necessary due to env variable refresh", restart the plugin's worker and load the module again with the new value. A throw from `createNodes` failed the run, the next run with another value succeeded, and the run after that with the first value failed again. A throw when the restarted worker loaded the module failed both hooks, so the message appeared twice, once for `createNodes` and once for `createDependencies`.
+
+Observed with pnpm 12.18.0 in a second throwaway repository that installed `nx` 24.0.6 from pnpm's store: adding a local package whose peer dependency range on `nx` was `^23` printed "Issues with peer dependencies found" and exited with status 0, with the package installed. `pnpm peers check` then listed the unmet peer with the installed and wanted versions and exited with status 1. pnpm linked the repository's `nx` into the package's folder in its store, so that `nx` resolves from the package. With the range `^24`, neither printed anything about peers.
+
+So a plugin that checks the version only when its module loads misses a change of `NX_RUST_ALLOW_UNSUPPORTED_NX` while a daemon runs it in Nx's own process, and a check in `createNodes` runs on every graph computation, also in a repository without a `Cargo.toml`. The peer dependency range does not stop an install with another Nx major; only the plugin's own check stops it.
+:::
+
 :::mara evidence EVD-CARGO-TARGET-COMMANDS
 :mid: 01M7A4FCEFVN0W56WPDHWWW88N
 :title: What cargo, rustfmt and rust-analyzer 1.100 do with the commands of the inferred targets

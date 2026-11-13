@@ -1,4 +1,5 @@
 import type { CreateNodes } from "@nx/devkit";
+import { checkNxForGraph } from "../compatibility/nx-version";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
 import { CargoGraph, inferProjects, projectNodes } from "./projects";
@@ -58,7 +59,8 @@ export class Registration {
    * all its manifests in one call, so each call is taken as a computation of
    * its own.
    *
-   * @throws {Error} When discovery fails, see {@link discoverWorkspaces}.
+   * @throws {Error} When the installed Nx is not supported ({@link checkNxForGraph}) or
+   *   discovery fails ({@link discoverWorkspaces}).
    */
   async discover(manifests: readonly string[], workspaceRoot: string): Promise<CargoGraph> {
     const sequence = ++this.started;
@@ -66,6 +68,7 @@ export class Registration {
     const reports = computationReports();
     let graph: CargoGraph | undefined;
     try {
+      checkNxForGraph(workspaceRoot, reports);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
       graph = { discovery, projects: inferProjects(discovery) };
       return graph;
