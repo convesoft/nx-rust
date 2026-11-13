@@ -71,7 +71,7 @@ The crate name is what a Rust developer types, so it is the Nx project name. Wit
 
 Leaving dev-dependencies out of the graph means a change in a crate used only by another crate's tests does not invalidate those cached tests. All three kinds are therefore edges.
 
-Cargo allows cycles through dev-dependencies. Three treatments were considered: drop the edge that closes the cycle and add the crate's files as explicit inputs, fail graph creation, or keep the edge. Nx 24 fails only on a cycle between tasks, not between projects ([[EVD-NX-24-INSPECTION]]), and the plugin's targets declare no dependencies between crates ([[ADR-NO-RUST-BUILD-DEPS]]). The edge is kept, so `nx graph` shows what Cargo sees and no workspace that Cargo accepts is rejected. If a user's own `dependsOn` turns the project cycle into a task cycle, Nx reports it. That hashing over a project cycle is stable still has to be checked ([[RISK-NX-INPUT-SEMANTICS]]).
+Cargo allows cycles through dev-dependencies. Three treatments were considered: drop the edge that closes the cycle and add the crate's files as explicit inputs, fail graph creation, or keep the edge. Nx 24 fails only on a cycle between tasks, not between projects ([[EVD-NX-24-INSPECTION]]), and the plugin's targets declare no dependencies between crates ([[ADR-NO-RUST-BUILD-DEPS]]). The edge is kept, so `nx graph` shows what Cargo sees and no workspace that Cargo accepts is rejected. If a user's own `dependsOn` turns the project cycle into a task cycle, Nx reports it. Nx 24 hashes `^` inputs over a project cycle stably ([[EVD-NX-24-INPUT-SEMANTICS]]).
 :::
 
 :::mara decision ADR-EXTERNAL-NODES
@@ -279,7 +279,7 @@ rustup picks the toolchain file, and Cargo its configuration files, from the fol
 
 The first design keyed the toolchain with `rustup run <channel> rustc -Vv`, with the channel read from the toolchain file. That needs rustup, and it misses a toolchain chosen through `RUSTUP_TOOLCHAIN` or `rustup override`, which cargo honours. Plain `rustc -Vv`, run in the workspace root, asks the question cargo will ask, with or without rustup.
 
-The cost is that a toolchain or configuration file inside a member crate changes the cache key without changing what Nx runs, and that a developer who starts cargo inside such a crate builds differently from Nx. The documentation says so. That a runtime input can change into a folder before it runs still has to be checked ([[RISK-NX-INPUT-SEMANTICS]]).
+The cost is that a toolchain or configuration file inside a member crate changes the cache key without changing what Nx runs, and that a developer who starts cargo inside such a crate builds differently from Nx. The documentation says so. Nx 24 runs a runtime input through `sh -c` in the repository root, so the toolchain command can change into the workspace root first ([[EVD-NX-24-INPUT-SEMANTICS]]).
 :::
 
 :::mara decision ADR-CI-LINUX-ONLY
@@ -359,13 +359,18 @@ If the result of running selected tests were stored under the key of the full su
 :mid: 01M78FHG7FWVEHYKF3KRPQYTWN
 :title: Nx evaluates inputs differently from what the design assumes
 :status: accepted
-:likelihood: possible
+:likelihood: unlikely
 :consequence: major
 :threatens: REQ-TEST-MODE-KEY
 :threatens: REQ-TOOLCHAIN-KEY
 :threatens: NEED-AFFECTED
+:threatens: REQ-ENV-ALLOWLIST
 
-The design assumes that a runtime input is evaluated once per run and afresh on each run, also under the Nx daemon; that its command runs through a shell from the repository root, so that it can change into a workspace folder, and with the environment of the `nx` command; that task-based affected treats runtime inputs and batched tasks the way the cache does; and that `^` inputs hash stably when projects form a cycle. None of this is confirmed. If a runtime input were cached across runs, or evaluated in the daemon's environment, the test mode or the toolchain in a key could be stale. To check each on the supported Nx versions.
+The design assumed that a runtime input is evaluated afresh on each run, also under the Nx daemon; that its command runs through a shell from the repository root, so that it can change into a workspace folder, and with the environment of the `nx` command; that task-based affected treats runtime inputs and batched tasks the way the cache does; and that `^` inputs hash stably when projects form a cycle. Nx 24.0.6 confirms most of this ([[EVD-NX-24-INPUT-SEMANTICS]]). It evaluates a runtime input once per task of every run, also under the daemon, through `sh -c` in the repository root, with the environment of the `nx` command plus the dotenv files it loads for the task. Batched and unbatched runs select the same tasks and share their keys, and `^` inputs hash stably over a project cycle. Two differences remain.
+
+In a batch, Nx computes each task's key with the dotenv files of that task, those in the crate's folder and those at the root that are named for a target or configuration, such as `.env.test`, but starts the batch process without them. A test mode, a toolchain or a listed variable set in such a file is then in the key of a task that runs without it. A result could be stored under a key that does not describe it, a subset result under the full-suite key among them ([[RISK-SUBSET-AS-FULL]]). This takes batching and a per-task dotenv file that sets one of these variables, and [[DES-BATCH]] does not handle it yet.
+
+Task-based affected selects tasks by changed files, never by environment variables or the output of runtime commands. A toolchain update without a change to a toolchain file, or a new value of a listed variable, makes no task affected, although it changes the keys. A task that does run still misses the cache, so no stale result is restored, but `nx affected` does not run the tasks such a change reaches.
 :::
 
 :::mara risk RISK-BATCH-BEHAVIOUR
@@ -531,6 +536,30 @@ Inspection of the `nx` 24.0.6 package installed in this repository, on 12 Novemb
 - **CI detection.** `isCI()` reports CI when `CI` is set to anything but `false`, or when one of the variables that the common CI systems set is present, such as `GITHUB_ACTIONS`, `GITLAB_CI` or `BUILDKITE` (`utils/is-ci.js`).
 
 This is a reading of type definitions, schemas and compiled source. It shows what Nx declares, not how it behaves in every case; behaviour is checked by the spikes named under the risks.
+:::
+
+:::mara evidence EVD-NX-24-INPUT-SEMANTICS
+:mid: 01M7A0X81J8XAG79EE2DFXFEZD
+:title: How Nx 24.0.6 evaluates runtime inputs, selects affected tasks and hashes a cycle
+:status: accepted
+:supports: ADR-WORKSPACE-ROOT
+:supports: ADR-TEST-MODE-CHOICE
+:supports: ADR-ALL-DEP-KINDS
+:supports: DES-INPUTS
+:supports: RISK-NX-INPUT-SEMANTICS
+
+Experiments on 13 November 2026 with `nx` 24.0.6, the version this repository installs, cargo and rustc 1.100.0, rustup with the toolchains 1.97.1, 1.98 and 1.100.0, Node 26.12.0 and git 2.56.0, on Linux x86-64 with bash as `/bin/sh`. The throwaway workspace lay outside this repository and had the default task-based affected. It held two Cargo workspaces: `rs`, whose `rust-toolchain.toml` selects 1.98, with the members `a`, `b` and `d`, where `b` depends on `a`, `a` has `b` as a dev-dependency and `d` depends on `b`; and `rs2`, with the member `c` and no toolchain file. A local plugin made each crate a project, with an edge for every dependency kind from `cargo metadata --no-deps`, and gave it two cached targets with the inputs of [[DES-INPUTS]]: the crate's folder as a named input and `^` over it, the workspace's `Cargo.toml` and `rust-toolchain.toml`, the runtime input `cd <workspace> && rustc -Vv`, a runtime input running a Node script that logged each evaluation with its working directory, `$0` and environment, and one `env` input. `probe` (`nx:run-commands`) logged `NX_TASK_HASH`. `test` used an executor with `batchImplementation` and `preferBatch: true` that ran `cargo test` once per Cargo workspace and logged its environment. The commands were `nx run-many -t probe --skip-nx-cache`, also with `-p` for subsets and from a crate's folder, `nx run-many -t test` with and without `--batch=false`, `nx affected -t probe --base=main --head=HEAD --explain=stdout` and `nx affected -t test --base=main --head=HEAD --skip-nx-cache` with and without `--batch=false`. Each case ran with `NX_DAEMON=false` and again with `NX_DAEMON=true`, the daemon started by `nx daemon --start` with variables that later commands did not set. Both modes gave the same results and the same hashes:
+
+- **Evaluation.** Nx evaluated a runtime input once per task, not once per run: four tasks with the same command gave four evaluations. Every run evaluated it again, also when the daemon reused its cached project graph, and a changed output of the command, read from a file outside the workspace, changed the hashes of the next run.
+- **Shell and folder.** The command ran through `sh -c` (`$0` was `sh`), in the repository root, also when `nx` was started in a crate's folder. `cd rs && rustc -Vv` worked. The hash of `a` was the same with and without `RUSTUP_TOOLCHAIN=1.98`, that of `c` was not, and `RUSTUP_TOOLCHAIN=1.97.1` changed every hash: the toolchain file of the folder the command changed into applied.
+- **Environment.** The command saw the environment of the `nx` command. Variables that only the daemon's process had were not visible to it, and a `PATH` with another `rustc` in front changed the hashes under the daemon too. Nx added the dotenv files it loads for the task: a variable set in `rs/d/.env` reached the command of `d` only, one in a root `.env.test` reached the commands of `test` tasks, and a value set in the shell won over both.
+- **Batches.** Nx hashed each task of a batch with that task's environment, but started the batch process with the environment of the `nx` command and the root `.env`, `.env.local` and `.local.env` only (`getEnvVariablesForBatchProcess` in `tasks-runner/task-env.js`). With `NX_RUST_TEST_MODE=full` in `rs/d/.env` or in a root `.env.test`, and the variable unset in the shell, the runtime input printed `full` while the batch process had no value; with `--batch=false`, each task's process had `full`. A value in the root `.env` reached both. Without per-task dotenv files, batched and unbatched runs restored each other's results, four of four either way.
+- **Affected.** `nx affected` selected tasks by changed files only. A commit changing a source file of `a` or of `b` selected `a`, `b` and `d`; one of `d` selected `d`, one of `c` selected `c`, a change of `rs/rust-toolchain.toml` selected `a`, `b` and `d`, and a new root `README.md` selected nothing. Without a changed file, a new value of the `env` input, `RUSTUP_TOOLCHAIN=1.97.1` or a new output of a runtime command selected nothing, while `nx run-many` found none of the four tasks in the cache. In each of these seven cases, `nx affected -t test` ran the same tasks batched and with `--batch=false`.
+- **Cycle.** The hashes of `a`, `b` and `d` stayed the same across runs of all three together and of each alone, in either order. A change in `a` or in `b` changed all three hashes, and undoing it restored them. No run reported a task cycle.
+
+One evaluation of `rustc -Vv` took about 6 ms on this machine, and one of the Node script about 14 ms.
+
+These results support [[ADR-WORKSPACE-ROOT]], [[ADR-TEST-MODE-CHOICE]], [[ADR-ALL-DEP-KINDS]] and the toolchain, environment and `^` inputs of [[DES-INPUTS]]. They contradict one assumption of [[DES-TEST-MODE]] and [[DES-BATCH]]: in a batch, a variable from a per-task dotenv file is in the key but not in the environment of the executor and cargo. [[RISK-NX-INPUT-SEMANTICS]] records what remains. The workspace was a toy and ran on one machine, so this says nothing about the cost of per-task evaluation in a large workspace or about macOS.
 :::
 
 :::mara evidence EVD-CARGO-NO-DEPS
