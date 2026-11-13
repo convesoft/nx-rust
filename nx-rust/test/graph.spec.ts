@@ -429,6 +429,8 @@ describe("name collisions", () => {
       "services/billing/Cargo.toml",
       "services-billing/Cargo.toml",
     ],
+    // DES-PROJECT-GRAPH promises the plugin's message here only as best
+    // effort, because one project is at the root; this guards today's message.
     [
       "a workspace at the root and one in cargo-workspace/",
       "two-workspaces",
@@ -546,6 +548,21 @@ describe.each([
     },
     HARNESS_TIMEOUT,
   );
+
+  it(
+    "fail graph creation with Nx's error for two crates with one name that two entries both receive",
+    async () => {
+      // How often the plugin's message appears here is best effort.
+      const loading = loadFixtureGraph("name-collision", {
+        files: { "nx.json": pluginEntries({}, { options: {} }) },
+        env,
+      });
+
+      await expect(loading).rejects.toThrow(GraphCreationError);
+      await expect(loading).rejects.toThrow(/defined in multiple locations/);
+    },
+    HARNESS_TIMEOUT,
+  );
 });
 
 describe.each([
@@ -586,7 +603,11 @@ describe.each([
     return { folders, pluginMessage: message.includes("nx-rust would give") };
   }
 
-  /** Nx's error alone, naming `folders`. */
+  /**
+   * Nx's error alone, naming `folders`. In these cases DES-PROJECT-GRAPH
+   * promises only that graph creation fails with Nx's error; that the
+   * plugin's message is absent guards today's behaviour.
+   */
   function nxErrorAlone(...folders: string[]) {
     return { folders: folders.sort(), pluginMessage: false };
   }
