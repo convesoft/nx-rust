@@ -667,6 +667,15 @@ describe("init", () => {
         },
         'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build.options] sets the option "pluginVersion", which only the plugin sets: it carries the plugin\'s version into the cache key, and a value set by hand would replace it, so that Nx could restore results of another version of the plugin. Remove it.',
       ],
+      [
+        "pluginVersion in a project.json beside a crate",
+        {
+          "rust/crates/model/project.json": JSON.stringify({
+            targets: { build: { options: { pluginVersion: "0.0.0" } } },
+          }),
+        },
+        'The file rust/crates/model/project.json sets the option "pluginVersion" on targets that nx-rust infers. Only nx-rust sets this option: it carries the plugin\'s version into the cache key, and another value would take its place, so that Nx could restore results of another version of the plugin. Remove it there. It reaches:\n  - model (rust/crates/model/Cargo.toml): "build"',
+      ],
       ...(
         [
           ['options = "broken"', 'has to be a table, not "broken".'],
