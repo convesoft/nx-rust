@@ -7,6 +7,7 @@ import {
   HARNESS_TIMEOUT,
   inFixture,
   linesWith,
+  lockfileCalls,
   runNx as runNxWithCache,
   sortedCalls,
   taskCalls,
@@ -122,7 +123,7 @@ describe("an option that the executor does not know", () => {
           }
         }
 
-        // With Nx's cache, a second identical run restores every Rust task
+        // With Nx's cache, a second identical run restores every crate task
         // and prints the same lines. The first run stores the results, unless
         // the runs above already did.
         const lines = ["core-lib", "cli"]
@@ -147,7 +148,10 @@ describe("an option that the executor does not know", () => {
           "core-lib:build",
           "core-lib:test",
         ]);
+        // No crate task runs cargo. The workspace's lockfile task, which the
+        // crate tasks depend on, is not cached and runs its own cargo call.
         expect(taskCalls(workspace)).toEqual([]);
+        expect(lockfileCalls(workspace)).toEqual([rust(["update", "--workspace"])]);
         expect(linesWith(restored.output, "ignoring").sort()).toEqual(lines);
 
         // The ignored option stays in the key: another value restores no Rust task.
