@@ -82,9 +82,9 @@ After merging `origin/main` at bd9ceae, these checks ran again, one after anothe
 - `mara project validate`: `valid: true`, complete evaluation.
 - `zban check`: no findings.
 
-After review (merging `origin/main` at 2765657, #54, whose messages add none and whose new toolchain case asserts its advice), these checks ran again, one after another:
-- The ten changed spec files with `CI=true GITHUB_ACTIONS=true` and every `CLAUDE*`, `CODEX*` and `AI_AGENT` variable removed: 343 tests passed.
-- `pnpm nx run-many -t build lint test`: 30 suites, 889 tests passed, 1 todo.
+After review, `origin/main` was merged at 7aa4e40, which brings #54 and #53. Neither adds a message: #54 changes which folder the advice of the failing `cargo metadata` names, and its new toolchain case asserts that advice. These checks then ran again, one after another:
+- The ten changed spec files with `CI=true GITHUB_ACTIONS=true` and every `CLAUDE*`, `CODEX*` and `AI_AGENT` variable removed: 347 tests passed.
+- `pnpm nx run-many -t build lint test`: 30 suites, 893 tests passed, 1 todo.
 - `pnpm nx format:check --all`: passed.
 - `mara schema validate`: valid.
 - `mara project validate`: `valid: true`, complete evaluation.
