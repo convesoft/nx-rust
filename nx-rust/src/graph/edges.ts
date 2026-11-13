@@ -5,6 +5,7 @@ import type {
 } from "@nx/devkit";
 import { dirname, relative } from "node:path";
 import type { CargoGraph } from "./projects";
+import { redirectedUses } from "./redirected-uses";
 
 // Nx's `DependencyType.implicit`, written out because the plugin does not
 // load @nx/devkit at run time.
@@ -20,14 +21,17 @@ const implicit = "implicit" as DependencyType.implicit;
 /**
  * The edges of the projects that one plugin entry created: from each crate
  * to every crate it depends on through a path, whether as a normal, build
- * or dev-dependency, and from each workspace project to every member of its
- * workspace.
+ * or dev-dependency, from each workspace project to every member of its
+ * workspace, and from members to the crates that their workspace's
+ * `[patch]`, `[replace]` and `paths` tables redirect to
+ * ({@link redirectedUses}).
  *
  * An edge exists only where both crates are Nx projects, and names each end
  * by the project that Nx has at the crate's folder, as `projects` lists it:
  * a `package.json` or `project.json` in that folder may have renamed it.
  * A path dependency on a crate without a project gives no edge. Edges that
- * close a cycle are kept.
+ * close a cycle are kept, apart from the redirected uses that
+ * {@link redirectedUses} leaves without an edge.
  *
  * @param projects The projects that `createDependencies` receives, by name.
  */
@@ -58,6 +62,12 @@ export function projectEdges(
       for (const member of project.workspace.report.packages) {
         add(source, nameAt(dirname(member.manifest_path)));
       }
+    }
+  }
+  const roots = Object.values(projects).map((project) => project.root);
+  for (const use of redirectedUses(graph, roots)) {
+    if (use.edge && use.projectRoot !== undefined) {
+      add(nameAt(dirname(use.member.manifest_path)), nameByRoot.get(use.projectRoot));
     }
   }
   return [...edges.values()];

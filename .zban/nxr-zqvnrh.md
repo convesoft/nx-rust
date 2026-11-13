@@ -17,6 +17,7 @@ Context: nxr-q6cxt3 built the check without the executor, which did not exist ye
 - [ ] The `audit` and `deny` case of `VER-TARGETS`: with cargo-audit or cargo-deny removed from `PATH`, the task fails with the missing-tool message
 - [ ] Name the target or setting and the crate or workspace in `neededBy`, as `DES-DIAGNOSTICS` asks
 - [ ] Print the warning of an unsupported Nx with `NX_RUST_ALLOW_UNSUPPORTED_NX=true` again from the executor at the start of each task
+- [ ] Print the graph-time warnings about redirections again from the executor at the start of each task of the workspace they concern (`DES-DIAGNOSTICS`, "Warnings where they are seen", and its rows for `ADR-REDIRECTION-EDGES` and `DES-METADATA-REPORT`): a configuration file outside the repository with `[patch]` or `paths`, an included file that is no valid TOML, and a redirected crate that `cargo metadata` fails for. Graph creation prints them from `CargoDiscovery.warnings` (nxr-p5ybc0), which holds plain messages without the workspace they concern
 - [ ] Tests: for each tool, removing it from `PATH` and running a task that needs it fails with that message, and nothing is installed (`VER-SETUP`, fifth paragraph); hide installed tools with an empty `PATH` and Cargo home (`ToolFolders` in `nx-rust/test/harness`) and install none
 - [ ] End-to-end: one such task through the installed plugin
 
