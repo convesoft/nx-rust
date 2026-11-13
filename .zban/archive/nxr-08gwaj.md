@@ -31,7 +31,7 @@ Checks run:
 - Tests added in `graph.spec.ts` (kinds, chains, no edge behind a `.cargo-checksum.json` crate, a dev-dependency cycle that hashes) and `redirections.spec.ts` (an assumed use gives way). The edge tests fail without the code change.
 - Edges and inputs of every fixture and six variants (18 graphs) compared before and after: no edge lost or added, and inputs identical.
 - New tests run with the AI agent variables removed: pass.
-- `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all` and `pnpm nx e2e nx-rust-e2e --skip-nx-cache`, before and after merging `origin/main` (#54): pass.
+- `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all` and `pnpm nx e2e nx-rust-e2e --skip-nx-cache`, before and after merging `origin/main` (#54, then #53): pass.
 - `mara schema validate`, `mara project validate` (valid, complete evaluation, no diagnostics) and `zban check`: pass.
 
 Follow-up: nxr-vaywmh, the same hole behind a redirected crate without a project.
