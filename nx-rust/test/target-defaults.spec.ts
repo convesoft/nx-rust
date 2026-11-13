@@ -482,6 +482,67 @@ describe("combinations", () => {
   );
 
   it(
+    "a filter on a tag that the crates get from [workspace.metadata.nx], as the guidance narrows an entry: nothing is reported",
+    async () => {
+      const { output, projects } = await created(
+        {
+          build: [{ filter: { projects: ["!tag:lang:rust"] }, cache: true, dependsOn: ["^build"] }],
+        },
+        {
+          "rust/Cargo.toml": (manifest) =>
+            `${manifest}\n[workspace.metadata.nx]\ntags = ["lang:rust"]\n`,
+        },
+      );
+
+      expect(output).not.toContain("targetDefaults");
+      expect(projects.api.tags).toContain("lang:rust");
+      expect(projects.web.targets?.build.cache).toBe(true);
+      expect(projects.api.targets?.build.cache).toBe(false);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  describe('a targets table in Cargo metadata that keeps the inputs with "..."', () => {
+    // The workspace project's update, with one input more than inferred.
+    const table: FileChanges = {
+      "rust/Cargo.toml": (manifest) =>
+        `${manifest}\n[workspace.metadata.nx.project.targets.update]\ninputs = ["...", "{projectRoot}/extra.toml"]\n`,
+    };
+
+    it(
+      "is part of what the plugin declares: an entry that replaces it is reported",
+      async () => {
+        const output = await failed({ update: { inputs: ["default"] } }, table);
+
+        expect(output).toContain(
+          '  - It replaces the inputs that nx-rust declares for "update", so that the cache key and nx affected miss files or settings that the task depends on. In rust (rust/Cargo.toml).',
+        );
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      'is not blamed on an entry that keeps it with "..."',
+      async () => {
+        const { output, projects } = await created(
+          { update: { inputs: ["...", "{workspaceRoot}/.tool-versions"] } },
+          table,
+        );
+
+        expect(output).not.toContain("targetDefaults");
+        const workspaceProject = Object.values(projects).find((project) => project.root === "rust");
+        expect(workspaceProject?.targets?.update.inputs).toEqual([
+          "{projectRoot}/Cargo.lock",
+          "{projectRoot}/Cargo.toml",
+          "{projectRoot}/extra.toml",
+          "{workspaceRoot}/.tool-versions",
+        ]);
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
+  it(
     'an entry that adds ^build and keeps the rest with "...": a warning',
     async () => {
       const { output, projects } = await created({ build: { dependsOn: ["...", "^build"] } });
@@ -601,6 +662,7 @@ describe("the check on targets the plugin declares more for", () => {
         workspace: { rootManifest: "rust/Cargo.toml" },
         pkg: { name: "api" },
         isWorkspaceProject: false,
+        settings: { tags: [], implicitDependencies: [] },
       },
     ],
   } as unknown as CargoGraph;
