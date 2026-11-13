@@ -14,6 +14,7 @@ Implements the draft `REQ-TARGET-DEFAULT-GUARD` (`nx-rust/docs/targets.mara.md`)
 
 - [ ] Accept `REQ-TARGET-DEFAULT-GUARD` with a design and verification, after the user agrees
 - [ ] Implement the report and name the entry, the target and the fix
+- [ ] Report a target default that replaces a crate target's `dependsOn`, which drops the dependency on the workspace's `lockfile` task and with it the lockfile digest from the key (`DES-LOCKFILE-HASHING`, "Excluded dependencies")
 - [ ] Document narrowing a target default in `targets.mara.md`
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
