@@ -366,6 +366,77 @@ describe("a run with the plugin's executor", () => {
     },
     HARNESS_TIMEOUT,
   );
+
+  it.each([
+    [
+      "only a configuration that the run does not select names it",
+      (triple: string) =>
+        `\n[package.metadata.nx.targets.build.configurations.explicit]\ntargetTriple = "${triple}"\n`,
+    ],
+    [
+      "a configuration clears the triple that the options name",
+      (triple: string) =>
+        `\n[package.metadata.nx.targets.build.options]\ntargetTriple = "${triple}"\n[package.metadata.nx.targets.build.configurations.plain]\ntargetTriple = ""\n`,
+    ],
+  ])(
+    "runs build every time, and leaves no artifact missing, where Cargo's configuration chooses the triple and %s",
+    async (_case, table) => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "rust/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
+        "rust/crates/cli/Cargo.toml": (manifest) => `${manifest}${table(hostTriple())}`,
+      });
+      try {
+        expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
+        const artifact = join(workspace.root, "rust/target", hostTriple(), "debug/cli");
+        rmSync(artifact);
+        const second = await nx(workspace, ["run", "cli:build"]);
+
+        expect(second.status).toBe(0);
+        expect(second.output).not.toMatch(new RegExp(hit));
+        expect(existsSync(artifact)).toBe(true);
+        expect(taskCalls(workspace)).toHaveLength(2);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "caches build with the triple in the target's options where Cargo's configuration chooses it, restores the artifact, and fails a run that clears the triple before cargo runs",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "rust/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
+        "rust/crates/cli/Cargo.toml": (manifest) =>
+          `${manifest}\n[package.metadata.nx.targets.build.options]\ntargetTriple = "${hostTriple()}"\n`,
+        // A configuration that the plugin cannot see when it creates the graph.
+        "rust/crates/cli/project.json": JSON.stringify({
+          targets: { build: { configurations: { plain: { targetTriple: "" } } } },
+        }),
+      });
+      try {
+        expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
+        const artifact = join(workspace.root, "rust/target", hostTriple(), "debug/cli");
+        rmSync(artifact);
+        const restored = await nx(workspace, ["run", "cli:build"]);
+
+        expect(restored.status).toBe(0);
+        expect(restored.output).toMatch(new RegExp(hit));
+        expect(existsSync(artifact)).toBe(true);
+
+        const cleared = await nx(workspace, ["run", "cli:build", "--configuration=plain"]);
+
+        expect(cleared.status).toBe(1);
+        expect(cleared.output).toContain(
+          "cli:build: build.target in rust/.cargo/config.toml chooses the target triple, and this run of the cached build names none in the targetTriple option",
+        );
+        expect(taskCalls(workspace)).toHaveLength(1);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
 });
 
 /** The triple that the installed toolchain builds for by default. */

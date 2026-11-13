@@ -93,6 +93,40 @@ describeCacheKeyMatrix("keys must differ after", [
     // app reaches both through lib.
     keys: { "lib:test": "must differ", "lib:build": "must differ", "app:test": "must differ" },
   })),
+  // A crate whose folder holds .cargo-checksum.json gets no report, so the
+  // plugin does not know the path dependencies behind it, but its own folder
+  // is an input of the crates that use it.
+  {
+    change:
+      "a change in a path dependency without a project and without a report, a crate of a directory source",
+    fixture: "crate-shapes",
+    base: {
+      files: {
+        "rust/Cargo.toml": appended('\nexclude = ["vendor"]\n'),
+        "rust/crates/cli/Cargo.toml": appended('vendorlib = { path = "../../vendor" }\n'),
+        "rust/vendor/Cargo.toml":
+          '[package]\nname = "vendorlib"\nversion = "0.1.0"\nedition = "2024"\n',
+        "rust/vendor/.cargo-checksum.json": '{"files":{},"package":null}\n',
+        "rust/vendor/src/lib.rs": "pub fn value() {}\n",
+      },
+    },
+    after: { files: { "rust/vendor/src/lib.rs": 'compile_error!("vendored source changed");\n' } },
+    keys: {
+      "cli:check": "must differ",
+      "cli:build": "must differ",
+      "cli:test": "must differ",
+      "cli:lint": "must differ",
+      "core-lib:check": "must not differ",
+    },
+  },
+  {
+    change:
+      "a change in a path dependency without a report that the crate reaches through a crate without a project",
+    fixture: "vendored-crate",
+    base: { files: { "vendor/lexer/.cargo-checksum.json": '{"files":{},"package":null}\n' } },
+    after: { files: { "vendor/lexer/src/lib.rs": changed } },
+    keys: { "lib:test": "must differ", "lib:build": "must differ", "app:test": "must differ" },
+  },
   ...[
     [
       "without a project",

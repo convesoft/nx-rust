@@ -109,10 +109,12 @@ export interface CacheOptions {
   /** The settings that change the project's inputs. */
   settings: InputSettings;
   /**
-   * Whether the project's target tables name a target triple for the
-   * target with this default name, which the inferred options do not.
+   * The target tables of the project for the target with this default name,
+   * in the order in which they are laid over it (`applyTargetTables` in
+   * `target-tables.ts`), as far as their options and configurations decide
+   * whether every run of the target names a triple.
    */
-  namesTriple?: (target: InferredTargetName) => boolean;
+  targetTables?: (target: InferredTargetName) => readonly TargetConfiguration[];
 }
 
 /**
@@ -138,19 +140,27 @@ export function configureCaching(
   const { settings } = options;
   const artifacts = context.artifactDirectories.get(subject.workspace.root) ?? { inside: false };
   const place = { artifacts, buildTargetFiles: subject.workspace.buildTargetFiles ?? [] };
+  const [buildTargetFile] = place.buildTargetFiles;
   for (const [name, target] of targets) {
     const reason =
       target.cache === true
         ? uncachedReason(
             name,
             place,
-            configuredTriples(target).length > 0 || options.namesTriple?.(name) === true,
+            alwaysNamesTriple([target, ...(options.targetTables?.(name) ?? [])]),
           )
         : (uncachedByDesign[name] ?? "the plugin does not cache this target");
     target.cache = reason === undefined;
     const metadata = target.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
     if (metadata !== undefined && reason !== undefined) {
       metadata.uncached = reason;
+    }
+    if (
+      metadata !== undefined &&
+      buildTargetFile !== undefined &&
+      (name === "build" || name === "doc")
+    ) {
+      metadata.buildTargetFile = shownPath(buildTargetFile, context.repositoryRoot);
     }
     const inputs = targetInputs(name, subject, context, settings);
     if (inputs !== undefined) {
@@ -196,17 +206,39 @@ function buildTargetWarning(workspace: CargoWorkspace, workspaceRoot: string): s
   const shown = relative(workspaceRoot, file);
   const where = shown.startsWith("..") || isAbsolute(shown) ? file : shown;
   return [
-    `nx-rust: ${where} sets build.target for ${describeWorkspace(workspace)}, so cargo puts the artifacts of its build and doc targets in a folder that the plugin cannot name.`,
-    `Those targets run uncached, and its other targets stay cached.`,
-    `To cache them, give the triple as the targetTriple option of build and doc, in the crate's or the workspace's configuration, or on the command line as --targetTriple=<triple>.`,
+    `nx-rust: ${where} sets build.target for ${describeWorkspace(workspace)}, so cargo puts the artifacts of its build and doc targets in a folder that the plugin cannot name unless the target's options name the triple.`,
+    `Those targets run uncached where their options name none, and its other targets stay cached.`,
+    `To cache them, give the triple as the targetTriple option in the options of their target tables, in the crate's or the workspace's Cargo metadata; a triple only in a configuration or on the command line leaves them uncached.`,
   ].join(" ");
 }
 
-// The target triples that a target's options and configurations name.
-function configuredTriples(target: TargetConfiguration): string[] {
-  return [target.options, ...Object.values(target.configurations ?? {})]
-    .map((options) => options?.targetTriple)
-    .filter((triple): triple is string => typeof triple === "string" && triple !== "");
+// Whether every run of a target names a triple, as the layers give it, the
+// inferred target first and then each target table laid over it: the
+// options, merged key by key, name one, and no configuration, merged by name
+// and key, sets the option to anything else. Nx's `cache` belongs to the
+// target and not to a configuration, so a triple in a configuration that a
+// run need not select does not count (`DES-OUTPUTS`).
+function alwaysNamesTriple(layers: readonly TargetConfiguration[]): boolean {
+  const isTriple = (value: unknown) => typeof value === "string" && value !== "";
+  let triple: unknown;
+  const configured = new Map<string, unknown>();
+  for (const layer of layers) {
+    if (layer.options !== undefined && layer.options !== null && "targetTriple" in layer.options) {
+      triple = layer.options.targetTriple;
+    }
+    for (const [configuration, options] of Object.entries(layer.configurations ?? {})) {
+      if (typeof options === "object" && options !== null && "targetTriple" in options) {
+        configured.set(configuration, options.targetTriple);
+      }
+    }
+  }
+  return isTriple(triple) && [...configured.values()].every(isTriple);
+}
+
+// A file's path relative to the repository root, or as it is outside it.
+function shownPath(file: string, repositoryRoot: string): string {
+  const shown = relative(repositoryRoot, file);
+  return shown === "" || shown.startsWith("..") || isAbsolute(shown) ? file : shown;
 }
 
 // Where each workspace's artifact directory lies, by the workspace's root

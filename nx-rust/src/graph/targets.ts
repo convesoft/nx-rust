@@ -72,6 +72,13 @@ export interface TargetCargoMetadata {
    * executor fails a task whose configuration caches the target anyway.
    */
   uncached?: string;
+  /**
+   * On `build` and `doc`, the configuration file whose `build.target`
+   * chooses the workspace's target triple, relative to the repository root
+   * where it lies inside it. The executor fails a cached task of the target
+   * whose run names no triple (`DES-OUTPUTS`).
+   */
+  buildTargetFile?: string;
 }
 
 /**

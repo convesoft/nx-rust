@@ -466,6 +466,42 @@ describe("caching", () => {
           options: { targetTriple: "x86_64-unknown-linux-gnu" },
         });
         expect(named.projects["core-lib"].targets.build.cache).toBe(false);
+        // The executor reads the file from the metadata, cached or not.
+        for (const target of [
+          named.projects.cli.targets.build,
+          named.projects["core-lib"].targets.build,
+          named.projects.rust.targets.doc,
+        ]) {
+          expect(target.metadata.cargo.buildTargetFile).toBe("rust/.cargo/config.toml");
+        }
+        expect(named.projects.cli.targets.check.metadata.cargo.buildTargetFile).toBeUndefined();
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it.each([
+      [
+        "only a configuration names, which a run need not select",
+        '\n[package.metadata.nx.targets.build.configurations.explicit]\ntargetTriple = "x86_64-unknown-linux-gnu"\n',
+      ],
+      [
+        "the options name and a configuration clears",
+        '\n[package.metadata.nx.targets.build.options]\ntargetTriple = "x86_64-unknown-linux-gnu"\n[package.metadata.nx.targets.build.configurations.plain]\ntargetTriple = ""\n',
+      ],
+    ])(
+      "leave build uncached where Cargo's configuration chooses the triple and %s",
+      async (_case, table) => {
+        const graph = await loadFixtureGraph("crate-shapes", {
+          files: {
+            "rust/.cargo/config.toml": '[build]\ntarget = "x86_64-unknown-linux-gnu"\n',
+            "rust/crates/cli/Cargo.toml": (manifest) => `${manifest}${table}`,
+          },
+        });
+
+        expect(graph.projects.cli.targets.build).toMatchObject({ cache: false, outputs: [] });
+        expect(graph.projects.cli.targets.build.metadata.cargo.uncached).toMatch(
+          /build.target in .*rust\/.cargo\/config.toml chooses the target triple/,
+        );
       },
       HARNESS_TIMEOUT,
     );

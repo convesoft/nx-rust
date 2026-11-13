@@ -47,10 +47,11 @@ export interface CrateFolders {
  * crates"), for each crate with a project.
  *
  * A crate without a project is excluded by `exclude` on the plugin's entry,
- * ignored by Nx, or outside the repository. One that a path dependency
- * reaches counts with the crates without a project behind it, and so does
- * one that a redirection reaches where a report describes it; without a
- * report, its folder counts alone. What lies behind a crate with a project
+ * ignored by Nx, outside the repository, or a package of a directory source
+ * whose folder holds `.cargo-checksum.json`. One that a path dependency or a
+ * redirection reaches counts with the crates without a project behind it
+ * where a report describes it; without a report, as for such a package or
+ * one whose report failed, its folder counts alone. What lies behind a crate with a project
  * reaches the crate through that project's own input.
  *
  * Whether Nx sees a crate's files is whether it sees its manifest, or any
@@ -99,9 +100,9 @@ export async function findCrateFolders(
     for (const crate of workspace.members) {
       reached.set(
         crate.manifest_path,
-        reachedWithoutProject(crate, withProject, known).map((pkg) => ({
-          name: pkg.name,
-          folder: dirname(pkg.manifest_path),
+        reachedWithoutProject(crate, withProject, known).map((behind) => ({
+          name: behind.name,
+          folder: dirname(behind.manifest),
           via: "path",
         })),
       );
@@ -129,7 +130,7 @@ export async function findCrateFolders(
       ...(pkg === undefined ? [] : reachedWithoutProject(pkg, withProject, known)).map(
         (behind): Reached => ({
           name: behind.name,
-          folder: dirname(behind.manifest_path),
+          folder: dirname(behind.manifest),
           via: "redirection",
         }),
       ),
@@ -241,13 +242,16 @@ export function unseenPathDependencyWarning(
 
 // The crates without a project that `crate` reaches through path
 // dependencies, directly or through other crates without a project, in the
-// order the walk meets them.
+// order the walk meets them, each by its package name and manifest. A crate
+// without a report, such as one whose folder holds `.cargo-checksum.json`
+// or one whose report failed, counts too; only the path dependencies behind
+// it stay unknown.
 function reachedWithoutProject(
   crate: CargoPackage,
   withProject: ReadonlySet<string>,
   known: ReadonlyMap<string, CargoPackage>,
-): CargoPackage[] {
-  const reached: CargoPackage[] = [];
+): { name: string; manifest: string }[] {
+  const reached: { name: string; manifest: string }[] = [];
   const visited = new Set<string>([crate.manifest_path]);
   const queue = [crate];
   while (queue.length > 0) {
@@ -262,8 +266,8 @@ function reachedWithoutProject(
       }
       visited.add(manifest);
       const pkg = known.get(manifest);
+      reached.push({ name: pkg?.name ?? dependency.name, manifest });
       if (pkg !== undefined) {
-        reached.push(pkg);
         queue.push(pkg);
       }
     }

@@ -131,8 +131,8 @@ export function inferProjects(
       project,
       targets: inferTargets(project, context, settings.options.locked, {
         settings: inputSettings(project.settings),
-        namesTriple: (target) =>
-          tablesNameTriple(project.settings, settings.options.targetNames[target] ?? target),
+        targetTables: (target) =>
+          targetTables(project.settings, settings.options.targetNames[target] ?? target),
       }),
     })),
     settings.options.targetNames,
@@ -166,16 +166,10 @@ function inputSettings(settings: ProjectSettings): InputSettings {
   };
 }
 
-// Whether a target table of the project names a target triple for the
-// target of this final name, in its options or a configuration.
-function tablesNameTriple(settings: ProjectSettings, name: string): boolean {
-  return settings.targets
-    .filter((table) => table.name === name)
-    .some((table) =>
-      [table.target.options, ...Object.values(table.target.configurations ?? {})].some(
-        (options) => typeof options?.targetTriple === "string" && options.targetTriple !== "",
-      ),
-    );
+// The target tables of the project for the target of this final name, in
+// the order in which they are laid over it.
+function targetTables(settings: ProjectSettings, name: string): TargetConfiguration[] {
+  return settings.targets.filter((table) => table.name === name).map((table) => table.target);
 }
 
 /**

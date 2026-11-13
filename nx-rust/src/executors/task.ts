@@ -109,8 +109,9 @@ export async function runTask(
  * @throws {TaskError} When the target is no inferred target of this
  *   executor, when its configuration caches a target that the plugin leaves
  *   uncached in this project, when `build` or `doc` gets the profile `dev`,
- *   `test` or `bench`, or is cached while `CARGO_BUILD_TARGET` chooses its
- *   triple (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
+ *   `test` or `bench`, or is cached while `CARGO_BUILD_TARGET` or
+ *   `build.target` in Cargo's configuration chooses its triple and the
+ *   task's options name none (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
  *   `false`, or when `args` does not split into words.
  */
 // @mara implements DES-OUTPUTS
@@ -152,15 +153,19 @@ export function taskInvocation(
         `${task}: the profile ${options.profile} puts cargo's artifacts in the folder of another profile, which @convesoft/nx-rust cannot name for the cache. Build with ${replacement}.`,
       );
     }
+    // The outputs name the triple's folder only through the option; where
+    // the environment or Cargo's configuration chooses the triple instead,
+    // cargo writes elsewhere and Nx would store no artifact.
+    const namesTriple = typeof options.targetTriple === "string" && options.targetTriple !== "";
     const triple = env.CARGO_BUILD_TARGET;
-    if (
-      context.target?.cache === true &&
-      triple !== undefined &&
-      triple !== "" &&
-      options.targetTriple === undefined
-    ) {
+    if (context.target?.cache === true && !namesTriple && triple !== undefined && triple !== "") {
       throw new TaskError(
         `${task}: CARGO_BUILD_TARGET is ${JSON.stringify(triple)}, and @convesoft/nx-rust cannot cache ${metadata.target} for a target triple that comes from the environment, because it cannot name the folder where cargo puts the artifacts. Give the triple as the targetTriple option instead: --targetTriple=${triple} on the command line, or in the crate's or the workspace's configuration. The task does not run, so that Nx stores no result for it.`,
+      );
+    }
+    if (context.target?.cache === true && !namesTriple && metadata.buildTargetFile !== undefined) {
+      throw new TaskError(
+        `${task}: build.target in ${metadata.buildTargetFile} chooses the target triple, and this run of the cached ${metadata.target} names none in the targetTriple option, so @convesoft/nx-rust cannot name the folder where cargo puts the artifacts. Run it with the triple that the target's options give, and remove what clears the option for this run, such as a configuration, a project.json, a targetDefaults entry or a value on the command line; \`nx show target ${task} --json\` shows where each option comes from. The task does not run, so that Nx stores no result for it.`,
       );
     }
   }
@@ -302,12 +307,15 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
-  const { target, locked, uncached } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
+  const { target, locked, uncached, buildTargetFile } = value as Partial<
+    Record<keyof TargetCargoMetadata, unknown>
+  >;
   return (inferredTargetNames as readonly unknown[]).includes(target)
     ? {
         target: target as InferredTargetName,
         locked: locked === true,
         ...(typeof uncached === "string" ? { uncached } : {}),
+        ...(typeof buildTargetFile === "string" ? { buildTargetFile } : {}),
       }
     : undefined;
 }
