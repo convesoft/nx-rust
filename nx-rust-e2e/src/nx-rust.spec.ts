@@ -1089,11 +1089,13 @@ function createTestProject() {
   // denied, so the one build script of this workspace is decided here.
   writeFileSync(join(projectDirectory, "pnpm-workspace.yaml"), "allowBuilds:\n  nx: true\n");
 
-  // In CI pnpm expects a lockfile, and a new workspace has none.
+  // In CI pnpm expects a lockfile, and a new workspace has none. Nx's
+  // postinstall loads Nx, so the install gets the environment of every other
+  // command in the test project.
   execSync("pnpm install --no-frozen-lockfile", {
     cwd: projectDirectory,
     stdio: "inherit",
-    env: process.env,
+    env: testEnvironment(),
   });
   console.log(`Created test project in "${projectDirectory}"`);
 

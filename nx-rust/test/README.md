@@ -120,9 +120,11 @@ runs the Nx command line there and returns its status and output,
 and `.nx` with its content, `reset(files)` and `remove()`. Besides the fixture, the copy
 has a `tsconfig.base.json` that lets Nx compile the plugin's TypeScript
 source, and a `node_modules`, which Nx ignores, with a link to this
-repository's Nx and a copy of the cargo wrapper in `.bin`. If creating it
-fails, nothing is left behind. Set `NX_RUST_KEEP_FIXTURES=1` to keep the
-copies for inspection.
+repository's Nx and a copy of the cargo wrapper in `.bin`. Its Nx keeps
+its sockets in a folder of their own in the test run's socket folder (see
+`startTestRun()` below), which `remove()` deletes. If creating it fails,
+nothing is left behind. Set `NX_RUST_KEEP_FIXTURES=1` to keep the copies for
+inspection.
 
 **`useNx(version)`** links the copy's `node_modules/nx` to a copy of this
 repository's Nx whose `package.json` gives `version`, written by
@@ -246,7 +248,22 @@ variables that choose a toolchain or Cargo's directories, turns the Nx
 daemon off, stops rustup from installing toolchains, and puts rustup's
 folder first on `PATH`: Nx runs this repository's tests through
 `nx:run-commands`, which puts the folder of the Node executable first, where
-a system cargo would otherwise shadow rustup.
+a system cargo would otherwise shadow rustup. It also keeps Nx's caches out
+of `/tmp/.nx/<uid>`, which Nx uses whatever `TMPDIR` says and which is
+memory on some machines: Nx loads its native binary where it is installed
+instead of copying it there, and Node's compile cache, whose entries are
+keyed by file path, lives in the test run's folder, or is off without one.
+
+**`startTestRun()`** and **`endTestRun()`**, which the global setup and
+teardown of the unit tests and of the end-to-end tests call, create and
+remove the folders that the commands of one test run share: one in the
+temporary folder (`testRunFolder()`) for Node's compile cache, and one in
+`XDG_RUNTIME_DIR` (`testRunSocketFolder()`), where there is one, for the
+fixtures' socket folders, because a socket's path has to stay short. Nx
+would otherwise leave a socket folder for every fixture in
+`/tmp/.nx/<uid>/sockets`. A plugin worker that outlives its `nx` command can
+still write into a fixture's socket folder while `remove()` deletes it; the
+end of the run removes what such a worker left.
 
 **`discoveryProbeEntry`** is the path of a plugin that behaves as the plugin
 under test and also appends, for each call of an entry's
@@ -261,3 +278,8 @@ can run: rustup has the toolchain that `pinned/` names
 
 Each helper that runs Nx or cargo takes a few seconds at most; give such
 tests the `HARNESS_TIMEOUT`.
+
+Each test file runs in a Jest worker, which holds a few hundred megabytes
+besides the Nx and cargo processes that its tests start, so
+[`../jest.config.cts`](../jest.config.cts) runs at most three test files at
+once, or fewer where Jest's default of one per core but one is lower.

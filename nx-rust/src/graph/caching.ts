@@ -1,5 +1,5 @@
 import type { NxJsonConfiguration, TargetConfiguration } from "@nx/devkit";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { PackageVersion } from "../cargo/lockfile";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
@@ -18,7 +18,7 @@ import { digestFolder, lockfileDependency } from "./lockfile-task";
 import { ArtifactDirectory, targetOutputs, uncachedByDesign, uncachedReason } from "./outputs";
 import { crateInputs, findCrateFolders, unseenPathDependencyWarning } from "./path-dependencies";
 import { pluginInput } from "./plugin-package";
-import { realPath } from "./real-path";
+import { physicalPath, realPath } from "./real-path";
 import { redirectedUses } from "./redirected-uses";
 import {
   cachedTargets,
@@ -107,12 +107,13 @@ export async function cacheContext(
       }
     }
   }
-  const artifactDirectories = locateArtifactDirectories(discovery);
+  const sharers = artifactDirectorySharers(discovery.workspaces);
+  const artifactDirectories = locateArtifactDirectories(discovery, sharers);
   const directoryWarnings = unignoredDirectoryWarnings(discovery.workspaces, workspaceRoot);
   const withoutLockfileTask = await workspacesWithoutRootProject(discovery, nxJson);
   for (const workspace of discovery.workspaces) {
     const messages = [
-      artifactDirectoryWarning(workspace, discovery, artifactDirectories),
+      artifactDirectoryWarning(workspace, artifactDirectories, sharers),
       buildTargetWarning(workspace, workspaceRoot),
       ...(directoryWarnings.get(workspace) ?? []),
       withoutLockfileTask.has(workspace.root) ? noLockfileTaskWarning(workspace) : undefined,
@@ -420,24 +421,52 @@ function shownPath(file: string, repositoryRoot: string): string {
   return shown === "" || shown.startsWith("..") || isAbsolute(shown) ? file : shown;
 }
 
+// The workspaces with which each workspace shares its artifact directory.
+// Cargo reports the directory as the configuration or `CARGO_TARGET_DIR`
+// spells it, `..`, symbolic links and a trailing separator included. Two
+// reports name one folder where their paths agree with `.` and `..` taken
+// as text, or with symbolic links followed ({@link physicalPath}); either
+// counts, because two folders taken for one only leave `doc` uncached, while
+// one folder taken for two lets a restored `doc` folder delete the pages of
+// the other workspace (`DES-OUTPUTS`).
+// @mara implements DES-OUTPUTS
+function artifactDirectorySharers(
+  workspaces: readonly CargoWorkspace[],
+): Map<CargoWorkspace, CargoWorkspace[]> {
+  const spellings = new Map<CargoWorkspace, string[]>();
+  for (const workspace of workspaces) {
+    const directory = workspace.report.target_directory;
+    spellings.set(workspace, [resolve(directory), physicalPath(directory)]);
+  }
+  const sharers = new Map<CargoWorkspace, CargoWorkspace[]>();
+  for (const workspace of workspaces) {
+    const own = spellings.get(workspace) ?? [];
+    sharers.set(
+      workspace,
+      workspaces.filter(
+        (other) =>
+          other !== workspace && (spellings.get(other) ?? []).some((path) => own.includes(path)),
+      ),
+    );
+  }
+  return sharers;
+}
+
 // Where each workspace's artifact directory lies, by the workspace's root
 // folder: outside the repository, or inside it and shared with another
 // workspace or not.
-function locateArtifactDirectories(discovery: CargoDiscovery): Map<string, ArtifactDirectory> {
-  const workspacesByDirectory = new Map<string, number>();
-  for (const workspace of discovery.workspaces) {
-    const directory = workspace.report.target_directory;
-    workspacesByDirectory.set(directory, (workspacesByDirectory.get(directory) ?? 0) + 1);
-  }
+function locateArtifactDirectories(
+  discovery: CargoDiscovery,
+  sharers: ReadonlyMap<CargoWorkspace, readonly CargoWorkspace[]>,
+): Map<string, ArtifactDirectory> {
   const located = new Map<string, ArtifactDirectory>();
   for (const workspace of discovery.workspaces) {
-    const directory = workspace.report.target_directory;
-    const path = relative(discovery.workspaceRoot, directory);
+    const path = relative(discovery.workspaceRoot, workspace.report.target_directory);
     located.set(
       workspace.root,
       path === "" || path === ".." || path.startsWith("../") || isAbsolute(path)
         ? { inside: false }
-        : { inside: true, path, shared: (workspacesByDirectory.get(directory) ?? 0) > 1 },
+        : { inside: true, path, shared: (sharers.get(workspace) ?? []).length > 0 },
     );
   }
   return located;
@@ -448,8 +477,8 @@ function locateArtifactDirectories(discovery: CargoDiscovery): Map<string, Artif
 // @mara implements DES-DIAGNOSTICS
 function artifactDirectoryWarning(
   workspace: CargoWorkspace,
-  discovery: CargoDiscovery,
   located: ReadonlyMap<string, ArtifactDirectory>,
+  sharers: ReadonlyMap<CargoWorkspace, readonly CargoWorkspace[]>,
 ): string | undefined {
   const artifacts = located.get(workspace.root);
   const directory = workspace.report.target_directory;
@@ -462,9 +491,7 @@ function artifactDirectoryWarning(
     ].join(" ");
   }
   if (artifacts.shared) {
-    const others = discovery.workspaces
-      .filter((other) => other !== workspace && other.report.target_directory === directory)
-      .map(describeWorkspace);
+    const others = (sharers.get(workspace) ?? []).map(describeWorkspace);
     return [
       `nx-rust: ${where} shares Cargo's artifact directory ${artifacts.path} with ${others.join(" and ")}.`,
       `Its doc target runs uncached, because restoring one workspace's doc folder from the cache would delete the pages of the others; its other targets stay cached.`,
