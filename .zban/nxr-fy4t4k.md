@@ -26,6 +26,7 @@ Implements `REQ-INPUT-FILES`, `REQ-ENV-ALLOWLIST`, `REQ-TOOLCHAIN-KEY`, `REQ-CAC
 - [ ] The toolchain runtime input, run in the workspace root
 - [ ] The toolchain input's command for a missing pinned toolchain (`DES-INPUTS`, `ADR-GRAPH-NO-TOOLCHAIN-INSTALL`), with the missing-toolchain case of `VER-CACHE-KEYS`
 - [ ] Outputs: executables, `cdylib` and `staticlib` files for `build`, the whole doc folder of the artifact directory for the workspace project's `doc`, none elsewhere; nothing inside the build directory; no caching of `build` and `doc` when the artifact directory is outside the repository, and none of `doc` when two workspaces share one artifact directory
-- [ ] The cache-key matrix rows for all of the above
+- [ ] Inputs for redirected crates (`DES-INPUTS`, `ADR-REDIRECTION-EDGES`): a crate that a workspace's `[patch]` or `[replace]` redirects to and that has no project is handled like a path dependency without one, on every member that `redirectedUses` in `nx-rust/src/graph/edges.ts` lists for its folder when it is given the folders of the workspace's redirections, the warning included, and the folder of a `paths` entry without a project at it likewise; a member whose use `redirectedUses` returns with `edge: false` gets a fileset for that crate's folder on its targets
+- [ ] The cache-key matrix rows for all of the above, the `VER-CACHE-KEYS` rows for redirected crates included
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

@@ -27,6 +27,7 @@ export const fixtureNames = [
   "different-toolchains",
   "mixed-folders",
   "nested-folders",
+  "patched-workspaces",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

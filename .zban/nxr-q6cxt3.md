@@ -16,6 +16,7 @@ Implements `REQ-COMPATIBILITY` and `REQ-DIAGNOSTICS` (`nx-rust/docs/setup.mara.m
 - [ ] Version checks for Nx and Cargo with the found and required versions in the message
 - [ ] The peer dependency range of the package names the supported Nx majors, `^24` at first
 - [ ] Graph-time errors for the problems the design lists
+- [ ] Graph-time warnings printed again from the executor at the start of each task they concern (`DES-DIAGNOSTICS`); graph creation already prints the warning for redirections in a configuration file outside the repository (`ADR-REDIRECTION-EDGES`, nxr-p5ybc0)
 - [ ] Task-time errors for a missing tool, naming the tool, the feature that needs it and how to get it
 - [ ] Nothing is installed by the plugin
 - [ ] `init` stops for each of these errors too, and for an unsupported Nx also in a repository without a `Cargo.toml`, with the tests that the third paragraph of `VER-SETUP` lists, the name collision of nxr-1bv0wm included. `init` runs the plugin's `createNodes` through Nx (`nx-rust/src/generators/init/graph-check.ts`), so a check made there reaches it; a check made when the plugin loads has to reach it as well

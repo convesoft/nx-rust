@@ -21,6 +21,27 @@ interface ExpectedGraph {
   edges: [source: string, target: string][];
 }
 
+// The edges of patched-workspaces.
+const patchedEdges: [string, string][] = [
+  ["api", "model"],
+  ["api", "types"],
+  ["harness", "model"],
+  ["harness", "types"],
+  ["model", "harness"],
+  ["model", "types"],
+  ["model", "util"],
+  ["rust", "api"],
+  ["rust", "harness"],
+  ["rust", "model"],
+  ["rust", "plain"],
+  ["rust", "util"],
+  ["rust", "viaw"],
+  ["shared", "types"],
+  ["util", "types"],
+  ["viaw", "model"],
+  ["viaw", "types"],
+];
+
 const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = {
   // api has a normal dependency on model, a build dependency on codegen and a
   // dev-dependency on testkit.
@@ -151,6 +172,26 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["apps-Billing.API-rust_v2", "gateway"],
       ["services-billing", "invoice"],
     ],
+  },
+  // rust's [patch] redirects model, types and fork, which has no project.
+  // Every member with a registry dependency, of its own or behind a path
+  // dependency, gets an edge to model and types, apart from model itself,
+  // plain, which has none, and util, which model reaches through a normal
+  // dependency. model reaches harness only through a dev-dependency, so
+  // harness keeps its edge, which closes a cycle.
+  "patched-workspaces": {
+    projects: {
+      api: "rust/crates/api",
+      harness: "rust/crates/harness",
+      model: "rust/crates/model",
+      plain: "rust/crates/plain",
+      rust: "rust",
+      shared: "shared",
+      types: "shared/crates/types",
+      util: "rust/crates/util",
+      viaw: "rust/crates/viaw",
+    },
+    edges: patchedEdges,
   },
 };
 

@@ -119,6 +119,32 @@ const expected: Record<FixtureName, Expectation> = {
       ["apps/Billing.API/rust_v2", ["apps/Billing.API/rust_v2/crates/gateway"]],
     ],
   },
+  // Its nx.json excludes third_party/**, so fork, which rust's [patch]
+  // redirects to, has no project and is read from rust, where the
+  // redirection applies. model and types have projects.
+  "patched-workspaces": {
+    workspaces: [
+      [
+        "rust",
+        [
+          "rust/crates/api",
+          "rust/crates/harness",
+          "rust/crates/model",
+          "rust/crates/plain",
+          "rust/crates/util",
+          "rust/crates/viaw",
+        ],
+      ],
+      ["shared", ["shared/crates/types"]],
+    ],
+    pathDependencies: [["rust", "third_party/fork/Cargo.toml"]],
+  },
+};
+
+// The folders that a fixture's nx.json excludes from the plugin.
+const excludedFolders: Partial<Record<FixtureName, string[]>> = {
+  "vendored-crate": ["vendor"],
+  "patched-workspaces": ["third_party"],
 };
 
 function expectedCalls({ workspaces, pathDependencies = [] }: Expectation): CargoCall[] {
@@ -382,7 +408,7 @@ describe("discovery in the plugin", () => {
     "finds the workspaces of %s with their members",
     async (fixture) => {
       const { root } = copy(fixture);
-      const manifests = manifestsIn(root, fixture === "vendored-crate" ? ["vendor"] : []);
+      const manifests = manifestsIn(root, excludedFolders[fixture] ?? []);
 
       const discovery = await discoverWorkspaces(manifests, root);
 
