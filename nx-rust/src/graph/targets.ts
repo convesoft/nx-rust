@@ -78,11 +78,13 @@ export interface TargetCargoMetadata {
  * The inferred targets that the plugin caches, as `DES-TARGETS` and
  * `DES-OUTPUTS` give them, with the inputs of `DES-INPUTS` and the outputs
  * of `DES-OUTPUTS` (`configureCaching` in `caching.ts`). `build` and `doc`
- * are left uncached where their artifact directory lies outside the
- * repository, and `doc` where two workspaces share one. The executor fails a
- * task of any other target that its configuration caches after all, such as
- * through a `targetDefaults` entry in `nx.json`, so that Nx stores no result
- * for it.
+ * are left uncached for a project where the plugin cannot name or store
+ * their artifacts, with the reason in `metadata.cargo.uncached`. Graph
+ * creation fails for a `targetDefaults` entry in `nx.json` that turns caching
+ * on for a target that the plugin leaves uncached in a project
+ * (`DES-TARGET-DEFAULT-GUARD`, which compares with the `cache` that
+ * {@link inferTargets} sets), and the executor fails a task of such a target
+ * that its configuration caches after all, so that Nx stores no result for it.
  */
 export const cachedTargets: ReadonlySet<InferredTargetName> = new Set<InferredTargetName>([
   "build",

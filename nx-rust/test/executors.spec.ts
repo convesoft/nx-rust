@@ -462,30 +462,29 @@ describe("the cargo executor", () => {
   );
 });
 
+// A `targetDefaults` entry that caches a target that the plugin leaves
+// uncached already fails graph creation (DES-TARGET-DEFAULT-GUARD,
+// target-defaults.spec.ts). The executor's check is the second line, for a
+// configuration that the graph does not blame on a target default, such as a
+// project.json in the crate's folder.
 describe("a target that the plugin leaves uncached and the configuration caches", () => {
-  it.each<[string, object, string, string]>([
-    [
-      "by the target's name",
-      { fmt: { cache: true } },
-      "core-lib:fmt",
-      "rewrites the crate's files",
-    ],
-    [
-      "by the cargo executor",
-      { "@convesoft/nx-rust:cargo": { cache: true } },
-      "perf:bench",
-      "benchmark timings differ between runs",
-    ],
-    [
-      "by the run executor",
-      { "@convesoft/nx-rust:run": { cache: true } },
-      "cli:run",
-      "runs a binary",
-    ],
+  /** A project.json in a crate's folder that turns on caching for one of its targets. */
+  function cachedIn(folder: string, target: string): FileChanges {
+    return {
+      [`rust/crates/${folder}/project.json`]: JSON.stringify({
+        targets: { [target]: { cache: true } },
+      }),
+    };
+  }
+
+  it.each<[string, FileChanges, string, string]>([
+    ["fmt", cachedIn("core", "fmt"), "core-lib:fmt", "rewrites the crate's files"],
+    ["bench", cachedIn("perf", "bench"), "perf:bench", "benchmark timings differ between runs"],
+    ["run, of the run executor", cachedIn("cli", "run"), "cli:run", "runs a binary"],
   ])(
-    "fails without running cargo, so that no result is stored, when targetDefaults keys it %s",
-    (_key, defaults, task, reason) =>
-      inFixture("crate-shapes", { "nx.json": targetDefaults(defaults) }, async (workspace) => {
+    "fails without running cargo, so that no result is stored, when a project.json caches %s",
+    (_target, files, task, reason) =>
+      inFixture("crate-shapes", files, async (workspace) => {
         const executor = task === "cli:run" ? "@convesoft/nx-rust:run" : "@convesoft/nx-rust:cargo";
         for (let run = 0; run < 2; run++) {
           const result = await nx(workspace, ["run", task]);
@@ -506,15 +505,14 @@ describe("a target that the plugin leaves uncached and the configuration caches"
   );
 
   it(
-    "is what keeps Nx from restoring it: Nx restores a JS target that the same entry caches",
+    "is what keeps Nx from restoring it: Nx restores a JS target that its project.json caches",
     () =>
       inFixture(
         "crate-shapes",
         {
-          "nx.json": targetDefaults({ build: { cache: true } }),
           "web/project.json": JSON.stringify({
             name: "web",
-            targets: { build: { command: "echo web build ran" } },
+            targets: { build: { command: "echo web build ran", cache: true } },
           }),
         },
         async (workspace) => {
