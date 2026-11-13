@@ -50,7 +50,7 @@ The plugin therefore asks with `--no-deps`. That report still names the members,
 :justifies: REQ-MULTI-WORKSPACE
 :justifies: DES-DISCOVERY
 
-Repositories that add Rust to an existing monorepo rarely have one Cargo workspace at the Nx root: they have a workspace in a subfolder, tools as standalone crates, and sometimes several workspaces. Requiring one root workspace would force a restructuring before the plugin can be tried. The plugin supports any number of workspaces anywhere, and hangs everything Cargo scopes to a workspace off one [[TERM-WORKSPACE-CONTEXT]]: lockfile, build directory, toolchain, batch and coverage database. Standalone crates are workspaces of one and share no build directory; the plugin does not hide that.
+Repositories that add Rust to an existing monorepo rarely have one Cargo workspace at the Nx root: they have a workspace in a subfolder, tools as standalone crates, and sometimes several workspaces. Requiring one root workspace would force a restructuring before the plugin can be tried. The plugin supports any number of workspaces anywhere, and hangs everything Cargo scopes to a workspace off one [[TERM-WORKSPACE-CONTEXT]]: lockfile, build directory, toolchain file, batch and coverage database. Standalone crates are workspaces of one and share no build directory; the plugin does not hide that.
 :::
 
 :::mara decision ADR-PROJECT-NAMES
@@ -311,7 +311,7 @@ v1 has an `init` generator behind `nx add`, and `library` and `binary` generator
 :justifies: DES-INPUTS
 :justifies: REQ-TOOLCHAIN-KEY
 
-rustup picks the toolchain file, and Cargo its configuration files, from the folder a command starts in and its parents, not from the manifest of the crate being built. A command for a group of crates has one such folder. The plugin therefore starts every cargo command in the workspace root, and the toolchain is a property of the workspace ([[TERM-WORKSPACE-CONTEXT]]). Starting each task in its crate's folder was rejected: per-crate files would apply as they do for a developer who works in that folder, but crates with such files could not share an invocation.
+rustup picks the toolchain file, and Cargo its configuration files, from the folder a command starts in and its parents, not from the manifest of the crate being built. A command for a group of crates has one such folder. The plugin therefore starts every cargo command in the workspace root, so the toolchain file and configuration files found from the workspace root apply to every task ([[TERM-WORKSPACE-CONTEXT]]). A task's environment can still override the toolchain file, as `RUSTUP_TOOLCHAIN` in a crate's `.env` does, and the toolchain input is evaluated with that environment ([[EVD-NX-24-INPUT-SEMANTICS]]). Starting each task in its crate's folder was rejected: per-crate files would apply as they do for a developer who works in that folder, but crates with such files could not share an invocation.
 
 The first design keyed the toolchain with `rustup run <channel> rustc -Vv`, with the channel read from the toolchain file. That needs rustup, and it misses a toolchain chosen through `RUSTUP_TOOLCHAIN` or `rustup override`, which cargo honours. Plain `rustc -Vv`, run in the workspace root, asks the question cargo will ask, with or without rustup.
 

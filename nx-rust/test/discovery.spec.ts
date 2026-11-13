@@ -119,6 +119,20 @@ const expected: Record<FixtureName, Expectation> = {
       ["apps/Billing.API/rust_v2", ["apps/Billing.API/rust_v2/crates/gateway"]],
     ],
   },
+  "crate-shapes": {
+    workspaces: [
+      [
+        "rust",
+        [
+          "rust/crates/cli",
+          "rust/crates/core",
+          "rust/crates/internal",
+          "rust/crates/perf",
+          "rust/crates/server",
+        ],
+      ],
+    ],
+  },
   // Its nx.json excludes third_party/**, so fork, which rust's [patch]
   // redirects to, has no project and is read from rust, where the
   // redirection applies. model and types have projects.

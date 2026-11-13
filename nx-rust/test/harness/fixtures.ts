@@ -27,6 +27,7 @@ export const fixtureNames = [
   "different-toolchains",
   "mixed-folders",
   "nested-folders",
+  "crate-shapes",
   "patched-workspaces",
 ] as const;
 
