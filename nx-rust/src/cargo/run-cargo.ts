@@ -21,11 +21,18 @@ export class CargoError extends Error {
  * Every cargo call that graph creation makes starts here, so that a setting
  * that applies to graph creation only, and not to tasks, has one place.
  *
+ * Cargo runs with `RUSTUP_AUTO_INSTALL=0`, set for this child only: where
+ * cargo is a rustup proxy, a toolchain that is pinned for `cwd` and not
+ * installed fails the call with rustup's message, which names the toolchain,
+ * instead of being downloaded. A cargo that is no rustup proxy ignores the
+ * variable. Tasks run cargo elsewhere and keep rustup's default.
+ *
  * @param args The arguments after `cargo`.
  * @param cwd The folder cargo starts in, which decides the toolchain that
  *   rustup picks and the configuration files that Cargo reads.
  * @throws {CargoError} When cargo cannot be started or exits unsuccessfully.
  */
+// @mara implements DES-METADATA-REPORT
 export function runCargoForGraph(args: readonly string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -37,7 +44,7 @@ export function runCargoForGraph(args: readonly string[], cwd: string): Promise<
     };
     const child = spawn("cargo", args, {
       cwd,
-      env: process.env,
+      env: { ...process.env, RUSTUP_AUTO_INSTALL: "0" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
