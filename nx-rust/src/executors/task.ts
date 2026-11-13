@@ -53,7 +53,10 @@ export interface TaskInvocation extends CargoInvocation {
  *
  * A problem found before cargo starts fails the task with a message that
  * names it and runs no cargo. An option that the task ignores gets a warning
- * line at the top of its output.
+ * line at the top of its output. Before anything else, the task prints the
+ * warnings that graph creation found for its project, which the Nx daemon
+ * keeps out of the terminal (`DES-DIAGNOSTICS`, "Warnings where they are
+ * seen").
  */
 // @mara implements DES-INVOCATION
 // @mara implements REQ-CARGO-UNCHANGED
@@ -63,6 +66,9 @@ export async function runTask(
   options: CargoTargetOptions,
   context: ExecutorContext,
 ): Promise<{ success: boolean }> {
+  for (const warning of projectWarnings(context)) {
+    console.warn(warning);
+  }
   let invocation: TaskInvocation;
   try {
     invocation = taskInvocation(executor, options, context, process.env);
@@ -236,6 +242,16 @@ export function runCargo({ args, cwd }: CargoInvocation): Promise<boolean> {
     });
     child.on("close", (code) => finish(code === 0));
   });
+}
+
+// The warnings that graph creation recorded for the task's project.
+// @mara implements DES-DIAGNOSTICS
+function projectWarnings(context: ExecutorContext): string[] {
+  const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];
+  const warnings = project === undefined ? undefined : cargoMetadataOf(project)?.warnings;
+  return Array.isArray(warnings)
+    ? warnings.filter((warning): warning is string => typeof warning === "string")
+    : [];
 }
 
 // The target's metadata from the plugin, or undefined where it is missing.

@@ -5,6 +5,7 @@ import { readRedirections, Redirection } from "../cargo/redirections";
 import { CargoError } from "../cargo/run-cargo";
 import { UnsupportedCargoError } from "../compatibility/cargo-version";
 import { ComputationReports } from "./computation-reports";
+import { nxIgnoreRules } from "./nx-internals";
 import { realPath } from "./real-path";
 
 /** A Cargo workspace, which may be a standalone crate: a workspace of one. */
@@ -26,6 +27,12 @@ export interface CargoWorkspace {
    * matched by `exclude`, is in the report but not here.
    */
   members: CargoPackage[];
+  /**
+   * The warnings among {@link CargoDiscovery.warnings} that concern the
+   * workspace, which the executor prints again at the start of each task of
+   * its projects (`DES-DIAGNOSTICS`, "Warnings where they are seen").
+   */
+  warnings: string[];
   /**
    * The crates that cargo may build in place of the workspace's registry and
    * git dependencies, as its `[patch]`, `[replace]` and `paths` tables say
@@ -72,7 +79,9 @@ export interface CargoDiscovery {
  * path dependency without a project, and every crate without a project that
  * `[patch]` or `[replace]` redirects to, whose crate no report covers yet
  * gets a report of its own, so that the path dependencies behind it are
- * known.
+ * known. Last come the warnings about redirections from configuration files
+ * outside the repository, and those about Cargo directories that Nx reads,
+ * which the workspaces concerned also keep ({@link unignoredDirectoryWarnings}).
  *
  * @param manifests The `Cargo.toml` files, relative to `workspaceRoot`.
  * @param workspaceRoot The absolute path of the repository root.
@@ -111,6 +120,7 @@ export async function discoverWorkspaces(
       rootManifest,
       rootManifestHanded: handed.has(rootManifest),
       report,
+      warnings: [],
       members: memberPackages
         .filter((pkg) => handed.has(repositoryPath(workspaceRoot, pkg.manifest_path)))
         .sort((a, b) => compare(a.manifest_path, b.manifest_path)),
@@ -124,7 +134,82 @@ export async function discoverWorkspaces(
     warnings,
   );
   warnings.push(...outsideRedirectionWarnings(workspaces, workspaceRoot));
+  for (const [workspace, messages] of unignoredDirectoryWarnings(workspaces, workspaceRoot)) {
+    workspace.warnings.push(...messages);
+    warnings.push(...messages);
+  }
   return { workspaceRoot, workspaces, pathDependencyReports, warnings: [...new Set(warnings)] };
+}
+
+/** One of Cargo's two directories of a workspace ({@link unignoredDirectoryWarnings}). */
+type CargoDirectoryRole = "build" | "artifact";
+
+/**
+ * The warnings for Cargo's build and artifact directories that lie inside
+ * the repository and that no `.gitignore` or `.nxignore` file and none of
+ * Nx's fixed folders leave out of the files that Nx reads, as Nx itself
+ * applies those rules ({@link nxIgnoreRules}): Nx then hashes Cargo's
+ * output with the sources, and hands the plugin the manifests that
+ * `cargo package` leaves there. A directory that the repository root itself
+ * is, or that lies outside the repository, is not one of them.
+ *
+ * Each directory gets one warning, which names it, its role and the
+ * workspaces whose directory it is, and advises the line to add to the
+ * root `.gitignore`. Every workspace whose directory it is gets that
+ * warning; none gets one where the installed Nx cannot tell what it
+ * ignores.
+ */
+// @mara implements DES-DIAGNOSTICS
+function unignoredDirectoryWarnings(
+  workspaces: CargoWorkspace[],
+  workspaceRoot: string,
+): Map<CargoWorkspace, string[]> {
+  const directories = new Map<
+    string,
+    { roles: Set<CargoDirectoryRole>; workspaces: CargoWorkspace[] }
+  >();
+  for (const workspace of workspaces) {
+    const { build_directory: build, target_directory: artifact } = workspace.report;
+    const found: [CargoDirectoryRole, unknown][] = [
+      ["build", build],
+      ["artifact", artifact],
+    ];
+    for (const [role, path] of found) {
+      if (typeof path !== "string" || isOutside(workspaceRoot, path)) {
+        continue;
+      }
+      const directory = repositoryPath(workspaceRoot, path);
+      if (directory === "") {
+        continue;
+      }
+      const entry = directories.get(directory) ?? { roles: new Set(), workspaces: [] };
+      entry.roles.add(role);
+      if (!entry.workspaces.includes(workspace)) {
+        entry.workspaces.push(workspace);
+      }
+      directories.set(directory, entry);
+    }
+  }
+  const warnings = new Map<CargoWorkspace, string[]>();
+  const ignores = directories.size === 0 ? undefined : nxIgnoreRules(workspaceRoot);
+  if (ignores === undefined) {
+    return warnings;
+  }
+  for (const [directory, { roles, workspaces: owners }] of directories) {
+    if (ignores(directory)) {
+      continue;
+    }
+    const role = roles.size === 2 ? "build and artifact directory" : `${[...roles][0]} directory`;
+    const message = [
+      `nx-rust: ${directory}, Cargo's ${role} of ${describeWorkspaces(owners.map((owner) => owner.root))}, lies inside the repository, and no .gitignore or .nxignore leaves it out of the files that Nx reads.`,
+      "Nx then hashes every file that Cargo writes there, counts those inside a project's folder among the project's files, so that a build can change the cache keys of its tasks, and hands nx-rust the Cargo.toml files that `cargo package` leaves there.",
+      `Add the line /${directory}/ to the .gitignore at the repository root.`,
+    ].join("\n");
+    for (const owner of owners) {
+      warnings.set(owner, [...(warnings.get(owner) ?? []), message]);
+    }
+  }
+  return warnings;
 }
 
 /**

@@ -1,6 +1,6 @@
 ---
 title: Warn about Cargo directories inside the repository that Nx does not ignore
-status: todo
+status: in-progress
 type: feature
 parent: nxr-w9qa5f
 discovered_from: nxr-eg9s2w

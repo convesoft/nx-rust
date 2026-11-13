@@ -6,10 +6,15 @@
 > Nx whose version cannot be read, a missing cargo, a pinned toolchain that is
 > not installed, a failing `cargo metadata`, two crates with one project name,
 > and invalid `targetNames` or `locked`. Of the tools below it counts only
-> cargo-deny as needed by your settings. Apart from the one for a newer Nx
-> with `NX_RUST_ALLOW_UNSUPPORTED_NX`, the warnings are not implemented yet,
-> and neither are the errors of a task for a missing tool (nxr-zqvnrh). The
-> package is not published to npm yet.
+> cargo-deny as needed by your settings. Graph creation and `init` print the
+> warnings for a newer Nx with `NX_RUST_ALLOW_UNSUPPORTED_NX`, for
+> redirections from configuration outside the repository, for included
+> configuration files and redirected crates that cannot be read, for
+> `targetDefaults` entries that change the inferred targets, and for Cargo's
+> build or artifact directory inside the repository where Nx does not ignore
+> it, which a task of the workspace prints again. The other warnings are not
+> implemented yet, and neither are the errors of a task for a missing tool
+> (nxr-zqvnrh). The package is not published to npm yet.
 
 ## What you need
 
@@ -307,7 +312,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 
 **Errors.** A problem found when the graph is created stops graph creation for the whole repository; the plugin never leaves a workspace or a crate out to get past it ([[REQ-DIAGNOSTICS]]). `init` runs the same checks and stops before it registers the plugin ([[DES-GENERATORS]]). An error found when a task starts, or when the cargo call of a `build` task has finished, fails that task, so that no success is cached for it. By default Nx stores no failure either; with `NX_CACHE_FAILURES=true` it stores the failure and replays it until an input of the task changes ([[EVD-NX-24-FILE-INPUTS]]).
 
-**Warnings where they are seen.** While the Nx daemon creates the graph, what the plugin prints goes to the daemon's log file and not to the terminal, and Nx's plugin interface has no channel for warnings ([[EVD-NX-24-SETUP]]). The plugin therefore prints a warning found when the graph is created three times: when the graph is created, again from the executor at the start of each task of the crate or workspace it concerns, and from `init`.
+**Warnings where they are seen.** While the Nx daemon creates the graph, what the plugin prints goes to the daemon's log file and not to the terminal, and Nx's plugin interface has no channel for warnings ([[EVD-NX-24-SETUP]]). The plugin therefore prints a warning found when the graph is created three times: when the graph is created, again from the executor at the start of each task of the crate or workspace it concerns, and from `init`. Graph creation records the warnings that concern a project in the project's metadata, under `cargo.warnings`, where the executor finds them.
 
 **Nx version.** When it loads, the plugin compares the major version of the installed `nx` with the majors in its peer dependency range, so an unsupported Nx fails graph creation also in a repository without a crate. The error names the major found and the supported majors. For a newer major, `NX_RUST_ALLOW_UNSUPPORTED_NX=true` turns the error into a warning that says the plugin has not been checked on that major, and the plugin continues ([[REQ-COMPATIBILITY]]). The variable has no effect on an older major. The installed `nx` is the one that resolves from the repository root, where Nx itself looks for it. The daemon takes over each client's environment and recomputes the graph when a variable changes, but it can keep a loaded plugin, so the plugin compares again each time it creates the graph and prints the warning there; the variable thus works with the daemon as well ([[EVD-NX-24-SETUP]], [[EVD-NX-24-VERSION-CHECK]]). The peer dependency range itself stops no install, because pnpm only warns about an unmet peer.
 
@@ -315,7 +320,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 
 **Toolchains.** Graph creation and the toolchain input of a task's cache key do not let rustup install a toolchain that a workspace pins and that is missing. Graph creation fails with a message that names the toolchain and the workspace. The toolchain input cannot fail a task, so it gives the task a key that matches no stored result, and the task keeps plain cargo's behaviour ([[ADR-GRAPH-NO-TOOLCHAIN-INSTALL]], [[DES-INPUTS]]).
 
-**Directories that Nx does not ignore.** Nx leaves out only what `.gitignore` and `.nxignore` exclude and a few fixed folders, `target` not among them, and `cargo new --vcs none` writes no `.gitignore` ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]). By default Cargo puts both its directories in the workspace folder, which for a standalone crate is the crate's folder, all of whose files are inputs ([[EVD-CARGO-DIRECTORIES]], [[REQ-INPUT-FILES]]). When Cargo's build or artifact directory lies inside the repository and Nx does not ignore it, the warning names the directory and advises adding it to `.gitignore`.
+**Directories that Nx does not ignore.** Nx leaves out only what `.gitignore` and `.nxignore` exclude and a few fixed folders, `target` not among them, and `cargo new --vcs none` writes no `.gitignore` ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]). By default Cargo puts both its directories in the workspace folder, which for a standalone crate is the crate's folder, all of whose files are inputs ([[EVD-CARGO-DIRECTORIES]], [[REQ-INPUT-FILES]]). When Cargo's build or artifact directory lies inside the repository and Nx does not ignore it, the warning names the directory and advises adding it to `.gitignore`. The plugin applies these rules as Nx itself reads them from the ignore files on disk, so it warns also before Cargo has created the directory, and where the installed Nx lacks that reading it does not warn. A directory that several workspaces use gets one warning, which names them all, and the tasks of each of them print it.
 
 **Missing tools.** The message names the tool, the target or setting that needs it, and how to get it. The plugin installs nothing ([[ADR-V1-SCOPE]]).
 :::

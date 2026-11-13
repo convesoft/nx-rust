@@ -49,6 +49,12 @@ export interface CargoProject {
   targets: Record<string, TargetConfiguration>;
   /** What the plugin options and the metadata tables give the project. */
   settings: ProjectSettings;
+  /**
+   * The warnings found while creating the graph that concern the project,
+   * which the executor prints again at the start of each of its tasks
+   * (`DES-DIAGNOSTICS`).
+   */
+  warnings: string[];
 }
 
 /** What one `createNodes` call of a plugin entry found, kept for its `createDependencies`. */
@@ -77,7 +83,7 @@ export interface CargoGraph {
  */
 // @mara implements DES-PROJECT-GRAPH
 export function inferProjects(discovery: CargoDiscovery, settings: GraphSettings): CargoProject[] {
-  const projects: Omit<CargoProject, "targets">[] = [];
+  const projects: Omit<CargoProject, "targets" | "warnings">[] = [];
   for (const workspace of discovery.workspaces) {
     const rootManifest = join(workspace.report.workspace_root, "Cargo.toml");
     for (const pkg of workspace.members) {
@@ -123,14 +129,19 @@ export function inferProjects(discovery: CargoDiscovery, settings: GraphSettings
     discovery.workspaceRoot,
     settings.options.targetNames,
   );
-  return projects.map((project, index) => ({ ...project, targets: targets[index] }));
+  return projects.map((project, index) => ({
+    ...project,
+    targets: targets[index],
+    warnings: [...project.workspace.warnings],
+  }));
 }
 
 /**
  * The result of `createNodes` for the projects: each project under the
  * manifest it comes from, with its name, its tags, its implicit
  * dependencies, its targets and, in its metadata, what another entry of
- * the plugin needs to recognise it ({@link cargoMetadata}).
+ * the plugin needs to recognise it ({@link cargoMetadata}) and the warnings
+ * that concern it.
  */
 export function projectNodes(projects: readonly CargoProject[]): CreateNodesResultArray {
   return projects.map((project) => [
@@ -144,7 +155,12 @@ export function projectNodes(projects: readonly CargoProject[]): CreateNodesResu
             ? { implicitDependencies: [...project.settings.implicitDependencies] }
             : {}),
           targets: project.targets,
-          metadata: { [cargoMetadataKey]: cargoMetadata(project) },
+          metadata: {
+            [cargoMetadataKey]: {
+              ...cargoMetadata(project),
+              ...(project.warnings.length > 0 ? { warnings: project.warnings } : {}),
+            },
+          },
         },
       },
     },

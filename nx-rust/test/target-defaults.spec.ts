@@ -820,6 +820,7 @@ describe("the check on targets the plugin declares more for", () => {
         root: "rust/crates/api",
         manifest: crates.api,
         targets: inferred,
+        warnings: [],
         workspace: { rootManifest: "rust/Cargo.toml" },
         pkg: { name: "api" },
         isWorkspaceProject: false,
