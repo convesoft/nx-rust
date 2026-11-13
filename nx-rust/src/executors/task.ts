@@ -1,4 +1,4 @@
-import type { ExecutorContext } from "@nx/devkit";
+import type { ExecutorContext, Task } from "@nx/devkit";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { cargoMetadataOf } from "../graph/collisions";
@@ -11,6 +11,8 @@ import {
   targetCargoMetadataKey,
 } from "../graph/targets";
 import { cargoArguments, type CargoTargetOptions } from "./command";
+import { recordedNxCommand } from "./nx-command";
+import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
 
 /**
  * The profiles whose artifacts Cargo puts in another profile's folder, which
@@ -32,10 +34,11 @@ export class TaskError extends Error {
   }
 }
 
-/** One of the plugin's executors, by the name under which `executors.json` lists it. */
-export interface PluginExecutor {
-  /** The executor's full name, such as `@convesoft/nx-rust:cargo`. */
-  name: string;
+/**
+ * One of the plugin's executors, by the name under which `executors.json`
+ * lists it, with the options that its schema declares.
+ */
+export interface PluginExecutor extends ExecutorOptions {
   /** Whether the executor runs the target with this default name. */
   serves(target: InferredTargetName): boolean;
 }
@@ -48,6 +51,12 @@ export interface CargoInvocation {
   cwd: string;
 }
 
+/** The cargo command of one task and the lines it prints before cargo starts. */
+export interface TaskInvocation extends CargoInvocation {
+  /** One warning line per option that the task ignores (`DES-UNKNOWN-OPTIONS`). */
+  warnings: string[];
+}
+
 /**
  * Runs one task of an inferred target as one cargo command: in the root
  * folder of the crate's workspace, with the environment that Nx gives the
@@ -56,7 +65,8 @@ export interface CargoInvocation {
  * cargo exits with status 0.
  *
  * A problem found before cargo starts fails the task with a message that
- * names it and runs no cargo. Before anything else, the task prints the
+ * names it and runs no cargo. An option that the task ignores gets a warning
+ * line at the top of its output. Before anything else, the task prints the
  * warnings that graph creation found for its project, which the Nx daemon
  * keeps out of the terminal (`DES-DIAGNOSTICS`, "Warnings where they are
  * seen").
@@ -72,9 +82,9 @@ export async function runTask(
   for (const warning of projectWarnings(context)) {
     console.warn(warning);
   }
-  let invocation: CargoInvocation;
+  let invocation: TaskInvocation;
   try {
-    invocation = taskInvocation(executor, options, context, process.env.NX_RUST_LOCKED);
+    invocation = taskInvocation(executor, options, context, process.env);
   } catch (error) {
     if (error instanceof TaskError) {
       console.error(error.message);
@@ -82,28 +92,34 @@ export async function runTask(
     }
     throw error;
   }
+  for (const warning of invocation.warnings) {
+    console.warn(warning);
+  }
   return { success: await runCargo(invocation) };
 }
 
 /**
- * The cargo command of a task, from the target's options, the metadata that
- * the plugin gave the target and its project, and locked mode.
+ * The cargo command of a task, from the options that its target takes
+ * ({@link taskOptions}), the metadata that the plugin gave the target and its
+ * project, and locked mode, together with the warning lines for the options
+ * that it ignores.
  *
- * @param lockedVariable The value of `NX_RUST_LOCKED`.
+ * @param env The task's environment, with `NX_RUST_LOCKED` and the record of
+ *   the `nx` command ({@link recordedNxCommand}).
  * @throws {TaskError} When the target is no inferred target of this
  *   executor, when its configuration caches a target that the plugin leaves
  *   uncached in this project, when `build` or `doc` gets the profile `dev`,
  *   `test` or `bench`, or is cached while `CARGO_BUILD_TARGET` chooses its
- *   triple (`DES-OUTPUTS`), or when `NX_RUST_LOCKED` is neither `true` nor
- *   `false`.
+ *   triple (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
+ *   `false`, or when `args` does not split into words.
  */
 // @mara implements DES-OUTPUTS
 export function taskInvocation(
   executor: PluginExecutor,
   options: CargoTargetOptions,
   context: ExecutorContext,
-  lockedVariable: string | undefined,
-): CargoInvocation {
+  env: NodeJS.ProcessEnv,
+): TaskInvocation {
   const projectName = context.projectName ?? "";
   const targetName = context.targetName ?? "";
   const task = `${projectName}:${targetName}`;
@@ -136,7 +152,7 @@ export function taskInvocation(
         `${task}: the profile ${options.profile} puts cargo's artifacts in the folder of another profile, which @convesoft/nx-rust cannot name for the cache. Build with ${replacement}.`,
       );
     }
-    const triple = process.env.CARGO_BUILD_TARGET;
+    const triple = env.CARGO_BUILD_TARGET;
     if (
       context.target?.cache === true &&
       triple !== undefined &&
@@ -155,15 +171,62 @@ export function taskInvocation(
       `${task}: the project carries no Cargo workspace in its metadata, which @convesoft/nx-rust gives each project that it creates. Make sure that a project.json or package.json in the folder ${project?.root ?? projectName} does not replace the project's "metadata".`,
     );
   }
+  const locked = lockedMode(metadata.locked, env.NX_RUST_LOCKED);
+  let examined: TaskOptions;
+  try {
+    examined = taskOptions({
+      task,
+      target: metadata.target,
+      executor,
+      options: options as Record<string, unknown>,
+      configured: configuredOptions(context),
+      graphTask: graphTaskOf(context),
+      record: recordedNxCommand(env),
+    });
+  } catch (error) {
+    throw error instanceof OptionError ? new TaskError(error.message) : error;
+  }
   const args = cargoArguments(
     {
       target: metadata.target,
       packageName: cargo.packageName,
-      locked: lockedMode(metadata.locked, lockedVariable),
+      locked,
+      binaryArguments: examined.binaryArguments,
     },
-    options,
+    examined.options,
   );
-  return { args, cwd: join(context.root, dirname(cargo.workspaceManifest)) };
+  return {
+    args,
+    cwd: join(context.root, dirname(cargo.workspaceManifest)),
+    warnings: examined.warnings,
+  };
+}
+
+/**
+ * The task that the task graph in the executor's context holds for this
+ * invocation: the one of the same project, target and configuration. Nx
+ * gives a task's configuration, its target's `defaultConfiguration` where the
+ * command names none, to the task in the graph and to the context alike.
+ */
+export function graphTaskOf(context: ExecutorContext): Task | undefined {
+  const configuration = context.configurationName || undefined;
+  return Object.values(context.taskGraph?.tasks ?? {}).find(
+    ({ target }) =>
+      target.project === context.projectName &&
+      target.target === context.targetName &&
+      (target.configuration || undefined) === configuration,
+  );
+}
+
+// The target's options with those of the active configuration laid over
+// them, as Nx merges them before the options of the invocation
+// (`combineOptionsForExecutor` in `utils/params.js` of `nx` 24).
+function configuredOptions(context: ExecutorContext): Record<string, unknown> {
+  const configuration = context.configurationName;
+  return {
+    ...context.target?.options,
+    ...(configuration ? context.target?.configurations?.[configuration] : undefined),
+  };
 }
 
 /**

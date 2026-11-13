@@ -140,6 +140,15 @@ which files a command wrote, such as `init`, which may write `nx.json` only.
 environment asks for colours, as `nx run-many` does for this repository's
 tests, so that a test can compare the text.
 
+**`runNx(workspace, args, env)`** runs Nx with static output, put before
+`args` so that it stays Nx's own option when `args` holds `--`, and returns
+the output without colours. **`taskCalls(workspace)`** returns the logged
+cargo calls of tasks, without graph creation's `cargo metadata`, and
+**`sortedCalls(calls)`** puts them in a stable order. **`inFixture(fixture,
+files, test)`** hands a new copy to `test` and removes it afterwards,
+**`withTargetDefaults(defaults)`** is a change to `nx.json` for `files`, and
+**`linesWith(output, text)`** returns the lines that contain `text`.
+
 **`CargoWrapper.install(directory)`** writes a `cargo` that appends one JSON
 line per invocation (`cwd`, `args`) to a log and then runs the real cargo in
 the same folder, with the real cargo's folder first on `PATH`, so that cargo

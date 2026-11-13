@@ -1,7 +1,18 @@
 import type { ExecutorContext } from "@nx/devkit";
+import { join } from "node:path";
 import { cargoExecutor } from "../../graph/targets";
 import type { CargoTargetOptions } from "../command";
-import { runTask } from "../task";
+import { type PluginExecutor, runTask } from "../task";
+import { declaredOptions } from "../task-options";
+
+// The executor, with the options of its schema, which lies beside this file
+// in the source tree and in the built package alike.
+const executor: PluginExecutor = {
+  name: cargoExecutor,
+  shortName: "cargo",
+  declared: declaredOptions(join(__dirname, "schema.json")),
+  serves: (target) => target !== "run",
+};
 
 /**
  * The executor of every inferred target but `run`, `@convesoft/nx-rust:cargo`:
@@ -14,5 +25,5 @@ export default function cargo(
   options: CargoTargetOptions,
   context: ExecutorContext,
 ): Promise<{ success: boolean }> {
-  return runTask({ name: cargoExecutor, serves: (target) => target !== "run" }, options, context);
+  return runTask(executor, options, context);
 }
