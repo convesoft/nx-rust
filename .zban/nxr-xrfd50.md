@@ -1,6 +1,6 @@
 ---
 title: Read a workspace's artifact directory in the folder where its tasks run cargo
-status: todo
+status: in-progress
 type: bug
 parent: nxr-w9qa5f
 discovered_from: nxr-zz36hb

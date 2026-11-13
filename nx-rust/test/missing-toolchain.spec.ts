@@ -93,6 +93,43 @@ describeWithRustup("graph creation with a pinned toolchain that is not installed
   );
 
   it(
+    "fails, naming the root folder, when the folder where a workspace's tasks run cargo pins it and Nx does not hand the root manifest to the plugin",
+    async () => {
+      const workspace = FixtureWorkspace.create("subfolder-workspace", {
+        "rust/rust-toolchain.toml": pin,
+        // The toolchain of the folder where discovery starts, the
+        // shallowest manifest that the plugin receives, is installed.
+        "rust/crates/api/rust-toolchain.toml": '[toolchain]\nchannel = "stable"\n',
+        "nx.json": (text) => {
+          const config = JSON.parse(text);
+          config.plugins = config.plugins.map((entry: string | { plugin: string }) => ({
+            plugin: typeof entry === "string" ? entry : entry.plugin,
+            exclude: ["rust/Cargo.toml"],
+          }));
+          return JSON.stringify(config);
+        },
+      });
+      try {
+        const loading = workspace.graph();
+
+        await expect(loading).rejects.toThrow(
+          /`cargo metadata` failed for the Cargo workspace of rust\/crates\/api\/Cargo\.toml/,
+        );
+        await expect(loading).rejects.toThrow(/toolchain '1\.92\.0-[^']+' is not installed/);
+        await expect(loading).rejects.toThrow(/`cargo metadata --no-deps` succeeds in rust\./);
+        expect(workspace.cargo.callsWithEnv(workspace.root)).toEqual([
+          metadataCall("rust/crates/api", "rust/crates/api/Cargo.toml"),
+          metadataCall("rust", "rust/Cargo.toml"),
+        ]);
+        expect(installedToolchains()).toEqual(toolchains);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "succeeds when only a member and a path dependency pin it, with every cargo call in the workspace's root folder",
     async () => {
       const workspace = FixtureWorkspace.create("vendored-crate", {

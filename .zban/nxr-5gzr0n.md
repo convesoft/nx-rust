@@ -1,6 +1,6 @@
 ---
 title: Name build outputs where cargo writes them when a link and .. spell the artifact directory
-status: todo
+status: in-progress
 type: bug
 parent: nxr-w9qa5f
 discovered_from: nxr-zz36hb

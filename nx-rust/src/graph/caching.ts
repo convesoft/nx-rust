@@ -107,13 +107,14 @@ export async function cacheContext(
       }
     }
   }
-  const sharers = artifactDirectorySharers(discovery.workspaces);
-  const artifactDirectories = locateArtifactDirectories(discovery, sharers);
+  const reached = reachedArtifactDirectories(discovery.workspaces);
+  const sharers = artifactDirectorySharers(discovery.workspaces, reached);
+  const artifactDirectories = locateArtifactDirectories(discovery, reached, sharers);
   const directoryWarnings = unignoredDirectoryWarnings(discovery.workspaces, workspaceRoot);
   const withoutLockfileTask = await workspacesWithoutRootProject(discovery, nxJson);
   for (const workspace of discovery.workspaces) {
     const messages = [
-      artifactDirectoryWarning(workspace, artifactDirectories, sharers),
+      artifactDirectoryWarning(workspace, artifactDirectories, reached, sharers),
       buildTargetWarning(workspace, workspaceRoot),
       ...(directoryWarnings.get(workspace) ?? []),
       withoutLockfileTask.has(workspace.root) ? noLockfileTaskWarning(workspace) : undefined,
@@ -421,22 +422,36 @@ function shownPath(file: string, repositoryRoot: string): string {
   return shown === "" || shown.startsWith("..") || isAbsolute(shown) ? file : shown;
 }
 
-// The workspaces with which each workspace shares its artifact directory.
+// The folder that each workspace's artifact directory is, as the system
+// reaches it through the path that cargo reports ({@link physicalPath}).
 // Cargo reports the directory as the configuration or `CARGO_TARGET_DIR`
-// spells it, `..`, symbolic links and a trailing separator included. Two
-// reports name one folder where their paths agree with `.` and `..` taken
-// as text, or with symbolic links followed ({@link physicalPath}); either
-// counts, because two folders taken for one only leave `doc` uncached, while
-// one folder taken for two lets a restored `doc` folder delete the pages of
-// the other workspace (`DES-OUTPUTS`).
+// spells it, `..`, symbolic links and a trailing separator included, and
+// writes to the folder that the system reaches; where a link comes before a
+// `..`, that is not the folder that the path names as text (`DES-OUTPUTS`).
+// @mara implements DES-OUTPUTS
+function reachedArtifactDirectories(
+  workspaces: readonly CargoWorkspace[],
+): Map<CargoWorkspace, string> {
+  return new Map(
+    workspaces.map((workspace) => [workspace, physicalPath(workspace.report.target_directory)]),
+  );
+}
+
+// The workspaces with which each workspace shares its artifact directory.
+// Two reports name one folder where their paths agree with `.` and `..`
+// taken as text, or with symbolic links followed (`reached`); either
+// counts, because two folders taken for one only leave `doc` uncached,
+// while one folder taken for two lets a restored `doc` folder delete the
+// pages of the other workspace (`DES-OUTPUTS`).
 // @mara implements DES-OUTPUTS
 function artifactDirectorySharers(
   workspaces: readonly CargoWorkspace[],
+  reached: ReadonlyMap<CargoWorkspace, string>,
 ): Map<CargoWorkspace, CargoWorkspace[]> {
   const spellings = new Map<CargoWorkspace, string[]>();
   for (const workspace of workspaces) {
     const directory = workspace.report.target_directory;
-    spellings.set(workspace, [resolve(directory), physicalPath(directory)]);
+    spellings.set(workspace, [resolve(directory), reached.get(workspace) ?? resolve(directory)]);
   }
   const sharers = new Map<CargoWorkspace, CargoWorkspace[]>();
   for (const workspace of workspaces) {
@@ -454,14 +469,18 @@ function artifactDirectorySharers(
 
 // Where each workspace's artifact directory lies, by the workspace's root
 // folder: outside the repository, or inside it and shared with another
-// workspace or not.
+// workspace or not. The folder that the system reaches decides, relative to
+// the repository's real path, and is the path that the outputs name.
 function locateArtifactDirectories(
   discovery: CargoDiscovery,
+  reached: ReadonlyMap<CargoWorkspace, string>,
   sharers: ReadonlyMap<CargoWorkspace, readonly CargoWorkspace[]>,
 ): Map<string, ArtifactDirectory> {
+  const repositoryRoot = realPath(discovery.workspaceRoot);
   const located = new Map<string, ArtifactDirectory>();
   for (const workspace of discovery.workspaces) {
-    const path = relative(discovery.workspaceRoot, workspace.report.target_directory);
+    const directory = reached.get(workspace) ?? workspace.report.target_directory;
+    const path = relative(repositoryRoot, directory);
     located.set(
       workspace.root,
       path === "" || path === ".." || path.startsWith("../") || isAbsolute(path)
@@ -478,10 +497,11 @@ function locateArtifactDirectories(
 function artifactDirectoryWarning(
   workspace: CargoWorkspace,
   located: ReadonlyMap<string, ArtifactDirectory>,
+  reached: ReadonlyMap<CargoWorkspace, string>,
   sharers: ReadonlyMap<CargoWorkspace, readonly CargoWorkspace[]>,
 ): string | undefined {
   const artifacts = located.get(workspace.root);
-  const directory = workspace.report.target_directory;
+  const directory = reached.get(workspace) ?? workspace.report.target_directory;
   const where = describeWorkspace(workspace);
   if (artifacts === undefined || !artifacts.inside) {
     return [
