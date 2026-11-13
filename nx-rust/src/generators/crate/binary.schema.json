@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/schema",
+  "$id": "NxRustBinary",
+  "title": "Create a binary crate",
+  "description": "Create a binary crate with `cargo new --vcs none --bin`. Cargo adds it to the members of the Cargo workspace around the folder.",
+  "cli": "nx",
+  "type": "object",
+  "properties": {
+    "directory": {
+      "type": "string",
+      "description": "The crate's folder, relative to the folder you run nx in.",
+      "$default": {
+        "$source": "argv",
+        "index": 0
+      },
+      "x-prompt": "Which folder should the binary crate be created in?"
+    },
+    "name": {
+      "type": "string",
+      "description": "The package name. Without it, the crate is named after its folder."
+    },
+    "edition": {
+      "type": ["string", "number"],
+      "description": "The Rust edition, such as 2024. Without it, the crate takes the workspace's edition, or Cargo's default."
+    }
+  },
+  "required": ["directory"]
+}

@@ -20,7 +20,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CargoCall, CargoWrapper } from "./cargo-wrapper";
 import { testEnvironment } from "./environment";
-import { copyFixture, FileChanges, FixtureName, pluginSourceEntry } from "./fixtures";
+import {
+  copyFixture,
+  FileChanges,
+  FixtureName,
+  pluginPackageDirectory,
+  pluginPackageName,
+  pluginSourceEntry,
+} from "./fixtures";
 
 /** The project graph that Nx built for a fixture, arranged for comparison. */
 export interface FixtureGraph {
@@ -77,9 +84,10 @@ interface InspectResult {
  * A copy of a fixture in a temporary folder, set up as an Nx workspace that
  * loads the plugin from its TypeScript source, with a {@link CargoWrapper}
  * that sees every cargo invocation of the commands the harness runs there.
- * Its `node_modules`, which Nx ignores, links to this repository's Nx and
- * holds a copy of the wrapper in `.bin`, ahead of Node's folder on the `PATH`
- * that `nx:run-commands` builds for its tasks.
+ * Its `node_modules`, which Nx ignores, links to this repository's Nx and to
+ * the plugin's package folder, whose generators `nx g` then runs from source,
+ * and holds a copy of the wrapper in `.bin`, ahead of Node's folder on the
+ * `PATH` that `nx:run-commands` builds for its tasks.
  *
  * Remove it with {@link FixtureWorkspace.remove} when the test is done.
  * Setting `NX_RUST_KEEP_FIXTURES=1` keeps every workspace for inspection.
@@ -139,6 +147,11 @@ export class FixtureWorkspace {
     const modules = join(this.root, "node_modules");
     this.cargo.placeIn(join(modules, ".bin"));
     symlinkSync(nxPackage, join(modules, "nx"), "dir");
+    // Lets `nx g @convesoft/nx-rust:<generator>` find the generators, which
+    // Nx then loads from their TypeScript source.
+    const pluginLink = join(modules, ...pluginPackageName.split("/"));
+    mkdirSync(dirname(pluginLink), { recursive: true });
+    symlinkSync(pluginPackageDirectory, pluginLink, "dir");
     this.cargo.clear();
   }
 
@@ -216,14 +229,18 @@ export class FixtureWorkspace {
    * and output.
    *
    * @param env Environment variables to set; `undefined` removes one.
+   * @param cwd The folder to run Nx in, relative to the workspace root.
    */
   nx(
     args: string[],
     env: Record<string, string | undefined> = {},
+    cwd = ".",
   ): Promise<{ status: number | null; output: string }> {
     return run(process.execPath, [join(this.root, "node_modules", "nx", nxBin), ...args], {
-      cwd: this.root,
-      env: this.environment({ NX_TUI: "false", ...env }),
+      cwd: join(this.root, cwd),
+      // INIT_CWD, which the package manager of an outer run sets, would
+      // override the folder for Nx's generators.
+      env: this.environment({ NX_TUI: "false", INIT_CWD: undefined, ...env }),
     });
   }
 
@@ -286,6 +303,18 @@ export async function loadFixtureGraph(
   } finally {
     workspace.remove();
   }
+}
+
+// ESC, `[`, parameters and `m`; built from the character code, because a
+// control character in a regular expression literal reads as a mistake.
+const colourCode = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
+/**
+ * `text` without the colour codes that Nx writes when the environment asks
+ * for colours, as `nx run-many` does for the tests it runs.
+ */
+export function withoutColours(text: string): string {
+  return text.replace(colourCode, "");
 }
 
 function run(

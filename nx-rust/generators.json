@@ -1,0 +1,19 @@
+{
+  "generators": {
+    "init": {
+      "factory": "./src/generators/init/init",
+      "schema": "./src/generators/init/schema.json",
+      "description": "Register the plugin in nx.json and report missing tools. `nx add @convesoft/nx-rust` runs it."
+    },
+    "library": {
+      "factory": "./src/generators/crate/crate#libraryGenerator",
+      "schema": "./src/generators/crate/library.schema.json",
+      "description": "Create a library crate with cargo new."
+    },
+    "binary": {
+      "factory": "./src/generators/crate/crate#binaryGenerator",
+      "schema": "./src/generators/crate/binary.schema.json",
+      "description": "Create a binary crate with cargo new."
+    }
+  }
+}
