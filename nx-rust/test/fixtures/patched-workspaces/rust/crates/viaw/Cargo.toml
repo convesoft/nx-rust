@@ -1,0 +1,7 @@
+[package]
+name = "viaw"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+fork = "0.1"

@@ -2,6 +2,7 @@ import type { ProjectConfiguration, TargetConfiguration } from "@nx/devkit";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CargoGraph } from "../src/graph/projects";
+import { cachedTargets, InferredTargetName } from "../src/graph/targets";
 import {
   describeTargetDefaultChanges,
   findTargetDefaultChanges,
@@ -152,16 +153,25 @@ describe("a target default that fails graph creation", () => {
   );
 
   it(
-    "turns on caching keyed by the plugin's executor, and says to remove the field",
+    "turns on caching keyed by the plugin's executor for exactly the targets outside cachedTargets, which the executor's check reads too, and says to remove the field",
     async () => {
       const output = await failed({ [cargoExecutor]: { cache: true } });
+      // The targets of the cargo executor in subfolder-workspace, sorted as the report sorts them.
+      const uncached = (targets: InferredTargetName[]) =>
+        targets
+          .filter((target) => !cachedTargets.has(target))
+          .map((target) => `"${target}"`)
+          .join(", ")
+          .replace(/, ([^,]*)$/, " and $1");
+      const crateTargets = uncached(["build", "check", "fmt", "fmt-check", "lint", "test"]);
+      const workspaceTargets = uncached(["audit", "doc", "update"]);
 
       expect(output).toContain(`The targetDefaults entry "${cargoExecutor}" in nx.json changes`);
       expect(output).toContain(
-        `  - It turns on caching for "build", "check", "fmt", "fmt-check", "lint" and "test", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ${allCrates}.`,
+        `  - It turns on caching for ${crateTargets}, which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ${allCrates}.`,
       );
-      expect(output).toMatch(
-        /It turns on caching for "audit", "doc" and "update", which nx-rust leaves uncached: .* In \S+ \(rust\/Cargo\.toml\)\./,
+      expect(output).toContain(
+        `  - It turns on caching for ${workspaceTargets}, which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In rust (rust/Cargo.toml).`,
       );
       expect(output).toContain(
         `  - Remove "cache" from the entry. It is keyed by the executor of nx-rust's targets, so it reaches only those.`,

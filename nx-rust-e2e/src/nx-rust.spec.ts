@@ -1,13 +1,22 @@
 import { NX_VERSION, workspaceRoot } from "@nx/devkit";
 import { execFileSync, execSync, spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { join, relative } from "path";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { join, relative, sep } from "path";
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "fs";
 import {
   CargoCall,
   CargoWrapper,
   cargoProbeProject,
   changedFiles,
+  fakeNxPackage,
   HARNESS_TIMEOUT,
   installFixture,
   installProbeExecutor,
@@ -119,6 +128,19 @@ describe("@convesoft/nx-rust", () => {
     expect(fileDigests(installed)).toEqual(fileDigests(built));
   });
 
+  // The suite runs on the Nx that this repository installs, so the range
+  // names exactly the majors it has passed on (REQ-COMPATIBILITY).
+  it("names the Nx major that the suite runs on, and no other, in its peer dependency range", () => {
+    const installed = JSON.parse(
+      readFileSync(
+        join(projectDirectory, "node_modules", "@convesoft", "nx-rust", "package.json"),
+        "utf8",
+      ),
+    );
+
+    expect(installed.peerDependencies).toEqual({ nx: `^${NX_VERSION.split(".")[0]}` });
+  });
+
   // The global setup builds the plugin from this project's folder, not from
   // the workspace root, and the package has to look the same either way.
   it("has the README and the licences at the package root", () => {
@@ -228,8 +250,7 @@ describe("@convesoft/nx-rust", () => {
           expect(target).not.toHaveProperty("dependsOn");
         }
 
-        // Nx builds the task graph without running a task, which needs no
-        // executor yet (nxr-kmdpgj).
+        // Nx builds the task graph without running a task.
         const file = join(wrapperDirectory, "tasks.json");
         nx(projectDirectory, cargo, ["run-many", "-t", "build", "test", "lint", `--graph=${file}`]);
         const { tasks } = JSON.parse(readFileSync(file, "utf8"));
@@ -262,6 +283,209 @@ describe("@convesoft/nx-rust", () => {
       },
       HARNESS_TIMEOUT,
     );
+
+    // The installed package reads the Nx majors it supports from its own
+    // package.json. A copy of Nx that gives the next major as its version,
+    // linked in place of the installed one, shows what it does with a newer
+    // Nx; the variable lets it continue.
+    describe("with an Nx major newer than its peer dependency range names", () => {
+      const major = Number(NX_VERSION.split(".")[0]);
+      const newer = `${major + 1}.0.0`;
+      const fakeDirectory = join(process.cwd(), "tmp", "nx-newer");
+      let link: string;
+      let installedNx: string;
+
+      beforeAll(() => {
+        link = join(projectDirectory, "node_modules", "nx");
+        installedNx = readlinkSync(link);
+        rmSync(fakeDirectory, { recursive: true, force: true });
+        const copy = fakeNxPackage(fakeDirectory, newer);
+        rmSync(link);
+        symlinkSync(copy, link, "dir");
+      });
+
+      afterAll(() => {
+        rmSync(link, { force: true });
+        symlinkSync(installedNx, link, "dir");
+        rmSync(fakeDirectory, { recursive: true, force: true });
+      });
+
+      /** Runs the linked Nx, which pnpm's `nx` command would bypass. */
+      function newerNx(env: Record<string, string> = {}) {
+        const result = spawnSync(
+          process.execPath,
+          [
+            join(projectDirectory, "node_modules", "nx", "dist", "bin", "nx.js"),
+            "show",
+            "projects",
+          ],
+          {
+            cwd: projectDirectory,
+            env: { ...cargo.environment(testEnvironment()), NX_TUI: "false", ...env },
+            encoding: "utf8",
+          },
+        );
+        return {
+          status: result.status,
+          output: withoutColours(`${result.stdout}${result.stderr}`),
+        };
+      }
+
+      const untested = `nx-rust has not been checked with Nx ${newer}, which is installed in this repository: this version of @convesoft/nx-rust supports Nx ${major}.`;
+
+      it(
+        "stops graph creation, naming the version found and the supported major",
+        () => {
+          const { status, output } = newerNx();
+
+          expect(status).toBe(1);
+          expect(output).toContain(untested);
+          expect(output).toContain("NX_RUST_ALLOW_UNSUPPORTED_NX=true");
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "continues with a warning when NX_RUST_ALLOW_UNSUPPORTED_NX is true",
+        () => {
+          const { status, output } = newerNx({ NX_RUST_ALLOW_UNSUPPORTED_NX: "true" });
+
+          expect(status).toBe(0);
+          expect(output).toContain(untested);
+          expect(output).toContain("It continues because NX_RUST_ALLOW_UNSUPPORTED_NX is true");
+          expect(output).toContain("api");
+        },
+        HARNESS_TIMEOUT,
+      );
+    });
+
+    // VER-CARGO-UNCHANGED, as far as tasks that run one cargo call each show
+    // it: the test project becomes a git repository of its own, with the
+    // ignore rules of a real one.
+    describe("when Nx runs the inferred targets", () => {
+      const crates = ["api", "codegen", "model", "testkit"];
+      const rustFolder = () => join(projectDirectory, "rust");
+      const git = (...args: string[]) =>
+        execFileSync(
+          "git",
+          [
+            "-c",
+            "user.name=nx-rust e2e",
+            "-c",
+            "user.email=e2e@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            ...args,
+          ],
+          { cwd: projectDirectory, encoding: "utf8" },
+        );
+      // The plain cargo commands that do what `nx run-many -t build test lint` does.
+      const plainCargo = () =>
+        crates
+          .flatMap((crate) => [
+            ["build", "-p", crate],
+            ["test", "-p", crate],
+            ["clippy", "--all-targets", "-p", crate],
+          ])
+          .map((args) => {
+            const result = spawnSync("cargo", args, {
+              cwd: rustFolder(),
+              env: cargo.environment(testEnvironment()),
+              encoding: "utf8",
+            });
+            return { args, status: result.status, output: `${result.stdout}${result.stderr}` };
+          });
+      const compiles = /^\s*(Compiling|Checking) /m;
+
+      beforeAll(() => {
+        installFixture(projectDirectory, "subfolder-workspace", {
+          ".gitignore": "node_modules/\n.nx/cache\n.nx/workspace-data\ntarget/\n",
+        });
+        cargo.placeIn(join(projectDirectory, "node_modules", ".bin"));
+        git("init", "--quiet");
+        git("add", "--all");
+        git("commit", "--quiet", "--message", "The fixture");
+      });
+
+      afterAll(() => rmSync(join(projectDirectory, ".git"), { recursive: true, force: true }));
+
+      it(
+        "runs a target through the installed plugin's executor",
+        () => {
+          const output = withoutColours(
+            nx(projectDirectory, cargo, ["run", "api:build", "--output-style=static"]),
+          );
+
+          expect(output).toContain("Compiling api v0.1.0");
+          expect(output).toContain("Successfully ran target build for project api");
+          expect(cargo.calls(projectDirectory)).toEqual([
+            readRustWorkspace,
+            { cwd: "rust", args: ["build", "-p", "api"] },
+          ]);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "shares its builds with plain cargo in both orders",
+        () => {
+          // Nx first, then plain cargo, which finds nothing to compile.
+          nx(projectDirectory, cargo, ["run-many", "-t", "build", "test", "lint"]);
+          for (const result of plainCargo()) {
+            expect(result).toEqual({ ...result, status: 0 });
+            expect(result.output).not.toMatch(compiles);
+          }
+
+          // Plain cargo from scratch, then Nx, whose tasks compile nothing.
+          execFileSync("cargo", ["clean"], {
+            cwd: rustFolder(),
+            env: cargo.environment(testEnvironment()),
+          });
+          for (const result of plainCargo()) {
+            expect(result).toEqual({ ...result, status: 0 });
+          }
+          cargo.clear();
+          const output = withoutColours(
+            nx(projectDirectory, cargo, [
+              "run-many",
+              "-t",
+              "build",
+              "test",
+              "lint",
+              "--output-style=static",
+            ]),
+          );
+          expect(output).toContain("Successfully ran targets build, test, lint for 4 projects");
+          expect(output).not.toMatch(compiles);
+          // Each task ran cargo, which found everything up to date.
+          expect(cargo.calls(projectDirectory)).toHaveLength(1 + 3 * crates.length);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "leaves no file changed or new in the repository",
+        () => {
+          nx(projectDirectory, cargo, [
+            "run-many",
+            "-t",
+            "build",
+            "check",
+            "lint",
+            "test",
+            "fmt-check",
+            "fmt",
+            "doc",
+            "update",
+          ]);
+
+          expect(git("status", "--porcelain", "--untracked-files=all")).toEqual("");
+        },
+        HARNESS_TIMEOUT,
+      );
+    });
 
     // Nx starts cargo in two ways: from an nx:run-commands task, which
     // rebuilds PATH with Node's folder ahead of the inherited one, and from an
@@ -341,16 +565,18 @@ function nx(projectDirectory: string, cargo: CargoWrapper, args: string[]): stri
 
 /**
  * Maps the path of each file below `directory`, relative to it, to the SHA-256
- * digest of its contents.
+ * digest of its contents. A `node_modules` folder directly below `directory`
+ * is left out: pnpm writes the commands of an installed package's
+ * dependencies there, such as those of its peer dependency nx, and the
+ * package does not contain it.
  */
 function fileDigests(directory: string): Record<string, string> {
   const digests: Record<string, string> = {};
   for (const entry of readdirSync(directory, { recursive: true, withFileTypes: true })) {
-    if (entry.isFile()) {
-      const path = join(entry.parentPath, entry.name);
-      digests[relative(directory, path)] = createHash("sha256")
-        .update(readFileSync(path))
-        .digest("hex");
+    const path = join(entry.parentPath, entry.name);
+    const file = relative(directory, path);
+    if (entry.isFile() && !file.startsWith(`node_modules${sep}`)) {
+      digests[file] = createHash("sha256").update(readFileSync(path)).digest("hex");
     }
   }
   return digests;

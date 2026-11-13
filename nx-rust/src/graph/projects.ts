@@ -64,12 +64,14 @@ export interface CargoGraph {
  * checks it (`failOnNameCollisions` in `collisions.ts`).
  *
  * @param targetNames The names of the inferred targets from the plugin options.
+ * @param locked The `locked` option from the plugin options.
  * @throws {Error} When `targetNames` gives two targets of one project the same name.
  */
 // @mara implements DES-PROJECT-GRAPH
 export function inferProjects(
   discovery: CargoDiscovery,
   targetNames: TargetNames = {},
+  locked = false,
 ): CargoProject[] {
   const projects: Omit<CargoProject, "targets">[] = [];
   for (const workspace of discovery.workspaces) {
@@ -98,7 +100,7 @@ export function inferProjects(
   const targets = nameTargets(
     projects.map((project) => ({
       project,
-      targets: inferTargets(project, discovery.workspaceRoot),
+      targets: inferTargets(project, discovery.workspaceRoot, locked),
     })),
     targetNames,
   );

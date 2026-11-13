@@ -74,6 +74,20 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       ],
     },
   },
+  "patched-workspaces": {
+    workspaces: {
+      rust: [
+        "rust/crates/api",
+        "rust/crates/harness",
+        "rust/crates/model",
+        "rust/crates/plain",
+        "rust/crates/util",
+        "rust/crates/viaw",
+      ],
+      shared: ["shared/crates/types"],
+    },
+    others: ["third_party/fork"],
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.
@@ -116,6 +130,24 @@ describe("fixtures", () => {
         ...others,
       ]);
       expect(manifestFolders(root)).toEqual([...listed].sort());
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // So that fmt and fmt-check leave a fixture as it is (VER-CARGO-UNCHANGED).
+  it.each(fixtureNames)(
+    "%s has Rust sources that rustfmt leaves as they are",
+    (fixture) => {
+      copyFixture(fixture, root, { plugin: pluginPackageName });
+      const sources = rustSources(root);
+      expect(sources.length).toBeGreaterThan(0);
+
+      // Throws on a source that rustfmt would change, naming it.
+      execFileSync("rustfmt", ["--check", "--edition", "2024", ...sources], {
+        cwd: root,
+        env: testEnvironment(),
+        encoding: "utf8",
+      });
     },
     HARNESS_TIMEOUT,
   );
@@ -171,6 +203,18 @@ function manifestFolders(root: string, folder = "."): string[] {
         return manifestFolders(root, path);
       }
       return entry.name === "Cargo.toml" ? [folder] : [];
+    })
+    .sort();
+}
+
+function rustSources(root: string, folder = "."): string[] {
+  return readdirSync(join(root, folder), { withFileTypes: true })
+    .flatMap((entry) => {
+      const path = folder === "." ? entry.name : `${folder}/${entry.name}`;
+      if (entry.isDirectory()) {
+        return rustSources(root, path);
+      }
+      return entry.name.endsWith(".rs") ? [path] : [];
     })
     .sort();
 }

@@ -1,7 +1,8 @@
 import type { CreateNodes } from "@nx/devkit";
+import { checkNxForGraph } from "../compatibility/nx-version";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
-import { readTargetNames } from "./options";
+import { readLocked, readTargetNames } from "./options";
 import { CargoGraph, inferProjects, projectNodes } from "./projects";
 
 /** What the `createNodes` call that started last found. */
@@ -40,6 +41,11 @@ export class Registration {
       "**/Cargo.toml",
       async (manifests, options, context) => {
         const graph = await this.discover(manifests, context.workspaceRoot, options);
+        // Nx's plugin interface has no channel for warnings; standard error
+        // reaches the terminal without the daemon and its log file with it.
+        for (const warning of graph.discovery.warnings) {
+          console.warn(warning);
+        }
         return projectNodes(graph.projects);
       },
     ];
@@ -59,10 +65,12 @@ export class Registration {
    * all its manifests in one call, so each call is taken as a computation of
    * its own.
    *
-   * @param options The entry's plugin options, of which `targetNames` is read.
-   * @throws {Error} When the options are invalid, when discovery fails (see
-   *   {@link discoverWorkspaces}) or when `targetNames` gives two targets of
-   *   one project the same name.
+   * @param options The entry's plugin options, of which `targetNames` and
+   *   `locked` are read.
+   * @throws {Error} When the installed Nx is not supported (see
+   *   {@link checkNxForGraph}), when the options are invalid, when discovery
+   *   fails (see {@link discoverWorkspaces}) or when `targetNames` gives two
+   *   targets of one project the same name.
    */
   async discover(
     manifests: readonly string[],
@@ -74,9 +82,11 @@ export class Registration {
     const reports = computationReports();
     let graph: CargoGraph | undefined;
     try {
+      checkNxForGraph(workspaceRoot, reports);
       const targetNames = readTargetNames(options);
+      const locked = readLocked(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
-      graph = { discovery, projects: inferProjects(discovery, targetNames) };
+      graph = { discovery, projects: inferProjects(discovery, targetNames, locked) };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {

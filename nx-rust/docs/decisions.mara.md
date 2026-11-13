@@ -40,7 +40,7 @@ It also means that every machine that computes the graph needs cargo, including 
 
 `cargo metadata` can resolve the whole dependency graph or, with `--no-deps`, report only the workspace's own packages. The full report was the first assumption. It needs the manifest of every dependency, so on a machine without a filled Cargo cache it downloads the crates of the lockfile, and it creates or updates `Cargo.lock` on the way. Nx builds the project graph for every command, also for JS-only work and in every CI job, and each of those machines needs cargo ([[ADR-CARGO-SOURCE-OF-TRUTH]]). The full report would add a registry download to all of them.
 
-The plugin therefore asks with `--no-deps`. That report still names the members, their targets, their declared dependencies with paths and features, the metadata tables and Cargo's directories, which is all that projects, targets and edges need ([[EVD-CARGO-NO-DEPS]]). What it lacks is the resolved versions of external crates. Only per-crate lockfile hashing needs those, and `Cargo.lock` holds them. The cost is that the plugin reads `Cargo.lock` itself for that purpose, and that a path dependency outside the workspace needs a report of its own.
+The plugin therefore asks with `--no-deps`. That report still names the members, their targets, their declared dependencies with paths and features, the metadata tables and Cargo's directories, which is all that projects, targets and edges need, apart from the crates that `[patch]`, `[replace]` and `paths` redirect to ([[EVD-CARGO-NO-DEPS]]). What it lacks is the resolved versions of external crates. Only per-crate lockfile hashing needs those, and `Cargo.lock` holds them. The cost is that the plugin reads `Cargo.lock` itself for that purpose, that a path dependency outside the workspace needs a report of its own, and that the plugin reads the redirection tables from Cargo's manifests and configuration files itself ([[ADR-REDIRECTION-EDGES]]).
 :::
 
 :::mara decision ADR-MULTI-WORKSPACE
@@ -85,7 +85,7 @@ A collision between any two of the plugin's projects, crates or workspace projec
 
 Leaving dev-dependencies out of the graph means a change in a crate used only by another crate's tests does not invalidate those cached tests. All three kinds are therefore edges.
 
-Cargo allows cycles through dev-dependencies. Three treatments were considered: drop the edge that closes the cycle and add the crate's files as explicit inputs, fail graph creation, or keep the edge. Nx 24 fails only on a cycle between tasks, not between projects ([[EVD-NX-24-INSPECTION]]), and the plugin's targets declare no dependencies between crates beyond the lockfile task, which depends on nothing ([[ADR-NO-RUST-BUILD-DEPS]]). The edge is kept, so `nx graph` shows what Cargo sees and no workspace that Cargo accepts is rejected. If a user's own `dependsOn` turns the project cycle into a task cycle, Nx reports it. Nx 24 hashes `^` inputs over a project cycle stably ([[EVD-NX-24-INPUT-SEMANTICS]]).
+Cargo allows cycles through dev-dependencies. Three treatments were considered: drop the edge that closes the cycle and add the crate's files as explicit inputs, fail graph creation, or keep the edge. Nx 24 fails only on a cycle between tasks, not between projects ([[EVD-NX-24-INSPECTION]]), and the plugin's targets declare no dependencies between crates beyond the lockfile task, which depends on nothing ([[ADR-NO-RUST-BUILD-DEPS]]). The edge is kept, so `nx graph` shows at least what Cargo sees and no workspace that Cargo accepts is rejected. The exception is an edge to a crate that `[patch]`, `[replace]` or `paths` redirects to and that reaches the edge's source through normal or build dependencies: Cargo rejects that cycle, so the edge is left out and inputs cover the source's dev-dependencies ([[ADR-REDIRECTION-EDGES]]). If a user's own `dependsOn` turns the project cycle into a task cycle, Nx reports it. Nx 24 hashes `^` inputs over a project cycle stably ([[EVD-NX-24-INPUT-SEMANTICS]]).
 :::
 
 :::mara decision ADR-EXTERNAL-NODES
@@ -395,6 +395,33 @@ A workspace's `rust-toolchain.toml` can pin a toolchain that the machine lacks, 
 The toolchain input of a task's key runs `rustc -Vv` with the variable as well. Nx 24.0.6 cannot fail a task from a runtime input: it keys the task on what the command prints and runs it ([[EVD-RUSTUP-MISSING-TOOLCHAIN]]). When the toolchain is missing, the input therefore yields a value that never repeats, so that no result stored under that key can be restored, and the task runs as plain cargo does. The message that names the toolchain comes from graph creation, which fails first in nearly every case.
 
 Leaving rustup's default was rejected, because `nx graph`, or any Nx command that creates the graph or computes a key, could then download a toolchain unasked. Setting the variable for tasks as well, or failing a task from the executor when its toolchain is missing, was rejected, because a task would then fail where the same plain cargo command succeeds. Keying the task on rustup's message was rejected, because the message names a channel such as `stable` and not the release that cargo would install, so a result could be restored for another toolchain.
+:::
+
+:::mara decision ADR-REDIRECTION-EDGES
+:mid: 01M7AQ58FTSJX0AWN2BGZF4TND
+:title: Give the crates that [patch], [replace] and paths redirect to edges from every member that may use them
+:status: accepted
+:justifies: REQ-DEPENDENCY-EDGES
+:justifies: DES-PROJECT-GRAPH
+:justifies: DES-METADATA-REPORT
+:justifies: DES-INPUTS
+:justifies: DES-DISCOVERY
+:justifies: DES-DIAGNOSTICS
+:justifies: REQ-INPUT-FILES
+
+Agreed with the maintainer on 13 November 2026. Through `[patch]`, `[replace]` and `paths`, cargo builds a local crate in place of a registry or git dependency, and the graph's `--no-deps` report shows none of them. Without more, a crate that cargo builds against another crate of the repository this way has no edge to it, and neither `nx affected` nor its cache keys follow that crate ([[EVD-CARGO-REDIRECTIONS]], [[GOAL-TRUSTED-CACHE]]).
+
+The plugin therefore reads the tables from files when it creates the graph: `[patch]` and `[replace]` from each workspace's root manifest, and `[patch]` and `paths` from the configuration files that cargo reads for the workspace's tasks. That needs no cargo call, no network and no `Cargo.lock`. It is the one place where the plugin parses Cargo's files itself, and it makes a TOML parser a dependency of the plugin.
+
+The files say neither whether cargo uses a redirected crate nor which crates reach it, through a registry crate or through a path crate of another workspace. Every member with a registry or git dependency, of its own or of a path crate it reaches, therefore gets an edge to every redirected crate with a project but itself. That is a superset: no edge is missing, so keys and `nx affected` are right, and the graph may show edges that cargo does not have.
+
+Where the redirected crate reaches the member through normal or build dependencies, cargo would reject the member's use of it as a cycle, so only the member's dev-dependencies can lead there. The edge would close a cycle that cargo never has, which a user's `dependsOn: ["^build"]` turns into a task cycle that fails the run ([[EVD-NX-24-INSPECTION]]). That edge is left out, and the member's targets get the redirected crate's files as an input instead. Where the redirected crate reaches the member only through a dev-dependency, the edge stays, as [[ADR-ALL-DEP-KINDS]] keeps such cycles.
+
+The review of the change refined this on 13 November 2026, without changing the answers above: a dependency whose name, source and version requirement a redirected crate satisfies is resolved to it by cargo, so that edge is real and always kept, and it counts among the real dependencies that leave a possible edge out. A requirement that the redirected crate does not satisfy is no redirection. Two redirected crates that may only possibly use each other get no edge either way, but each other's files as an input, because cargo can have at most one direction and the plugin cannot tell which ([[DES-PROJECT-GRAPH]]).
+
+A configuration file outside the repository, such as the Cargo home's, applies like one inside it, and the plugin warns that Nx does not see changes to it.
+
+Rejected: edges only from the members that declare the redirected crate's name, which miss the uses through registry crates and through other workspaces' crates; a resolved `cargo metadata` report, which needs the network or a filled Cargo home and writes `Cargo.lock`, or with `--locked` fails while it is stale ([[ADR-METADATA-NO-DEPS]]); reading `Cargo.lock` while the graph is created, which still needs the tables for the crates' folders, holds no trace of `paths` and needs the superset whenever the lockfile is stale; a warning or an error in place of edges; and inputs in place of edges, which neither the `^` inputs of the member's dependents nor the project graph follow.
 :::
 
 ## Risks
@@ -924,6 +951,34 @@ Observed in a throwaway git repository outside this one, with that `nx` package 
 Observed with pnpm 12.18.0 in a second throwaway repository, whose `package.json` linked that `nx` package, and a local package whose `init` generator threw: `nx add probe-plugin@file:<folder>` added the package to `package.json` and `pnpm-lock.yaml` and installed it, then failed with the generator's message and exit status 1. The package stayed in `package.json` and `node_modules`, and `nx.json` was unchanged.
 :::
 
+:::mara evidence EVD-NX-24-VERSION-CHECK
+:mid: 01M7AR5NQ71CB4YNT6NRTYWHJZ
+:title: How Nx 24.0.6 and pnpm 12.18.0 treat a plugin that checks the Nx version
+:status: accepted
+:supports: DES-DIAGNOSTICS
+:supports: DES-GENERATORS
+
+Inspection of the `nx` 24.0.6 package installed in this repository, and experiments with it and with pnpm 12.18.0, on 13 November 2026, while implementing the version checks of [[DES-DIAGNOSTICS]]. Paths are relative to `nx/dist/src/`.
+
+Read in the compiled source:
+
+- **The installed Nx.** Nx takes the version of the installed Nx from the `nx/package.json` that resolves from `.nx/installation` and then from the repository root (`utils/installed-nx-version.js`, `utils/installation-directory.js`), and finds the repository root from the folder it runs in, or from `NX_WORKSPACE_ROOT_PATH` (`utils/workspace-root.js`). When that version differs from the version of the Nx that runs, the client does not use the daemon (`daemon/client/client.js`, `daemon/is-nx-version-mismatch.js`).
+- **Hooks without files.** Graph creation calls each plugin entry's `createNodes`, also when none of the repository's files matches the entry's pattern, `include` and `exclude`: it then hands the entry an empty list (`project-graph/utils/project-configuration-utils.js`).
+- **Reloads.** A plugin in a worker, the default, whose last hook is `createDependencies` has its worker shut down after that hook, and the next hook call starts a new worker that loads the module again (`project-graph/plugins/isolation/isolated-plugin.js`, `plugin-lifecycle-manager.js`). A plugin loaded into Nx's own process, with `NX_ISOLATE_PLUGINS=false`, stays loaded. When a client's environment changes, the daemon forwards it to the workers and discards its graph, but it loads no plugin again (`daemon/server/handle-client-env.js`). A failed load is not kept: the next graph creation loads the plugin again (`project-graph/plugins/get-plugins.js`, `isolation/load-isolated-plugin.js`).
+- **Errors of `createDependencies`.** When `createNodes` fails, graph creation still calls `createDependencies` with the projects it has, and then reports the errors of both, an error of `createDependencies` as `The "<plugin>" plugin threw an error while creating dependencies: <message>` (`project-graph/project-graph.js`, `project-graph/build-project-graph.js`, `project-graph/error-types.js`). Graph creation merges the projects of the plugins of `nx.json` with those of Nx's default plugins for `package.json` and `project.json` before it calls `createDependencies` with them by name.
+- **Internals.** The `exports` of `nx/package.json` include `./src/*`, so `nx/src/project-graph/plugins/get-plugins` and `nx/src/project-graph/utils/retrieve-workspace-files`, which load the plugins of `nx.json` and read the files of the repository by project, can be required alongside `nx/src/devkit-internals`.
+
+Observed in a throwaway git repository outside this one, with one `Cargo.toml` and a local plugin file in `nx.json` that printed a line when it loaded and when its hooks ran, and could throw from either, run with a copy of that `nx` package whose `package.json` gave the version 25.0.0, linked as the repository's `node_modules/nx`:
+
+- `nx --version` reported the local Nx as 25.0.0, and the copy created the graph, with the plugin in a worker and in Nx's own process.
+- A throw when the module loaded made `nx show projects` fail with "Failed to load 1 Nx plugin(s)" and the message.
+- With `NX_DAEMON=true`, the daemon log showed Nx 25.0.0. Changing a variable between runs made the daemon log "Graph recompute necessary due to env variable refresh", restart the plugin's worker and load the module again with the new value. A throw from `createNodes` failed the run, the next run with another value succeeded, and the run after that with the first value failed again. A throw when the restarted worker loaded the module failed both hooks, so the message appeared twice, once for `createNodes` and once for `createDependencies`.
+
+Observed with pnpm 12.18.0 in a second throwaway repository that installed `nx` 24.0.6 from pnpm's store: adding a local package whose peer dependency range on `nx` was `^23` printed "Issues with peer dependencies found" and exited with status 0, with the package installed. `pnpm peers check` then listed the unmet peer with the installed and wanted versions and exited with status 1. pnpm linked the repository's `nx` into the package's folder in its store, so that `nx` resolves from the package. With the range `^24`, neither printed anything about peers.
+
+So a plugin that checks the version only when its module loads misses a change of `NX_RUST_ALLOW_UNSUPPORTED_NX` while a daemon runs it in Nx's own process, and a check in `createNodes` runs on every graph computation, also in a repository without a `Cargo.toml`. The peer dependency range does not stop an install with another Nx major; only the plugin's own check stops it.
+:::
+
 :::mara evidence EVD-CARGO-TARGET-COMMANDS
 :mid: 01M7A4FCEFVN0W56WPDHWWW88N
 :title: What cargo, rustfmt and rust-analyzer 1.100 do with the commands of the inferred targets
@@ -1296,6 +1351,28 @@ An experiment on 13 November 2026 with `nx` 24.0.6 and Node.js 26.12.0, in a thr
 - **Source.** Nx passes the whole `nx.json` as `nxJsonConfiguration` to each entry's `createNodes` and chooses its files with `findMatchingConfigFiles(files, include, exclude)` (`project-graph/utils/project-configuration-utils.js`). Both that function and `globWithWorkspaceContext` are exported from `nx/src/devkit-internals` only, an interface that can change between majors ([[RISK-UPSTREAM-CHANGES]]).
 
 The stand-in was not the plugin; how the plugin's two entries share reports is [[EVD-NX-PLUGIN-ENTRIES]].
+:::
+
+:::mara evidence EVD-CARGO-REDIRECTIONS
+:mid: 01M7AQ4FBNBJZK6DKFSMS2793S
+:title: What cargo does with [patch], [replace] and paths, and what the plugin can see of them
+:status: accepted
+:supports: ADR-REDIRECTION-EDGES
+
+Experiments on 13 November 2026 with cargo 1.100.0, the main cases repeated with 1.91.0, on Linux, and a reading of the `nx` 24.0.6 package. Each experiment ran in a throwaway repository with a `CARGO_HOME` of its own, in which `[source.crates-io] replace-with` replaced crates.io by a local registry, a `file://` git index holding `model 0.1.0` and `wrapper 0.1.0`, which depends on `model ^0.1`. The workspace had the members `api`, with `model = "0.1"`, `viaw`, with `wrapper = "0.1"`, and `model 0.1.5`. The commands were `cargo metadata --format-version 1 --no-deps --offline`, `cargo metadata --format-version 1 --offline` with and without `--locked`, `cargo tree --offline -e normal,build,dev` and `cargo generate-lockfile`, and `Cargo.lock` was read after each. Both versions gave the same results except for `include`.
+
+- **The graph's report shows nothing.** With `[patch.crates-io] model = { path = "crates/model" }` in the root manifest, the `--no-deps` report listed `api`'s dependency with the crates.io source and no `path`, and was identical to the report without the patch. So it was for every way of redirecting below, and with a patch path that does not exist the report still succeeded. The full report and `cargo tree` named the local crate, and `Cargo.lock` held it as an entry without `source` and without its folder.
+- **Where cargo reads them.** From the workspace's root manifest, `[patch]` entries with a `path`, for crates.io, for a registry named in `[registries]` and for a git URL, and `[replace]` entries with a `path`; cargo rejects a manifest that has both tables. A `[patch]` in a member's manifest is ignored, with the warning "patch for the non root package will be ignored", which `--no-deps` prints too. From `.cargo/config.toml`, and the older `.cargo/config`, in the folder cargo starts in and in each folder above it, from `config.toml` in the Cargo home, and from `--config`: `[patch]` entries and `paths`. A relative path in such a file resolves against the folder above the one that holds the file: the folder that holds `.cargo`, the one that holds the Cargo home, and for a file that `include` names, the folder above that file's folder. Cargo 1.100.0 applied a `[patch]` from an included file, in the plain and in the `{ path = … }` form; 1.91.0 ignored it. Started outside the workspace with `--manifest-path`, cargo did not read the workspace's `.cargo/config.toml`. `CARGO_PATCH_CRATES_IO_MODEL_PATH` had no effect. A `[patch]` or `[replace]` path has to be the crate's own folder, while `paths = ["local"]` took `model` from `local/inner/model`.
+- **Who uses the crate.** `viaw` was built with the local `model` through `wrapper` alone, which `--no-deps` shows only as `viaw → wrapper`. A crate `m` whose workspace has the patch and that depends by path on `l`, a member of another workspace that declares `model = "0.1"`, was built with the local `model` through `l`; `l` built in its own workspace got the registry's. A redirection applies to everything cargo builds for the workspace that has it.
+- **Whether it is used.** A patch whose version does not satisfy the requirement, 0.2.0 for `^0.1`, and a patch to 0.1.5 added after `Cargo.lock` had locked the registry's 0.1.0, were not used until `cargo update`: without a message where the patched crate is a member, otherwise with "patch … was not used in the crate graph" and a `[[patch.unused]]` entry in the lockfile. A patch of the locked version was used at once. `paths` put the local 0.1.5 in place of the locked 0.1.0 and left no trace in `Cargo.lock`; `[replace]` added `replace = "model 0.1.0"` to the registry's entry.
+- **What resolving costs.** The full report and `cargo tree` failed offline until every package had been downloaded ("failed to download `wrapper`"), and for a git dependency until the git source had been fetched, although it was patched. Without `--locked` they created a missing `Cargo.lock` and rewrote a stale one, also when they failed afterwards; with `--locked` they failed on either.
+- **Configuration files and `include`.** With both `.cargo/config` and `.cargo/config.toml` in one folder, Cargo 1.91.0 and 1.100.0 read only `config`, with the warning "both … exist. Using … config", and an unparsable `config.toml` beside it stopped neither. An `include` of an unparsable file stopped `cargo metadata --no-deps` with 1.100.0 and not with 1.91.0, which ignores `include`.
+- **A crate that cargo builds but does not report.** In a workspace with `members = ["api"]` whose root manifest patches `model` to `local`, a folder inside the workspace's folder holding `model` without `[workspace]`, `cargo check` succeeded, while `cargo metadata --no-deps --manifest-path local/Cargo.toml` and `cargo read-manifest` failed on both versions with "current package believes it's in a workspace when it's not"; `cargo locate-project` succeeded but names only the manifest.
+- **Version requirements.** For 43 pairs of a requirement and a local version, of every form the plugin evaluates (bare, `^`, `~`, `=`, `>`, `>=`, `<`, `<=`, comma-joined, `*`, `1.*`, `1.2.*`, and a version with build metadata), a dependency patched to the local crate resolved with an empty Cargo home and offline exactly when the version satisfied the requirement, on both versions (`nx-rust/test/version-req.spec.ts`).
+- **Vendoring.** After `cargo vendor` into the workspace with `[source]` replacement, every report showed the registry as the source, cargo refused to build an edited vendored file because its checksum changed, and `cargo metadata --no-deps` in a vendored crate's folder failed with "current package believes it's in a workspace when it's not".
+- **Nx.** In `nx` 24.0.6, the daemon subscribes to changes below the repository root (`subscribeToWorkspaceChanges` in `daemon/server/server.js`) and runs every plugin's `createNodes` again after any such change (`processFilesAndCreateAndSerializeProjectGraph` in `daemon/server/project-graph-incremental-recomputation.js`); without the daemon, every command does (`project-graph/project-graph.js`). A change to a file outside the repository reaches a daemon's graph only with the next change inside it.
+
+The fixture `patched-workspaces` keeps the cases that need no registry, and `nx-rust/test/redirections.spec.ts` checks with `cargo tree --offline --locked` that every crate with a project that cargo builds for a member is reachable from it in the graph. The workspaces were toys, so this says nothing about how long reading the files takes in a large repository.
 :::
 
 ## Sources

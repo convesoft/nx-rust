@@ -2,6 +2,7 @@ import { isAbsolute, relative } from "node:path";
 import type { CargoWorkspace } from "../../graph/discovery";
 import {
   describeFolder,
+  missingToolMessage,
   OptionalTool,
   optionalTools,
   ToolContext,
@@ -24,12 +25,11 @@ const cachingGuide =
   "https://github.com/convesoft/nx-rust/blob/main/nx-rust/docs/caching.mara.md#cargos-two-directories";
 
 /**
- * The report of step 3 of `init`: the warnings about `targetDefaults`
- * entries that graph creation gives, the tools of the table that are
- * missing, as warnings where the configuration needs them and on one line
- * otherwise, the workspaces whose build directory lies inside the
- * repository, and how to create a crate where there is none. The warnings
- * that `createNodes` gives are printed by the check itself.
+ * The report of step 3 of `init`: the tools of the table that are missing,
+ * as warnings where the configuration needs them and on one line otherwise,
+ * the workspaces whose build directory lies inside the repository, and how
+ * to create a crate where there is none. The warnings that graph creation
+ * gives are printed by the check itself.
  *
  * @param env The environment whose `PATH` and `CARGO_HOME` say where tools are installed.
  */
@@ -40,7 +40,7 @@ export function initReport(
   env: NodeJS.ProcessEnv,
   tools: readonly OptionalTool[] = optionalTools,
 ): InitReport {
-  const report: InitReport = { warnings: [...check.targetDefaultWarnings], info: [] };
+  const report: InitReport = { warnings: [], info: [] };
   const context: ToolContext = { workspaceRoot, workspaces: check.workspaces, env };
   const notNeeded: string[] = [];
   for (const tool of tools) {
@@ -51,9 +51,7 @@ export function initReport(
     if (neededBy.length === 0) {
       notNeeded.push(tool.name);
     } else {
-      report.warnings.push(
-        `${sentenceStart(tool.name)} is not installed, but ${list(neededBy)} ${neededBy.length === 1 ? "needs" : "need"} it. ${tool.install}`,
-      );
+      report.warnings.push(missingToolMessage(tool, neededBy));
     }
   }
   if (notNeeded.length > 0) {
@@ -102,15 +100,4 @@ function buildDirectoryInside(
   }
   const path = relative(workspaceRoot, directory);
   return path === ".." || path.startsWith("../") || isAbsolute(path) ? undefined : path || ".";
-}
-
-// "The" at the start of a sentence; a tool's own name keeps its case.
-function sentenceStart(name: string): string {
-  return name.startsWith("the ") ? `The ${name.slice(4)}` : name;
-}
-
-function list(items: string[]): string {
-  return items.length <= 1
-    ? items.join("")
-    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }

@@ -30,11 +30,12 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
-      # The fixture tests run cargo. `1.91.0` is the toolchain that the
+      # The fixture tests run cargo, and the `lint`, `fmt` and `fmt-check`
+      # targets run clippy and rustfmt. `1.91.0` is the toolchain that the
       # `different-toolchains` fixture pins (nx-rust/test/README.md).
       - name: Install the Rust toolchains
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup toolchain install 1.91.0 --profile minimal
           rustup default stable
           cargo --version
@@ -70,9 +71,10 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+      # The `lint`, `fmt` and `fmt-check` targets run clippy and rustfmt.
       - name: Install the Rust toolchain
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup default stable
           cargo --version
       - run: pnpm install --frozen-lockfile

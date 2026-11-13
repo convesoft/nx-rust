@@ -121,6 +121,9 @@ export function findTargetDefaultChanges(
           !includes(inferred.dependsOn, entry) && reachesOtherProjects(entry, merged.name, names),
       );
       const candidates = {
+        // The plugin's `cache` comes from `cachedTargets`, the set that the
+        // executor's check reads, and is off as well where `DES-OUTPUTS`
+        // leaves a target of that set uncached.
         cache: inferred.cache !== true && target.cache === true,
         dependsOn: lost(inferred.dependsOn, target.dependsOn),
         inputs: lost(inferred.inputs, target.inputs),

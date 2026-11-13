@@ -1,4 +1,5 @@
 import type { CreateDependenciesContext, CreateNodes, RawProjectGraphDependency } from "@nx/devkit";
+import { checkNxOnLoad } from "./compatibility/nx-version";
 import { failOnNameCollisions } from "./graph/collisions";
 import { projectEdges } from "./graph/edges";
 import { Registration, registrationOf } from "./graph/registration";
@@ -44,10 +45,13 @@ function createDependencies(
  *
  * `createNodes` is a getter: Nx copies the module's properties once for each
  * entry in `nx.json`, so that each entry gets a registration of its own
- * ({@link Registration}).
+ * ({@link Registration}). Nx reads it when it loads the plugin for an entry,
+ * and an unsupported Nx stops the plugin there, which fails graph creation
+ * also where Nx calls none of its hooks ({@link checkNxOnLoad}).
  */
 const plugin = {
   get createNodes(): CreateNodes {
+    checkNxOnLoad();
     return new Registration().createNodes;
   },
   createDependencies,

@@ -3,13 +3,13 @@
 > **Status:** the plugin finds the Cargo workspaces and creates a project for
 > each crate and each workspace, with the default names and an edge for each
 > path dependency. The projects have the targets that the status note of
-> [Targets](targets.mara.md) names, which do not run yet. The `name`, `namePrefix` and `project` settings of the
+> [Targets](targets.mara.md) names. The `name`, `namePrefix` and `project` settings of the
 > metadata tables are not read yet, so for now only a `name` in a crate
-> folder's `project.json` or `package.json` resolves a name collision. A crate that depends on
-> another crate of the repository through a registry dependency that
-> `[patch]` redirects to that crate's path gets no edge to it, without a
-> message, so `affected` and the cache keys of that crate miss changes in the
-> other one until nxr-p5ybc0.
+> folder's `project.json` or `package.json` resolves a name collision. A crate gets edges to the crates that `[patch]`,
+> `[replace]` and `paths` redirect its workspace's dependencies to, so
+> `nx affected` follows them. Where such an edge is left out to avoid a cycle,
+> and for a redirected crate without a project, the crate's files become
+> inputs only together with the cache inputs (nxr-fy4t4k).
 
 nx-rust finds every Cargo workspace in the repository and turns each member
 crate into an Nx project. You do not list crates anywhere: the plugin asks
@@ -185,6 +185,18 @@ root of the Nx workspace, `nx audit .` works too.
 - **A path dependency into another workspace** is an edge to the one project
   that crate already has. The crate stays in its home workspace, and its own
   tests run there.
+- **Crates that `[patch]`, `[replace]` or `paths` put in place of a registry or
+  git dependency** are dependencies too. The plugin reads these tables from the
+  workspace's root `Cargo.toml` and from the `.cargo/config.toml` files that
+  Cargo reads for the workspace, without running Cargo. A dependency whose
+  name and version requirement the redirected crate matches gets its edge.
+  Which other crates end up using a redirected crate is not in those files: a
+  crates.io crate can lead to it. So every member with a registry or git
+  dependency gets an edge to it, and the graph can show more edges than
+  `cargo tree`, never fewer, apart from edges that would form a cycle, for
+  which the crate's files count as inputs instead. A redirection in your
+  Cargo home's `config.toml` counts too, with a warning, because Nx does not
+  notice when a file outside the repository changes.
 - **External crates are not nodes.** `nx graph` shows the crates of the
   repository only. A crate's cache key still follows the locked versions of
   the external crates it reaches, through the `lockfile` task of its workspace
@@ -262,7 +274,7 @@ Each Cargo workspace has exactly one Nx project for tasks that concern the works
 :satisfies: NEED-AFFECTED
 :satisfies: NEED-CORRECT-CACHE
 
-The graph has an edge for every normal, build and dev-dependency between crates that are Nx projects. An edge is present even when it closes a cycle that Cargo permits.
+The graph has an edge for every normal, build and dev-dependency between crates that are Nx projects. An edge is present even when it closes a cycle that Cargo permits. A crate that `[patch]`, `[replace]` or `paths` may put in place of a registry or git dependency counts as a dependency of every member that may use it, so the graph has at least the edges of the crates that Cargo builds; where such an edge would close a cycle that Cargo rejects, the member's cache keys cover the crate through inputs instead ([[ADR-REDIRECTION-EDGES]], [[REQ-INPUT-FILES]]).
 :::
 
 :::mara requirement REQ-EXTERNAL-DEPS
@@ -301,7 +313,9 @@ Discovery repeats one step until no manifest is unclaimed: take the shallowest u
 
 A member whose manifest was left out or removed gets no project, although the report lists it.
 
-When cargo cannot be started, or `cargo metadata` fails for a manifest, graph creation fails with an error that names the manifest and carries cargo's message. A toolchain that the folder pins and that is not installed is such a failure, and rustup's message names the toolchain ([[DES-METADATA-REPORT]]). The plugin never leaves a workspace out of the graph to get past such a failure ([[ADR-CARGO-SOURCE-OF-TRUTH]]). A manifest matched by `exclude` gets no project and is not read as a workspace, but a crate that depends on it by path still makes the plugin request one report for it, because its files are inputs of that crate.
+For each workspace, discovery also reads the crates that its `[patch]`, `[replace]` and `paths` tables redirect dependencies to, without cargo ([[DES-METADATA-REPORT]], [[ADR-REDIRECTION-EDGES]]).
+
+When cargo cannot be started, or `cargo metadata` fails for a manifest, graph creation fails with an error that names the manifest and carries cargo's message. A toolchain that the folder pins and that is not installed is such a failure, and rustup's message names the toolchain ([[DES-METADATA-REPORT]]). The plugin never leaves a workspace out of the graph to get past such a failure ([[ADR-CARGO-SOURCE-OF-TRUTH]]). A manifest matched by `exclude` gets no project and is not read as a workspace, but a crate that depends on it by path, or whose workspace's `[patch]` or `[replace]` redirects to it, still makes the plugin request one report for it, because its files are inputs of that crate.
 :::
 
 :::mara design DES-METADATA-REPORT
@@ -315,7 +329,9 @@ Nodes, targets and edges of a workspace all come from one `cargo metadata` repor
 
 The report is requested with `--no-deps` ([[ADR-METADATA-NO-DEPS]]). It then holds the members of the workspace with their targets, their declared dependencies and the metadata tables, and Cargo's two directories. It needs no network, downloads nothing and never creates or changes `Cargo.lock` ([[EVD-CARGO-NO-DEPS]]). A dependency on another crate in the repository is recognised by the path its entry carries. Dependencies are not resolved in this report, so the locked versions of external crates come from `Cargo.lock` itself ([[DES-LOCKFILE-HASHING]]). The lockfile task lets cargo bring that file up to date and reads it when it runs; graph creation does not read it.
 
-A path dependency that is no member of the workspace appears only as that path. When such a crate has no project of its own, the plugin requests a report for its manifest as well, to learn the path dependencies behind it ([[DES-INPUTS]]). These calls come on top of the one per workspace.
+**Redirections.** The report does not apply `[patch]`, `[replace]` or `paths`, and no report without dependency resolution holds them ([[EVD-CARGO-REDIRECTIONS]]). They are the one exception to reading everything from the report: the plugin parses Cargo's files for them itself ([[ADR-REDIRECTION-EDGES]]). For each workspace it reads the `[patch]` and `[replace]` entries with a `path` from the root manifest, and the `[patch]` entries with a `path` and the `paths` entries from the configuration of the workspace root, of every folder above it and of the Cargo home, following `include`. In each of these folders cargo reads `.cargo/config` where it exists and `.cargo/config.toml` otherwise, and in the Cargo home `config` or `config.toml` in the same way; these are the files that cargo reads for the workspace's tasks ([[DES-INVOCATION]]). A path resolves against the root manifest's folder, or in a configuration file against the folder above the one that holds the file. A `[patch]` in a member's manifest is ignored, as cargo ignores it. Reading runs no cargo and leaves `Cargo.lock` untouched. A root manifest or configuration file that cargo reads and the plugin cannot parse fails graph creation with an error that names it. A file that `include` names is skipped with a warning instead, because Cargo 1.91 ignores `include`.
+
+A path dependency that is no member of the workspace appears only as that path. When such a crate has no project of its own, the plugin requests a report for its manifest as well, to learn the path dependencies behind it ([[DES-INPUTS]]). So it does for a crate without a project that a `[patch]` or `[replace]` entry redirects to, from the root folder of the workspace that redirects, comparing folders through symbolic links; an entry whose folder holds no `Cargo.toml` gets no report. When cargo fails for such a crate, as it does for a crate in a workspace's folder that is not its member, which cargo builds as a patch but does not report, graph creation goes on with a warning that names the manifest and carries cargo's message, and the path dependencies behind that crate are not followed. These calls come on top of the one per workspace.
 
 Every cargo call of graph creation runs with `RUSTUP_AUTO_INSTALL=0`, set for these calls only, so a toolchain that is pinned for the folder the call starts in and that is not installed fails the call and graph creation instead of being installed ([[ADR-GRAPH-NO-TOOLCHAIN-INSTALL]]). rustup and Cargo choose the toolchain file and the configuration files by that folder ([[DES-INVOCATION]]). A workspace's report is requested once, in the folder of the first of its manifests that discovery reads, the shallowest one that Nx hands to the plugin ([[DES-DISCOVERY]]); that is the folder of the root manifest whenever Nx hands the root manifest to the plugin, where the workspace's tasks run as well. When Nx does not, because the root manifest is ignored or excluded while members are not, the report runs in a member's folder and the toolchain file that applies there decides the toolchain, so a toolchain pinned there and not installed fails graph creation with the same error. The report of a path dependency without a project starts in the root folder of the workspace whose member depends on it, directly or through other such crates.
 :::
@@ -338,9 +354,16 @@ The plugin's own error names the manifest paths and the remedy for each: the cra
 
 **Edges.** For each member, every dependency of kind normal, build or dev that resolves to a crate with an Nx project becomes an edge. That includes a path dependency on a member of another workspace: the target crate keeps its single project in its home workspace, where its own targets run in that [[TERM-WORKSPACE-CONTEXT]]. A path dependency on a crate without an Nx project produces no edge; its files reach the cache key as inputs ([[DES-INPUTS]]). Each edge names its two projects by the name Nx gives the project at the crate's root, as listed in the projects that `createDependencies` receives, because a `package.json` or `project.json` may have renamed it ([[EVD-NX-PROJECT-MERGE]]). Edges have Nx's type `implicit`, which names no source file, so that Nx takes them as returned on every graph computation: for the other types, Nx puts back the file dependencies it cached in an earlier computation for each file whose hash is unchanged, and a crate's edges depend on more than its own manifest ([[EVD-NX-EDGE-CACHE]]). The maintainer accepted the cost on 13 November 2026: `nx graph` labels the edges implicit and shows no file for them, and the default dependency reading of Nx release skips implicit edges, which the release work has to handle (nxr-jhdr3x).
 
+**Redirected crates.** A workspace's redirections name crates ([[DES-METADATA-REPORT]]): the crate in the folder of a `[patch]` or `[replace]` entry, and every crate at or below the folder of a `paths` entry, matched to projects by their real folders, through symbolic links ([[ADR-REDIRECTION-EDGES]]).
+
+- _Direct._ A dependency is redirected when its package name is the redirected crate's, the entry applies to its source (`crates-io`, the URL of a `[patch."<url>"]`, the URL of a `[replace]` specification, which is crates.io without one, or any source for `paths`), and the crate's version, from its report, satisfies the requirement. Cargo resolves it to that crate, so the edge is as real as a path dependency's. A member gets it for its own dependencies of every kind, and for those of the crates it reaches through normal or build dependencies without passing another member of the workspace, which has edges of its own. A requirement or a source that the plugin cannot evaluate, such as a pre-release or a registry named in `[patch.<name>]`, makes the dependency possible, not direct.
+- _Possible._ A member that has a registry or git dependency, of its own or of a path crate that it reaches through normal or build dependencies, and no direct redirection to a redirected crate, gets an edge to it all the same, because a registry or git crate can lead there. The edge is left out where the redirected crate already reaches the member through real dependencies of kind normal or build, that is path dependencies and direct redirections, and where two redirected crates may only possibly use each other: cargo would reject the first as a cycle and can have at most one direction of the second. The member's targets then get the crate's files as an input instead ([[DES-INPUTS]]).
+
+The edges are thereby a superset of the crates that cargo builds for a member ([[EVD-CARGO-REDIRECTIONS]]). The member itself is never its own target, and a redirected crate without a project gives no edge, only the input.
+
 **External crates.** The graph has no node for an external crate ([[ADR-LOCKFILE-TASK]]). A crate's locked dependencies reach its cache key through the lockfile task of its workspace ([[DES-LOCKFILE-HASHING]]).
 
-**Cycles.** A dev-dependency edge that closes a cycle is kept ([[ADR-ALL-DEP-KINDS]]). The plugin's targets declare no dependencies on other crates' targets except the lockfile task, which depends on nothing ([[REQ-NO-RUST-TASK-DEPS]]), so a project cycle does not become a task cycle through them.
+**Cycles.** A dev-dependency edge that closes a cycle is kept ([[ADR-ALL-DEP-KINDS]]), and so is an edge to a redirected crate, apart from those the paragraph on redirected crates leaves out. The plugin's targets declare no dependencies on other crates' targets except the lockfile task, which depends on nothing ([[REQ-NO-RUST-TASK-DEPS]]), so a project cycle does not become a task cycle through them.
 :::
 
 :::mara design DES-LOCKFILE-HASHING
@@ -375,5 +398,5 @@ Each Cargo workspace has one target, the lockfile task, that lets cargo bring `C
 
 **Merged project.** When the workspace folder also is an Nx project, a `package.json` script or a `project.json` target with the lockfile task's name replaces it, as it replaces any inferred target ([[EVD-NX-PROJECT-MERGE]], [[RISK-MIXED-PROJECT-MERGE]]). Renaming the lockfile task through `targetNames` avoids that; what the plugin does about replaced targets belongs to [[REQ-MIXED-PROJECTS]].
 
-**Not covered.** A `paths` override, and the contents of a path package that a crate reaches only through `[patch]` or `[replace]`, leave no trace in the digest; issue nxr-p5ybc0 covers them.
+**Redirected crates.** A `paths` override, and the contents of a path package that a crate reaches only through `[patch]` or `[replace]`, leave no trace in the digest; the edges to redirected crates bring their files into the keys of the members that may use them through `^` inputs ([[DES-PROJECT-GRAPH]], [[ADR-REDIRECTION-EDGES]]).
 :::

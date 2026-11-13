@@ -20,5 +20,9 @@
     "smol-toml": "^1.9.0",
     "tslib": "^2.3.0"
   },
+  "peerDependencies": {
+    "nx": "^24"
+  },
+  "executors": "./executors.json",
   "generators": "./generators.json"
 }
