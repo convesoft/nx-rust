@@ -119,6 +119,20 @@ const expected: Record<FixtureName, Expectation> = {
       ["apps/Billing.API/rust_v2", ["apps/Billing.API/rust_v2/crates/gateway"]],
     ],
   },
+  "crate-shapes": {
+    workspaces: [
+      [
+        "rust",
+        [
+          "rust/crates/cli",
+          "rust/crates/core",
+          "rust/crates/internal",
+          "rust/crates/perf",
+          "rust/crates/server",
+        ],
+      ],
+    ],
+  },
 };
 
 function expectedCalls({ workspaces, pathDependencies = [] }: Expectation): CargoCall[] {

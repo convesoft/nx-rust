@@ -14,7 +14,7 @@ Implements the accepted form of `REQ-RELEASE` and `DES-RELEASE` (`nx-rust/docs/r
 
 - [ ] The `VersionActions` implementation for `Cargo.toml`
 - [ ] Dependents and `Cargo.lock` after a bump
-- [ ] The publish target, in dependency order, absent for `publish = false`
+- [ ] The publish target, in dependency order, absent for `publish = false`; `targetNames` renames it like the other inferred targets (`DES-PLUGIN-OPTIONS`; `inferredTargetNames` and `inferTargets` in `nx-rust/src/graph/targets.ts`). The `crate-shapes` fixture has a crate with `publish = false`
 - [ ] The hack-crate dependency for workspaces with cargo-hakari
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

@@ -1,6 +1,8 @@
 # Configuration
 
-> **Status:** specified, not implemented yet.
+> **Status:** of these settings, only `targetNames` in the plugin options is
+> implemented. The metadata tables and the other plugin options are not read
+> yet.
 
 Most repositories need no configuration. When a crate or workspace needs
 something other than the default, you say so in the `Cargo.toml` that already

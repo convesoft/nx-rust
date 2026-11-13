@@ -2,10 +2,10 @@
 
 > **Status:** the plugin finds the Cargo workspaces and creates a project for
 > each crate and each workspace, with the default names and an edge for each
-> path dependency. The projects have no targets yet, and the `name`,
-> `namePrefix` and `project` settings of the metadata tables are not read yet,
-> so for now only a `name` in a crate folder's `project.json` or `package.json`
-> resolves a name collision. A crate that depends on
+> path dependency. The projects have the targets of [Targets](targets.mara.md),
+> which do not run yet. The `name`, `namePrefix` and `project` settings of the
+> metadata tables are not read yet, so for now only a `name` in a crate
+> folder's `project.json` or `package.json` resolves a name collision. A crate that depends on
 > another crate of the repository through a registry dependency that
 > `[patch]` redirects to that crate's path gets no edge to it, without a
 > message, so `affected` and the cache keys of that crate miss changes in the

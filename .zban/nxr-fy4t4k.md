@@ -21,5 +21,7 @@ Implements `REQ-INPUT-FILES`, `REQ-ENV-ALLOWLIST`, `REQ-TOOLCHAIN-KEY`, `REQ-CAC
 - [ ] The toolchain runtime input, run in the workspace root
 - [ ] Outputs: executables, `cdylib` and `staticlib` files for `build`, the whole doc folder of the artifact directory for the workspace project's `doc`, none elsewhere; nothing inside the build directory; no caching of `build` and `doc` when the artifact directory is outside the repository, and none of `doc` when two workspaces share one artifact directory
 - [ ] The cache-key matrix rows for all of the above
+- [ ] Set `cache: true` on `build`, `check`, `lint`, `test`, `fmt-check` and `doc` together with their inputs and outputs, as `DES-TARGETS` and `DES-OUTPUTS` give them. Until then nxr-t1ht7j leaves every inferred target uncached, because Nx's default inputs miss `Cargo.lock`, the workspace's manifest, the toolchain and the environment (`GOAL-TRUSTED-CACHE`); `target()` in `nx-rust/src/graph/targets.ts` sets it
+- [ ] Inputs of the uncached `fmt`, `bench` and `run`, as `DES-INPUTS` lists them (`CARGO_BUILD_WARNINGS` on `bench` and `run`), so that `nx affected` selects them; nxr-t1ht7j leaves them, and those of the cached targets, to Nx's default inputs, which select no crate target after a change to `Cargo.lock` or the workspace's manifest
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
