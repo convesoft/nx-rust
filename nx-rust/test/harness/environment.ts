@@ -42,6 +42,17 @@ export const HARNESS_TIMEOUT = 120_000;
  * the task's process (`Check failed: current == end_slot_index.`). The cache
  * files of the fixtures' random folders were also never removed.
  *
+ * `NX_USE_LOCAL` keeps an Nx daemon from installing `nx@latest`. Outside CI,
+ * a daemon that starts asks the latest Nx whether to offer Nx Console and
+ * whether the workspace's AI agent configuration is outdated, and for that
+ * installs it from the npm registry into `~/.nx/tmp`, about 73 MB for each
+ * daemon. It removes the installation when it stops, but not one that is
+ * still in progress. With the variable, the installed Nx answers both
+ * questions; it also makes `nx migrate`, `nx init` and
+ * `nx configure-ai-agents` run the installed Nx, which no test runs. `CI`
+ * would stop the download too, but changes more, such as whether `nx run`
+ * applies sync generators and whether pnpm requires a lockfile.
+ *
  * Nx keeps two caches in `/tmp/.nx/<uid>`, whatever `TMPDIR` says, and on
  * some machines `/tmp` is memory. One holds a copy of its native binary per
  * Nx version and installation; Nx here loads the binary from where it is
@@ -69,6 +80,7 @@ export function testEnvironment(
     env.PATH = [folder, ...rest].join(delimiter);
   }
   env.NX_DAEMON = "false";
+  env.NX_USE_LOCAL = "true";
   env.RUSTUP_AUTO_INSTALL = "0";
   env.DISABLE_V8_COMPILE_CACHE = "1";
   env.NX_SKIP_NATIVE_FILE_CACHE = "true";

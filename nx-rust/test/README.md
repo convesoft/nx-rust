@@ -227,7 +227,10 @@ variables that choose a toolchain or Cargo's directories, turns the Nx
 daemon off, stops rustup from installing toolchains, and puts rustup's
 folder first on `PATH`: Nx runs this repository's tests through
 `nx:run-commands`, which puts the folder of the Node executable first, where
-a system cargo would otherwise shadow rustup. It also keeps Nx's caches out
+a system cargo would otherwise shadow rustup. It sets `NX_USE_LOCAL`, so
+that an Nx daemon outside CI asks the installed Nx about Nx Console and AI
+agent configuration instead of installing `nx@latest` from the npm registry
+into `~/.nx/tmp`, which it does on every start. It also keeps Nx's caches out
 of `/tmp/.nx/<uid>`, which Nx uses whatever `TMPDIR` says and which is
 memory on some machines: Nx loads its native binary where it is installed
 instead of copying it there, and Node's compile cache, whose entries are
