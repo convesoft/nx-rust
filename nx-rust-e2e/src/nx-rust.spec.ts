@@ -70,12 +70,26 @@ describe("@convesoft/nx-rust", () => {
     });
 
     it(
-      "loads the fixture through the installed plugin",
+      "reads the fixture's workspace through the installed plugin",
       () => {
         const projects = JSON.parse(nx(projectDirectory, cargo, ["show", "projects", "--json"]));
 
-        // The plugin infers no project yet (nxr-7n0nqf).
+        // The plugin creates no project yet (nxr-1bv0wm), but it reads the
+        // workspace with one cargo call.
         expect(projects).toEqual([]);
+        expect(cargo.calls(projectDirectory)).toEqual([
+          {
+            cwd: "rust",
+            args: [
+              "metadata",
+              "--format-version",
+              "1",
+              "--no-deps",
+              "--manifest-path",
+              "{workspaceRoot}/rust/Cargo.toml",
+            ],
+          },
+        ]);
       },
       HARNESS_TIMEOUT,
     );

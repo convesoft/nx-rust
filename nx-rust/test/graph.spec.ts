@@ -4,8 +4,9 @@ describe("project graph of a fixture", () => {
   it(
     "loads the fixture through the plugin",
     async () => {
-      // The plugin infers no project yet (nxr-7n0nqf), so a project added by
-      // hand shows that the fixture reached Nx.
+      // The plugin creates no project yet (nxr-1bv0wm), so a project added by
+      // hand shows that the fixture reached Nx, and the cargo call that the
+      // plugin made shows that Nx loaded it.
       const graph = await loadFixtureGraph("subfolder-workspace", {
         files: { "rust/crates/api/project.json": JSON.stringify({ name: "probe" }) },
       });
@@ -13,7 +14,19 @@ describe("project graph of a fixture", () => {
       expect(Object.keys(graph.projects)).toEqual(["probe"]);
       expect(graph.projects.probe.root).toBe("rust/crates/api");
       expect(graph.dependencies).toEqual([]);
-      expect(graph.cargoCalls).toEqual([]);
+      expect(graph.cargoCalls).toEqual([
+        {
+          cwd: "rust",
+          args: [
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--manifest-path",
+            "{workspaceRoot}/rust/Cargo.toml",
+          ],
+        },
+      ]);
     },
     HARNESS_TIMEOUT,
   );
