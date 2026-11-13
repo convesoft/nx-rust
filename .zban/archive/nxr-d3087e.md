@@ -52,3 +52,31 @@ The maintainer answered the issue's three questions before work started: widen t
   - The warning in a task's output with the daemon on: nxr-rxzgbq, since the executor does not print graph-time warnings yet.
   - The real `inputs`/`outputs` cases: a step in nxr-fy4t4k.
   - The real `lockfile` case: a step in nxr-xq9ava.
+
+Review of pull request #32 (four findings, fixed in one round):
+
+- The guard now learns which layer changed a value from Nx's own code. `createDependencies` receives no source maps, so where a target differs from what the plugin inferred, it does the following:
+  - It runs Nx's default plugins (`nx/src/plugins/package-json` and `project-json`) on the `package.json` and `project.json` in the project's folder that Nx sees.
+  - It hands that layer, its own `createNodes` result and a source map naming its entry to Nx's `createTargetDefaultsResults`, which returns exactly the `nx.json#targetDefaults.<key>[<index>]` elements Nx laid over the target.
+  - A field that the folder's file sets without `"..."` is that file's and is not reported. Added `dependsOn` entries are resolved with Nx's `expandDependencyConfigSyntaxSugar` and `normalizeDependencyConfigProjects`.
+  - `readTargetDefaultsForTarget` is no longer used.
+- The four findings:
+  - The executor supplied by a `project.json`: the `build` entry is reported for that crate only.
+  - A harmless entry beside a `project.json` or `package.json` that replaces inputs: not reported. With `"..."` in that file, the entry is still reported.
+  - `projects: ["api*"]` on `api`: no warning; `mod*`: a warning.
+  - `init` cases for `fmt`, `build`, the executor key and `update` inputs, and an Nx copy without `createTargetDefaultsResults` through graph creation.
+- Combinations, each with a test:
+  - Executor and name keys both matching: only the executor's is reported.
+  - `targetNames` renaming `lint` to `clippy`: `clippy` is reported, `lint` is not.
+  - `"..."` plus `^build`: a warning.
+  - A `!tag:lang:rust` filter with tags from `[workspace.metadata.nx]`: nothing is reported.
+  - A `targets.update` table (#31) that keeps the inputs with `"..."`: an entry that replaces them is reported, one that keeps them is not.
+- Mara: `DES-TARGET-DEFAULT-GUARD` ("What counts", "Which layer"), its row in `DES-DIAGNOSTICS` for missing internal parts, and `VER-TARGET-DEFAULT-GUARD` with the new cases.
+- Filed nxr-8rcaxm at the maintainer's request (`nx add` writes empty entries for the plugin's executors), with a step in nxr-xq9ava. This pull request leaves `init` reporting and not editing.
+- Checks after merging `origin/main` at 65d5338 (#31):
+  - `pnpm nx run-many -t build lint test`: 17 suites, 510 tests passed.
+  - `pnpm nx format:check --all`: passed.
+  - `pnpm nx e2e nx-rust-e2e`: 19 of 19 passed.
+  - `mara schema validate`: valid.
+  - `mara project validate`: `valid: true`, evaluation complete, no diagnostics, every policy check passed.
+  - `zban check`: no problems.
