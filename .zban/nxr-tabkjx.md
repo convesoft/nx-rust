@@ -22,4 +22,4 @@ Implements `REQ-AFFECTED-TESTS`, `REQ-SELECTION-SAFETY` and steps 1 and 2 of `DE
 - [ ] Warn when cargo-affected is missing in a run in mode `full`
 - [ ] `--affectedTests=false` and the per-crate opt-out
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm exec nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.

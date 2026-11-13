@@ -17,4 +17,4 @@ Implements `REQ-METADATA-OVERRIDES` and `DES-METADATA-TABLES` (`nx-rust/docs/con
 - [ ] Workspace defaults, with the crate's value taking precedence and tags added up
 - [ ] The name override and workspace prefix resolve a collision
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm exec nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.

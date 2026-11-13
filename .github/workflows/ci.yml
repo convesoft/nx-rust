@@ -27,7 +27,7 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec nx run-many -t build lint test
+      - run: pnpm nx run-many -t build lint test
       - run: pnpm format:check
       - name: Install zban
         env:
@@ -63,4 +63,4 @@ jobs:
           rustup default stable
           cargo --version
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec nx e2e nx-rust-e2e
+      - run: pnpm nx e2e nx-rust-e2e

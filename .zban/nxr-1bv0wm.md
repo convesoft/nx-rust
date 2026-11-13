@@ -21,4 +21,4 @@ Implements `REQ-INFERRED-PROJECTS`, `REQ-PROJECT-NAMES`, `REQ-CROSS-WORKSPACE-DE
 - [ ] No external nodes yet: they come with nxr-xq9ava (`DES-PROJECT-GRAPH`)
 - [ ] Commands address crates by real package name and manifest path
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm exec nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.

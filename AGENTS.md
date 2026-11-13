@@ -143,10 +143,11 @@ changed, then validate with Mara again.
 - CI does not run the Mara validation yet, because the Mara version this
   knowledge base needs is not published (nxr-0x99we). Your local run is the
   only check of the knowledge base, so never skip it.
-- Before reporting work as done, run `pnpm exec nx run-many -t build lint test`
-  and `pnpm format:check`. Run `pnpm exec nx e2e nx-rust-e2e` when behaviour of
-  the built plugin changed. Run `mara schema validate`, `mara project validate`
-  and `zban check` when knowledge or issues changed. Report which checks ran.
+- Before reporting work as done, run `pnpm nx run-many -t build lint test` and
+  `pnpm format:check`. Run `pnpm nx e2e nx-rust-e2e` when behaviour of the
+  built plugin changed. Run `mara schema validate`, `mara project validate` and
+  `zban check` when knowledge or issues changed. Report which checks ran.
+- Run Nx as `pnpm nx <command>`; `pnpm exec` is not needed.
 - Write tests for behaviour named by the cited `VER-` items. Prefer a real
   `cargo`, the real Nx hasher and fixture workspaces over mocks for those
   checks (`verification.mara.md`).

@@ -19,4 +19,4 @@ Implements `REQ-INFERRED-TARGETS`, `REQ-TARGET-NAMES`, `REQ-NO-RUST-TASK-DEPS` a
 - [ ] No `dependsOn` between Rust crates, and none added to JS projects
 - [ ] Tests for each crate shape in the fixtures
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm exec nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.

@@ -16,4 +16,4 @@ Implements `REQ-TEST-RUNNER`, `REQ-DOCTESTS`, `DES-TEST-PHASES` and steps 3 to 5
 - [ ] Doctests as a second step, failing the crate's task when they fail
 - [ ] Build and run as separate phases inside the executor
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm exec nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.

@@ -18,4 +18,4 @@ Described under "How the plugin is tested" in `nx-rust/docs/verification.mara.md
 - [ ] A cache-key matrix runner: pairs of states with the verdict "must differ" or "must not differ", hashed with the real Nx hasher
 - [ ] The end-to-end project installs a fixture next to the plugin, and a cargo wrapper logs invocations
 
-Done when: one trivial graph test, one matrix row and one end-to-end test run against a fixture, in `pnpm exec nx run-many -t test` and `pnpm exec nx e2e nx-rust-e2e`.
+Done when: one trivial graph test, one matrix row and one end-to-end test run against a fixture, in `pnpm nx run-many -t test` and `pnpm nx e2e nx-rust-e2e`.

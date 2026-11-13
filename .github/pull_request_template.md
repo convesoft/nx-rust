@@ -4,9 +4,9 @@ Mara items:
 
 ## Checks
 
-- [ ] `pnpm exec nx run-many -t build lint test`
+- [ ] `pnpm nx run-many -t build lint test`
 - [ ] `pnpm format:check`
-- [ ] `pnpm exec nx e2e nx-rust-e2e`
+- [ ] `pnpm nx e2e nx-rust-e2e`
 - [ ] `mara schema validate && mara project validate`
 - [ ] `zban check`
 - [ ] The issue's `Done when` checks pass
