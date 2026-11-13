@@ -2,6 +2,7 @@ import type { CreateDependenciesContext, CreateNodes, RawProjectGraphDependency 
 import { failOnNameCollisions } from "./graph/collisions";
 import { projectEdges } from "./graph/edges";
 import { Registration, registrationOf } from "./graph/registration";
+import { failOnTargetDefaults } from "./graph/target-defaults";
 
 /**
  * The edges between the projects that this entry's `createNodes` created in
@@ -10,7 +11,9 @@ import { Registration, registrationOf } from "./graph/registration";
  *
  * It fails first when projects of the plugin still share a name once Nx has
  * merged the projects of all plugins and entries, which only the projects
- * and files that Nx passes here can show.
+ * and files that Nx passes here can show. It then reports the
+ * `targetDefaults` entries of `nx.json` that change the inferred targets,
+ * which only the merged projects show (`DES-TARGET-DEFAULT-GUARD`).
  *
  * Nx calls it as a method of its copy of the plugin for the entry, which is
  * `this`.
@@ -25,6 +28,7 @@ function createDependencies(
     return [];
   }
   failOnNameCollisions(graph, context);
+  failOnTargetDefaults(graph, context, this);
   return projectEdges(graph, context.projects);
 }
 

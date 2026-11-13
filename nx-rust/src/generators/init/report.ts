@@ -24,11 +24,12 @@ const cachingGuide =
   "https://github.com/convesoft/nx-rust/blob/main/nx-rust/docs/caching.mara.md#cargos-two-directories";
 
 /**
- * The report of step 3 of `init`: the tools of the table that are missing,
- * as warnings where the configuration needs them and on one line otherwise,
- * the workspaces whose build directory lies inside the repository, and how
- * to create a crate where there is none. The warnings that graph creation
- * gives are printed by the check itself.
+ * The report of step 3 of `init`: the warnings about `targetDefaults`
+ * entries that graph creation gives, the tools of the table that are
+ * missing, as warnings where the configuration needs them and on one line
+ * otherwise, the workspaces whose build directory lies inside the
+ * repository, and how to create a crate where there is none. The warnings
+ * that `createNodes` gives are printed by the check itself.
  *
  * @param env The environment whose `PATH` and `CARGO_HOME` say where tools are installed.
  */
@@ -39,7 +40,7 @@ export function initReport(
   env: NodeJS.ProcessEnv,
   tools: readonly OptionalTool[] = optionalTools,
 ): InitReport {
-  const report: InitReport = { warnings: [], info: [] };
+  const report: InitReport = { warnings: [...check.targetDefaultWarnings], info: [] };
   const context: ToolContext = { workspaceRoot, workspaces: check.workspaces, env };
   const notNeeded: string[] = [];
   for (const tool of tools) {

@@ -1,7 +1,8 @@
-import type { NxJsonConfiguration, PluginConfiguration } from "@nx/devkit";
+import type { NxJsonConfiguration, PluginConfiguration, ProjectConfiguration } from "@nx/devkit";
 import plugin = require("../../index");
 import type { CargoWorkspace } from "../../graph/discovery";
 import { registrationOf } from "../../graph/registration";
+import { checkTargetDefaults, ReadTargetDefaults } from "../../graph/target-defaults";
 
 /** The name under which `nx.json` lists the plugin. */
 export const pluginName = "@convesoft/nx-rust";
@@ -15,6 +16,8 @@ export interface GraphCheck {
   manifests: string[];
   /** The Cargo workspaces the entries found, each once, in the order they were found. */
   workspaces: CargoWorkspace[];
+  /** The warnings about `targetDefaults` entries that graph creation prints (`DES-TARGET-DEFAULT-GUARD`). */
+  targetDefaultWarnings: string[];
 }
 
 /** Graph creation would fail with the plugin's entries in `nx.json`. */
@@ -68,8 +71,10 @@ export function isPluginEntry(entry: PluginConfiguration): boolean {
  * `Cargo.toml` files of Nx's workspace context that the entry's `include` and
  * `exclude` let through, as graph creation does. Every check that graph
  * creation makes in `createNodes` therefore runs here too, and the warnings
- * it prints are printed again. `@nx/devkit`'s `addPlugin` runs a plugin the
- * same way before it registers one. Nx's project-configuration step is not
+ * it prints are printed again. The check of `targetDefaults` that graph
+ * creation makes in `createDependencies` runs on the projects that this
+ * step merges. `@nx/devkit`'s `addPlugin` runs a plugin the same way before
+ * it registers one. Nx's project-configuration step is not
  * part of its public API: the end-to-end suite checks it on each supported Nx
  * major (`REQ-COMPATIBILITY`).
  *
@@ -120,23 +125,67 @@ export async function checkGraphCreation(
       "the result of retrieveProjectConfigurations from nx/src/devkit-internals has no matchingProjectFiles list of file paths",
     );
   }
+  const projects = (result as { projects?: unknown }).projects;
+  if (typeof projects !== "object" || projects === null) {
+    throw new UnsupportedNxError(
+      nxVersion(workspaceRoot),
+      "the result of retrieveProjectConfigurations from nx/src/devkit-internals has no projects",
+    );
+  }
   const workspaces = new Map<string, CargoWorkspace>();
+  const targetDefaultWarnings: string[] = [];
+  const targetDefaultErrors: string[] = [];
   for (const { copy } of entries) {
-    const discovery = registrationOf(copy).graphForDependencies(workspaceRoot)?.discovery;
-    for (const workspace of discovery?.workspaces ?? []) {
+    const graph = registrationOf(copy).graphForDependencies(workspaceRoot);
+    for (const workspace of graph?.discovery.workspaces ?? []) {
       if (!workspaces.has(workspace.root)) {
         workspaces.set(workspace.root, workspace);
       }
     }
+    if (graph !== undefined) {
+      const report = checkTargetDefaults(
+        graph,
+        Object.values(projects as Record<string, ProjectConfiguration>),
+        nxJson,
+        copy.name,
+        () => targetDefaultsResolver(nx, workspaceRoot),
+      );
+      targetDefaultWarnings.push(...report.warnings);
+      if (report.error !== undefined) {
+        targetDefaultErrors.push(report.error);
+      }
+    }
+  }
+  if (targetDefaultErrors.length > 0) {
+    throw new GraphCheckError(targetDefaultErrors);
   }
   return {
     manifests: [...new Set(manifests as string[])].sort(),
     workspaces: [...workspaces.values()],
+    targetDefaultWarnings,
   };
+}
+
+/**
+ * Nx's resolver for target defaults, which the check of `targetDefaults`
+ * needs only where `nx.json` has an entry that changes an inferred target.
+ *
+ * @throws {UnsupportedNxError} When the installed Nx lacks it.
+ */
+function targetDefaultsResolver(nx: NxInternals, workspaceRoot: string): ReadTargetDefaults {
+  if (typeof nx.readTargetDefaultsForTarget !== "function") {
+    throw new UnsupportedNxError(
+      nxVersion(workspaceRoot),
+      "readTargetDefaultsForTarget from nx/src/devkit-internals is not a function",
+    );
+  }
+  return nx.readTargetDefaultsForTarget;
 }
 
 /** The internal parts of Nx that the check uses, as far as it uses them. */
 interface NxInternals {
+  /** Checked where it is used ({@link targetDefaultsResolver}). */
+  readTargetDefaultsForTarget?: ReadTargetDefaults;
   LoadedNxPlugin: new (
     plugin: object,
     entry: PluginConfiguration,

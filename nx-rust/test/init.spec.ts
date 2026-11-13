@@ -358,7 +358,11 @@ describe("init's report of tools", () => {
       writeFileSync(join(root, file), "");
     }
     const workspace = { root: "rust", report: {}, members: [] } as unknown as CargoWorkspace;
-    const check: GraphCheck = { manifests: ["rust/Cargo.toml"], workspaces: [workspace] };
+    const check: GraphCheck = {
+      manifests: ["rust/Cargo.toml"],
+      workspaces: [workspace],
+      targetDefaultWarnings: [],
+    };
     return initReport(check, root, env);
   }
 
