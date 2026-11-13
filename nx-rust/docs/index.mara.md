@@ -16,7 +16,7 @@ for users, followed by the requirements and design that govern that topic.
 | [Setup and compatibility](setup.mara.md)      | Supported versions, tools you need, adding the plugin, generators and error messages                   |
 | [Workspaces and projects](workspaces.mara.md) | How Cargo workspaces and crates become Nx projects, project names and the dependency graph             |
 | [Configuration](configuration.mara.md)        | Overrides in `Cargo.toml`, plugin options and target names                                             |
-| [Targets](targets.mara.md)                    | The inferred targets and why crates have no `^build`                                                   |
+| [Targets](targets.mara.md)                    | The targets of crates and workspaces, and why crates have no `^build`                                  |
 | [Caching](caching.mara.md)                    | What goes into a cache key, what is stored, and Cargo's two directories                                |
 | [Batching and features](execution.mara.md)    | One cargo call per group, and feature unification                                                      |
 | [Testing](testing.mara.md)                    | Test runners, affected tests and how the cache stays honest                                            |

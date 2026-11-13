@@ -26,11 +26,13 @@ call.
 ## What forms a group
 
 A group is the tasks of one kind, such as `test` or `lint`, in one Cargo
-workspace with one feature set, profile and target triple. Tasks in one group
-share one cargo invocation. Tasks that differ in any of these run separately,
-one group after another. So do tasks whose `.env` files, such as one in a
-crate's folder, give them different environment variables: each cargo call runs
-with the environment its tasks were keyed with.
+workspace whose cargo commands would differ only in the crates they select: one
+feature set, profile and target triple, and the same target options, such as a
+crate's switch for `--all-targets`. Tasks in one group share one cargo
+invocation. Tasks that differ in any of these run separately, one group after
+another. So do tasks whose `.env` files, such as one in a crate's folder, give
+them different environment variables: each cargo call runs with the environment
+its tasks were keyed with.
 
 Known limit: while a batch runs, Nx starts no other task. In a mixed repository
 JS tasks wait for the Rust batch ([[RISK-BATCH-BEHAVIOUR]]).
@@ -96,7 +98,7 @@ With `hakari`, the plugin adds what hakari alone does not cover:
 :status: accepted
 :satisfies: NEED-EFFICIENT-BUILDS
 
-Tasks of one [[TERM-GROUP]] that Nx runs in the same command are served by a single cargo invocation, without the user passing a flag. Each task still has its own result, its own terminal output and its own cache entry, and a task restored from the cache takes no part in the invocation. A task fails only when its own crate fails or a crate it depends on fails; a failure elsewhere in the invocation does not fail it.
+Tasks of one [[TERM-GROUP]] that Nx runs in the same command are served by a single cargo invocation, without the user passing a flag. Each task still has its own result, its own terminal output and its own cache entry, and a task restored from the cache takes no part in the invocation. A task fails only when its own crate fails or a crate it depends on fails; a failure elsewhere in the invocation does not fail it. Tasks whose invocations would differ in more than the crates they select never share one.
 :::
 
 :::mara requirement REQ-STABLE-FEATURES
@@ -120,7 +122,7 @@ The features with which a crate and its dependencies are compiled do not depend 
 
 The plugin's cargo executor declares a `batchImplementation` and `preferBatch: true` in `executors.json`. Nx then hands the executor all runnable tasks of that executor at once, without `--batch`, and still hashes, restores and caches each task individually ([[ADR-BATCH-EXECUTOR]]).
 
-The batch implementation splits its tasks into groups ([[TERM-GROUP]]): one per kind of task, Cargo workspace, feature set, profile and target triple. It runs the groups one after another, because each cargo call already uses every core and the groups of one workspace share a build lock. Each group is one cargo call, started in the workspace root ([[DES-INVOCATION]]), that selects the crates of the group's tasks as [[DES-UNIFICATION]] prescribes.
+The batch implementation splits its tasks into groups ([[TERM-GROUP]]): tasks share a group only when their cargo invocations would differ in nothing but the crates they select. A group has one kind of task, Cargo workspace, feature set, profile, target triple and set of command options, and one environment, as the next paragraph describes. It runs the groups one after another, because each cargo call already uses every core and the groups of one workspace share a build lock. Each group is one cargo call, started in the workspace root ([[DES-INVOCATION]]), that selects the crates of the group's tasks as [[DES-UNIFICATION]] prescribes.
 
 Nx computes each task's key with that task's environment, which includes the dotenv files it loads for the task: those in the crate's folder and those at the repository root named for the target or a configuration, such as `.env.test`. The batch process gets only the environment of the `nx` command and the root `.env`, `.env.local` and `.local.env` ([[EVD-NX-24-INPUT-SEMANTICS]]). The batch implementation therefore rebuilds each task's environment from the same files, in the order Nx reads them, splits a group further where those environments differ, and runs each cargo call with the environment of its tasks. No task runs with another environment than the one its key was computed with.
 
