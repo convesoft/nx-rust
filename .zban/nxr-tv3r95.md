@@ -18,4 +18,4 @@ Implements `REQ-ARTIFACT-TARGETS`, `REQ-ARTIFACT-CACHE`, `DES-ARTIFACT-STEPS` an
 - [ ] The napi CLI step: `.node` file, JS and type definitions
 - [ ] The napi CLI version and target triple in the key; generated files as outputs, not inputs
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm exec nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

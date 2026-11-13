@@ -18,4 +18,4 @@ Implements `REQ-TEST-MODE-KEY` and `DES-TEST-MODE` (`nx-rust/docs/testing.mara.m
 - [ ] The mode rule of `DES-TEST-MODE`: `NX_RUST_TEST_MODE`, the default per environment, the fallback without a baseline, and `--affectedTests=false`
 - [ ] Matrix rows for mode and baseline changes
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm exec nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

@@ -19,4 +19,4 @@ Implements `REQ-COMPATIBILITY` and `REQ-DIAGNOSTICS` (`nx-rust/docs/setup.mara.m
 - [ ] Task-time errors for a missing tool, naming the tool, the feature that needs it and how to get it
 - [ ] Nothing is installed by the plugin
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm exec nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

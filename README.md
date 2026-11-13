@@ -103,9 +103,9 @@ coding agents start with [AGENTS.md](AGENTS.md).
 
 ```sh
 pnpm install
-pnpm exec nx run-many -t build lint test
-pnpm exec nx e2e nx-rust-e2e          # publishes to a local registry and installs from it
-pnpm format:check
+pnpm nx run-many -t build lint test
+pnpm nx e2e nx-rust-e2e          # publishes to a local registry and installs from it
+pnpm nx format:check --all
 mara schema validate && mara project validate
 zban check
 ```

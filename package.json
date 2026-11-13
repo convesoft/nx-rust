@@ -4,8 +4,6 @@
   "private": true,
   "license": "MIT OR Apache-2.0",
   "scripts": {
-    "format": "oxfmt",
-    "format:check": "oxfmt --check",
     "lint": "nx run-many -t lint"
   },
   "dependencies": {

@@ -126,8 +126,8 @@ works.
 `nx-rust/README.md` is what npm shows. Keep it short, and link to the docs with
 absolute URLs. The root `README.md` is the repository's front page.
 
-Markdown is formatted with oxfmt: run `pnpm exec oxfmt <files>` on the pages you
-changed, then validate with Mara again.
+Markdown is formatted with oxfmt, which Nx runs: `pnpm nx format:write` formats
+the files you changed. Validate with Mara again afterwards.
 
 ## TypeScript and Nx
 
@@ -140,10 +140,17 @@ changed, then validate with Mara again.
 - CI runs on Linux only for the moment (`ADR-CI-LINUX-ONLY`). Do not add macOS
   jobs to a workflow until the user says the runners are usable again, and do
   not write code that assumes Linux.
-- Before reporting work as done, run `pnpm exec nx run-many -t build lint test`
-  and `pnpm format:check`. Run `pnpm exec nx e2e nx-rust-e2e` when behaviour of
+- CI does not run the Mara validation yet, because the Mara version this
+  knowledge base needs is not published (nxr-0x99we). Your local run is the
+  only check of the knowledge base, so never skip it.
+- Before reporting work as done, run `pnpm nx run-many -t build lint test` and
+  `pnpm nx format:check --all`. Run `pnpm nx e2e nx-rust-e2e` when behaviour of
   the built plugin changed. Run `mara schema validate`, `mara project validate`
   and `zban check` when knowledge or issues changed. Report which checks ran.
+- Run Nx as `pnpm nx <command>`; `pnpm exec` is not needed. Formatting goes
+  through Nx as well: `nx format:check` and `nx format:write` run oxfmt, and
+  without `--all` they cover only the files you changed. Do not add package
+  scripts that call oxfmt directly.
 - Write tests for behaviour named by the cited `VER-` items. Prefer a real
   `cargo`, the real Nx hasher and fixture workspaces over mocks for those
   checks (`verification.mara.md`).
