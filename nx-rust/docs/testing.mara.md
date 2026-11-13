@@ -42,7 +42,8 @@ affectedTests = false
 ```
 
 Setting the option to `true` in a workspace without `affectedTests` fails when
-the graph is created: the workspace setting turns selection on.
+the graph is created, and `--affectedTests=true` on the command line fails the
+task before cargo runs: the workspace setting turns selection on.
 
 Doctests always run when nextest is the runner: nextest does not run them, so
 the plugin runs `cargo test --doc` as a second step.

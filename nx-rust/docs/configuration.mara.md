@@ -162,6 +162,10 @@ elsewhere too, rename targets in the plugin options:
 }
 ```
 
+Two targets may not end up with one name: `{ "test": "build" }` fails graph
+creation and names the project, both targets and the name. A `targets` table in
+`Cargo.toml` uses a target's name after renaming.
+
 The full list of targets is on the [Targets](targets.mara.md) page.
 
 ## Options of targets
@@ -200,6 +204,10 @@ nx build api --profile=release
 plugin passes it to nextest as `--cargo-profile`, because nextest's own
 `--profile` selects a profile of `.config/nextest.toml`, and to the doctest step
 as `--profile`.
+
+`affectedTests = true` on a crate whose workspace does not use selection is an
+error: in a `Cargo.toml` it stops graph creation, and as `--affectedTests=true`
+on the command line it fails the task before cargo runs.
 
 The triple is `targetTriple`, not `target`, because `nx run-many -t` and
 `--target` already mean the Nx target. In v1 tests run on the host triple only.
@@ -348,11 +356,13 @@ Options of inferred targets are set under `targets.<name>.options`, in a configu
 
 `profile` names a Cargo profile. With the nextest runner, `test` passes it to `cargo nextest run` as `--cargo-profile`, because nextest takes `--profile` for a profile of its own configuration, and to the doctest step, `cargo test --doc`, as `--profile` ([[DES-TEST-RUN]], [[EVD-NEXTEST-CARGO-FLAGS]]). nextest takes the other flags of the table as cargo does.
 
-`affectedTests = false` as an option of `test` makes the task run the full suite in a workspace that uses selection. It is how a crate opts out of selection, `[package.metadata.nx.targets.test.options] affectedTests = false`, and what `--affectedTests=false` passes for one run ([[DES-TEST-RUN]]). The option set to `true` in a workspace without the `affectedTests` setting fails graph creation. The triple option is not called `target`, because `nx run`, `nx run-many` and `nx affected` take `--target` and `-t` themselves, so an option of that name could not be given on the command line ([[EVD-NX-24-OPTION-SEMANTICS]]).
+`affectedTests = false` as an option of `test` makes the task run the full suite in a workspace that uses selection. It is how a crate opts out of selection, `[package.metadata.nx.targets.test.options] affectedTests = false`, and what `--affectedTests=false` passes for one run ([[DES-TEST-RUN]]). In a workspace without the `affectedTests` setting, the option set to `true` in stored configuration, which is the plugin options, the workspace and package tables, or a target configuration that Nx holds in the graph, fails graph creation. Given as `--affectedTests=true` on the command line, which graph creation never sees, it makes the executor fail the task with the same message before it runs cargo; Nx hands such an override to the executor, also in a batch ([[EVD-NX-24-OPTION-SEMANTICS]]). The triple option is not called `target`, because `nx run`, `nx run-many` and `nx affected` take `--target` and `-t` themselves, so an option of that name could not be given on the command line. `--verbose` is Nx's own flag and no option of the plugin's targets; Nx adds `verbose: true` to the options of a single task only where the executor's schema declares `verbose` or sets `additionalProperties: true` ([[EVD-NX-24-OPTION-SEMANTICS]]).
 
 Three environment variables act on a run and are no options: `NX_RUST_TEST_MODE` ([[DES-TEST-MODE]]), `NX_RUST_LOCKED`, which replaces `locked` for one run ([[DES-INVOCATION]]), and `NX_RUST_ALLOW_UNSUPPORTED_NX` ([[DES-DIAGNOSTICS]]).
 
 **Precedence.** A setting takes its default, then the value in the plugin options, then the one in the workspace table, then the one in the package table, each replacing the one before. `tags`, `implicitDependencies`, `envInputs` and `runtimeInputs` add up instead: a crate has the values of every level, and no level removes what another set. This order is the plugin's own, applied to the projects it returns. Nx then applies `targetDefaults` from `nx.json`, and after them the `project.json` and `package.json` in the project's folder, so a value that either sets for a target, an option such as `features` included, replaces the one that the plugin gave it ([[EVD-NX-TARGET-DEFAULTS]], [[EVD-NX-PROJECT-MERGE]]).
+
+**Target names.** When `targetNames` gives two inferred targets of one project the same name, graph creation fails with an error that names the project, the two inferred targets and the resulting name, and says to change `targetNames`. Neither target replaces the other, because [[DES-TARGETS]] gives the project both. The rule for a `targets.<name>` table in Cargo metadata stands: under the name of an inferred target, which is its name after `targetNames`, it overrides that target, and under any other name it defines an extra target ([[DES-METADATA-TABLES]]).
 
 **Several entries.** `testRunner`, `affectedTests` and `featureUnification` are settings of a whole workspace. When entries of the plugin that receive manifests of one workspace give different values for one of them, an entry without the option counting as giving its default, and the workspace table does not set it, graph creation fails with a message that names the workspace, the setting and the entries by their place in the `plugins` of `nx.json`. An entry learns of the others from the `plugins` of `nx.json` in the context Nx passes to its `createNodes`, which holds every entry, also under plugin isolation. It takes the manifests that another entry receives by applying that entry's `include` and `exclude` to the `Cargo.toml` files of Nx's workspace context, as Nx does ([[EVD-NX-24-ENTRY-CONTEXT]]).
 

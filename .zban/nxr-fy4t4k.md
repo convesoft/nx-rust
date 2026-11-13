@@ -17,7 +17,7 @@ Implements `REQ-INPUT-FILES`, `REQ-ENV-ALLOWLIST`, `REQ-TOOLCHAIN-KEY`, `REQ-CAC
 - [ ] The whole crate folder as the crate-file input, and real paths for workspace files, including every `.cargo/config.toml` and `rust-toolchain.toml` that applies
 - [ ] Inputs for path dependencies without a project, with the warning where Nx cannot see them, and for tool configuration files
 - [ ] `^` inputs over normal, build and dev-dependency edges
-- [ ] The environment allowlist, and the repository's `envInputs` and `runtimeInputs` from all three levels of `DES-PLUGIN-OPTIONS`, added up, in the crate's own named input that dependents reach through `^`, not on single targets
+- [ ] The environment allowlist and the inputs the repository adds, placed as `DES-INPUTS` says
 - [ ] The toolchain runtime input, run in the workspace root
 - [ ] Outputs: executables, `cdylib` and `staticlib` files for `build`, the whole doc folder of the artifact directory for the workspace project's `doc`, none elsewhere; nothing inside the build directory; no caching of `build` and `doc` when the artifact directory is outside the repository, and none of `doc` when two workspaces share one artifact directory
 - [ ] The cache-key matrix rows for all of the above
