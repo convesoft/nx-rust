@@ -158,7 +158,9 @@ tests, so that a test can compare the text.
 
 **`runNx(workspace, args, env)`** runs Nx with static output, put before
 `args` so that it stays Nx's own option when `args` holds `--`, and returns
-the output without colours. **`taskCalls(workspace)`** returns the logged
+the output without colours. It sets `NX_SKIP_LOG_GROUPING`, so that the output
+is the same in GitHub Actions, where Nx would otherwise group each task's
+output and start its `> nx run` line with `::group::` and a status icon. **`taskCalls(workspace)`** returns the logged
 cargo calls of tasks, without graph creation's `cargo metadata` and without
 the lockfile task's `cargo update --workspace`, which
 **`lockfileCalls(workspace)`** returns, and

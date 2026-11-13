@@ -12,6 +12,7 @@ import {
   InputSettings,
   InputSubject,
   lockfileInputs,
+  pluginVersionInput,
   repositoryDefaultInputs,
   targetInputs,
 } from "./inputs";
@@ -235,7 +236,8 @@ export interface CacheOptions {
  * that the configuration caches anyway. The targets that `DES-INPUTS`
  * covers get their inputs, the lockfile task those of
  * `DES-WORKSPACE-TARGETS` and its digest folder as its output, and `audit`,
- * `deny` and `update` keep the inputs that `inferTargets` gave them.
+ * `deny` and `update` keep the inputs that `inferTargets` gave them, with
+ * the plugin's input added, which every inferred target has.
  *
  * A target that stays cached, other than `fmt-check`, depends on the
  * lockfile task of its workspace, the project at the workspace's root
@@ -302,9 +304,7 @@ export function configureCaching(
       name === "lockfile"
         ? lockfileInputs(subject, context)
         : targetInputs(name, subject, context, settings, readsDigest);
-    if (inputs !== undefined) {
-      target.inputs = inputs;
-    }
+    target.inputs = inputs ?? [...(target.inputs ?? []), pluginVersionInput(context.plugin)];
     if (name === "lockfile") {
       target.outputs = [`{workspaceRoot}/${digestFolder(workspaceRoot)}`];
       if (metadata !== undefined) {

@@ -263,10 +263,12 @@ describe("inferred targets", () => {
         "{workspaceRoot}/rust/crates/perf/Cargo.toml",
         "{workspaceRoot}/rust/crates/server/Cargo.toml",
       ]);
+      // Each also has the plugin's input, which caching.spec.ts checks.
       expect(targets.audit.inputs).toEqual([
         "{projectRoot}/Cargo.lock",
         "{projectRoot}/Cargo.toml",
         "{projectRoot}/.cargo/audit.toml",
+        { externalDependencies: [] },
       ]);
       expect(targets.deny.inputs).toEqual([
         "{projectRoot}/Cargo.lock",
@@ -279,10 +281,12 @@ describe("inferred targets", () => {
         "{workspaceRoot}/rust/crates/internal/Cargo.toml",
         "{workspaceRoot}/rust/crates/perf/Cargo.toml",
         "{workspaceRoot}/rust/crates/server/Cargo.toml",
+        { externalDependencies: [] },
       ]);
       expect(targets.update.inputs).toEqual([
         "{projectRoot}/Cargo.lock",
         "{projectRoot}/Cargo.toml",
+        { externalDependencies: [] },
       ]);
       // The other targets have those of DES-INPUTS, which caching.spec.ts checks.
       for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt", "run"]) {
