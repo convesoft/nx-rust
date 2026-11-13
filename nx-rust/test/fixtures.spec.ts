@@ -88,6 +88,9 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
     },
     others: ["third_party/fork"],
   },
+  "declared-files": {
+    workspaces: { rust: ["rust/crates/api", "rust/crates/app", "rust/crates/other"] },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.
