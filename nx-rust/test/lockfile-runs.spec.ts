@@ -225,6 +225,8 @@ describe("the lockfile task", () => {
         expect(run.status).toBe(1);
         expect(run.output).toMatch(/--locked/);
         expect(run.output).toContain("Cargo.lock");
+        // Cargo's message says what to do.
+        expect(run.output).toContain("remove the --locked flag");
         expect(run.output).toContain("rust:lockfile");
         expect(lockfileCalls(workspace)).toEqual([
           { cwd: "rust", args: ["update", "--workspace", "--locked"] },

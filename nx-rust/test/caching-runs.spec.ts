@@ -200,22 +200,24 @@ describe("a run with the plugin's executor", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each<[string, string, (root: string) => Record<string, string>, string]>([
+  it.each<[string, string, (root: string) => Record<string, string>, string, string]>([
     [
       "two workspaces share one artifact directory",
       "scaffold:fmt-check",
       () => ({}),
       "shares Cargo's artifact directory target with",
+      "To cache it, give each workspace an artifact directory of its own with build.target-dir in its .cargo/config.toml.",
     ],
     [
       "the artifact directory lies outside the repository",
       "app:fmt-check",
       (root) => ({ CARGO_TARGET_DIR: join(root, "..", "target-outside") }),
       "outside the repository, where Nx cannot store files",
+      "To cache them, set build.target-dir in a .cargo/config.toml of the workspace to a folder inside the repository, or unset CARGO_TARGET_DIR.",
     ],
   ])(
     "repeats the warning of graph creation in the output of a task, and init prints it, where %s (VER-SETUP)",
-    async (_case, task, env, warning) => {
+    async (_case, task, env, warning, remedy) => {
       const workspace = FixtureWorkspace.create("two-workspaces", {
         ".cargo/config.toml": (text) =>
           task === "scaffold:fmt-check" ? '[build]\ntarget-dir = "target"\n' : (text ?? "# none\n"),
@@ -226,6 +228,7 @@ describe("a run with the plugin's executor", () => {
         // The task's own output starts after its header; graph creation prints before it.
         const taskOutput = result.output.slice(result.output.indexOf(`> nx run ${task}`));
         expect(taskOutput).toContain(warning);
+        expect(taskOutput).toContain(remedy);
 
         workspace.reset({
           "nx.json": "{}\n",

@@ -552,6 +552,7 @@ describe("init", () => {
               "`cargo metadata` failed for the Cargo workspace of rust/Cargo.toml",
               `toolchain '${toolchain}'`,
               "is not installed",
+              "Fix what cargo reports, so that `cargo metadata --no-deps` succeeds in rust.",
             ),
         );
         expect(toolchains()).toBe(before);
@@ -617,6 +618,9 @@ describe("init", () => {
             expect(output).toContain(
               `"targetNames" in the options of the ${pluginName} entry in nx.json gives two inferred targets of one project the same name`,
             );
+            expect(output).toContain(
+              'Change "targetNames" so that every inferred target keeps a name of its own.',
+            );
             expect(output).toContain("nx.json is unchanged.");
             expect(changed).toEqual([]);
           },
@@ -641,7 +645,7 @@ describe("init", () => {
           "rust/crates/model/Cargo.toml": (manifest) =>
             `${manifest}\n[package.metadata.nx.targets.test]\ninputs = ["default"]\n`,
         },
-        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test] sets "inputs" without "..." on the inferred target "test".',
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test] sets "inputs" without "..." on the inferred target "test". The list would replace the inferred inputs, and the cache key would lose the toolchain, the environment and the files of the crate\'s dependencies. Put "..." where the inferred inputs belong, such as inputs = ["...", { env = "DATABASE_URL" }].',
       ],
       [
         "a key under the options of a target table that the executor does not know",
@@ -720,6 +724,9 @@ describe("init", () => {
             expect(output).toContain(
               `nx.json: nx-rust does not know the key "namePrefix" in the options of the ${pluginName} entry.`,
             );
+            expect(output).toContain(
+              '"namePrefix" can be set in [workspace.metadata.nx] of a workspace\'s root manifest.',
+            );
             expect(output).toContain("nx.json is unchanged.");
             expect(changed).toEqual([]);
           },
@@ -742,8 +749,54 @@ describe("init", () => {
               "`cargo metadata` failed for the Cargo workspace of tools/Cargo.toml",
             );
             expect(output).toContain("cargo exited with status 101");
+            expect(output).toContain(
+              "Fix what cargo reports, so that `cargo metadata --no-deps` succeeds in tools.",
+            );
             expect(output).toContain("nx.json is unchanged.");
             expect(changed).toEqual([]);
+          },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "stops a second run on an nx.json that lists the plugin without the executors' entries, and writes nothing",
+      () =>
+        runInit(
+          "subfolder-workspace",
+          {
+            "nx.json": `${JSON.stringify({ plugins: [pluginName] })}\n`,
+            "rust/crates/api/Cargo.toml": "[package\n",
+          },
+          (workspace, { status, output, changed }) => {
+            expect(status).toBe(1);
+            expect(output).toContain(
+              "Nx cannot create the project graph with nx-rust as nx.json registers it.",
+            );
+            expect(output).toContain(
+              "`cargo metadata` failed for the Cargo workspace of rust/Cargo.toml",
+            );
+            expect(output).toContain("nx.json is unchanged.");
+            expect(output).not.toContain("to targetDefaults in nx.json");
+            expect(changed).toEqual([]);
+            expect(workspace.cargoCalls()).toEqual([workspaceCall("rust")]);
+          },
+          // As above: the harness cannot load the registered plugin by name.
+          ["--skipProjectGraph"],
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "stops with Nx's error when a crate has the name of a JS project in another folder",
+      () =>
+        runInit(
+          "subfolder-workspace",
+          { "web/project.json": '{ "name": "api" }\n' },
+          (_workspace, result) => {
+            expectStopped(result, "The following projects are defined in multiple locations:");
+            expect(result.output).toContain("  - web");
+            expect(result.output).toContain("  - rust/crates/api");
           },
         ),
       HARNESS_TIMEOUT,
@@ -907,7 +960,9 @@ describe("init with an Nx whose internals differ", () => {
 
   /**
    * Runs init on the fixture with Nx's internals as `changes` make them, on
-   * top of the working stand-ins, and returns its error and changes.
+   * top of the working stand-ins, and returns its error and changes: those
+   * in Nx's file tree, which Nx writes only after a generator that
+   * succeeds, and the files that changed on disk during the run.
    */
   async function initWith(
     changes: Partial<Record<"internals" | "plugins" | "files", Change>> = {},
@@ -926,11 +981,14 @@ describe("init with an Nx whose internals differ", () => {
     const { initGenerator } = require("../src/generators/init/init");
     const { FsTree } = require("nx/src/generators/tree");
     const tree = new FsTree(workspace.root, false);
+    const before = repositoryFiles(workspace.root);
     const error = await initGenerator(tree, {}).then(
       () => undefined,
       (e: unknown) => e,
     );
-    return { error, changed: tree.listChanges().map((change: { path: string }) => change.path) };
+    const inTree: string[] = tree.listChanges().map((change: { path: string }) => change.path);
+    const onDisk = changedFiles(before, repositoryFiles(workspace.root));
+    return { error, changed: [...new Set([...inTree, ...onDisk])].sort() };
   }
 
   /** The error for `detail`, as init words it. */
