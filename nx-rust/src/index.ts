@@ -3,6 +3,7 @@ import { checkNxOnLoad } from "./compatibility/nx-version";
 import { preTasksExecution } from "./executors/nx-command";
 import { failOnNameCollisions } from "./graph/collisions";
 import { projectEdges } from "./graph/edges";
+import { failOnPluginVersionOption } from "./graph/plugin-version";
 import { Registration, registrationOf } from "./graph/registration";
 import { failOnTargetDefaults } from "./graph/target-defaults";
 import { failOnAffectedTestsOption } from "./graph/target-tables";
@@ -16,9 +17,10 @@ import { failOnAffectedTestsOption } from "./graph/target-tables";
  * merged the projects of all plugins and entries, which only the projects
  * and files that Nx passes here can show, and when what Nx merged over a
  * crate's `test` target turns on `affectedTests` where the workspace does
- * not use selection. It then reports the `targetDefaults` entries of
- * `nx.json` that change the inferred targets, which only the merged
- * projects show (`DES-TARGET-DEFAULT-GUARD`).
+ * not use selection, and when it gives an inferred target a `pluginVersion`
+ * that the plugin did not set (`DES-PLUGIN-OPTIONS`). It then reports the
+ * `targetDefaults` entries of `nx.json` that change the inferred targets,
+ * which only the merged projects show (`DES-TARGET-DEFAULT-GUARD`).
  *
  * Nx calls it as a method of its copy of the plugin for the entry, which is
  * `this`.
@@ -35,7 +37,9 @@ function createDependencies(
   failOnNameCollisions(graph, context);
   failOnAffectedTestsOption(graph, context.projects);
   const edges = projectEdges(graph, context.projects);
-  return failOnTargetDefaults(graph, context, this).then(() => edges);
+  return failOnPluginVersionOption(graph, context, this)
+    .then(() => failOnTargetDefaults(graph, context, this))
+    .then(() => edges);
 }
 
 /**

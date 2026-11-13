@@ -1,6 +1,7 @@
 import type { ExecutorContext, Task } from "@nx/devkit";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { cargoMetadataOf } from "../graph/collisions";
 import { uncachedByDesign } from "../graph/outputs";
 import {
@@ -10,7 +11,7 @@ import {
   type TargetCargoMetadata,
   targetCargoMetadataKey,
 } from "../graph/targets";
-import { cargoArguments, type CargoTargetOptions } from "./command";
+import { cargoArguments, type CargoTargetOptions, pluginVersionOption } from "./command";
 import { recordedNxCommand } from "./nx-command";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
 
@@ -112,9 +113,11 @@ export async function runTask(
  *   `test` or `bench`, or is cached while `CARGO_BUILD_TARGET` or
  *   `build.target` in Cargo's configuration chooses its triple and the
  *   task's options name none (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
- *   `false`, or when `args` does not split into words.
+ *   `false`, when `args` does not split into words, or when the run gives
+ *   `pluginVersion` another value than the target's (`DES-PLUGIN-OPTIONS`).
  */
 // @mara implements DES-OUTPUTS
+// @mara implements DES-PLUGIN-OPTIONS
 export function taskInvocation(
   executor: PluginExecutor,
   options: CargoTargetOptions,
@@ -177,6 +180,7 @@ export function taskInvocation(
     );
   }
   const locked = lockedMode(metadata.locked, env.NX_RUST_LOCKED);
+  const configured = configuredOptions(context);
   let examined: TaskOptions;
   try {
     examined = taskOptions({
@@ -184,12 +188,21 @@ export function taskInvocation(
       target: metadata.target,
       executor,
       options: options as Record<string, unknown>,
-      configured: configuredOptions(context),
+      configured,
       graphTask: graphTaskOf(context),
       record: recordedNxCommand(env),
     });
   } catch (error) {
     throw error instanceof OptionError ? new TaskError(error.message) : error;
+  }
+  // Graph creation has checked the target's own value; a value for this run
+  // alone comes from the command line or from a task that forwards its
+  // options. Words after `--` that `run` passes to its binary are no option.
+  const given = examined.options.pluginVersion;
+  if (given !== undefined && !isDeepStrictEqual(given, configured[pluginVersionOption])) {
+    throw new TaskError(
+      `${task}: this run gives the option "pluginVersion" the value ${JSON.stringify(given)}, but only @convesoft/nx-rust sets that option, to carry its version into the cache key. The value comes from the command line, such as --pluginVersion, or from a task that forwards its options to this one: leave it out. The task does not run, so that Nx stores no result for it.`,
+    );
   }
   const args = cargoArguments(
     {
