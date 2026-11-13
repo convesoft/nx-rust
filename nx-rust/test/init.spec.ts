@@ -556,6 +556,30 @@ describe("init", () => {
         },
         'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test] sets "inputs" without "..." on the inferred target "test".',
       ],
+      [
+        "a key under the options of a target table that the executor does not know",
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx.targets.test.configurations.ci]\ncoverage = true\n`,
+        },
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.configurations.ci] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the inferred target "test", does not know.',
+      ],
+      [
+        "an option in a target table that the target does not take",
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx.targets.test.options]\ntargetTriple = "x86_64-unknown-linux-gnu"\n`,
+        },
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.options] sets the option "targetTriple", which the inferred target "test" does not take.',
+      ],
+      [
+        "pluginVersion in a target table",
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx.targets.build.options]\npluginVersion = "0.0.0"\n`,
+        },
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build.options] sets the option "pluginVersion", which only the plugin sets: it carries the plugin\'s version into the cache key, and a value set by hand would replace it, so that Nx could restore results of another version of the plugin. Remove it.',
+      ],
       ...(
         [
           ['options = "broken"', 'has to be a table, not "broken".'],

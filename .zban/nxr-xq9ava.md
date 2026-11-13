@@ -6,6 +6,8 @@ parent: nxr-w9qa5f
 blocked_by:
   - nxr-pn1hwr
   - nxr-fy4t4k
+related:
+  - nxr-8rcaxm
 created_at: 2026-11-12T18:20:01Z
 ---
 
@@ -29,5 +31,7 @@ Checked by `VER-CACHE-KEYS`, `VER-TARGETS` and `VER-SETUP`. `EVD-CARGO-LOCK-CHEC
 - [ ] The rows of `VER-CACHE-KEYS` for the lockfile (sibling requirement, feature, `[replace]`, the registry case, an edge change between current lockfiles) and its end-to-end checks, with `--exclude-task-dependencies` among them
 - [ ] The `lockfile` checks of `VER-TARGETS` and `VER-SETUP`
 - [ ] Add `lockfile` to `inferredTargetNames` and `inferTargets` (`nx-rust/src/graph/targets.ts`), so that `targetNames` accepts and renames it with the collision check (`DES-TARGETS`, `DES-PLUGIN-OPTIONS`); until then `targetNames` rejects the key `lockfile`. Add the `dependsOn` of the cached crate targets other than `fmt-check` on it (`REQ-NO-RUST-TASK-DEPS`, `DES-LOCKFILE-HASHING`). The tests in `nx-rust/test/targets.spec.ts` that no inferred target has a `dependsOn`, that the task graph of `nx run-many -t build test lint` has no edges, that a JS `^build` reaches only the crate's `build`, and the expected target lists of workspace projects then change with this issue, as does the end-to-end check of the task graph in `nx-rust-e2e/src/nx-rust.spec.ts`
+- [ ] Add the case of `VER-TARGET-DEFAULT-GUARD` for a target default that replaces a crate target's `dependsOn` and so loses the dependency on the `lockfile` task to `nx-rust/test/target-defaults.spec.ts`, with the real dependency in place of the stand-in there. The report compares with the inferred `dependsOn` (`DES-TARGET-DEFAULT-GUARD`), so it reports this without a change, and `build: { dependsOn: ["^build"] }` then fails graph creation: the warning cases of that file, `init`'s included, need `"..."` in the list from then on
+- [ ] The executor of the `lockfile` task (`@convesoft/nx-rust:lockfile`) needs an empty target-default entry from `nx add`, as nxr-8rcaxm gives the plugin's other executors: add it to that list if nxr-8rcaxm has landed, or leave a note there if it has not
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
