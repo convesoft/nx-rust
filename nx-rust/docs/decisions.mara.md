@@ -441,12 +441,13 @@ Several things the plugin uses are not stable: Cargo's `resolver.feature-unifica
 :mid: 01M78FHG7FMS3SAP65G9TME7FF
 :title: Two plugins describe one folder differently
 :status: accepted
-:likelihood: likely
+:likelihood: almost-certain
 :consequence: moderate
 :threatens: NEED-JS-BRIDGE
 :threatens: REQ-WORKSPACE-PROJECT
+:threatens: REQ-PROJECT-NAMES
 
-A napi or wasm crate usually has `Cargo.toml` and `package.json` side by side, so this plugin and Nx's JS plugin both create a project for the folder. How Nx merges their names and targets is not confirmed. The project could get an unexpected name, or one plugin's `build` or `test` could replace the other's. The same question arises for the workspace project, when a Cargo workspace sits in a folder that already is an Nx project, such as the repository root. Its name is therefore decided only after the check. [[REQ-MIXED-PROJECTS]] is the planned mitigation. To check on the supported Nx versions.
+A napi or wasm crate usually has `Cargo.toml` and `package.json` side by side, so this plugin and Nx's `package.json` plugin both create a project for the folder. Nx merges them into one project, and it applies `package.json` and `project.json` after every plugin listed in `nx.json` ([[EVD-NX-PROJECT-MERGE]]). The project is therefore named by `package.json`, or by a `project.json` that sets a name, and not after the crate. A script or `project.json` target that has the name of an inferred target, such as `build` or `test`, and runs something else replaces the inferred target, with its cache settings and inputs, without a message. The same happens to the workspace project when a Cargo workspace sits in a folder that already is an Nx project, such as a repository root with a `project.json` or with an `nx` key in its `package.json`. An edge or reference that names such a project by its crate name misses it. [[REQ-MIXED-PROJECTS]] is the planned mitigation. Checked on Nx 24.0.6; to check again on each Nx major the plugin supports.
 :::
 
 :::mara risk RISK-NAPI-TOOLING
@@ -548,6 +549,28 @@ An experiment with cargo 1.99.1 on 12 November 2026. The workspace had two membe
 - Run in a crate that lies inside the workspace folder without being a member, the command failed with Cargo's message "current package believes it's in a workspace when it's not", which names both manifests and the remedies.
 
 The workspace was a toy, so this says nothing about how long the call takes on a large one.
+:::
+
+:::mara evidence EVD-NX-PROJECT-MERGE
+:mid: 01M7A0S43EXZZGRM5WND8Z0BBG
+:title: How Nx 24.0.6 merges two plugins' projects at one root
+:status: accepted
+:supports: RISK-MIXED-PROJECT-MERGE
+:supports: REQ-WORKSPACE-PROJECT
+
+An experiment on 13 November 2026 with `nx` and `@nx/js` 24.0.6, TypeScript 6.0.3, pnpm 12.18.0, Node 26.12.0 and cargo 1.100.0 on Linux, together with a reading of the same `nx` package (`project-graph/utils/project-configuration-utils.js`, `project-configuration/project-nodes-manager.js` and `target-merging.js`, `plugins/package-json/create-nodes.js`).
+
+The throwaway pnpm workspace, outside this repository, had a Cargo workspace at its root with three member crates. One crate folder also held a `package.json` that `pnpm-workspace.yaml` listed, with a name other than the crate's and with `build` and `test` scripts. A JS package depended on it with `workspace:*`. A stand-in for this plugin, listed in `nx.json`, ran `cargo metadata --format-version 1 --no-deps --offline` for each workspace root manifest. It returned one project per member, named after the crate, with tags, metadata and `build` and `test` targets that ran cargo with `cache` and `inputs` set, and a workspace project at the workspace folder with `fmt`, `audit` and `deny`. Its `createDependencies` returned an edge for each path dependency between members and from the workspace project to each member. Each case was read with `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false pnpm exec nx graph --file=out/graph.json` and `nx show projects`, and one target was run with `nx run`.
+
+- **Order.** Nx merges all projects returned for one root into one project. It merges the plugins listed in `nx.json` in their order, then target defaults, then its built-in `package.json` and `project.json` plugins, in that order. No position in `nx.json` puts a plugin after those two.
+- **Name.** A later layer replaces the name. A folder whose `package.json` Nx reads takes its name from that file (`nx.name`, or else `name`), and a `project.json` that sets a name overrides both, whatever the order in `nx.json`. A `project.json` without a name kept the earlier name. Of two plugins listed in `nx.json`, the later one's name won. Nx reads a `package.json` only when the package manager's workspaces list it or a `project.json` sits beside it, and the root `package.json` also when it has an `nx` key. A crate's `package.json` outside the workspaces left the crate's project, name and targets unchanged.
+- **Targets.** Targets with different names were all kept. Two targets with one name are merged only when they have the same executor and command, or when one of them names neither; otherwise the later one replaces the earlier one entirely, including `cache`, `inputs` and `outputs`. A `package.json` script is a target with the executor `nx:run-script`, so the scripts `build` and `test` replaced the cargo targets, and `nx run` of the merged project's `build` ran the script. A `project.json` target that set only `inputs` and `outputs` kept the cargo command and `cache`, and replaced the list of inputs. Between `@nx/js/typescript` and the stand-in, the plugin listed later in `nx.json` won `build`.
+- **Tags, implicit dependencies and metadata.** The tags of all layers were united and their implicit dependencies combined. Metadata was merged key by key: objects such as `targetGroups` were combined, lists under one key concatenated, and a plain value such as `description` replaced by the later layer's.
+- **Edges.** In `createDependencies`, `context.projects` is keyed by the merged names, and each entry carries its root. An edge whose target was the crate name of a project that `package.json` had renamed was dropped without a message. An edge whose source was such a name failed graph creation with "Source project does not exist", and none of that plugin's edges were kept. Edges whose ends were looked up by root were all present. A `dependsOn` entry that named the crate was rewritten to the merged name, and the JS package's `workspace:*` dependency became an edge to the merged project.
+- **Workspace project at the root.** Without a root `project.json` and without an `nx` key in the root `package.json`, the workspace project stood alone under the stand-in's name. With either, it merged into the root project and took that file's name. The root scripts `audit` and `lint` and a `project.json` target `fmt` replaced or joined the workspace targets by the rules above, and the merged project depended on every member.
+- **Collisions.** A crate and a JS package with one name in different folders made Nx fail with its own message, "The following projects are defined in multiple locations", which lists both folders and recommends a `project.json`. A lookup by root in `context.projects` finds only one of two projects that share a name. When the stand-in returned an edge with the missing end undefined, Nx failed with "Cannot read properties of undefined (reading '1')" instead.
+
+For a crate folder that also is a JS project, this contradicts the rule of [[REQ-PROJECT-NAMES]], [[ADR-PROJECT-NAMES]] and [[DES-PROJECT-GRAPH]] that a project is named after its crate or its `name` override: no plugin listed in `nx.json` can set that project's name. The stand-in modelled the planned plugin; the plugin itself and other Nx versions were not tested.
 :::
 
 :::mara evidence EVD-NX-FORMAT
