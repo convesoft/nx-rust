@@ -2,8 +2,8 @@
 
 > **Status:** the plugin finds the Cargo workspaces and creates a project for
 > each crate and each workspace, with the default names and an edge for each
-> path dependency. The projects have the targets of [Targets](targets.mara.md),
-> which do not run yet. The `name`, `namePrefix` and `project` settings of the
+> path dependency. The projects have the targets that the status note of
+> [Targets](targets.mara.md) names, which do not run yet. The `name`, `namePrefix` and `project` settings of the
 > metadata tables are not read yet, so for now only a `name` in a crate
 > folder's `project.json` or `package.json` resolves a name collision. A crate that depends on
 > another crate of the repository through a registry dependency that
@@ -112,6 +112,12 @@ targets and no extra project appears. Formatting is per crate: every crate has
 its own `fmt` and `fmt-check`. The targets are listed under
 [Targets](targets.mara.md#workspace-level-targets).
 
+That project also has the `lockfile` task. It lets cargo bring the
+workspace's `Cargo.lock` up to date and turns it into one digest per crate.
+Every cached task of a crate waits for it and reads the crate's digest, so a
+dependency update reruns only the crates it reaches
+([Caching](caching.mara.md#lockfile-changes)).
+
 The workspace project is named after its folder's path from the root of the Nx
 workspace, with each `/` replaced by `-`: a workspace in `rust/` gives `rust`,
 one in `services/billing/` gives `services-billing`. A workspace at the root of
@@ -179,15 +185,15 @@ root of the Nx workspace, `nx audit .` works too.
 - **A path dependency into another workspace** is an edge to the one project
   that crate already has. The crate stays in its home workspace, and its own
   tests run there.
-- **External crates** will appear as nodes with the prefix `cargo:`, one per
-  direct dependency, so a crate's cache key can follow the dependencies it uses
-  instead of the whole lockfile ([Caching](caching.mara.md)). They arrive
-  together with per-crate lockfile hashing; until then the graph has no
-  external nodes and the whole `Cargo.lock` is an input.
+- **External crates are not nodes.** `nx graph` shows the crates of the
+  repository only. A crate's cache key still follows the locked versions of
+  the external crates it reaches, through the `lockfile` task of its workspace
+  ([Caching](caching.mara.md#lockfile-changes)).
 - **Cycles are kept.** Cargo allows a crate's dev-dependency to depend back on
   it. The edge stays in the graph. Nx fails only when tasks depend on each
   other in a cycle, and the plugin's targets do not depend on other crates'
-  targets ([Targets](targets.mara.md)). If your own `dependsOn` creates such a
+  targets, only on the `lockfile` task of their workspace, which depends on
+  nothing ([Targets](targets.mara.md)). If your own `dependsOn` creates such a
   cycle, Nx names the tasks involved.
 
 ## Requirements
@@ -266,7 +272,7 @@ The graph has an edge for every normal, build and dev-dependency between crates 
 :satisfies: NEED-AFFECTED
 :satisfies: NEED-CORRECT-CACHE
 
-Each crate depends in the graph on one [[TERM-EXTERNAL-NODE]] per direct external dependency. A change in `Cargo.lock` changes a crate's cache keys when it changes a package among that crate's resolved dependencies, direct or transitive. A lockfile change that leaves a crate's resolved dependencies untouched does not change that crate's cache keys.
+A change in `Cargo.lock` changes a crate's cache keys when it changes a package among that crate's resolved dependencies, direct or transitive, as the lockfile of the crate's own workspace resolves them. A lockfile change that leaves a crate's resolved dependencies untouched does not change that crate's cache keys, and a change to the lockfile of another workspace never does. No result is stored or restored under a key computed from a lockfile that cargo would still change. After a change to a workspace's `Cargo.lock`, `nx affected` selects the cached targets of that workspace's crates, and those whose keys did not change are restored from the cache.
 :::
 
 :::mara requirement REQ-METADATA-DISK-CACHE
@@ -307,7 +313,7 @@ When cargo cannot be started, or `cargo metadata` fails for a manifest, graph cr
 
 Nodes, targets and edges of a workspace all come from one `cargo metadata` report. Project creation and dependency creation (the plugin's `createNodes` and `createDependencies` hooks) of one plugin entry in `nx.json` share that report, so the two hooks cannot disagree and a graph computation runs cargo once per workspace for the entry. A workspace whose manifests two entries receive is reported once for each of them, because Nx runs each entry in a process of its own unless plugin isolation is off; entries in one process share the report ([[EVD-NX-PLUGIN-ENTRIES]]). Workspace and package metadata tables ([[DES-METADATA-TABLES]]) are read from the same report, not by parsing manifests. Keeping the report between Nx processes is [[REQ-METADATA-DISK-CACHE]].
 
-The report is requested with `--no-deps` ([[ADR-METADATA-NO-DEPS]]). It then holds the members of the workspace with their targets, their declared dependencies and the metadata tables, and Cargo's two directories. It needs no network, downloads nothing and never creates or changes `Cargo.lock` ([[EVD-CARGO-NO-DEPS]]). A dependency on another crate in the repository is recognised by the path its entry carries. Dependencies are not resolved in this report, so the locked versions of external crates come from `Cargo.lock` itself ([[DES-LOCKFILE-HASHING]]).
+The report is requested with `--no-deps` ([[ADR-METADATA-NO-DEPS]]). It then holds the members of the workspace with their targets, their declared dependencies and the metadata tables, and Cargo's two directories. It needs no network, downloads nothing and never creates or changes `Cargo.lock` ([[EVD-CARGO-NO-DEPS]]). A dependency on another crate in the repository is recognised by the path its entry carries. Dependencies are not resolved in this report, so the locked versions of external crates come from `Cargo.lock` itself ([[DES-LOCKFILE-HASHING]]). The lockfile task lets cargo bring that file up to date and reads it when it runs; graph creation does not read it.
 
 A path dependency that is no member of the workspace appears only as that path. When such a crate has no project of its own, the plugin requests a report for its manifest as well, to learn the path dependencies behind it ([[DES-INPUTS]]). These calls come on top of the one per workspace.
 
@@ -332,20 +338,42 @@ The plugin's own error names the manifest paths and the remedy for each: the cra
 
 **Edges.** For each member, every dependency of kind normal, build or dev that resolves to a crate with an Nx project becomes an edge. That includes a path dependency on a member of another workspace: the target crate keeps its single project in its home workspace, where its own targets run in that [[TERM-WORKSPACE-CONTEXT]]. A path dependency on a crate without an Nx project produces no edge; its files reach the cache key as inputs ([[DES-INPUTS]]). Each edge names its two projects by the name Nx gives the project at the crate's root, as listed in the projects that `createDependencies` receives, because a `package.json` or `project.json` may have renamed it ([[EVD-NX-PROJECT-MERGE]]). Edges have Nx's type `implicit`, which names no source file, so that Nx takes them as returned on every graph computation: for the other types, Nx puts back the file dependencies it cached in an earlier computation for each file whose hash is unchanged, and a crate's edges depend on more than its own manifest ([[EVD-NX-EDGE-CACHE]]). The maintainer accepted the cost on 13 November 2026: `nx graph` labels the edges implicit and shows no file for them, and the default dependency reading of Nx release skips implicit edges, which the release work has to handle (nxr-jhdr3x).
 
-**External nodes.** Each direct external dependency becomes a [[TERM-EXTERNAL-NODE]] with an edge from the crate. The nodes are created together with the mechanism that uses them for cache keys ([[DES-LOCKFILE-HASHING]]), not before: a node's identity has to tell apart two locked versions of one crate, and the same crate in the lockfiles of two workspaces, which the crate name alone cannot. Until then the graph has no external nodes.
+**External crates.** The graph has no node for an external crate ([[ADR-LOCKFILE-TASK]]). A crate's locked dependencies reach its cache key through the lockfile task of its workspace ([[DES-LOCKFILE-HASHING]]).
 
-**Cycles.** A dev-dependency edge that closes a cycle is kept ([[ADR-ALL-DEP-KINDS]]). The plugin's targets declare no dependencies on other crates' targets ([[REQ-NO-RUST-TASK-DEPS]]), so a project cycle does not become a task cycle through them.
+**Cycles.** A dev-dependency edge that closes a cycle is kept ([[ADR-ALL-DEP-KINDS]]). The plugin's targets declare no dependencies on other crates' targets except the lockfile task, which depends on nothing ([[REQ-NO-RUST-TASK-DEPS]]), so a project cycle does not become a task cycle through them.
 :::
 
 :::mara design DES-LOCKFILE-HASHING
 :mid: 01M78FHG7FQWJY49AGS0FVGY2D
-:title: Per-crate lockfile hashing through external nodes
-:status: draft
+:title: Per-crate lockfile hashing through a lockfile task
+:status: accepted
 :satisfies: REQ-EXTERNAL-DEPS
 
-Each crate's cached targets take their external dependencies as an input through the crate's [[TERM-EXTERNAL-NODE]] edges, in place of the whole `Cargo.lock`.
+Each Cargo workspace has one target, the lockfile task, that lets cargo bring `Cargo.lock` up to date and then writes a digest of it for each crate. It is named `lockfile` unless `targetNames` renames it, and it belongs to the [[TERM-WORKSPACE-PROJECT]], which is the root crate's project when the root manifest is a package ([[DES-WORKSPACE-TARGETS]]). The graph has no external nodes ([[ADR-LOCKFILE-TASK]]).
 
-The graph's report does not resolve dependencies ([[DES-METADATA-REPORT]]), so locked versions, sources and checksums are read from `Cargo.lock`.
+**Task.** The lockfile task is not cached. Each time it runs, it runs `cargo update --workspace` in the workspace root, with `--locked` in locked mode ([[DES-INVOCATION]]), and then writes the digests from the `Cargo.lock` that cargo leaves. Cargo leaves a current lockfile untouched, and it updates a stale one, or creates a missing one, byte for byte as the crates' own cargo commands would ([[EVD-CARGO-LOCK-CHECK]]). In locked mode cargo fails on a stale or missing lockfile and changes nothing. When cargo fails, for that or any other reason, the task fails with cargo's message, and Nx runs none of the tasks that depend on it ([[DES-DIAGNOSTICS]]). The task uses an executor without a batch implementation, so it never joins a batch ([[TERM-GROUP]]). It must not be cached, because whether cargo changes the lockfile also depends on files outside the repository, such as a `[patch]` in the cargo home's configuration, which Nx cannot hash ([[EVD-NX-24-LOCKFILE-UPDATE]]).
 
-Open: how a node's hash covers the locked version, source and checksum of the crate and of its transitive dependencies; what a node is called, so that two locked versions of one crate name, and one crate in the lockfiles of two workspaces, are told apart; whether enabled features belong in the hash; and how workspace-level tasks, which do depend on the whole lockfile, are keyed. Until this is specified, hashing the whole `Cargo.lock` is the safe fallback: it is correct but does not meet [[REQ-EXTERNAL-DEPS]].
+**Inputs.** The task's inputs only decide what `nx affected` selects: `Cargo.lock` as a fileset that includes git-ignored files, the root `Cargo.toml`, the `Cargo.toml` of every member and of every path package inside the repository, and the configuration files that [[DES-INPUTS]] lists as workspace files. The manifests are named from the repository root, because a pattern under the workspace project's root misses the files of the nested crate projects ([[EVD-NX-24-LOCKFILE-UPDATE]]).
+
+**Digest.** For each member, the task writes a SHA-256 over the part of the lockfile's graph that the member's entry reaches. The walk starts at the member's entry, takes every dependency an entry lists, passes through path packages and follows `replace = …` to the entry it names. A reference without a source that two entries share by name and version means the entry without a source. `[[patch.unused]]` entries stay out. Each reachable entry gives one line: its name, version, source, checksum and `replace` value, then the strings of its `dependencies` list as the lockfile writes them, in byte order, all joined by tab characters, with an empty field for a value the entry lacks. The digest is the SHA-256 of these lines in byte order, each ended by a line feed, in UTF-8. The dependency strings count, because two current lockfiles can lock the same packages and differ only in which version of a package another package uses ([[EVD-CARGO-LOCK-CHECK]]). The lockfile locks a member with all its features, platforms and dependency kinds, and while cargo calls the lockfile current, the packages cargo compiles for the crate lie in that closure ([[EVD-CARGO-LOCK-CHECK]]). The digest holds no features; those a crate asks for reach its key through its manifest and its target options ([[DES-INPUTS]]).
+
+**Where the digests live.** The digests are the task's outputs, in one folder per workspace under `.nx/workspace-data/nx-rust/lockfile/` in the repository. Nx hashes a dependency's output only inside the repository ([[EVD-NX-24-LOCKFILE-TASK]]). `nx init` writes `.nx/workspace-data` into `.gitignore`, and Nx always leaves that folder out of its file map ([[EVD-NX-24-SETUP]]).
+
+**Crate targets.** Every cached target of a member other than `fmt-check` depends on the lockfile task of the member's workspace and hashes the member's digest through a `dependentTasksOutputFiles` input; `doc` hashes the digests of all members ([[DES-INPUTS]]). None of them has `Cargo.lock` as a plain file input: Nx hashes such a task before the run starts, before the lockfile task can rewrite the file, and restores the result for the old lockfile ([[EVD-NX-24-LOCKFILE-UPDATE]]). `fmt` and `fmt-check` do not depend on the lockfile task, because `cargo fmt` reads no lockfile ([[EVD-CARGO-LOCK-CHECK]]). A crate that a member of another workspace uses by path runs its tasks in its home workspace, keyed on that workspace's digest. The consumer's digest covers that crate's dependencies as the consumer's lockfile resolves them.
+
+**Post-check.** After the cargo call of a cached task that depends on the lockfile task, in a batch after the call of its group, the executor computes the crate's digest again from `Cargo.lock`. When it differs from the digest file the task's key was computed from, the task fails, so that Nx stores nothing, as for the check of [[DES-BUILD-INPUT-CHECK]], which runs in the same step. That happens when a manifest or the lockfile changed while the run went on ([[EVD-NX-24-LOCKFILE-UPDATE]]).
+
+**Excluded dependencies.** A command run with `--exclude-task-dependencies` runs no lockfile task, and a crate task's digest input then contributes nothing to its key ([[EVD-NX-24-LOCKFILE-UPDATE]]). The plugin's `preTasksExecution` hook, the one that [[DES-UNKNOWN-OPTIONS]] uses, parses the command's arguments as Nx does. It sets `NX_RUST_RUN_ID` to a value that no other run has when they exclude task dependencies, and to the empty string otherwise. Every cached crate target that depends on the lockfile task has that variable as an `env` input, so such a run runs those tasks, nothing it stores is restored again, and a normal run keeps its keys. A target default that replaces a crate target's `dependsOn` drops the lockfile task in the same way; issue nxr-d3087e covers that report.
+
+**nx affected.** A change to `Cargo.lock` or to a manifest selects the lockfile task through its inputs and, through its output, every cached target of the workspace's crates that depends on it. Those whose digest did not change are restored from the cache ([[EVD-NX-24-LOCKFILE-UPDATE]]).
+
+**Batching.** Nx runs the lockfile task before the crate tasks of its workspace, which then become runnable together and form their groups as [[DES-BATCH]] describes ([[EVD-NX-24-LOCKFILE-TASK]]).
+
+**Root package.** When the root manifest is a package, `Cargo.lock` lies in that crate's folder, as it does in the folder of every [[TERM-STANDALONE-CRATE]]. The crate's own files leave it out ([[DES-INPUTS]]), so that it reaches the keys of that crate and of the crates that depend on it only through the digests ([[EVD-NX-24-LOCKFILE-TASK]]).
+
+**Workspace-level targets.** `audit`, `deny` and `update`, which are not cached, take the whole `Cargo.lock` as a file input together with the configuration of their tool; that input only decides what `nx affected` selects ([[DES-WORKSPACE-TARGETS]]).
+
+**Merged project.** When the workspace folder also is an Nx project, a `package.json` script or a `project.json` target with the lockfile task's name replaces it, as it replaces any inferred target ([[EVD-NX-PROJECT-MERGE]], [[RISK-MIXED-PROJECT-MERGE]]). Renaming the lockfile task through `targetNames` avoids that; what the plugin does about replaced targets belongs to [[REQ-MIXED-PROJECTS]].
+
+**Not covered.** A `paths` override, and the contents of a path package that a crate reaches only through `[patch]` or `[replace]`, leave no trace in the digest; issue nxr-p5ybc0 covers them.
 :::
