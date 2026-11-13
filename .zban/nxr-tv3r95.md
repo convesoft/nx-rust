@@ -16,6 +16,7 @@ Implements `REQ-ARTIFACT-TARGETS`, `REQ-ARTIFACT-CACHE`, `DES-ARTIFACT-STEPS` an
 - [ ] Infer the target by that rule, with the `artifacts` override
 - [ ] The compile step for the host triple, inside the batch
 - [ ] The napi CLI step: `.node` file, JS and type definitions
+- [ ] Run the check of `REQ-BUILD-INPUT-CHECK` and `DES-BUILD-INPUT-CHECK` after the compile step, as `build` does
 - [ ] The napi CLI version and target triple in the key; generated files as outputs, not inputs
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
