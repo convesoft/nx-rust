@@ -20,10 +20,16 @@
 // version without running cargo, and the report of `cargo metadata` lacks
 // `build_directory`, as the report of every stable Cargo before 1.91 does
 // (EVD-CARGO-DIRECTORIES). Everything else runs the real cargo.
+//
+// With NX_RUST_TEST_HOLD_CARGO set to `<subcommand>|<folder>`, a call whose
+// first argument is that subcommand is logged, writes `<folder>/held` and
+// waits until `<folder>/release` exists before it runs the real cargo, so
+// that a test can act while a task is between its cache key and its cargo
+// call (holdCargo in cargo-wrapper.ts).
 
 const { spawn } = require("node:child_process");
-const { appendFileSync } = require("node:fs");
-const { delimiter, dirname } = require("node:path");
+const { appendFileSync, existsSync, writeFileSync } = require("node:fs");
+const { delimiter, dirname, join } = require("node:path");
 
 // The variables of this call's environment that the log records, each null
 // where it is unset. cargo-wrapper.ts names the same ones.
@@ -44,7 +50,23 @@ if (fakeVersion && args.length === 1 && ["--version", "-V", "version"].includes(
   // Exits once the output is written: writes to a pipe can be asynchronous.
   process.stdout.write(`cargo ${fakeVersion} (0000000 2025-01-01)\n`, () => process.exit(0));
 } else {
-  runCargo(Boolean(fakeVersion) && args[0] === "metadata");
+  holdIfAsked(() => runCargo(Boolean(fakeVersion) && args[0] === "metadata"));
+}
+
+// Waits as NX_RUST_TEST_HOLD_CARGO asks, then calls `next`.
+function holdIfAsked(next) {
+  const [subcommand, folder] = (process.env.NX_RUST_TEST_HOLD_CARGO ?? "").split("|");
+  if (!subcommand || !folder || args[0] !== subcommand) {
+    next();
+    return;
+  }
+  writeFileSync(join(folder, "held"), "");
+  const wait = setInterval(() => {
+    if (existsSync(join(folder, "release"))) {
+      clearInterval(wait);
+      next();
+    }
+  }, 50);
 }
 
 function runCargo(rewriteReport) {

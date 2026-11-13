@@ -2,15 +2,12 @@
 
 > **Status:** each task's cargo command starts in the workspace root, and
 > locked mode works as [Where cargo runs](#where-cargo-runs) describes. The
-> inferred targets declare the inputs and outputs of this page, and those
-> that it caches are cached. Until nxr-xq9ava brings the `lockfile` task, a
-> cached crate target hashes its workspace's whole `Cargo.lock` in place of
-> the crate's digest: any change to the lockfile changes the keys of every
-> crate of that workspace, and a lockfile that cargo would still change is not
-> handled, so a task can be keyed on the lockfile before its own cargo command
-> updates it. `envInputs`, `runtimeInputs` and `fileInputs` work; every
-> workspace counts as using the `workspace-build` strategy (nxr-k64tm5), and
-> the check of a build's dependency files is not implemented (nxr-agyqmz).
+> inferred targets declare the inputs and outputs of this page, those that it
+> caches are cached, and the `lockfile` task keys each crate on the packages
+> it reaches in `Cargo.lock`. `envInputs`, `runtimeInputs` and `fileInputs`
+> work; every workspace counts as using the `workspace-build` strategy
+> (nxr-k64tm5), and the check of a build's dependency files is not
+> implemented (nxr-agyqmz).
 
 Nx caches the **result** of a Rust task and, for a few targets, its **final
 artifacts**. It never stores or restores Cargo's intermediate files: Cargo owns
@@ -129,9 +126,10 @@ that includes one of its crates' cached tasks. It runs
 `cargo update --workspace`, which leaves an up-to-date lockfile alone and
 updates an outdated one exactly as your next `cargo build` would. It then
 writes one digest per crate into `.nx/workspace-data/nx-rust/lockfile`. Every
-cached task of a crate waits for it and reads the crate's digest. A digest
-covers the version, source and checksum of each package the crate depends on,
-directly or through other crates, for every platform and feature set.
+cached task of a crate except `fmt-check` waits for it and reads the crate's
+digest. A digest covers the version, source and checksum of each package the
+crate depends on, directly or through other crates, for every platform and
+feature set, and which version of a package each of them uses.
 
 ```text
 rust/Cargo.lock: ryu 1.0.23 -> 1.0.24, which only "api" reaches
@@ -163,6 +161,18 @@ are restored from the cache, so they cost a lookup, not a build.
 - A `Cargo.lock` that git ignores is read all the same.
 - With `--exclude-task-dependencies` the `lockfile` task does not run. The
   crates' cached tasks then run and store nothing that a later run restores.
+- A cached crate task that runs without the `lockfile` task in a run that does
+  not exclude task dependencies, for example because a `project.json` replaces
+  its `dependsOn`, fails before cargo runs: its key would hold no digest. Keep
+  the dependency with `"..."`, as in `"dependsOn": ["...", "^codegen"]`.
+- A cached task fails when `Cargo.lock` changes while it runs, for example
+  because you edited a manifest during the run, or because another `nx`
+  command that ran at the same time updated the lockfile, so that its key no
+  longer describes what cargo built. Nx stores nothing for it; run it again.
+- A workspace whose root `Cargo.toml` Nx hands to no entry of the plugin, for
+  example because an `exclude` of the plugin's entry in `nx.json` names it,
+  has no `lockfile` task. Its crates' `build`, `check`, `lint` and `test` then
+  run uncached, and graph creation warns.
 - If the workspace folder also is a JS project with a script or target called
   `lockfile`, that one replaces the plugin's task, as it would any target of
   that name. Rename the plugin's task through `targetNames`
@@ -412,7 +422,7 @@ The environment list:
 
 **Redirected uses.** Nx asks for a plugin's targets before it merges the projects of every plugin and entry, so the plugin works out the redirected uses for the inputs with the projects of its own entry. A redirected crate that another entry gives a project counts there as one without a project, and its folder joins the member's inputs beside the edge that the dependencies of the merged graph add.
 
-**Uncached targets.** `fmt`, `bench` and `run` are not cached, but declare the inputs of `fmt-check`, `build` and `build`, so that `nx affected` selects them when what they read changes.
+**Uncached targets.** `fmt`, `bench` and `run` are not cached, but declare the inputs of `fmt-check`, `build` and `build`, so that `nx affected` selects them when what they read changes. They do not depend on the lockfile task, so `bench` and `run`, `build` and `doc` where the plugin leaves them uncached ([[DES-OUTPUTS]]), and the targets of the crates of a workspace without a lockfile task ([[DES-LOCKFILE-HASHING]]) name the workspace's `Cargo.lock`, read also where Git ignores it, in place of the digest and of `NX_RUST_RUN_ID`, as `audit` and `update` do ([[DES-WORKSPACE-TARGETS]]).
 
 The variables and commands that the repository adds, with `envInputs` and `runtimeInputs` in the plugin options, in the workspace table or in a crate's table ([[DES-PLUGIN-OPTIONS]]), go into the crate's own named input, the one that its dependents hash through `^` inputs, and not onto single targets. A dependent's key therefore changes with them, also in another workspace, because Nx hashes the `env` and `runtime` entries of a dependency's named input into the dependent's key and those of a dependency's target into no other key ([[EVD-NX-24-OPTION-SEMANTICS]]).
 

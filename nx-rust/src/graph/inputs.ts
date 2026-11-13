@@ -2,6 +2,7 @@ import type { TargetConfiguration } from "@nx/devkit";
 import { posix, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoWorkspace } from "./discovery";
+import { digestFile, digestFolder, runIdVariable } from "./lockfile-task";
 import type { InferredTargetName } from "./targets";
 
 /**
@@ -119,6 +120,15 @@ export interface InputContext {
    * and the root manifest of its workspace.
    */
   redirectedInputs: ReadonlyMap<string, readonly Input[]>;
+  /**
+   * The manifests inside the repository of the path packages that each
+   * workspace's members reach, by the workspace's root folder relative to
+   * the repository root, as `{workspaceRoot}` paths: the crates of path
+   * dependencies, with a project or without, and those of the workspace's
+   * `[patch]` and `[replace]` entries, with the path packages behind them.
+   * The lockfile task reads them as inputs (`DES-WORKSPACE-TARGETS`).
+   */
+  pathPackageManifests?: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
@@ -209,8 +219,9 @@ const toolFileNames: Partial<Record<InferredTargetName, readonly string[]>> = {
  *
  * It holds every file of the project's folder that belongs to no nested
  * project, except the workspace's `Cargo.lock` where the folder is the
- * workspace root, which reaches the keys of the workspace's own targets
- * only ({@link externalDependencyInputs}); the root manifest of the crate's
+ * workspace root, which reaches the keys of the crate and of those that
+ * depend on it only through the digests of the lockfile task
+ * ({@link externalDependencyInputs}); the root manifest of the crate's
  * workspace, whose fields the crate can inherit, also when another
  * workspace builds it (`EVD-CARGO-DEPENDENCY-SIDE`); the folder and
  * workspace manifest of every crate without a project that the crate
@@ -281,12 +292,16 @@ export function repositoryDefaultInputs(namedInputs: unknown): Input[] {
  * The inputs of one of the project's targets, in the order of the table in
  * `DES-INPUTS`: the crate's files and those of its dependencies, the
  * workspace files, the redirected crates that the crate may use without an
- * edge, the members' manifests, the tool's configuration, the lockfile, the
- * environment, the toolchain with Cargo's profile and target variables, and
- * the plugin.
+ * edge, the members' manifests, the tool's configuration, the external
+ * dependencies, the environment, the toolchain with Cargo's profile and
+ * target variables, and the plugin.
  *
+ * @param readsDigest Whether the target depends on the workspace's lockfile
+ *   task and hashes digests of it: a cached target other than `fmt-check`
+ *   (`DES-LOCKFILE-HASHING`).
  * @returns `undefined` for a target that `DES-INPUTS` gives no such inputs:
- *   `audit`, `deny` and `update` keep theirs from `DES-WORKSPACE-TARGETS`.
+ *   `lockfile`, `audit`, `deny` and `update` keep theirs from
+ *   `DES-WORKSPACE-TARGETS`.
  */
 // @mara implements DES-INPUTS
 // @mara implements REQ-INPUT-FILES
@@ -297,6 +312,7 @@ export function targetInputs(
   subject: InputSubject,
   context: InputContext,
   settings: InputSettings = defaultInputSettings,
+  readsDigest = false,
 ): Input[] | undefined {
   if (!crateInputTargets.has(target)) {
     return undefined;
@@ -313,7 +329,7 @@ export function targetInputs(
     ...toolConfigurationInputs(target, subject, workspaceRoot, settings),
     ...(target === "fmt" || target === "fmt-check"
       ? []
-      : externalDependencyInputs(subject, workspaceRoot)),
+      : externalDependencyInputs(target, subject, workspaceRoot, readsDigest)),
     ...environmentInputs(target),
     { runtime: toolchainCommand(workspaceRoot) },
     pluginInput(context.plugin),
@@ -330,8 +346,10 @@ export function targetInputs(
  * adding one changes the key. They stay out of the named input: cargo takes
  * them from the folder it starts in, not from a dependency's
  * (`EVD-CARGO-DEPENDENCY-SIDE`).
+ *
+ * @param own Whether the files in the project's own folder count too.
  */
-function workspaceFiles(subject: InputSubject, repositoryRoot: string): string[] {
+function workspaceFiles(subject: InputSubject, repositoryRoot: string, own = false): string[] {
   const files: string[] = [];
   // The files that a configuration's `include` adds, inside the repository.
   for (const included of subject.workspace.configIncludes ?? []) {
@@ -340,7 +358,7 @@ function workspaceFiles(subject: InputSubject, repositoryRoot: string): string[]
       files.push(`{workspaceRoot}/${path}`);
     }
   }
-  for (const folder of foldersAbove(subject.root)) {
+  for (const folder of [...(own ? [subject.root] : []), ...foldersAbove(subject.root)]) {
     files.push(...workspaceFileNames.map((name) => fromRoot(folder, name)));
   }
   return files;
@@ -398,20 +416,68 @@ function toolConfigurationInputs(
 }
 
 /**
- * The external dependencies of the crate. For now the workspace's whole
- * `Cargo.lock`, read also where Git ignores it: a change to it changes the
- * keys of every crate of the workspace, also where it leaves a crate's
- * resolved dependencies alone, and a lockfile that cargo would still change
- * is not handled. nxr-xq9ava replaces this input with the crate's digest
- * from the workspace's lockfile task (`DES-LOCKFILE-HASHING`).
+ * The external dependencies of the crate (`DES-INPUTS`, "External
+ * dependencies"). A target that depends on the workspace's lockfile task
+ * hashes the crate's digest among that task's outputs, and on `doc` the
+ * digests of every member, through a `dependentTasksOutputFiles` input,
+ * with an `env` input for `NX_RUST_RUN_ID`, which a run that excludes task
+ * dependencies sets to a new value (`DES-LOCKFILE-HASHING`). It has no
+ * `Cargo.lock` as a file input: Nx hashes such an input before the run
+ * starts, before the lockfile task can update the file
+ * (`EVD-NX-24-LOCKFILE-UPDATE`).
  *
- * `fmt` and `fmt-check` do not have it: `cargo fmt` reads no lockfile.
+ * A target that is not cached, `bench` and `run`, or `build` and `doc`
+ * where the plugin leaves them uncached, does not depend on the lockfile
+ * task. Its inputs only decide what `nx affected` selects, so it names the
+ * workspace's `Cargo.lock`, read also where Git ignores it, as `audit` and
+ * `update` do (`DES-INPUTS`, "Uncached targets").
+ *
+ * `fmt` and `fmt-check` have neither: `cargo fmt` reads no lockfile.
  */
+// @mara implements DES-LOCKFILE-HASHING
+// @mara implements REQ-EXTERNAL-DEPS
 export function externalDependencyInputs(
-  _subject: InputSubject,
+  target: InferredTargetName,
+  subject: InputSubject,
   workspaceRoot: string,
+  readsDigest: boolean,
 ): InputDefinition[] {
-  return [{ fileset: fromRoot(workspaceRoot, "Cargo.lock"), includeIgnored: true }];
+  if (!readsDigest) {
+    return [{ fileset: fromRoot(workspaceRoot, "Cargo.lock"), includeIgnored: true }];
+  }
+  const digests =
+    target === "doc" || subject.pkg === undefined
+      ? `${digestFolder(workspaceRoot)}/*.digest`
+      : digestFile(workspaceRoot, subject.pkg.name);
+  return [{ dependentTasksOutputFiles: digests }, { env: runIdVariable }];
+}
+
+/**
+ * The inputs of the lockfile task (`DES-WORKSPACE-TARGETS`), which only
+ * decide what `nx affected` selects, since the task is not cached: the
+ * workspace's `Cargo.lock`, read also where Git ignores it, its root
+ * manifest, the manifests of its members and of the path packages they
+ * reach inside the repository, and the workspace files that apply in the
+ * workspace root, where the task's cargo runs. All are named from the
+ * repository root, because a pattern under the workspace project's root
+ * misses the files of the crate projects nested in it
+ * (`EVD-NX-24-LOCKFILE-UPDATE`).
+ */
+// @mara implements DES-WORKSPACE-TARGETS
+// @mara implements DES-LOCKFILE-HASHING
+export function lockfileInputs(subject: InputSubject, context: InputContext): Input[] {
+  const workspaceRoot = workspaceFolder(subject, context);
+  const manifests = new Set([
+    ...memberManifests(subject.workspace, context.repositoryRoot),
+    ...(context.pathPackageManifests?.get(workspaceRoot) ?? []),
+  ]);
+  manifests.delete(fromRoot(workspaceRoot, "Cargo.toml"));
+  return [
+    { fileset: fromRoot(workspaceRoot, "Cargo.lock"), includeIgnored: true },
+    fromRoot(workspaceRoot, "Cargo.toml"),
+    ...[...manifests].sort(),
+    ...workspaceFiles({ ...subject, root: workspaceRoot }, context.repositoryRoot, true),
+  ];
 }
 
 /**

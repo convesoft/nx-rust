@@ -9,6 +9,11 @@
       "implementation": "./src/executors/run/executor",
       "schema": "./src/executors/run/schema.json",
       "description": "Runs a binary of a crate with cargo run."
+    },
+    "lockfile": {
+      "implementation": "./src/executors/lockfile/executor",
+      "schema": "./src/executors/lockfile/schema.json",
+      "description": "Lets cargo bring a Cargo workspace's Cargo.lock up to date and writes a digest of each member's locked dependencies."
     }
   }
 }

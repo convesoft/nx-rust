@@ -94,6 +94,46 @@ export async function checkEntries(
   }
 }
 
+/**
+ * The root folders of the workspaces whose root manifest Nx hands to no
+ * entry of the plugin in `nx.json`, because the entries' `include` and
+ * `exclude`, `.gitignore` or `.nxignore` keep it out. No project of the
+ * plugin lies at such a workspace's root folder, so the workspace has no
+ * lockfile task (`DES-LOCKFILE-HASHING`). With one entry, that is this
+ * entry's own view; with several, each entry's `include` and `exclude` is
+ * applied to the `Cargo.toml` files of Nx's workspace context, as Nx does
+ * ({@link checkEntries}).
+ */
+// @mara implements DES-LOCKFILE-HASHING
+export async function workspacesWithoutRootProject(
+  discovery: CargoDiscovery,
+  nxJson: NxJsonConfiguration | undefined,
+): Promise<Set<string>> {
+  const unhanded = discovery.workspaces.filter((workspace) => !workspace.rootManifestHanded);
+  if (unhanded.length === 0) {
+    return new Set();
+  }
+  const { workspaceRoot } = discovery;
+  const entries = (nxJson?.plugins ?? []).filter((entry) => isOwnEntry(entry, workspaceRoot));
+  if (entries.length < 2) {
+    return new Set(unhanded.map((workspace) => workspace.root));
+  }
+  const nx = nxGraphInternals(workspaceRoot);
+  const manifests = await nx.globWithWorkspaceContext(workspaceRoot, ["**/Cargo.toml"]);
+  const received = new Set(
+    entries.flatMap((entry) =>
+      typeof entry === "string"
+        ? manifests
+        : nx.findMatchingConfigFiles(manifests, entry.include, entry.exclude),
+    ),
+  );
+  return new Set(
+    unhanded
+      .filter((workspace) => !received.has(workspace.rootManifest))
+      .map((workspace) => workspace.root),
+  );
+}
+
 const defaults: Record<WorkspaceWideSetting, string | boolean | undefined> = {
   testRunner: "cargo",
   affectedTests: false,

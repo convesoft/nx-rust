@@ -1,4 +1,14 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, join, relative, resolve } from "node:path";
 import { findExecutable, testEnvironment } from "./environment";
 
@@ -162,6 +172,42 @@ export function installProbeExecutor(root: string): void {
   cpSync(join(__dirname, "probe-executor"), join(root, "node_modules", "cargo-probe-executor"), {
     recursive: true,
   });
+}
+
+/** A pause of the cargo wrapper before one subcommand ({@link holdCargo}). */
+export interface CargoHold {
+  /** The variable to give the command whose cargo call is to wait. */
+  env: Record<string, string>;
+  /** Resolves once a call has reached the pause. */
+  held(timeout?: number): Promise<void>;
+  /** Lets the waiting call run the real cargo. */
+  release(): void;
+  /** Deletes the hold's folder. */
+  remove(): void;
+}
+
+/**
+ * Makes the cargo wrapper wait before the real cargo of a call whose first
+ * argument is `subcommand`, in the commands that get {@link CargoHold.env}:
+ * after Nx has computed the task's key and started its executor, and
+ * before cargo reads `Cargo.lock`. Meanwhile a test can change the
+ * repository or run another command.
+ */
+export function holdCargo(subcommand: string): CargoHold {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-hold-")));
+  return {
+    env: { NX_RUST_TEST_HOLD_CARGO: `${subcommand}|${folder}` },
+    async held(timeout = 60_000) {
+      for (const start = Date.now(); !existsSync(join(folder, "held"));) {
+        if (Date.now() - start > timeout) {
+          throw new Error(`No cargo ${subcommand} reached the hold in ${folder}.`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    },
+    release: () => writeFileSync(join(folder, "release"), ""),
+    remove: () => rmSync(folder, { recursive: true, force: true }),
+  };
 }
 
 function shellQuote(value: string): string {

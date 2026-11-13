@@ -20,14 +20,18 @@ import {
 } from "./harness";
 
 // Checks VER-TARGET-DEFAULT-GUARD and the target-default cases of VER-SETUP
-// with Nx's own graph creation and a real `nx g`. The plugin declares no
-// dependency on the lockfile task yet (nxr-xq9ava), so those cases run on a
-// stand-in inferred `build` against Nx's own resolver.
+// with Nx's own graph creation and a real `nx g`. Every cached crate target
+// but fmt-check depends on the workspace's lockfile task, so an entry that
+// adds to a crate target's dependsOn keeps that dependency with "...", or it
+// replaces it (DES-LOCKFILE-HASHING).
 
 const pluginName = "@convesoft/nx-rust";
 const nxVersion: string = require("nx/package.json").version;
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 const runExecutor = "@convesoft/nx-rust:run";
+const lockfileExecutor = "@convesoft/nx-rust:lockfile";
+/** The dependency of the crates' cached targets on the lockfile task of `rust`. */
+const lockfileTask = { projects: ["directory:rust"], target: "lockfile" };
 
 /** The crates of `subfolder-workspace`, each with its manifest, by name. */
 const crates = {
@@ -113,9 +117,9 @@ describe("a target default that adds dependencies on other projects' tasks", () 
   ])(
     "in %s creates the graph and warns, naming the entry, the target, each crate and the fixes",
     async (_form, dependency, shown) => {
-      const { output, projects } = await created({ build: { dependsOn: [dependency] } });
+      const { output, projects } = await created({ build: { dependsOn: ["...", dependency] } });
 
-      expect(projects.api.targets?.build.dependsOn).toEqual([dependency]);
+      expect(projects.api.targets?.build.dependsOn).toEqual([lockfileTask, dependency]);
       expect(output).toContain(
         [
           'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
@@ -180,6 +184,45 @@ describe("a target default that fails graph creation", () => {
         `  - Remove "cache" from the entry. It is keyed by the executor of nx-rust's targets, so it reaches only those.`,
       );
       expect(output).not.toContain(`"${cargoExecutor}": {}`);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each([
+    ["^build", "^build", '"^build"'],
+    [
+      "an object",
+      { target: "build", dependencies: true },
+      '{"target":"build","dependencies":true}',
+    ],
+  ])(
+    "replaces the dependsOn of the crates' targets with %s, losing the dependency on the lockfile task, and also warns about the added dependency",
+    async (_form, dependency, shown) => {
+      const output = await failed({ build: { dependsOn: [dependency] } });
+
+      expect(output).toContain(
+        [
+          'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
+          `  - It replaces the dependsOn that nx-rust declares for "build", so that the task no longer depends on a task whose output its cache key reads. In ${allCrates}.`,
+          `To narrow the entry (${targetDefaultsGuide}), do one of these:`,
+        ].join("\n"),
+      );
+      expect(output).toContain(`putting "..." into the entry's "dependsOn" list`);
+      expect(output).toContain(
+        `  - It adds ${shown} to the dependsOn of "build", so that the task waits for tasks of other projects.`,
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "turns on caching for the lockfile task",
+    async () => {
+      const output = await failed({ lockfile: { cache: true } });
+
+      expect(output).toContain(
+        '  - It turns on caching for "lockfile", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In rust (rust/Cargo.toml).',
+      );
     },
     HARNESS_TIMEOUT,
   );
@@ -347,7 +390,7 @@ describe("nothing is reported", () => {
       // The entries do apply where they are meant to.
       expect(projects.web.targets?.build).toMatchObject({ cache: true, dependsOn: ["^build"] });
       expect(projects.web.targets?.lint.cache).toBe(true);
-      expect(projects.api.targets?.build.dependsOn).toBeUndefined();
+      expect(projects.api.targets?.build.dependsOn).toEqual([lockfileTask]);
       const workspaceProject = Object.values(projects).find((project) => project.root === "rust");
       expect(workspaceProject?.targets?.update.inputs).toEqual([
         "{projectRoot}/Cargo.lock",
@@ -368,7 +411,7 @@ describe("nothing is reported", () => {
 
       expect(output).not.toContain("targetDefaults");
       expect(projects.web.targets?.build.cache).toBe(true);
-      expect(projects.api.targets?.build.dependsOn).toBeUndefined();
+      expect(projects.api.targets?.build.dependsOn).toEqual([lockfileTask]);
     },
     HARNESS_TIMEOUT,
   );
@@ -517,13 +560,14 @@ describe("a dependency's projects", () => {
         build: [
           {
             filter: { projects: ["api"] },
-            dependsOn: [{ projects: ["api*"], target: "lint" }],
+            dependsOn: ["...", { projects: ["api*"], target: "lint" }],
           },
         ],
       });
 
       expect(output).not.toContain("targetDefaults");
       expect(projects.api.targets?.build.dependsOn).toEqual([
+        lockfileTask,
         { projects: ["api*"], target: "lint" },
       ]);
     },
@@ -537,7 +581,7 @@ describe("a dependency's projects", () => {
         build: [
           {
             filter: { projects: ["api"] },
-            dependsOn: [{ projects: ["mod*"], target: "lint" }],
+            dependsOn: ["...", { projects: ["mod*"], target: "lint" }],
           },
         ],
       });
@@ -609,7 +653,7 @@ describe("combinations", () => {
       expect(output).not.toContain("targetDefaults");
       expect(projects.api.tags).toContain("lang:rust");
       expect(projects.web.targets?.build.cache).toBe(true);
-      expect(projects.api.targets?.build.dependsOn).toBeUndefined();
+      expect(projects.api.targets?.build.dependsOn).toEqual([lockfileTask]);
     },
     HARNESS_TIMEOUT,
   );
@@ -662,7 +706,7 @@ describe("combinations", () => {
       expect(output).toContain(
         `  - It adds "^build" to the dependsOn of "build", so that the task waits for tasks of other projects. Cargo builds what a crate depends on itself, so these only queue more cargo processes behind its build lock. In ${allCrates}.`,
       );
-      expect(projects.api.targets?.build.dependsOn).toEqual(["^build"]);
+      expect(projects.api.targets?.build.dependsOn).toEqual([lockfileTask, "^build"]);
     },
     HARNESS_TIMEOUT,
   );
@@ -815,10 +859,10 @@ describe('object-level "..."', () => {
     "in a later element of an entry's list, after an empty dependsOn: Nx keeps the dependency, and the entry draws the warning",
     async () => {
       const { output, projects } = await created({
-        build: [{ dependsOn: ["^lint"] }, { dependsOn: [], "...": true }],
+        build: [{ dependsOn: ["...", "^lint"] }, { dependsOn: [], "...": true }],
       });
 
-      expect(projects.api.targets?.build.dependsOn).toEqual(["^lint"]);
+      expect(projects.api.targets?.build.dependsOn).toEqual([lockfileTask, "^lint"]);
       expect(output).toContain(
         [
           'The targetDefaults entry "build" in nx.json (its elements 0 and 1) changes targets that nx-rust infers:',
@@ -865,7 +909,9 @@ describe("init", () => {
   }
 
   /** The empty entries that init adds for the plugin's executors. */
-  const added = { [cargoExecutor]: {}, [runExecutor]: {} };
+  const added = { [cargoExecutor]: {}, [runExecutor]: {}, [lockfileExecutor]: {} };
+  /** How init's line names them. */
+  const addedNames = `"${cargoExecutor}": {}, "${runExecutor}": {} and "${lockfileExecutor}": {}`;
 
   /** Init's line about the entries it added. */
   const addedLine = (entries: string) =>
@@ -897,8 +943,9 @@ describe("init", () => {
         ...Object.keys(defaults),
         cargoExecutor,
         runExecutor,
+        lockfileExecutor,
       ]);
-      expect(output).toContain(addedLine(`"${cargoExecutor}": {} and "${runExecutor}": {}`));
+      expect(output).toContain(addedLine(addedNames));
       expect(output).toContain(
         `Nx chooses an entry keyed by a target's executor before one keyed by the target's name or a glob, so entries such as "build" or "test" apply to your other projects and not to Rust targets, whose inputs, outputs, caching and dependencies nx-rust declares itself (${targetDefaultsGuide}).`,
       );
@@ -919,7 +966,7 @@ describe("init", () => {
 
       expect(status).toBe(0);
       expect(nxJson).toEqual({ targetDefaults: { ...defaults, ...added }, plugins: [pluginName] });
-      expect(output).toContain(addedLine(`"${cargoExecutor}": {} and "${runExecutor}": {}`));
+      expect(output).toContain(addedLine(addedNames));
       expect(output).not.toContain("changes targets that nx-rust infers");
     },
     HARNESS_TIMEOUT,
@@ -957,17 +1004,17 @@ describe("init", () => {
     async () => {
       const defaults = {
         build: { cache: true },
-        [cargoExecutor]: { dependsOn: ["^build"] },
+        [cargoExecutor]: { dependsOn: ["...", "^build"] },
       };
       const { status, output, changed, nxJson } = await init(defaults);
 
       expect(status).toBe(0);
       expect(changed).toEqual(["nx.json"]);
       expect(nxJson).toEqual({
-        targetDefaults: { ...defaults, [runExecutor]: {} },
+        targetDefaults: { ...defaults, [runExecutor]: {}, [lockfileExecutor]: {} },
         plugins: [pluginName],
       });
-      expect(output).toContain(addedLine(`"${runExecutor}": {}`));
+      expect(output).toContain(addedLine(`"${runExecutor}": {} and "${lockfileExecutor}": {}`));
       expect(output).toContain(
         `The targetDefaults entry "${cargoExecutor}" in nx.json changes targets that nx-rust infers:`,
       );
@@ -979,9 +1026,14 @@ describe("init", () => {
   );
 
   it(
-    "adds nothing when both entries are there, and leaves nx.json as it was apart from the plugin entry",
+    "adds nothing when all three entries are there, and leaves nx.json as it was apart from the plugin entry",
     async () => {
-      const defaults = { build: { cache: true }, [runExecutor]: {}, [cargoExecutor]: {} };
+      const defaults = {
+        build: { cache: true },
+        [runExecutor]: {},
+        [lockfileExecutor]: {},
+        [cargoExecutor]: {},
+      };
       const { status, output, nxJson } = await init(defaults);
 
       expect(status).toBe(0);
@@ -1016,11 +1068,10 @@ describe("init", () => {
 });
 
 describe("the check on a dependency on the lockfile task", () => {
-  // A stand-in for the dependency on the workspace's lockfile task, which
-  // the plugin does not declare yet (nxr-xq9ava), on a build with outputs.
-  // The merged targets are as Nx merges them, which the graph tests above
-  // show for the inputs and outputs that the plugin declares.
-  const lockfile = { projects: ["rust"], target: "lockfile" };
+  // The dependency on the workspace's lockfile task as the plugin declares
+  // it, on a build with outputs, without a graph computation: the merged
+  // targets are as Nx merges them, which the graph tests above show.
+  const lockfile = lockfileTask;
   const inferred: Record<string, TargetConfiguration> = {
     build: {
       executor: cargoExecutor,

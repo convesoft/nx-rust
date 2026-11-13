@@ -151,6 +151,7 @@ export function inferProjects(
         settings: inputSettings(project.settings, fileInputs(project)),
         targetTables: (target) =>
           targetTables(project.settings, settings.options.targetNames[target] ?? target),
+        lockfileTarget: settings.options.targetNames.lockfile ?? "lockfile",
       }),
     })),
     settings.options.targetNames,
