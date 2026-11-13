@@ -74,6 +74,20 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       ],
     },
   },
+  "patched-workspaces": {
+    workspaces: {
+      rust: [
+        "rust/crates/api",
+        "rust/crates/harness",
+        "rust/crates/model",
+        "rust/crates/plain",
+        "rust/crates/util",
+        "rust/crates/viaw",
+      ],
+      shared: ["shared/crates/types"],
+    },
+    others: ["third_party/fork"],
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.
