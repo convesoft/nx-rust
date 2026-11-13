@@ -6,7 +6,7 @@ import type { InferredTargetName } from "./targets";
  * (`DES-OUTPUTS`).
  */
 export type ArtifactDirectory =
-  /** Inside the repository, at `path` relative to its root; `shared` when another workspace reports it too. */
+  /** Inside the repository, at `path` relative to its root; `shared` when it is another workspace's too. */
   | { inside: true; path: string; shared: boolean }
   /** Outside the repository, where Nx cannot store files. */
   | { inside: false };
