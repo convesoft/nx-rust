@@ -182,6 +182,27 @@ describe("a target default that fails graph creation", () => {
   );
 
   it(
+    "turns on caching for run, keyed by the run executor",
+    async () => {
+      const workspace = FixtureWorkspace.create(
+        "crate-shapes",
+        targetDefaults({ "@convesoft/nx-rust:run": { cache: true } }),
+      );
+      try {
+        const { status, output } = await workspace.nx(["show", "projects"]);
+
+        expect(status).not.toBe(0);
+        expect(withoutColours(output)).toContain(
+          'The targetDefaults entry "@convesoft/nx-rust:run" in nx.json changes targets that nx-rust infers:\n  - It turns on caching for "run", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In cli (rust/crates/cli/Cargo.toml) and server (rust/crates/server/Cargo.toml).',
+        );
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "replaces the inputs of update, and says to keep them with ...",
     async () => {
       const output = await failed({ update: { inputs: ["default"] } });
