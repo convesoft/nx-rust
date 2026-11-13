@@ -316,9 +316,46 @@ describe("graph creation with an unsupported Nx", () => {
         const shown = await workspace.nx(["show", "projects"], {
           NX_RUST_ALLOW_UNSUPPORTED_NX: "true",
         });
+        const task = await workspace.nx(["run", "api:fmt-check", "--output-style=static"], {
+          NX_RUST_ALLOW_UNSUPPORTED_NX: "true",
+        });
 
         expect(shown.status).toBe(0);
         expect(shown.output).not.toContain("nx-rust");
+        expect(task.status).toBe(0);
+        expect(withoutColours(task.output)).not.toContain("has not been checked");
+      }),
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("a task with an Nx major newer than the supported ones", () => {
+  it.each<[string, Record<string, string>, number]>([
+    // Graph creation prints the warning in the terminal, and the task again.
+    ["without the daemon", {}, 2],
+    // The daemon writes graph creation's warning to its log.
+    ["with the daemon", { NX_DAEMON: "true" }, 1],
+  ])(
+    "prints the warning of NX_RUST_ALLOW_UNSUPPORTED_NX=true again at its start, %s",
+    (_case, env, printed) =>
+      inFixture({}, async (workspace) => {
+        workspace.useNx(newerNx);
+        const allowed = { ...env, NX_RUST_ALLOW_UNSUPPORTED_NX: "true" };
+        try {
+          const { status, output } = await workspace.nx(
+            ["run", "api:fmt-check", "--output-style=static"],
+            allowed,
+          );
+
+          expect(status).toBe(0);
+          expect(occurrences(withoutColours(output), untested(newerNx))).toBe(printed);
+          // Only the daemon has a log, where graph creation printed it.
+          expect(workspace.daemonLog().includes(untested(newerNx))).toBe(env.NX_DAEMON === "true");
+        } finally {
+          if (env.NX_DAEMON === "true") {
+            await workspace.nx(["daemon", "--stop"], allowed);
+          }
+        }
       }),
     HARNESS_TIMEOUT,
   );

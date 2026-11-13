@@ -42,6 +42,14 @@ export interface CargoWorkspace {
    * ({@link readRedirections}).
    */
   configIncludes: string[];
+  /**
+   * The warnings, also in {@link CargoDiscovery.warnings}, about the
+   * workspace's redirections: an included file that is no valid TOML, a
+   * configuration file outside the repository with `[patch]` or `paths`, and
+   * a redirected crate that `cargo metadata` fails for. The projects of the
+   * workspace repeat them at the start of their tasks.
+   */
+  warnings: string[];
 }
 
 /** The report of a crate without a project that a member may use. */
@@ -148,6 +156,7 @@ export async function discoverWorkspaces(
       redirections: found.redirections,
       buildTargetFiles: found.buildTargetFiles,
       configIncludes: found.includedFiles,
+      warnings: [...new Set(found.warnings)],
     });
   }
   const unreportedPathDependencies = new Map<string, string>();
@@ -172,26 +181,38 @@ export async function discoverWorkspaces(
  * One warning for each configuration file outside the repository that
  * redirects dependencies of a workspace: the plugin applies it, but Nx does
  * not watch it, so a change to it reaches the graph only once Nx computes
- * the graph again for another reason.
+ * the graph again for another reason. Each warning also joins the
+ * {@link CargoWorkspace.warnings} of the workspaces it names.
  */
 // @mara implements DES-DIAGNOSTICS
 function outsideRedirectionWarnings(workspaces: CargoWorkspace[], workspaceRoot: string): string[] {
-  const byFile = new Map<string, string[]>();
+  const byFile = new Map<string, CargoWorkspace[]>();
   for (const workspace of workspaces) {
     for (const { file } of workspace.redirections) {
-      const folders = byFile.get(file) ?? [];
-      if (isOutside(workspaceRoot, file) && !folders.includes(workspace.root)) {
-        byFile.set(file, [...folders, workspace.root]);
+      const concerned = byFile.get(file) ?? [];
+      if (isOutside(workspaceRoot, file) && !concerned.includes(workspace)) {
+        byFile.set(file, [...concerned, workspace]);
       }
     }
   }
-  return [...byFile].map(([file, folders]) =>
-    [
-      `nx-rust: ${file} redirects dependencies of ${describeWorkspaces(folders)} through [patch] or paths, so nx-rust gives the crates that may use the redirected crates edges to them.`,
+  return [...byFile].map(([file, concerned]) => {
+    const message = [
+      `nx-rust: ${file} redirects dependencies of ${describeWorkspaces(concerned.map((workspace) => workspace.root))} through [patch] or paths, so nx-rust gives the crates that may use the redirected crates edges to them.`,
       "The file lies outside the repository, so Nx does not see when it changes: with the Nx daemon, the graph keeps these edges until a file in the repository changes or the daemon restarts (`nx reset`).",
       "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository.",
-    ].join("\n"),
-  );
+    ].join("\n");
+    for (const workspace of concerned) {
+      addWarning(workspace, message);
+    }
+    return message;
+  });
+}
+
+// Adds a warning to those that the workspace's projects repeat, once.
+function addWarning(workspace: CargoWorkspace, message: string): void {
+  if (!workspace.warnings.includes(message)) {
+    workspace.warnings.push(message);
+  }
 }
 
 /** "the Cargo workspace in rust", or "the Cargo workspaces in rust and shared". */
@@ -226,7 +247,9 @@ export function describeWorkspaces(folders: string[]): string {
  * of the workspace it lies in ({@link isUnreportedNonMember}), which cargo
  * builds as a dependency all the same; any other failure of a path
  * dependency's report fails graph creation. Such a path dependency's warning
- * also goes into `unreported`, by the real path of the crate's folder.
+ * also goes into `unreported`, by the real path of the crate's folder, and
+ * the warning of a redirected crate joins the {@link CargoWorkspace.warnings}
+ * of each workspace whose table redirects to it.
  *
  * A package of a directory source that no workspace report lists as a
  * member gets no report ({@link isDirectorySourcePackage}); like any crate
@@ -251,6 +274,8 @@ async function readPathDependencies(
   }
   const pathDependencyReports: PathDependencyReport[] = [];
   const visited = new Set<string>();
+  // The warning for each crate whose report cargo refused, by its manifest.
+  const failures = new Map<string, string>();
   const queue: { pkg: CargoPackage; cwd: string }[] = [];
   // Requests the report of a crate without a project, unless one covers it
   // already, and queues the crate so that its path dependencies follow. A
@@ -281,6 +306,7 @@ async function readPathDependencies(
       );
       if (typeof report === "string") {
         warnings.push(report);
+        failures.set(manifest, report);
         if (via === "path") {
           unreported.set(realPath(dirname(manifest)), report);
         }
@@ -337,6 +363,10 @@ async function readPathDependencies(
           `a crate that ${displayPath(workspaceRoot, file)} redirects dependencies of the Cargo workspace in ${workspace.root} to, which has no project of its own`,
         "redirection",
       );
+      const failure = failures.get(spelled);
+      if (failure !== undefined) {
+        addWarning(workspace, failure);
+      }
       await drain();
     }
   }
