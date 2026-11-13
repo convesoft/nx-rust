@@ -23,14 +23,14 @@ function createDependencies(
   this: unknown,
   _options: unknown,
   context: CreateDependenciesContext,
-): RawProjectGraphDependency[] {
+): RawProjectGraphDependency[] | Promise<RawProjectGraphDependency[]> {
   const graph = registrationOf(this).graphForDependencies(context.workspaceRoot);
   if (graph === undefined) {
     return [];
   }
   failOnNameCollisions(graph, context);
-  failOnTargetDefaults(graph, context, this);
-  return projectEdges(graph, context.projects);
+  const edges = projectEdges(graph, context.projects);
+  return failOnTargetDefaults(graph, context, this).then(() => edges);
 }
 
 /**
