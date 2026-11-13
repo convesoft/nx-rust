@@ -26,14 +26,15 @@ Done when: the decision is accepted in Mara and `mara project validate` reports 
   - `REQ-UNKNOWN-METADATA-OPTIONS`: an unknown key under a target's `options` or under one of its configurations in a metadata table, the `[workspace.metadata.nx.project]` table included, fails graph creation. Configurations were settled on 13 November 2026 as following from answer 5, on the same ground: the plugin owns that source and knows its option list when the graph is built.
   - `DES-UNKNOWN-OPTIONS`:
     - Open schemas with typed options.
-    - The maintainer's second decision on the line: it says "passed on the command line" only when the option is a flag both in the task's own `__overrides_unparsed__` and in the `nx` command's arguments that a `preTasksExecution` hook records. Otherwise it says the option comes from the workspace's configuration, names `nx show target <project>:<target> --json`, and gives the two fixes for a `targetDefaults` entry. It no longer works out a file or key itself.
-    - On `run`, the `args` option and the arguments after `--` go to the binary. Arguments after `--` reach the binary only when the record has `--` and the task's own `__overrides_unparsed__` equals them, so a dependency or continuous task that inherits the record forwards nothing.
+    - The maintainer's second decision on the line: it says "passed on the command line" only when three conditions hold. The task's overrides hold the option with the value the invocation received. The task's own `__overrides_unparsed__` lists it as a flag. The `nx` command's arguments, which a `preTasksExecution` hook records, contain it. Otherwise the line says the option comes from the workspace's configuration, names `nx show target <project>:<target> --json`, and gives the two fixes for a `targetDefaults` entry. The executor no longer works out a file or key itself.
+    - The third review showed that a target started in code through devkit's `runExecutor` with its caller's context finds the caller's graph task. The value condition gives it the general form when its value differs. When the caller passes the command's own value, the executor cannot tell it from the scheduled task, and the design now says so. A word after a second `--` stays positional and does not count.
+    - On `run`, the `args` option and the arguments after `--` go to the binary. Arguments after `--` are forwarded only when the record has `--`, the task's own `__overrides_unparsed__` equals them, and the invocation holds the undeclared options parsed from them. A dependency or continuous task that inherits the record forwards nothing.
     - A wrongly typed declared option fails every task that Nx hands to the batch implementation, and only the affected tasks without a batch. This is a known limitation.
   - `ADR-UNKNOWN-OPTIONS` (`decisions.mara.md`), with the rejected alternatives, now including naming the file or key.
   - `EVD-NX-OPTION-VALIDATION`: the experiments and source reading on Nx 24.0.6. It now includes forwarded options, records inherited by dependencies, the `--args` forms, scoped hashing with `metadata.scriptContent`, and why the exact source cannot be recomputed from the executor's context.
   - `VER-UNKNOWN-OPTIONS` (`verification.mara.md`), which verifies both requirements. It covers both forms of the line, the forwarded-options case and the earlier counterexamples as general-form cases, `run` with `--` and `--args`, and every metadata table with its configurations.
 - `DES-TARGET-COMMANDS` (`targets.mara.md`), by the maintainer's second decision:
-  - `run` takes an `args` option, a string split into words as a POSIX shell splits them.
+  - `run` takes an `args` option, a string. It is split at blanks outside quotes, quotes and backslashes work as in a POSIX shell, nothing is expanded or treated as an operator, and an unterminated quote is an error naming the option. A value that looks like a number arrives from Nx as a number and is rejected, so it needs a blank (`--args=" 3000"`) or `--`.
   - Arguments after `--` still go to the binary, with two limits from Nx: flags before `--` are dropped, and arguments after it are checked as options.
   - `VER-TARGETS` covers them.
 - `RISK-TARGET-DEFAULTS` now names the mitigation. `REQ-TARGET-DEFAULT-GUARD` and `DES-PLUGIN-OPTIONS` are unchanged.
@@ -44,6 +45,7 @@ Done when: the decision is accepted in Mara and `mara project validate` reports 
   - nxr-wea5vt: implement the executors' handling and `args`.
   - nxr-95kg91: implement the graph-time check.
   - nxr-26t4qt: say in the cache design what Nx hashes beyond the declared inputs.
+  - nxr-abrp5n: what the line says for positional arguments after `--`, which Nx hands over as `_`.
 - Checks, on the final commit of each round:
   - `pnpm nx format:write`.
   - `mara schema validate`: valid.
