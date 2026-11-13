@@ -66,9 +66,10 @@ package name and manifest path.
 
 A crate whose folder is also a JS project takes that project's name, from its
 `package.json` or its `project.json`, because Nx applies those files after
-every plugin. The crate's `name` override has no effect there; set `nx.name`
-in the `package.json` instead. A crate and a JS project with the same name make
-Nx fail with its own error, which names both folders.
+every plugin. The crate's `name` override has no effect there. To choose
+another name, set `name` in the folder's `project.json` if it has one, and
+otherwise `nx.name` in its `package.json`. A crate and a JS project with the
+same name make Nx fail with its own error, which names both folders.
 
 ## Workspace-level tasks
 
