@@ -840,6 +840,53 @@ describe("options in the target tables", () => {
       ],
     ],
     [
+      "an extra target whose executor the workspace table gives, with options in the crate's table",
+      "crate-shapes",
+      {
+        "rust/Cargo.toml": appendTo(
+          `[workspace.metadata.nx.targets.extra]\nexecutor = "${cargoExecutor}"`,
+        ),
+        "rust/crates/core/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.extra.options]\ncoverage = true\npluginVersion = "0.0.0"',
+        ),
+      },
+      [
+        'rust/crates/core/Cargo.toml: [package.metadata.nx.targets.extra.options] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the target "extra", does not know.',
+        'rust/crates/core/Cargo.toml: [package.metadata.nx.targets.extra.options] sets the option "pluginVersion", which only the plugin sets',
+      ],
+    ],
+    [
+      "an extra target whose executor the workspace table gives, with a configuration in the crate's table",
+      "crate-shapes",
+      {
+        "rust/Cargo.toml": appendTo(
+          `[workspace.metadata.nx.targets.extra]\nexecutor = "${cargoExecutor}"`,
+        ),
+        "rust/crates/core/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.extra.configurations.ci]\ncoverage = true\npluginVersion = "0.0.0"',
+        ),
+      },
+      [
+        'rust/crates/core/Cargo.toml: [package.metadata.nx.targets.extra.configurations.ci] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the target "extra", does not know.',
+        'rust/crates/core/Cargo.toml: [package.metadata.nx.targets.extra.configurations.ci] sets the option "pluginVersion", which only the plugin sets',
+      ],
+    ],
+    [
+      "an extra target whose executor the crate's table gives, with options in the workspace table",
+      "crate-shapes",
+      {
+        "rust/Cargo.toml": appendTo(
+          "[workspace.metadata.nx.targets.extra.options]\ncoverage = true",
+        ),
+        "rust/crates/core/Cargo.toml": appendTo(
+          `[package.metadata.nx.targets.extra]\nexecutor = "${cargoExecutor}"`,
+        ),
+      },
+      [
+        'rust/Cargo.toml: [workspace.metadata.nx.targets.extra.options] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the target "extra", does not know.',
+      ],
+    ],
+    [
       "an extra target that names the plugin's executor",
       "subfolder-workspace",
       {
@@ -936,6 +983,10 @@ describe("options in the target tables", () => {
               "[package.metadata.nx.targets.sqlx-prepare]",
               'command = "cargo sqlx prepare"',
               'options = { cwd = "rust", release = true }',
+              "",
+              // Replaces the workspace's serve, whose options Nx drops with it.
+              "[package.metadata.nx.targets.serve]",
+              `executor = "${cargoExecutor}"`,
             ].join("\n"),
           ),
           "rust/crates/server/Cargo.toml": appendTo(
@@ -971,6 +1022,8 @@ describe("options in the target tables", () => {
         release: true,
       });
       expect(projects.cli.targets.serve.options).toMatchObject({ parallel: false });
+      expect(projects["core-lib"].targets.serve.executor).toBe(cargoExecutor);
+      expect(projects["core-lib"].targets.serve.options).toEqual({});
       expect(projects.server.targets.run.options).toMatchObject({
         bin: "migrate",
         profile: "release",

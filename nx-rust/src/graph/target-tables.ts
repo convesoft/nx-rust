@@ -57,6 +57,11 @@ export function applyTargetTables(
   const problems = new Set<string>();
   const merged = projects.map(({ project, targets }) => {
     const result = { ...targets };
+    const applied: TargetTable[] = [];
+    // For each name, the tables whose fields the merged target still has. As
+    // in Nx's merge, a table that names another executor than the target has
+    // so far replaces the target, and what the tables before it gave is gone.
+    const kept = new Map<string, TargetTable[]>();
     for (const table of project.settings.targets) {
       const inferred = targets[table.name];
       if (
@@ -66,18 +71,34 @@ export function applyTargetTables(
       ) {
         continue;
       }
-      for (const problem of tableProblems(table, inferred, project.settings)) {
-        problems.add(problem);
-      }
+      const before = result[table.name];
+      const replaces =
+        before?.executor !== undefined &&
+        table.target.executor !== undefined &&
+        table.target.executor !== before.executor;
+      kept.set(table.name, [...(replaces ? [] : (kept.get(table.name) ?? [])), table]);
+      applied.push(table);
       // A copy for each project, so that no two projects share an object Nx may change.
       result[table.name] = mergeTargetConfigurations(
         structuredClone(table.target),
-        result[table.name],
+        before,
         undefined,
         undefined,
         undefined,
         false,
       );
+    }
+    // Checked once every table is merged, so that the options of an extra
+    // target meet the executor that another table gives it.
+    for (const table of applied) {
+      const target = result[table.name];
+      const runs =
+        kept.get(table.name)?.includes(table) && target.command === undefined
+          ? target.executor
+          : undefined;
+      for (const problem of tableProblems(table, targets[table.name], runs, project.settings)) {
+        problems.add(problem);
+      }
     }
     return result;
   });
@@ -90,7 +111,7 @@ export function applyTargetTables(
 /**
  * What is wrong with one target table, each problem a message that names
  * the manifest and the table. This is the one place where a table is checked
- * against the target it addresses, before it is merged.
+ * against the target it addresses.
  *
  * On an inferred target, a table may not set `inputs` without `"..."`, a
  * different `executor` or a `command`, and `affectedTests = true` among the
@@ -103,14 +124,17 @@ export function applyTargetTables(
  * ({@link optionProblems}).
  *
  * @param inferred The inferred target under the table's name, if the project has one.
+ * @param runs The executor of the target once every table of the project is
+ *   merged, where the table's fields are part of it and it has no `command`.
  */
 function tableProblems(
   table: TargetTable,
   inferred: TargetConfiguration | undefined,
+  runs: string | undefined,
   settings: ProjectSettings,
 ): string[] {
   if (inferred === undefined) {
-    return optionProblems(table, undefined);
+    return optionProblems(table, undefined, runs);
   }
   const { target, manifest, name } = table;
   const header = targetHeader(table.table, name);
@@ -152,7 +176,7 @@ function tableProblems(
     target.command === undefined &&
     (target.executor ?? inferred.executor) === inferred.executor
   ) {
-    problems.push(...optionProblems(table, inferred));
+    problems.push(...optionProblems(table, inferred, inferred.executor));
   }
   return problems;
 }
@@ -169,24 +193,29 @@ function tableProblems(
  * that the target takes ({@link targetTakes}), which the cargo command uses
  * as well. `pluginVersion`, which the plugin sets itself, is no table's to
  * set, because a value set by hand would replace the plugin's version in the
- * cache key (`GOAL-TRUSTED-CACHE`). On an extra target that names one of the
- * executors, which fails
- * when its task starts, a key is checked against the executor's schema
- * alone, because the option reference gives options to inferred targets
- * only. An extra target of another executor, or with a `command`, has Nx's
- * options, which are not the plugin's to check, and so does an inferred
- * target that the table gives another executor or a command, which is an
- * error of its own ({@link tableProblems}).
+ * cache key (`GOAL-TRUSTED-CACHE`). On an extra target that runs one of
+ * the executors once the workspace's and the crate's tables are merged,
+ * whichever of them names it, and which fails when its task starts, a key is
+ * checked against the executor's schema alone, because the option reference
+ * gives options to inferred targets only. An extra target of another
+ * executor, or with a `command`, has Nx's options, which are not the
+ * plugin's to check, and so does an inferred target that the table gives
+ * another executor or a command, which is an error of its own
+ * ({@link tableProblems}).
  *
  * @param inferred The inferred target under the table's name, if the
  *   project has one and the table keeps its executor.
+ * @param executor The executor that the table's keys reach: the inferred
+ *   target's, or the merged extra target's.
  */
 // @mara implements REQ-UNKNOWN-METADATA-OPTIONS
 // @mara implements DES-UNKNOWN-OPTIONS
-function optionProblems(table: TargetTable, inferred: TargetConfiguration | undefined): string[] {
+function optionProblems(
+  table: TargetTable,
+  inferred: TargetConfiguration | undefined,
+  executor: string | undefined,
+): string[] {
   const { target, manifest, name } = table;
-  const executor =
-    inferred?.executor ?? (target.command === undefined ? target.executor : undefined);
   const declared = executor === undefined ? undefined : declaredExecutorOptions().get(executor);
   if (executor === undefined || declared === undefined) {
     return [];
