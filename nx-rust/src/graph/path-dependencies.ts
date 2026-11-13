@@ -1,8 +1,11 @@
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-import type { CargoPackage } from "../cargo/metadata";
+import type { CargoMetadata, CargoPackage } from "../cargo/metadata";
+import { declaredFiles } from "./declared-files";
 import type { CargoDiscovery } from "./discovery";
+import type { Input, InputDefinition } from "./inputs";
 import { realPath } from "./real-path";
 import type { RedirectedUse } from "./redirected-uses";
+import { readCrateFileInputs } from "./settings";
 import { foldersNxSees } from "./visibility";
 
 /** A crate without an Nx project that a crate with a project reaches. */
@@ -22,6 +25,12 @@ export interface PathDependency {
    * another workspace builds it (`EVD-CARGO-DEPENDENCY-SIDE`).
    */
   workspaceManifest?: string;
+  /**
+   * The filesets for the `fileInputs` of its own table and of its
+   * workspace's, which travel with its folder (`DES-INPUTS`, "Declared
+   * files"); none where no report describes it or Nx does not see it.
+   */
+  declared: InputDefinition[];
 }
 
 /** The crates whose files a crate's inputs name beyond its edges, by the crate's manifest path. */
@@ -39,6 +48,11 @@ export interface CrateFolders {
    * out. Their folders and workspace manifests go onto the crate's targets.
    */
   leftOutEdges: Map<string, PathDependency[]>;
+  /**
+   * The problems of the declared files of those crates, each once, which
+   * stop graph creation (`declaredFiles` in `declared-files.ts`).
+   */
+  problems: string[];
 }
 
 /**
@@ -55,7 +69,10 @@ export interface CrateFolders {
  * reaches the crate through that project's own input.
  *
  * Whether Nx sees a crate's files is whether it sees its manifest, or any
- * file of a folder without one.
+ * file of a folder without one. The files that a crate seen there declares
+ * with `fileInputs`, in its own table or its workspace's, travel with its
+ * folder; they are read from its report, so a crate without one declares
+ * none.
  *
  * @param uses The redirected uses of the members (`redirectedUses`), for the
  *   projects that this plugin entry creates.
@@ -72,6 +89,8 @@ export async function findCrateFolders(
   );
   const known = new Map<string, CargoPackage>();
   const byRealFolder = new Map<string, CargoPackage>();
+  // The report of each known crate's workspace, by the crate's real folder.
+  const reportOf = new Map<string, CargoMetadata>();
   // The root manifest of each known crate's workspace, by the crate's real folder.
   const workspaceManifests = new Map<string, string>();
   for (const report of [
@@ -89,10 +108,13 @@ export async function findCrateFolders(
       const folder = realPath(dirname(pkg.manifest_path));
       if (!byRealFolder.has(folder)) {
         byRealFolder.set(folder, pkg);
+        reportOf.set(folder, report);
       }
     }
   }
 
+  const declared = new Map<string, InputDefinition[]>();
+  const problems = new Set<string>();
   type Reached = { name: string; folder: string; via: PathDependency["via"] };
   const reached = new Map<string, Reached[]>();
   const leftOutEdges = new Map<string, PathDependency[]>();
@@ -120,6 +142,7 @@ export async function findCrateFolders(
           seen: true,
           via: "redirection",
           workspaceManifest: ownWorkspaceManifest(use.folder),
+          declared: declaredOf(use.folder),
         },
       ]);
       continue;
@@ -166,13 +189,17 @@ export async function findCrateFolders(
   for (const [manifest, crates] of located) {
     withoutProject.set(
       manifest,
-      crates.map((crate) => ({
-        name: crate.name,
-        folder: crate.inside ?? crate.folder,
-        seen: crate.inside !== undefined && seen.has(crate.inside),
-        via: crate.via,
-        workspaceManifest: ownWorkspaceManifest(crate.folder),
-      })),
+      crates.map((crate) => {
+        const isSeen = crate.inside !== undefined && seen.has(crate.inside);
+        return {
+          name: crate.name,
+          folder: crate.inside ?? crate.folder,
+          seen: isSeen,
+          via: crate.via,
+          workspaceManifest: ownWorkspaceManifest(crate.folder),
+          declared: isSeen ? declaredOf(crate.folder) : [],
+        };
+      }),
     );
   }
   for (const [manifest, crates] of leftOutEdges) {
@@ -182,7 +209,30 @@ export async function findCrateFolders(
       crates.filter((crate) => !folders.has(crate.folder) && folders.add(crate.folder)),
     );
   }
-  return { withoutProject, leftOutEdges };
+  return { withoutProject, leftOutEdges, problems: [...problems] };
+
+  // The filesets for the files that the crate in `folder`, a real path,
+  // declares, read once per crate from its report; none without one.
+  function declaredOf(folder: string): InputDefinition[] {
+    const pkg = byRealFolder.get(folder);
+    const report = reportOf.get(folder);
+    if (pkg === undefined || report === undefined) {
+      return [];
+    }
+    let filesets = declared.get(folder);
+    if (filesets === undefined) {
+      const found: string[] = [];
+      const fileInputs = readCrateFileInputs(pkg, report, workspaceRoot, found);
+      const workspace = { root: relative(workspaceRoot, report.workspace_root) || ".", report };
+      const result = declaredFiles(fileInputs, workspace, workspaceRoot);
+      for (const problem of [...found, ...result.problems]) {
+        problems.add(problem);
+      }
+      filesets = result.filesets;
+      declared.set(folder, filesets);
+    }
+    return filesets;
+  }
 
   // The root manifest of the workspace of the crate in `folder`, a real
   // path, where it is not the crate's own and lies inside the repository.
@@ -197,10 +247,10 @@ export async function findCrateFolders(
 }
 
 /**
- * The inputs for a crate without an edge: its folder and the root manifest
- * of its workspace, where Nx can see them.
+ * The inputs for a crate without an edge: its folder, the root manifest of
+ * its workspace and the files it declares, where Nx can see them.
  */
-export function crateInputs(crate: PathDependency): string[] {
+export function crateInputs(crate: PathDependency): Input[] {
   if (!crate.seen) {
     return [];
   }
@@ -210,6 +260,7 @@ export function crateInputs(crate: PathDependency): string[] {
     ...(crate.workspaceManifest === undefined
       ? []
       : [`{workspaceRoot}/${crate.workspaceManifest}`]),
+    ...crate.declared,
   ];
 }
 

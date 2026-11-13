@@ -27,10 +27,11 @@ import {
 // The rows of VER-CACHE-KEYS that the inputs and outputs of nxr-fy4t4k
 // decide, checked with Nx's own task hasher on the plugin's inferred targets.
 // lockfile-keys.spec.ts holds the rows about Cargo.lock, which need the
-// lockfile task and a registry. The rows that need fileInputs (nxr-d371vy),
-// envInputs and runtimeInputs read from Cargo metadata (nxr-xyq7c8), the
-// nextest runner (nxr-jb6g5y), the test modes and the artifact targets are
-// left to those issues.
+// lockfile task and a registry. The rows that need envInputs and
+// runtimeInputs read from Cargo metadata (nxr-xyq7c8), the nextest runner
+// (nxr-jb6g5y), the test modes and the artifact targets are left to those
+// issues. declared-files.spec.ts checks the rows for declared files that are
+// ignored or linked, together with what nx affected selects.
 
 const appended = (text: string) => (current: string | undefined) => `${current ?? ""}${text}`;
 const changed = appended("// changed\n");
@@ -573,6 +574,156 @@ describeCacheKeyMatrix("keys with what the repository adds", [
     before: { env: { REVIEW_ADDED: "a" } },
     after: { env: { REVIEW_ADDED: "b" } },
     keys: { "server:test": "must differ", "model:test": "must differ" },
+  },
+]);
+
+// In declared-files, the workspace table declares proto/**/*.proto for every
+// member, and api's own table declares docs/banner.txt. app depends on api;
+// other depends on neither.
+const declaredFileTasks = (crate: string) => [`${crate}:build`, `${crate}:check`, `${crate}:test`];
+
+describeCacheKeyMatrix("keys with declared files", [
+  {
+    change:
+      "a change in a file outside the crate's folder that a fileInputs pattern of the crate's package table declares, for the crate, the crates that depend on it and their workspace's doc",
+    fixture: "declared-files",
+    after: { files: { "docs/banner.txt": "Built with nx-rust, changed\n" } },
+    keys: {
+      ...all([...declaredFileTasks("api"), "api:lint", "api:fmt-check"], "must differ"),
+      ...all(declaredFileTasks("app"), "must differ"),
+      "rust:doc": "must differ",
+    },
+  },
+  {
+    change:
+      "a change in a file outside the crate's folder that a fileInputs pattern of its workspace table declares, for every member",
+    fixture: "declared-files",
+    after: { files: { "proto/greeting.proto": appended("\nmessage Farewell {}\n") } },
+    keys: all(
+      ["api", "app", "other"].flatMap((crate) => declaredFileTasks(crate)),
+      "must differ",
+    ),
+  },
+  {
+    change: "a new file that a glob of fileInputs matches",
+    fixture: "declared-files",
+    after: { files: { "proto/nested/farewell.proto": 'syntax = "proto3";\n' } },
+    keys: all(declaredFileTasks("other"), "must differ"),
+  },
+  {
+    change: "a change in a declared file that Git ignores",
+    fixture: "declared-files",
+    base: {
+      files: {
+        ".gitignore": appended("generated/\n"),
+        "generated/schema.json": "{}\n",
+        "rust/crates/api/Cargo.toml": (manifest) =>
+          manifest.replace(
+            'fileInputs = ["../../../docs/banner.txt"]',
+            'fileInputs = ["../../../docs/banner.txt", "../../../generated/schema.json"]',
+          ),
+      },
+    },
+    after: { files: { "generated/schema.json": '{"changed":true}\n' } },
+    keys: all([...declaredFileTasks("api"), ...declaredFileTasks("app")], "must differ"),
+  },
+  {
+    change: "a change in a declared file of a dependency in another workspace",
+    fixture: "cross-workspace-path",
+    base: {
+      files: {
+        "shared/crates/model/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nfileInputs = ["../../../schema/model.sql"]\n',
+        ),
+        "schema/model.sql": "create table model ();\n",
+      },
+    },
+    after: { files: { "schema/model.sql": appended("-- changed\n") } },
+    keys: {
+      "server:test": "must differ",
+      "server:build": "must differ",
+      "model:test": "must differ",
+    },
+  },
+]);
+
+// The files that a crate declares travel with its folder where another
+// crate's inputs name the folder beside an edge.
+describeCacheKeyMatrix("keys with the declared files of a crate without an edge", [
+  {
+    change:
+      "a change in a file that a crate without a project declares, which the crate reaches through another crate without a project",
+    fixture: "declared-files",
+    base: {
+      files: {
+        "rust/crates/api/Cargo.toml": appended(
+          '\n[dependencies]\nlexer = { path = "../../../vendor/lexer" }\n',
+        ),
+        "vendor/lexer/Cargo.toml": `${crate("lexer")}\n[workspace]\n\n[dependencies]\ntoken = { path = "../token" }\n`,
+        "vendor/lexer/src/lib.rs": "",
+        "vendor/token/Cargo.toml": `${crate("token")}\n[workspace]\n\n[package.metadata.nx]\nfileInputs = ["../../shared/token.txt"]\n`,
+        "vendor/token/src/lib.rs": "",
+        "shared/token.txt": "token\n",
+        "nx.json": excludedFromPlugin("vendor/**"),
+      },
+    },
+    after: { files: { "shared/token.txt": appended("changed\n") } },
+    keys: { "api:test": "must differ", "app:test": "must differ", "other:test": "must not differ" },
+  },
+  {
+    change:
+      "a change in a file that a redirected crate without a project declares, for every member that may use it",
+    fixture: "patched-workspaces",
+    base: {
+      files: {
+        "third_party/fork/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nfileInputs = ["../../schema/fork.sql"]\n',
+        ),
+        "schema/fork.sql": "create table fork ();\n",
+      },
+    },
+    after: { files: { "schema/fork.sql": appended("-- changed\n") } },
+    keys: {
+      "api:test": "must differ",
+      "viaw:test": "must differ",
+      "plain:test": "must not differ",
+    },
+  },
+  {
+    change:
+      "a change in a file that a redirected crate declares whose edge is left out to avoid a cycle",
+    fixture: "patched-workspaces",
+    base: {
+      files: {
+        "rust/crates/model/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nfileInputs = ["../../../schema/model.sql"]\n',
+        ),
+        "schema/model.sql": "create table model ();\n",
+      },
+    },
+    after: { files: { "schema/model.sql": appended("-- changed\n") } },
+    keys: { "util:test": "must differ", "plain:test": "must not differ" },
+  },
+]);
+
+describeCacheKeyMatrix("keys without declared files", [
+  {
+    change: "a change in a file outside the crate's folder that a dependent declares",
+    fixture: "declared-files",
+    after: { files: { "docs/banner.txt": "Built with nx-rust, changed\n" } },
+    keys: all(declaredFileTasks("other"), "must not differ"),
+  },
+  {
+    change: "a change in a file outside the crate's folder that none of the task's inputs covers",
+    fixture: "declared-files",
+    base: { files: { "docs/guide.md": "# Guide\n", "proto/README.md": "Protocols\n" } },
+    after: {
+      files: { "docs/guide.md": appended("changed\n"), "proto/README.md": appended("changed\n") },
+    },
+    keys: all(
+      ["api", "app", "other"].flatMap((crate) => declaredFileTasks(crate)),
+      "must not differ",
+    ),
   },
 ]);
 
