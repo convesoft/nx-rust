@@ -22,5 +22,6 @@ Implements `REQ-AFFECTED-TESTS`, `REQ-SELECTION-SAFETY` and steps 1 and 2 of `DE
 - [ ] Warn when cargo-affected is missing in a run in mode `full`
 - [ ] `--affectedTests=false` and the per-crate opt-out (`DES-TEST-RUN`, `DES-PLUGIN-OPTIONS`); the graph-time error for `affectedTests = true` belongs to nxr-xyq7c8
 - [ ] The task-time error for `--affectedTests=true` that `DES-DIAGNOSTICS` lists, for a single task and in a batch
+- [ ] Count cargo-affected as needed in `init`'s table of tools (`nx-rust/src/tools/optional-tools.ts`) where a workspace has `affectedTests` on, with the fixture for that row that `VER-SETUP` asks for
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

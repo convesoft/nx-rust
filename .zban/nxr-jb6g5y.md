@@ -16,5 +16,6 @@ Implements `REQ-TEST-RUNNER`, `REQ-DOCTESTS`, `DES-TEST-PHASES` and steps 3 to 5
 - [ ] Doctests as a second step, failing the crate's task when they fail
 - [ ] The `profile` option on both steps, as `DES-PLUGIN-OPTIONS` maps it for the nextest runner (`EVD-NEXTEST-CARGO-FLAGS`)
 - [ ] Build and run as separate phases inside the executor
+- [ ] Count cargo-nextest as needed in `init`'s table of tools (`nx-rust/src/tools/optional-tools.ts`) where a workspace uses the nextest runner, with the fixture for that row that `VER-SETUP` asks for
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

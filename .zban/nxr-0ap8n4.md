@@ -17,5 +17,6 @@ Implements `REQ-ARTIFACT-TARGETS`, `REQ-ARTIFACT-CACHE`, `DES-ARTIFACT-STEPS` an
 - [ ] The CLI and crate version check
 - [ ] Run the check of `REQ-BUILD-INPUT-CHECK` and `DES-BUILD-INPUT-CHECK` after the compile step, as `build` does
 - [ ] Tool versions and target triple in the key; generated files as outputs, not inputs
+- [ ] Count the `wasm-bindgen` CLI and the wasm target as needed in `init`'s table of tools (`nx-rust/src/tools/optional-tools.ts`) where a crate has a `wasm-build` target, with the fixture for that row that `VER-SETUP` asks for
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
