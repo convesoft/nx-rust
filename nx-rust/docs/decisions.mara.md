@@ -317,7 +317,7 @@ Another Nx plugin for Rust, or Nx itself, could start reading `[package.metadata
 :threatens: NEED-EFFICIENT-BUILDS
 :threatens: NEED-CORRECT-CACHE
 
-Because Rust targets share the names `build`, `lint` and `test` with JS targets, a `targetDefaults` entry keyed by a bare name applies to them. A `dependsOn: ["^build"]` then queues one cargo process per dependency ([[EVD-NXRUST-BUILD-DEPS]]), and an `inputs` list written for a JS tool could replace the inferred inputs and drop the toolchain, environment and dependency inputs from the key. Nx 24 lets an entry be narrowed with a filter on plugin or projects ([[EVD-NX-24-INSPECTION]]). To check: how Nx 24 merges target defaults with inferred targets. [[REQ-TARGET-DEFAULT-GUARD]] is the planned mitigation.
+Because Rust targets share the names `build`, `lint` and `test` with JS targets, a `targetDefaults` entry keyed by a bare name applies to them. Nx 24 lays the entry over the inferred target: its `dependsOn`, `inputs`, `outputs` and `cache` replace the inferred values unless a list keeps them with `"..."`, and its `options` reach the executor ([[EVD-NX-TARGET-DEFAULTS]]). A `dependsOn: ["^build"]` then adds a build of every crate a crate depends on ([[EVD-NXRUST-BUILD-DEPS]]); batching ([[DES-BATCH]]) puts them in one batch with the build that needs them. An `inputs` list written for a JS tool drops the toolchain, environment and workspace inputs from the key, so a result built under other settings is restored. An `outputs` list drops the artifacts, so a cache hit restores no binary, and `cache: true` caches the targets that the plugin leaves uncached because their artifacts lie outside the repository. A `filter` on projects, plugin or executor keeps an entry away from Rust targets ([[EVD-NX-24-INSPECTION]]), but a `plugin` filter cannot select targets from `package.json` scripts or `project.json` files. [[REQ-TARGET-DEFAULT-GUARD]] is the planned mitigation.
 :::
 
 :::mara risk RISK-UNDECLARED-INPUTS
@@ -532,6 +532,29 @@ Inspection of the `nx` 24.0.6 package installed in this repository, on 12 Novemb
 - **CI detection.** `isCI()` reports CI when `CI` is set to anything but `false`, or when one of the variables that the common CI systems set is present, such as `GITHUB_ACTIONS`, `GITLAB_CI` or `BUILDKITE` (`utils/is-ci.js`).
 
 This is a reading of type definitions, schemas and compiled source. It shows what Nx declares, not how it behaves in every case; behaviour is checked by the spikes named under the risks.
+:::
+
+:::mara evidence EVD-NX-TARGET-DEFAULTS
+:mid: 01M7A0NA0X5XDW6MEQNS90EWC2
+:title: How Nx 24.0.6 lays target defaults over inferred targets
+:status: accepted
+:supports: RISK-TARGET-DEFAULTS
+:supports: ADR-NX-TARGET-NAMES
+
+An experiment on 13 November 2026 with `nx` 24.0.6, Node.js 26.12.0, pnpm 12.18.0 and rustc 1.100.0, in a throwaway pnpm workspace outside this repository. A stand-in plugin, listed in `nx.json` by its package name, made projects of two crates, `app` and its path dependency `core-lib`, and gave each the `build` and `test` targets that [[DES-TARGETS]] and [[DES-INPUTS]] describe: no `dependsOn`, `cache: true`, a named input for the crate folder with its `^` form, an `env` input for `RUSTFLAGS`, a `runtime` input for `rustc -Vv`, and an executor with `batchImplementation` and `preferBatch`. The executor ran no cargo; it recorded what it received and wrote a file into the declared output. Beside the crates were a JS project whose `build` is a `package.json` script and one whose `build` came from a second stand-in plugin. Each variant of `targetDefaults` was read back with `nx show project <name> --json`. Runs used `nx run <project>:build --output-style=static`, with `NX_DAEMON=false` and `NX_CACHE_DIRECTORY` set to a folder that was emptied before each variant. The Nx sources read alongside are `project-graph/utils/project-configuration-utils.js`, and `target-defaults.js` and `target-merging.js` in `project-graph/utils/project-configuration/`.
+
+- **Precedence.** Nx merges the targets of the plugins listed in `nx.json` first, then target defaults, then the targets of `project.json` and `package.json` files. A target default therefore overrides an inferred target, and a project's own file overrides the target default.
+- **Replaced, not merged.** An entry keyed `build` with `dependsOn: ["^build"]`, `inputs: ["default", "^default"]`, `outputs: ["{projectRoot}/dist"]` and `cache: false` replaced each of these four values on both crates. A field the entry does not set kept its inferred value. `options` were merged key by key, and the executor received the entry's option beside the inferred ones.
+- **Options.** An entry keyed `test` with `options: { passWithNoTests: true }` passed the option to the executor. With `additionalProperties: false` in the executor's schema, `nx run core-lib:test` failed instead, and the batch worker printed only an unhandled rejection with a `SchemaError`, naming neither the option nor the entry.
+- **Spread.** A list containing `"..."`, such as `inputs: ["...", "{workspaceRoot}/.tool-versions"]`, kept the inferred entries in that place and added the others.
+- **Cache key.** With `inputs: ["default", "^default"]` from a default, `nx run core-lib:build --exclude-task-dependencies` ran with `RUSTFLAGS` unset and then with `RUSTFLAGS=-Copt-level=1`. The second run restored the first result from the cache, including the file written under the empty `RUSTFLAGS`. Without the entry, or with `"..."` in its list, the second run executed.
+- **Outputs.** With `outputs: ["{projectRoot}/dist"]` from a default, a second run after deleting the inferred output folder was a cache hit that restored no file. Without the entry the hit restored the file.
+- **Task graph.** With `dependsOn: ["^build"]` from a default, `nx run app:build` also ran `core-lib:build`. Both tasks reached the executor in one batch, and the task graph in the executor's context held the dependency.
+- **Filters.** Array entries with `filter.plugin` set to the JS stand-in's name, with `filter.projects` set to `["tag:lang:js"]`, `["!tag:lang:rust"]` or `["packages/*"]`, where the crates carried the tag `lang:rust`, or with `filter.executor` set to `nx:run-commands` all left the crates' targets as inferred. `filter.plugin` compares with the `name` a plugin module exports or, if it exports none, with its entry in `nx.json`. It matched no target from a `package.json` script, not even as `nx/core/package-json`: Nx records a source plugin only for targets from the plugins listed in `nx.json`.
+- **Key precedence.** A key naming the target's executor is chosen before the key naming the target, even when its value is empty. With an empty entry keyed by the stand-in's executor beside a `build` entry, the crates' `build` stayed as inferred and the JS `build` targets took the `build` entry. An entry that sets another `executor`, such as `@nx/js:tsc`, was dropped for targets with a different executor.
+- **What a plugin sees.** `createNodes` receives `targetDefaults` as written in `nx.json`, not the merged targets. `createDependencies` receives `context.projects` with the merged targets. The batch executor found the merged target in `context.projectsConfigurations` and the added dependency in `context.taskGraph`. Nx's resolver for target defaults, `readTargetDefaultsForTarget`, is exported only from `nx/src/devkit-internals`.
+
+The stand-ins ran no cargo, so this shows how Nx merges, hashes and schedules targets of this shape, not what inherited builds cost in time.
 :::
 
 :::mara evidence EVD-CARGO-NO-DEPS
