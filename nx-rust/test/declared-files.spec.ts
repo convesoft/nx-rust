@@ -51,10 +51,16 @@ function git(workspace: FixtureWorkspace, ...args: string[]): string {
   }
   return execFileSync(
     "git",
+    // What the user's own configuration ignores must not decide what is committed.
     [
-      ...["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"],
-      // What the user's own configuration ignores must not decide what is committed.
-      ...["-c", "core.excludesFile=/dev/null"],
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.excludesFile=/dev/null",
       ...args,
     ],
     { cwd: workspace.root, env, encoding: "utf8" },
