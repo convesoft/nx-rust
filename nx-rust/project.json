@@ -20,7 +20,11 @@
         "main": "nx-rust/src/index.ts",
         "tsConfig": "nx-rust/tsconfig.lib.json",
         "assets": [
-          "nx-rust/*.md",
+          {
+            "input": "./nx-rust",
+            "glob": "*.md",
+            "output": "."
+          },
           {
             "input": "./nx-rust/src",
             "glob": "**/!(*.ts)",

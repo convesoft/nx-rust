@@ -17,6 +17,7 @@ Implements `REQ-INFERRED-TARGETS`, `REQ-TARGET-NAMES`, `REQ-NO-RUST-TASK-DEPS`, 
 
 - [x] `build`, `check`, `lint`, `test`, `fmt-check` and `fmt` on every crate; `run` and `bench` by target kind; no release targets with `publish = false`
 - [x] `doc`, `audit` and `update` on every workspace project, and `deny` where `deny.toml`, `.deny.toml` or `.cargo/deny.toml` is in the workspace root; the same targets whether or not cargo-audit and cargo-deny are installed
+- [x] Take those file names from `cargoDenyConfigurationFiles` (`nx-rust/src/tools/optional-tools.ts`), from which `init` tells whether cargo-deny is needed, so that both agree
 - [x] `bench` with `parallelism: false`; `run` on an executor without a batch implementation and not continuous; `fmt`, `bench`, `run`, `audit`, `deny` and `update` uncached, the last three with the inputs `DES-WORKSPACE-TARGETS` lists
 - [x] Renaming of each target through plugin options, with the graph-creation error for two inferred targets that get one name (`DES-PLUGIN-OPTIONS`, `DES-DIAGNOSTICS`)
 - [x] No `dependsOn` between Rust crates, and none added to JS projects

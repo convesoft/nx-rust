@@ -2,6 +2,7 @@ import type { TargetConfiguration } from "@nx/devkit";
 import { statSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
+import { cargoDenyConfigurationFiles } from "../tools/optional-tools";
 import type { CargoWorkspace } from "./discovery";
 import type { TargetNames } from "./options";
 
@@ -16,9 +17,6 @@ export const cargoExecutor = "@convesoft/nx-rust:cargo";
  * takes one package only (`DES-TARGET-COMMANDS`).
  */
 export const runExecutor = "@convesoft/nx-rust:run";
-
-/** The configuration files of cargo-deny that give a workspace project its `deny` target. */
-export const cargoDenyConfigurationFiles = ["deny.toml", ".deny.toml", ".cargo/deny.toml"];
 
 /**
  * The inferred targets by their default names, in the order of the table in

@@ -63,6 +63,9 @@ export const fixturesDirectory = join(__dirname, "..", "fixtures");
 /** The name under which a fixture's `nx.json` registers the plugin. */
 export const pluginPackageName = "@convesoft/nx-rust";
 
+/** The folder of the plugin's package in this repository, with its `package.json` and `generators.json`. */
+export const pluginPackageDirectory = join(__dirname, "..", "..");
+
 /** The plugin's entry point in this repository, which Nx can load from source. */
 export const pluginSourceEntry = join(__dirname, "..", "..", "src", "index.ts");
 
