@@ -63,6 +63,17 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       "services/billing": ["services/billing/crates/invoice"],
     },
   },
+  "crate-shapes": {
+    workspaces: {
+      rust: [
+        "rust/crates/cli",
+        "rust/crates/core",
+        "rust/crates/internal",
+        "rust/crates/perf",
+        "rust/crates/server",
+      ],
+    },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.

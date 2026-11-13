@@ -1,9 +1,11 @@
-import type { CreateNodesResultArray } from "@nx/devkit";
+import type { CreateNodesResultArray, TargetConfiguration } from "@nx/devkit";
 import { dirname, join, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
 import { cargoMetadata, cargoMetadataKey } from "./collisions";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import { projectName } from "./names";
+import type { TargetNames } from "./options";
+import { inferTargets, nameTargets } from "./targets";
 
 /**
  * A project that the plugin creates: a crate, or the workspace project of a
@@ -39,6 +41,8 @@ export interface CargoProject {
    * defines one, as for a standalone crate.
    */
   isWorkspaceProject: boolean;
+  /** The inferred targets, under the names that `targetNames` gives them. */
+  targets: Record<string, TargetConfiguration>;
 }
 
 /** What one `createNodes` call of a plugin entry found, kept for its `createDependencies`. */
@@ -53,14 +57,21 @@ export interface CargoGraph {
  * project per workspace whose root manifest defines no crate and was handed
  * to the plugin, rooted at the workspace folder. Where the root manifest
  * defines a crate, that crate's project has the workspace project's role.
+ * Each has the targets of its shape (`inferTargets` in `targets.ts`).
  *
  * Two of them may get one name: whether they keep it is known only once Nx
  * has applied `package.json` and `project.json`, so `createDependencies`
  * checks it (`failOnNameCollisions` in `collisions.ts`).
+ *
+ * @param targetNames The names of the inferred targets from the plugin options.
+ * @throws {Error} When `targetNames` gives two targets of one project the same name.
  */
 // @mara implements DES-PROJECT-GRAPH
-export function inferProjects(discovery: CargoDiscovery): CargoProject[] {
-  const projects: CargoProject[] = [];
+export function inferProjects(
+  discovery: CargoDiscovery,
+  targetNames: TargetNames = {},
+): CargoProject[] {
+  const projects: Omit<CargoProject, "targets">[] = [];
   for (const workspace of discovery.workspaces) {
     const rootManifest = join(workspace.report.workspace_root, "Cargo.toml");
     for (const pkg of workspace.members) {
@@ -84,13 +95,20 @@ export function inferProjects(discovery: CargoDiscovery): CargoProject[] {
       });
     }
   }
-  return projects;
+  const targets = nameTargets(
+    projects.map((project) => ({
+      project,
+      targets: inferTargets(project, discovery.workspaceRoot),
+    })),
+    targetNames,
+  );
+  return projects.map((project, index) => ({ ...project, targets: targets[index] }));
 }
 
 /**
  * The result of `createNodes` for the projects: each project under the
- * manifest it comes from, with its name and, in its metadata, what another
- * entry of the plugin needs to recognise it ({@link cargoMetadata}).
+ * manifest it comes from, with its name, its targets and, in its metadata,
+ * what another entry of the plugin needs to recognise it ({@link cargoMetadata}).
  */
 export function projectNodes(projects: readonly CargoProject[]): CreateNodesResultArray {
   return projects.map((project) => [
@@ -99,6 +117,7 @@ export function projectNodes(projects: readonly CargoProject[]): CreateNodesResu
       projects: {
         [project.root]: {
           name: project.name,
+          targets: project.targets,
           metadata: { [cargoMetadataKey]: cargoMetadata(project) },
         },
       },

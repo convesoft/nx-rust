@@ -259,7 +259,7 @@ When a tool is missing, a version is unsupported or a setting cannot work, the d
 :title: Workspace context
 :status: accepted
 
-Everything that Cargo scopes to one Cargo workspace and that the plugin therefore handles per workspace: the lockfile, the build directory, the toolchain, the batches and the coverage baseline. A repository has one workspace context per Cargo workspace, including each [[TERM-STANDALONE-CRATE]].
+Everything that Cargo scopes to one Cargo workspace and that the plugin therefore handles per workspace: the lockfile, the build directory, the toolchain file, the batches and the coverage baseline. A repository has one workspace context per Cargo workspace, including each [[TERM-STANDALONE-CRATE]].
 :::
 
 :::mara term TERM-STANDALONE-CRATE
@@ -327,9 +327,11 @@ The crate that cargo-hakari generates and every workspace member depends on. It 
 :::mara term TERM-EXTERNAL-NODE
 :mid: 01M78FHG7FTX12MCSFNZK69KW7
 :title: External node
-:status: accepted
+:status: retired
 
-A node in the Nx graph for a dependency that is not a project in the repository. The plugin creates one per direct external crate dependency, with the prefix `cargo:`. Whether the name also carries the locked version is open ([[DES-LOCKFILE-HASHING]]).
+A node in the Nx graph for a dependency that is not a project in the repository. The plugin was to create one per direct external crate dependency, with the prefix `cargo:`.
+
+Retired on 13 November 2026: v1 creates no external nodes. A crate's locked dependencies reach its cache key through the lockfile task of its workspace ([[ADR-LOCKFILE-TASK]], [[DES-LOCKFILE-HASHING]]).
 :::
 
 :::mara term TERM-TEST-MODE

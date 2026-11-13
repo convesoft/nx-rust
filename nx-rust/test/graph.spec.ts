@@ -152,6 +152,25 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["services-billing", "invoice"],
     ],
   },
+  "crate-shapes": {
+    projects: {
+      cli: "rust/crates/cli",
+      "core-lib": "rust/crates/core",
+      internal: "rust/crates/internal",
+      perf: "rust/crates/perf",
+      rust: "rust",
+      server: "rust/crates/server",
+    },
+    edges: [
+      ["cli", "core-lib"],
+      ["rust", "cli"],
+      ["rust", "core-lib"],
+      ["rust", "internal"],
+      ["rust", "perf"],
+      ["rust", "server"],
+      ["server", "core-lib"],
+    ],
+  },
 };
 
 // Without the toolchain that it pins, cargo fails in different-toolchains/pinned.
