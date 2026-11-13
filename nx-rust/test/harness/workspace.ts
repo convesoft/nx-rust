@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CargoCall, CargoWrapper } from "./cargo-wrapper";
 import { testEnvironment } from "./environment";
+import { testRunSocketFolder } from "./test-run";
 import { fakeNxPackage } from "./nx-package";
 import {
   copyFixture,
@@ -90,6 +91,8 @@ interface InspectResult {
  * and holds a copy of the wrapper in `.bin`, ahead of Node's folder on the
  * `PATH` that `nx:run-commands` builds for its tasks.
  *
+ * Its Nx keeps its sockets in a folder of their own ({@link socketFolder}).
+ *
  * Remove it with {@link FixtureWorkspace.remove} when the test is done.
  * Setting `NX_RUST_KEEP_FIXTURES=1` keeps every workspace for inspection.
  */
@@ -103,6 +106,7 @@ export class FixtureWorkspace {
   private constructor(
     readonly fixture: FixtureName,
     private readonly base: string,
+    private readonly sockets: string | undefined,
   ) {
     this.root = join(base, "repo");
     this.cargo = CargoWrapper.install(join(base, "cargo"));
@@ -117,13 +121,18 @@ export class FixtureWorkspace {
     // The real path, so that it matches what cargo and Nx report on macOS,
     // where the temporary folder is reached through a symbolic link.
     const base = realpathSync(mkdtempSync(join(tmpdir(), `nx-rust-${fixture}-`)));
+    const sockets = socketFolder();
     try {
-      const workspace = new FixtureWorkspace(fixture, base);
+      const workspace = new FixtureWorkspace(fixture, base, sockets);
       workspace.reset(...files);
       return workspace;
     } catch (error) {
       // The caller gets no workspace to remove.
-      rmSync(base, { recursive: true, force: true });
+      for (const folder of [base, sockets]) {
+        if (folder !== undefined) {
+          rmSync(folder, { recursive: true, force: true });
+        }
+      }
       throw error;
     }
   }
@@ -266,8 +275,14 @@ export class FixtureWorkspace {
     });
   }
 
-  /** Deletes the workspace and the cargo wrapper, unless `NX_RUST_KEEP_FIXTURES` is set. */
+  /**
+   * Deletes the workspace and the cargo wrapper, unless `NX_RUST_KEEP_FIXTURES`
+   * is set, and the folder for its sockets.
+   */
   remove(): void {
+    if (this.sockets !== undefined) {
+      rmSync(this.sockets, { recursive: true, force: true });
+    }
     if (process.env.NX_RUST_KEEP_FIXTURES) {
       console.log(`Kept the ${this.fixture} workspace in ${this.root}`);
       return;
@@ -304,8 +319,40 @@ export class FixtureWorkspace {
   private environment(env: Record<string, string | undefined>): NodeJS.ProcessEnv {
     // The plugin is CommonJS written in TypeScript, which Node's own type
     // stripping cannot load; Nx then uses swc instead.
-    return this.cargo.environment(testEnvironment({ NX_PREFER_NODE_STRIP_TYPES: "false", ...env }));
+    return this.cargo.environment(
+      testEnvironment({ NX_PREFER_NODE_STRIP_TYPES: "false", NX_SOCKET_DIR: this.sockets, ...env }),
+    );
   }
+}
+
+/** The longest name Nx gives a socket, as in `p<pid>-<counter>-<8 hex digits>.sock`. */
+const socketNameLength = 32;
+/** The longest path of a Unix socket on macOS; Linux allows 107 bytes. */
+const socketPathLimit = 103;
+
+/**
+ * A new folder for the sockets of one workspace's Nx, in the test run's
+ * socket folder ({@link testRunSocketFolder}), or `undefined` where the run
+ * has none and Nx uses its own.
+ *
+ * Nx names the folder it uses by default after the workspace root and never
+ * removes it, so that every fixture would leave one behind in
+ * `/tmp/.nx/<uid>/sockets`. It does not let workspaces share a folder.
+ * {@link FixtureWorkspace.remove} removes the folder, except where a plugin
+ * worker that outlives its `nx` command still writes to it, and the end of
+ * the test run removes what is left.
+ */
+function socketFolder(): string | undefined {
+  const parent = testRunSocketFolder();
+  if (parent === undefined) {
+    return undefined;
+  }
+  const folder = mkdtempSync(join(parent, "w-"));
+  if (folder.length + 1 + socketNameLength <= socketPathLimit) {
+    return folder;
+  }
+  rmSync(folder, { recursive: true, force: true });
+  return undefined;
 }
 
 /**
