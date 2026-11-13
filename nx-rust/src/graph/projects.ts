@@ -114,7 +114,7 @@ export function inferProjects(discovery: CargoDiscovery, settings: GraphSettings
   const named = nameTargets(
     projects.map((project) => ({
       project,
-      targets: inferTargets(project, discovery.workspaceRoot),
+      targets: inferTargets(project, discovery.workspaceRoot, settings.options.locked),
     })),
     settings.options.targetNames,
   );

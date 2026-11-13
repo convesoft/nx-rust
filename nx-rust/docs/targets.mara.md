@@ -1,16 +1,22 @@
 # Targets
 
 > **Status:** the plugin infers the targets of this page, apart from the
-> artifact and release targets and `lockfile`, and `targetNames` renames them.
-> The `lockfile` target and the crate targets' dependency on it are not
-> implemented yet and arrive with nxr-xq9ava; until then `targetNames` rejects
-> the key `lockfile`. The targets do not run yet, because the plugin's
-> executors are still missing (nxr-kmdpgj), and none of them is cached until
-> its inputs are declared (nxr-fy4t4k). A
-> `targetDefaults` entry in `nx.json` that sets `cache: true`, keyed by a
-> target's name or by its executor, overrides that: once the executors exist
-> and until the inputs are declared, such a target would be cached with Nx's
-> default inputs, which miss `Cargo.lock`, the toolchain and the environment.
+> artifact and release targets and `lockfile`, `targetNames` renames them, and
+> they run the commands below, each task with a cargo call of its own until
+> the batching of milestone 0.2. The `lockfile` target and the crate targets'
+> dependency on it are not implemented yet and arrive with nxr-xq9ava; until
+> then `targetNames` rejects the key `lockfile`. `run` takes no `args` yet,
+> arguments after `--` do not reach the binary, and an option that the
+> executor does not know, or that the target does not take, is left out of its
+> command without a warning (nxr-wea5vt). Without cargo-audit or cargo-deny,
+> `audit` and `deny` fail with cargo's own message for an unknown command.
+> None of the targets is cached until its inputs are declared (nxr-fy4t4k). A
+> task whose configuration caches it anyway, such as through a
+> `targetDefaults` entry in `nx.json` that sets `cache: true` and is keyed by
+> the target's name or by its executor, fails before cargo runs and says how
+> to take the target out of that entry: Nx's default inputs miss `Cargo.lock`,
+> the toolchain and the environment, so it would restore results that no
+> longer hold.
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.
@@ -345,7 +351,7 @@ Only `clippy` is renamed, to `lint`: `lint`, `test` and `build` are the target n
 
 Targets come from the `cargo metadata` report ([[DES-METADATA-REPORT]]): `run` exists when the crate has a binary target, `bench` when it has a bench target, an [[TERM-ARTIFACT-TARGET]] when the crate produces that artifact ([[DES-ARTIFACT-STEPS]]), and the release targets unless the manifest sets `publish = false`. The last five rows are targets of the [[TERM-WORKSPACE-PROJECT]]; `deny` exists only where a cargo-deny configuration file is in the workspace root. Whether a tool is installed never decides whether a target exists.
 
-**Executors.** Every inferred target runs the plugin's cargo executor, `@convesoft/nx-rust:cargo`, which has the batch implementation of [[DES-BATCH]], apart from `run`, which runs `@convesoft/nx-rust:run`, an executor without one ([[DES-TARGET-COMMANDS]]). Each target carries its default name from the table in its metadata, as `metadata.cargo.target`, so that the executor runs the same command whatever name `targetNames` gives the target.
+**Executors.** Every inferred target runs the plugin's cargo executor, `@convesoft/nx-rust:cargo`, which has the batch implementation of [[DES-BATCH]], apart from `run`, which runs `@convesoft/nx-rust:run`, an executor without one ([[DES-TARGET-COMMANDS]]). Each target carries its default name from the table in its metadata, as `metadata.cargo.target`, so that the executor runs the same command whatever name `targetNames` gives the target. It also carries the `locked` option of the plugin entry that created its project, as `metadata.cargo.locked`, from which the executor decides locked mode ([[DES-INVOCATION]]). A target that names one of these executors but that the plugin did not infer has no such name, and its task fails before cargo runs ([[DES-DIAGNOSTICS]]).
 
 No inferred target has a `dependsOn` entry that names another Rust crate's target, except that every cached crate target other than `fmt-check` depends on the lockfile task of its workspace ([[REQ-NO-RUST-TASK-DEPS]]), and none uses `^build` ([[ADR-NO-RUST-BUILD-DEPS]]). Dependencies reach a target through `^` inputs ([[DES-INPUTS]]). The plugin adds no `dependsOn` entry to a JS project. A JS target's own `^build` reaches the `build` of the crates its project depends on directly, which is how Nx defines `^build`, and ends there.
 :::

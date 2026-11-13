@@ -2,7 +2,7 @@ import type { TargetConfiguration } from "@nx/devkit";
 import { join, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
-import { readTargetNames, TargetNames } from "./options";
+import { readLocked, readTargetNames, TargetNames } from "./options";
 
 /** The test runner of a workspace (`DES-TEST-RUN`). */
 export type TestRunner = "cargo" | "nextest";
@@ -25,7 +25,8 @@ export type WorkspaceWideSetting = (typeof workspaceWideSettings)[number];
 /** The options of one entry of the plugin in `nx.json`, validated. */
 export interface PluginOptions {
   targetNames: TargetNames;
-  locked?: boolean;
+  /** Locked mode for the plugin's commands (`DES-INVOCATION`); `false` where unset. */
+  locked: boolean;
   testRunner?: TestRunner;
   affectedTests?: boolean;
   featureUnification?: FeatureUnification;
@@ -240,7 +241,7 @@ export function readPluginOptions(options: unknown): PluginOptions {
   reader.unknownKeys("plugin");
   const read: PluginOptions = {
     targetNames: {},
-    locked: reader.boolean("locked"),
+    locked: false,
     testRunner: reader.oneOf("testRunner", testRunners),
     affectedTests: reader.boolean("affectedTests"),
     featureUnification: reader.oneOf("featureUnification", featureUnifications),
@@ -250,8 +251,9 @@ export function readPluginOptions(options: unknown): PluginOptions {
   if (problems.length > 0) {
     throw new Error(problems.join("\n"));
   }
-  // It names its own problems in the words its checks have used since 0.1.
+  // They name their own problems in the words their checks have used since 0.1.
   read.targetNames = readTargetNames(options);
+  read.locked = readLocked(options);
   return read;
 }
 
@@ -284,7 +286,7 @@ export function readSettings(discovery: CargoDiscovery, options: PluginOptions):
     const table = readWorkspaceTable(workspace, rootIsCrate, problems);
     const settings: WorkspaceSettings = {
       rootManifest: workspace.rootManifest,
-      locked: options.locked ?? false,
+      locked: options.locked,
       testRunner: table.testRunner ?? options.testRunner ?? "cargo",
       affectedTests: table.affectedTests ?? options.affectedTests ?? false,
       featureUnification: table.featureUnification ?? options.featureUnification,

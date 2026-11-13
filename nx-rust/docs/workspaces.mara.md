@@ -3,7 +3,7 @@
 > **Status:** the plugin finds the Cargo workspaces and creates a project for
 > each crate and each workspace, named as this page describes, with an edge
 > for each path dependency. The projects have the targets that the status note of
-> [Targets](targets.mara.md) names, which do not run yet. A crate gets edges to the crates that `[patch]`,
+> [Targets](targets.mara.md) names. A crate gets edges to the crates that `[patch]`,
 > `[replace]` and `paths` redirect its workspace's dependencies to, so
 > `nx affected` follows them. Where such an edge is left out to avoid a cycle,
 > and for a redirected crate without a project, the crate's files become

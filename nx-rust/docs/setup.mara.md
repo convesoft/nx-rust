@@ -1,15 +1,15 @@
 # Setup and compatibility
 
-> **Status:** `nx add`, the `library` and `binary` generators and the checks of
-> the Nx and Cargo versions are implemented. `init` stops for each problem that
-> graph creation detects so far: an unsupported Nx or Cargo, an installed Nx
-> whose version cannot be read, a missing cargo, a pinned toolchain that is not
-> installed, a failing `cargo metadata`, two crates with one project name and
-> invalid `targetNames`. Of the tools below it counts only cargo-deny as needed
-> by your settings. Apart from the one for a newer Nx with
-> `NX_RUST_ALLOW_UNSUPPORTED_NX`, the warnings are not implemented yet, and
-> neither are the errors of a task for a missing tool, which need the plugin's
-> executor. The package is not published to npm yet.
+> **Status:** `nx add`, the `library` and `binary` generators and the checks
+> of the Nx and Cargo versions are implemented. `init` stops for each problem
+> that graph creation detects so far: an unsupported Nx or Cargo, an installed
+> Nx whose version cannot be read, a missing cargo, a pinned toolchain that is
+> not installed, a failing `cargo metadata`, two crates with one project name,
+> and invalid `targetNames` or `locked`. Of the tools below it counts only
+> cargo-deny as needed by your settings. Apart from the one for a newer Nx
+> with `NX_RUST_ALLOW_UNSUPPORTED_NX`, the warnings are not implemented yet,
+> and neither are the errors of a task for a missing tool (nxr-zqvnrh). The
+> package is not published to npm yet.
 
 ## What you need
 
@@ -277,6 +277,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 | `affectedTests = true` as an option of `test` in stored configuration, in a workspace without the `affectedTests` setting ([[DES-PLUGIN-OPTIONS]])                                                            | When the graph is created                          | Error                                                     |
 | `targetNames` gives two inferred targets of one project the same name ([[DES-PLUGIN-OPTIONS]])                                                                                                                | When the graph is created                          | Error                                                     |
 | A key of `targetNames` that is not the default name of an inferred target, or a value in it that is no target name ([[DES-PLUGIN-OPTIONS]])                                                                   | When the graph is created                          | Error                                                     |
+| `locked` in the plugin options is neither `true` nor `false` ([[DES-INVOCATION]])                                                                                                                             | When the graph is created                          | Error                                                     |
 | Entries of the plugin that receive manifests of one workspace give different values of `testRunner`, `affectedTests` or `featureUnification`, which the workspace table does not set ([[DES-PLUGIN-OPTIONS]]) | When the graph is created                          | Error                                                     |
 | An `implicitDependencies` entry starting with `!` ([[DES-PLUGIN-OPTIONS]])                                                                                                                                    | When the graph is created                          | Error                                                     |
 | A `fileInputs` pattern that resolves outside the repository or into Cargo's build or artifact directory ([[REQ-FILE-INPUTS-HASHABLE]])                                                                        | When the graph is created                          | Error                                                     |
@@ -292,6 +293,8 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 | cargo-affected missing in a workspace with `affectedTests`, in a run in mode `full`                                                                                                                           | When a `test` task starts                          | Warning                                                   |
 | A `build` task read a file in the repository that none of its inputs covers ([[REQ-BUILD-INPUT-CHECK]])                                                                                                       | When the cargo call of a `build` task has finished | Error                                                     |
 | A value of `NX_RUST_TEST_MODE` other than `affected` and `full` ([[DES-TEST-MODE]])                                                                                                                           | When a `test` task starts                          | Error                                                     |
+| A value of `NX_RUST_LOCKED` other than `true` and `false`; an empty value counts as unset ([[DES-INVOCATION]])                                                                                                | When a task starts, before cargo runs              | Error                                                     |
+| A target that names a plugin executor but was not inferred; the message says to use a target with a `command` instead ([[DES-TARGETS]])                                                                       | When the task starts, before cargo runs            | Error                                                     |
 | `--affectedTests=true` on the command line for a `test` task in a workspace without the `affectedTests` setting ([[DES-PLUGIN-OPTIONS]])                                                                      | When a `test` task starts, before cargo runs       | Error                                                     |
 | `wasm-bindgen` CLI and crate versions differ ([[DES-WASM]])                                                                                                                                                   | When the task starts                               | Error                                                     |
 | An option that a task's executor does not know, from a target default, a `project.json` or `package.json`, or the command line ([[REQ-UNKNOWN-OPTIONS]])                                                      | When the task starts                               | Warning                                                   |

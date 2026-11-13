@@ -51,6 +51,31 @@ export function readTargetNames(options: unknown): TargetNames {
   return value as TargetNames;
 }
 
+/**
+ * Reads `locked` from the options of the plugin's entry in `nx.json`: locked
+ * mode for the commands of the tasks of the projects that this entry creates
+ * (`DES-INVOCATION`). The environment variable `NX_RUST_LOCKED` replaces it
+ * for one run, which the executor decides when a task starts.
+ *
+ * @param options The `options` of the entry, as Nx passes them to `createNodes`.
+ * @returns `false` when the entry does not set it.
+ * @throws {Error} When `locked` is set to anything but `true` or `false`.
+ */
+// @mara implements DES-INVOCATION
+// @mara implements DES-PLUGIN-OPTIONS
+export function readLocked(options: unknown): boolean {
+  const value = isObject(options) ? options.locked : undefined;
+  if (value === undefined) {
+    return false;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error(
+      `"locked" in the options of the @convesoft/nx-rust entry in nx.json is ${JSON.stringify(value)}, but it has to be true or false.`,
+    );
+  }
+  return value;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

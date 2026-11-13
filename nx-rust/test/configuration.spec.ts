@@ -936,6 +936,118 @@ describe("several entries of the plugin", () => {
   );
 });
 
+describe("tasks of targets that the tables configure", () => {
+  /** Runs Nx in a fixture copy with static output, its colours removed. */
+  async function run(
+    workspace: FixtureWorkspace,
+    args: string[],
+  ): Promise<{ status: number | null; output: string }> {
+    const { status, output } = await workspace.nx([...args, "--output-style=static"]);
+    return { status, output: withoutColours(output) };
+  }
+
+  /** The cargo calls of tasks: every logged call but graph creation's `cargo metadata`. */
+  function taskCalls(workspace: FixtureWorkspace): { cwd: string; args: string[] }[] {
+    return workspace.cargoCalls().filter((call) => call.args[0] !== "metadata");
+  }
+
+  it(
+    "run check, renamed to typecheck, and lint without --all-targets where a crate's table sets allTargets = false",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "nx.json": pluginOptions({ targetNames: { check: "typecheck" } }),
+        "rust/crates/core/Cargo.toml": appendTo(
+          "[package.metadata.nx.targets.typecheck.options]\nallTargets = false\n\n[package.metadata.nx.targets.lint.options]\nallTargets = false",
+        ),
+      });
+      try {
+        for (const task of ["core-lib:typecheck", "core-lib:lint", "cli:typecheck"]) {
+          const result = await run(workspace, ["run", task]);
+          expect({ task, ...result }).toEqual({ task, status: 0, output: expect.any(String) });
+        }
+
+        expect(taskCalls(workspace)).toEqual([
+          { cwd: "rust", args: ["check", "-p", "core-lib"] },
+          { cwd: "rust", args: ["clippy", "-p", "core-lib"] },
+          // A crate without the table keeps the inferred option.
+          { cwd: "rust", args: ["check", "--all-targets", "-p", "cli"] },
+        ]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "start a run that the crate's table makes continuous, and a dependent once readyWhen holds",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        // The binary leaves a file in the folder cargo runs it in, the
+        // workspace root, and then serves until Nx stops it.
+        "rust/crates/cli/src/main.rs": [
+          "fn main() {",
+          '    std::fs::write("cli-started", "").unwrap();',
+          "    std::thread::sleep(std::time::Duration::from_secs(600));",
+          '    std::fs::write("cli-exited", "").unwrap();',
+          "}",
+          "",
+        ].join("\n"),
+        "rust/crates/cli/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.run]\ncontinuous = true\nreadyWhen = { command = "test -f rust/cli-started" }',
+        ),
+        "web/project.json": JSON.stringify({
+          name: "web",
+          targets: {
+            after: {
+              command:
+                "test -f rust/cli-started && test ! -f rust/cli-exited && echo the binary was running",
+              dependsOn: [{ projects: ["cli"], target: "run", waitFor: "ready" }],
+            },
+          },
+        }),
+      });
+      try {
+        const result = await run(workspace, ["run", "web:after"]);
+
+        expect(result.status).toBe(0);
+        expect(result.output).toContain("the binary was running");
+        expect(taskCalls(workspace)).toEqual([{ cwd: "rust", args: ["run", "-p", "cli"] }]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "run an extra target with a command, and fail one that repeats the cargo executor where the crate has no such inferred target",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "rust/Cargo.toml": appendTo(
+          `[workspace.metadata.nx.targets.hello]\ncommand = "echo hello from {projectName}"\n\n[workspace.metadata.nx.targets.bench]\nexecutor = "${cargoExecutor}"`,
+        ),
+      });
+      try {
+        const hello = await run(workspace, ["run", "core-lib:hello"]);
+        // core-lib has no bench target, so the table defines an extra one.
+        const bench = await run(workspace, ["run", "core-lib:bench"]);
+
+        expect(hello.status).toBe(0);
+        expect(hello.output).toContain("hello from core-lib");
+        expect(bench.status).toBe(1);
+        expect(bench.output).toContain(
+          `core-lib:bench: ${cargoExecutor} runs only the targets that @convesoft/nx-rust infers`,
+        );
+        expect(taskCalls(workspace)).toEqual([]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
 /** The root of the project called `name`. */
 function rootOf(graph: FixtureGraph, name: string): string | undefined {
   return graph.projects[name]?.root;

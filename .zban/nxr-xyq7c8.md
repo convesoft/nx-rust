@@ -17,6 +17,7 @@ Implements `REQ-METADATA-OVERRIDES`, `DES-METADATA-TABLES` and `DES-PLUGIN-OPTIO
 - [ ] Workspace defaults, with the precedence and the settings that add up as `DES-PLUGIN-OPTIONS` gives them
 - [ ] Each setting of `DES-PLUGIN-OPTIONS` read from the places that item gives for it
 - [ ] `targets.<name>` merged over the inferred targets as the "Targets" paragraph of `DES-PLUGIN-OPTIONS` says, under the names that `targetNames` gives them (`nameTargets` in `nx-rust/src/graph/targets.ts`), with `check` renamed to `typecheck` as `VER-CONFIGURATION` checks; `continuous` and `readyWhen` on `run` from the crate's table (`DES-TARGET-COMMANDS`)
+- [ ] The cases of `VER-TARGETS` that need the tables: `check` and `lint` without `--all-targets` for a crate whose metadata sets `allTargets = false`, and a `run` made continuous with `readyWhen` that starts before a dependent that waits for it. `nx-rust/test/executors.spec.ts` (nxr-kmdpgj) checks the commands with the option set in a `project.json`
 - [ ] The check of the "Several entries" paragraph of `DES-PLUGIN-OPTIONS`, with plugin isolation on and off (`EVD-NX-24-ENTRY-CONTEXT`)
 - [ ] The graph-creation errors that `DES-DIAGNOSTICS` attributes to `DES-PLUGIN-OPTIONS` for the metadata tables and the plugin options; the one for colliding target names belongs to nxr-t1ht7j, and the task-time one for `--affectedTests=true` to nxr-tabkjx
 - [ ] Project names from `name` and `namePrefix` as `DES-PROJECT-GRAPH` gives them, and both resolving a collision

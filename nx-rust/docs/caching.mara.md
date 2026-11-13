@@ -1,6 +1,10 @@
 # Caching
 
-> **Status:** specified, not implemented yet.
+> **Status:** each task's cargo command starts in the workspace root, and
+> locked mode works as [Where cargo runs](#where-cargo-runs) describes. The
+> cache inputs and outputs, the toolchain in the key among them, are not
+> implemented yet (nxr-fy4t4k), so no Rust target is cached, and the
+> `lockfile` task does not exist yet (nxr-xq9ava).
 
 Nx caches the **result** of a Rust task and, for a few targets, its **final
 artifacts**. It never stores or restores Cargo's intermediate files: Cargo owns
@@ -186,6 +190,7 @@ are those at the workspace root and above it.
   every cargo command of a task passes `--locked` and fails instead. Three
   targets never pass it: `update`, which exists to change the lockfile, and
   `fmt` and `fmt-check`, because `cargo fmt` reads no lockfile and rejects the
+  flag. `audit` runs cargo-audit, which only reads `Cargo.lock` and has no such
   flag. Building the project graph never touches `Cargo.lock`.
 - In locked mode, every run in which the `lockfile` task runs fails on an
   outdated `Cargo.lock`, also when every crate task is then restored from the

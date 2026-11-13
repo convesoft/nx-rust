@@ -1,18 +1,18 @@
 # Configuration
 
 > **Status:** the plugin reads and checks every setting of this page, in the
-> metadata tables and in the plugin options. Project names, `namePrefix`,
-> tags, `implicitDependencies`, `targetNames` and the `targets` tables take
-> effect in the graph. The others are read but have no effect yet: `locked`
-> until the executors run cargo (nxr-kmdpgj), `envInputs` and `runtimeInputs`
-> until the cache inputs are declared (nxr-fy4t4k), `fileInputs` until
-> nxr-d371vy, `testRunner` and `affectedTests` until milestone 0.3,
-> `featureUnification` until milestones 0.2 and 0.3, and `artifacts` until
-> milestone 0.4. Until the plugin detects cargo-hakari configurations
-> (nxr-k64tm5), the check of several entries treats an entry without
-> `featureUnification` as agreeing with one that sets `hakari` or
-> `workspace-build`. A key under a target's `options` or `configurations` that
-> the executor does not know is not rejected yet (nxr-95kg91).
+> metadata tables and in the plugin options, and `NX_RUST_LOCKED`. Project
+> names, `namePrefix`, tags, `implicitDependencies`, `targetNames`, `locked`
+> and the `targets` tables take effect. The others are read but have no
+> effect yet: `envInputs` and `runtimeInputs` until the cache inputs are
+> declared (nxr-fy4t4k), `fileInputs` until nxr-d371vy, `testRunner` and
+> `affectedTests` until milestone 0.3, `featureUnification` until milestones
+> 0.2 and 0.3, and `artifacts` until milestone 0.4. Until the plugin detects
+> cargo-hakari configurations (nxr-k64tm5), the check of several entries
+> treats an entry without `featureUnification` as agreeing with one that sets
+> `hakari` or `workspace-build`. A key under a target's `options` or
+> `configurations` in a metadata table that the executor does not know is not
+> rejected yet (nxr-95kg91).
 
 Most repositories need no configuration. When a crate or workspace needs
 something other than the default, you say so in the `Cargo.toml` that already
@@ -325,7 +325,7 @@ Inferred targets have, by default, the names that Nx projects conventionally use
 :satisfies: NEED-CLEAR-FAILURES
 :mitigates: RISK-TARGET-DEFAULTS
 
-When a task of a target that runs one of the plugin's executors receives an option that its executor does not know, from a `targetDefaults` entry in `nx.json`, a `project.json`, a `package.json` or the command line, the task runs as it would without that option, and the option fails no task. The task's own output carries one warning line per such option that names the option and the task and says that the option was passed on the command line, when that is certain, or else that it comes from the workspace's configuration, with the command that shows where. On a `run` task, the arguments after `--` on the command line go to its binary instead ([[DES-TARGET-COMMANDS]]).
+When a task of a target that runs one of the plugin's executors receives an option that its executor does not know, or one that its executor knows and the task's target does not take, from a `targetDefaults` entry in `nx.json`, a `project.json`, a `package.json` or the command line, the task runs as it would without that option, and the option fails no task. The task's own output carries one warning line per such option that names the option and the task and says that the option was passed on the command line, when that is certain, or else that it comes from the workspace's configuration, with the command that shows where. On a `run` task, the arguments after `--` on the command line go to its binary instead ([[DES-TARGET-COMMANDS]]).
 :::
 
 :::mara requirement REQ-UNKNOWN-METADATA-OPTIONS
@@ -396,7 +396,7 @@ The settings of milestone 0.1, where each can be set, and its default. The plugi
 
 The workspace table also holds the `project` sub-table for the [[TERM-WORKSPACE-PROJECT]] ([[DES-METADATA-TABLES]]). `exclude`, beside `options` on the plugin's entry, is Nx's own filter for plugin entries, not an option of the plugin ([[DES-DISCOVERY]]). A standalone crate takes the workspace settings from a `[workspace.metadata.nx]` table in its own manifest, which Cargo reports for a workspace of one ([[EVD-CARGO-NX-TABLES]]).
 
-Options of inferred targets are set under `targets.<name>.options`, in a configuration of the target, or on the command line. Each comes from a flag of the cargo command, so the command passes only what the options ask for ([[DES-INVOCATION]]):
+Options of inferred targets are set under `targets.<name>.options`, in a configuration of the target, or on the command line. Each comes from a flag of the cargo command, so the command passes only what the options ask for ([[DES-INVOCATION]]). On a target that the table does not list for it, an option is left out of the command with a warning line ([[DES-UNKNOWN-OPTIONS]]):
 
 | Option              | Flag                                                                                          | Targets                                                                                  | Default                                                  |
 | ------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
@@ -444,7 +444,7 @@ Three environment variables act on a run and are no options: `NX_RUST_TEST_MODE`
 
 The schema of each of the plugin's executors declares each target option with its type and leaves `additionalProperties` unset, so that Nx passes any other option on to the executor. Because no schema declares `verbose` or sets `additionalProperties: true`, Nx's own `--verbose` adds no option to a task and draws no line ([[EVD-NX-24-OPTION-SEMANTICS]]). Nx checks options against the schema before the batch implementation runs, and with `additionalProperties: false` one unknown option fails every task that Nx hands to the batch implementation, in every group, with a message that names neither the option nor a task ([[EVD-NX-OPTION-VALIDATION]], [[ADR-UNKNOWN-OPTIONS]]).
 
-When a task starts, the executor compares the keys of the task's options with the options its schema declares. It leaves every other key out of the cargo command, so that such a key splits no group ([[TERM-GROUP]]), and writes one warning line per such key at the top of the task's own output. The batch implementation and the implementation for a single task, which Nx uses with `--batch=false` and which is the only one that the executor of `run` has, both do this.
+When a task starts, the executor compares the keys of the task's options with the options its schema declares. It leaves every other key out of the cargo command, so that such a key splits no group ([[TERM-GROUP]]), and writes one warning line per such key at the top of the task's own output. A key that the schema declares but that the option reference of [[DES-PLUGIN-OPTIONS]] does not give the task's target, such as `targetTriple` on `test` or `allTargets` on `build`, is treated the same way, because one schema serves every target of the cargo executor; its line says that the target does not take the option. The batch implementation and the implementation for a single task, which Nx uses with `--batch=false` and which is the only one that the executor of `run` has, both do this.
 
 **Source.** Nx assembles a task's options from the plugin's target, `targetDefaults`, `package.json`, `project.json`, configurations, options forwarded from other tasks and the command line, and records which source gave a value only in its own source map ([[EVD-NX-OPTION-VALIDATION]]). The executor therefore does not work out the file or the `targetDefaults` entry, and the line takes one of two forms:
 

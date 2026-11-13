@@ -23,5 +23,6 @@
   "peerDependencies": {
     "nx": "^24"
   },
+  "executors": "./executors.json",
   "generators": "./generators.json"
 }

@@ -18,9 +18,8 @@ export interface TableSubject {
  * plugin's target. A table under a name that no inferred target of the
  * project has defines an extra target.
  *
- * On an inferred target, a table may not set `inputs` without `"..."`, a
- * different `executor` or a `command`, and `affectedTests = true` among the
- * options of `test` requires a workspace that uses selection.
+ * Every table is checked against the target it lays itself over by
+ * {@link tableProblems} first.
  *
  * @param workspaceRoot The repository root, from which Nx's merge is loaded.
  * @returns Each project's targets, in the order of `projects`.
@@ -41,11 +40,8 @@ export function applyTargetTables(
   const merged = projects.map(({ project, targets }) => {
     const result = { ...targets };
     for (const table of project.settings.targets) {
-      const inferred = targets[table.name];
-      if (inferred !== undefined) {
-        for (const problem of inferredTargetProblems(table, inferred, project.settings)) {
-          problems.add(problem);
-        }
+      for (const problem of tableProblems(table, targets[table.name], project.settings)) {
+        problems.add(problem);
       }
       // A copy for each project, so that no two projects share an object Nx may change.
       result[table.name] = mergeTargetConfigurations(
@@ -65,12 +61,33 @@ export function applyTargetTables(
   return merged;
 }
 
-// What a table may not do to an inferred target.
-function inferredTargetProblems(
+/**
+ * What is wrong with one target table, each problem a message that names
+ * the manifest and the table. This is the one place where a table is checked
+ * against the target it addresses, before it is merged.
+ *
+ * On an inferred target, a table may not set `inputs` without `"..."`, a
+ * different `executor` or a `command`, and `affectedTests = true` among the
+ * options or in a configuration of `test` requires a workspace that uses
+ * the selection of affected tests. A table under a name that the project
+ * has no inferred target for defines an extra target, which may run
+ * anything; one that names an executor of the plugin fails when its task
+ * starts (`DES-TARGETS`).
+ *
+ * The check of the keys under `options` and `configurations` against the
+ * `properties` of the executor's schema (`REQ-UNKNOWN-METADATA-OPTIONS`,
+ * nxr-95kg91) belongs here as well.
+ *
+ * @param inferred The inferred target under the table's name, if the project has one.
+ */
+function tableProblems(
   table: TargetTable,
-  inferred: TargetConfiguration,
+  inferred: TargetConfiguration | undefined,
   settings: ProjectSettings,
 ): string[] {
+  if (inferred === undefined) {
+    return [];
+  }
   const { target, manifest, name } = table;
   const header = targetHeader(table.table, name);
   const problems: string[] = [];
