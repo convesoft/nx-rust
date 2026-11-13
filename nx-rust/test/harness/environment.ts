@@ -1,5 +1,6 @@
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
+import { testRunFolder } from "./test-run";
 
 /**
  * Variables that the developer's shell must not pass to a test, because they
@@ -32,6 +33,15 @@ export const HARNESS_TIMEOUT = 120_000;
  * a cargo, as with a system Node and a system Rust, that cargo would shadow
  * rustup's proxies and ignore the fixtures' toolchain files.
  *
+ * Nx keeps two caches in `/tmp/.nx/<uid>`, whatever `TMPDIR` says, and on
+ * some machines `/tmp` is memory. One holds a copy of its native binary per
+ * Nx version and installation; Nx here loads the binary from where it is
+ * installed instead. The other is Node's compile cache, whose entries are
+ * keyed by file path, so that every fixture with a copy of Nx would add
+ * entries for all of Nx's modules. Node keeps it in the folder of the test
+ * run instead (`startTestRun`), whatever `NODE_COMPILE_CACHE` said, and
+ * without one it is off.
+ *
  * @param overrides Variables to set; `undefined` removes a variable.
  */
 export function testEnvironment(
@@ -51,6 +61,14 @@ export function testEnvironment(
   }
   env.NX_DAEMON = "false";
   env.RUSTUP_AUTO_INSTALL = "0";
+  env.NX_SKIP_NATIVE_FILE_CACHE = "true";
+  const run = testRunFolder();
+  if (run !== undefined) {
+    env.NODE_COMPILE_CACHE = join(run, "compile-cache");
+  } else {
+    delete env.NODE_COMPILE_CACHE;
+    env.NX_COMPILE_CACHE = "false";
+  }
   for (const [name, value] of Object.entries(overrides)) {
     if (value === undefined) {
       delete env[name];
