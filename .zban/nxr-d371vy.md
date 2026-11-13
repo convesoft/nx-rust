@@ -1,6 +1,6 @@
 ---
 title: Hash the files that fileInputs declares
-status: todo
+status: in-progress
 type: feature
 parent: nxr-w9qa5f
 blocked_by:

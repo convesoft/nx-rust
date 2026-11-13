@@ -4,7 +4,8 @@ import type { CargoPackage } from "../cargo/metadata";
 import { CacheContext, projectWarnings } from "./caching";
 import { cargoMetadata, cargoMetadataKey } from "./collisions";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
-import { Input, InputSettings, namedInputs } from "./inputs";
+import { declaredFiles } from "./declared-files";
+import { Input, InputDefinition, InputSettings, namedInputs } from "./inputs";
 import { projectName } from "./names";
 import type { GraphSettings, ProjectSettings } from "./settings";
 import { applyTargetTables } from "./target-tables";
@@ -83,8 +84,11 @@ export interface CargoGraph {
  *
  * @param settings The settings of the plugin options and metadata tables (`readSettings` in `settings.ts`).
  * @param context What the caching of the projects shares (`cacheContext` in `caching.ts`).
- * @throws {Error} When `targetNames` gives two targets of one project the
- *   same name, or a target table breaks a rule of `applyTargetTables`.
+ * @throws {Error} Naming every `fileInputs` pattern that resolves outside the
+ *   repository or into a Cargo directory (`declaredFiles` in
+ *   `declared-files.ts`); when `targetNames` gives two targets of one
+ *   project the same name, or a target table breaks a rule of
+ *   `applyTargetTables`.
  */
 // @mara implements DES-PROJECT-GRAPH
 export function inferProjects(
@@ -126,11 +130,22 @@ export function inferProjects(
       });
     }
   }
+  const declared = new Map(
+    projects.map((project) => [
+      project,
+      declaredFiles(project.settings.fileInputs, project.workspace, discovery.workspaceRoot),
+    ]),
+  );
+  const problems = new Set([...declared.values()].flatMap((files) => files.problems));
+  if (problems.size > 0) {
+    throw new Error([...problems].join("\n"));
+  }
+  const fileInputs = (project: (typeof projects)[number]) => declared.get(project)?.filesets ?? [];
   const named = nameTargets(
     projects.map((project) => ({
       project,
       targets: inferTargets(project, context, settings.options.locked, {
-        settings: inputSettings(project.settings),
+        settings: inputSettings(project.settings, fileInputs(project)),
         targetTables: (target) =>
           targetTables(project.settings, settings.options.targetNames[target] ?? target),
       }),
@@ -145,24 +160,33 @@ export function inferProjects(
   return projects.map((project, index) => ({
     ...project,
     targets: targets[index],
-    namedInputs: namedInputs(project, context, inputSettings(project.settings)),
+    namedInputs: namedInputs(
+      project,
+      context,
+      inputSettings(project.settings, fileInputs(project)),
+    ),
     warnings: projectWarnings(project, context),
   }));
 }
 
 /**
  * The settings that change a project's inputs: the variables and commands
- * that the plugin options and the metadata tables add (`DES-PLUGIN-OPTIONS`,
- * "Added inputs") and the workspace's test runner. Every workspace counts
- * as `workspace-build`, whose inputs include those of the other strategies,
- * until the strategies exist (nxr-k64tm5). The files of `fileInputs` are
- * nxr-d371vy's.
+ * that the plugin options and the metadata tables add, the filesets for the
+ * patterns of `fileInputs` in both tables (`DES-PLUGIN-OPTIONS`, "Added
+ * inputs") and the workspace's test runner. Every workspace counts as
+ * `workspace-build`, whose inputs include those of the other strategies,
+ * until the strategies exist (nxr-k64tm5).
+ *
+ * @param fileInputs The filesets of `declaredFiles` in `declared-files.ts`.
  */
-function inputSettings(settings: ProjectSettings): InputSettings {
+function inputSettings(
+  settings: ProjectSettings,
+  fileInputs: readonly InputDefinition[],
+): InputSettings {
   return {
     featureUnification: "workspace-build",
     testRunner: settings.workspace.testRunner,
-    added: { envInputs: settings.envInputs, runtimeInputs: settings.runtimeInputs, fileInputs: [] },
+    added: { envInputs: settings.envInputs, runtimeInputs: settings.runtimeInputs, fileInputs },
   };
 }
 

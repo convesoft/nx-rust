@@ -8,10 +8,9 @@
 > the crate's digest: any change to the lockfile changes the keys of every
 > crate of that workspace, and a lockfile that cargo would still change is not
 > handled, so a task can be keyed on the lockfile before its own cargo command
-> updates it. `envInputs` and `runtimeInputs` work; the files of `fileInputs`
-> are not hashed yet (nxr-d371vy), every workspace counts as using the
-> `workspace-build` strategy (nxr-k64tm5), and the check of a build's
-> dependency files is not implemented (nxr-agyqmz).
+> updates it. `envInputs`, `runtimeInputs` and `fileInputs` work; every
+> workspace counts as using the `workspace-build` strategy (nxr-k64tm5), and
+> the check of a build's dependency files is not implemented (nxr-agyqmz).
 
 Nx caches the **result** of a Rust task and, for a few targets, its **final
 artifacts**. It never stores or restores Cargo's intermediate files: Cargo owns
@@ -101,9 +100,10 @@ fileInputs = ["../../../proto/**/*.proto", "../../../README.md"]
   link's destination until the link itself changes or `nx reset` clears its
   stored hashes, so neither the key nor `nx affected` would see a change to the
   file.
-- A pattern that leaves the repository, or points into Cargo's build or
-  artifact directory, stops graph creation. Nx cannot hash files outside the
-  repository; cover those with a command under `runtimeInputs`.
+- A pattern that leaves the repository, also through a symbolic link, or
+  points into Cargo's build or artifact directory, stops graph creation. Nx
+  does not track files outside the repository; cover those with a command
+  under `runtimeInputs`.
 
 Whenever `build` runs cargo, also when nothing needs compiling, the plugin
 reads the dependency files that Cargo writes beside the crate's library and
@@ -416,7 +416,7 @@ The environment list:
 
 The variables and commands that the repository adds, with `envInputs` and `runtimeInputs` in the plugin options, in the workspace table or in a crate's table ([[DES-PLUGIN-OPTIONS]]), go into the crate's own named input, the one that its dependents hash through `^` inputs, and not onto single targets. A dependent's key therefore changes with them, also in another workspace, because Nx hashes the `env` and `runtime` entries of a dependency's named input into the dependent's key and those of a dependency's target into no other key ([[EVD-NX-24-OPTION-SEMANTICS]]).
 
-**Declared files.** Task-based affected matches changed files against filesets, so `nx affected` selects the tasks of the crate and of its dependents when a declared file changes. `includeIgnored` makes Nx hash a declared file that Git ignores. Nx leaves a file that the root `.gitignore` or `.nxignore` ignores out of the changed files before it matches them, also when a fileset with `includeIgnored` names it, so a change to such a file changes the keys and makes no task affected. A pattern that matches a symbolic link hashes the link's destination as Nx first reads it and keeps that hash until the link itself changes or `nx reset` clears the hashes Nx keeps, so a later change to the destination changes no key; Nx also matches changed files by their own paths, so `nx affected` does not select the task either ([[EVD-NX-24-FILE-INPUTS]]). The workspace project receives its members' patterns through its dependency on every member ([[DES-WORKSPACE-TARGETS]]). A pattern that resolves outside the repository fails graph creation with a message that names the manifest and the pattern and points to the runtime commands, because Nx accepts a fileset there without ever hashing it. So does a pattern that resolves into the build or artifact directory of the crate's workspace, whose files are Cargo's outputs ([[REQ-FILE-INPUTS-HASHABLE]], [[ADR-DECLARED-FILE-INPUTS]], [[DES-DIAGNOSTICS]]).
+**Declared files.** Task-based affected matches changed files against filesets, so `nx affected` selects the tasks of the crate and of its dependents when a declared file changes. `includeIgnored` makes Nx hash a declared file that Git ignores. Nx leaves a file that the root `.gitignore` or `.nxignore` ignores out of the changed files before it matches them, also when a fileset with `includeIgnored` names it, so a change to such a file changes the keys and makes no task affected. A pattern that matches a symbolic link hashes the link's destination as Nx first reads it and keeps that hash until the link itself changes or `nx reset` clears the hashes Nx keeps, so a later change to the destination changes no key; Nx also matches changed files by their own paths, so `nx affected` does not select the task either ([[EVD-NX-24-FILE-INPUTS]]). The workspace project receives its members' patterns through its dependency on every member ([[DES-WORKSPACE-TARGETS]]). A pattern that resolves outside the repository, also through a symbolic link, fails graph creation with a message that names the manifest and the pattern and points to the runtime commands: Nx hashes no file by a path that leaves the repository, and fails the hash of every task whose fileset with `includeIgnored` has a `..` segment, while `nx affected` sees no change to a file outside it. So does a pattern that resolves into the build or artifact directory of the crate's workspace, whose files are Cargo's outputs. Each pattern is resolved up to its first segment with a glob character, so that the fileset has no `.` or `..` segment there ([[REQ-FILE-INPUTS-HASHABLE]], [[ADR-DECLARED-FILE-INPUTS]], [[DES-DIAGNOSTICS]], [[EVD-NX-24-FILE-INPUTS]]).
 
 A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate is hashed with the crate's files, although it does not apply to the commands the plugin runs ([[DES-INVOCATION]]). An input the plugin cannot see is the repository's to declare, through `fileInputs` and the extra environment variables and commands. A `build` that read an undeclared file in the repository fails ([[DES-BUILD-INPUT-CHECK]], [[RISK-UNDECLARED-INPUTS]]).
 :::

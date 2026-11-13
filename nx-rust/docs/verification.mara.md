@@ -187,7 +187,7 @@ A commit, or a `--files` list, that changes only a declared file makes `nx affec
 - Covered only by Nx's fixed exclusions, such as a `node_modules` folder: the keys differ, and the tasks are selected, through `--files` as through a commit.
 - A symbolic link declared in place of the file it points to: after a change to that file, the keys stay the same and no task is selected. With the file itself declared, the keys differ and the tasks are selected.
 
-Graph creation fails, with a message naming the manifest and the pattern, for a `fileInputs` pattern that resolves outside the repository, where the message points to `runtimeInputs`, and for one that resolves into the build or artifact directory of the workspace.
+Graph creation fails, with a message naming the manifest and the pattern, for a `fileInputs` pattern that resolves outside the repository, also through a symbolic link to a folder or a file, where the message points to `runtimeInputs`, and for one that resolves into the build or artifact directory of the workspace.
 :::
 
 :::mara verification VER-BUILD-INPUT-CHECK
