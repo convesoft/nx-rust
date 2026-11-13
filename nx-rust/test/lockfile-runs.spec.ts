@@ -300,9 +300,12 @@ describe("the lockfile task", () => {
 });
 
 describe("nx affected after a change to Cargo.lock", () => {
-  it(
-    "selects the cached targets of that workspace's crates and none of the other workspace, runs those whose dependencies changed and restores the others",
-    async () => {
+  it.each<[string, Env]>([
+    ["without the daemon", {}],
+    ["with the daemon", { NX_DAEMON: "true" }],
+  ])(
+    "selects the cached targets of that workspace's crates and none of the other workspace, runs those whose dependencies changed and restores the others, %s",
+    async (_case, daemon) => {
       // app, in the workspace at the root, depends on util and on zzlib;
       // tools and scaffold form the other workspace.
       const workspace = await locked(
@@ -332,11 +335,15 @@ describe("nx affected after a change to Cargo.lock", () => {
         expect(git("init", "--quiet").status).toBe(0);
         expect(git("add", "--all").status).toBe(0);
         expect(git("commit", "--quiet", "--message", "The fixture").status).toBe(0);
-        expect((await nx(workspace, ["run-many", "-t", "test"])).status).toBe(0);
+        expect((await nx(workspace, ["run-many", "-t", "test"], daemon)).status).toBe(0);
         cargo(workspace, ".", "update", "-p", "zzlib", "--precise", "1.0.1");
         expect(git("commit", "--quiet", "--all", "--message", "Bump zzlib").status).toBe(0);
 
-        const run = await nx(workspace, ["affected", "-t", "test", "--base=HEAD~1", "--head=HEAD"]);
+        const run = await nx(
+          workspace,
+          ["affected", "-t", "test", "--base=HEAD~1", "--head=HEAD"],
+          daemon,
+        );
 
         expect(run.status).toBe(0);
         expect(run.output).toContain("nx run cargo-workspace:lockfile");
@@ -349,6 +356,9 @@ describe("nx affected after a change to Cargo.lock", () => {
         expect(ran(workspace)).toEqual([".: test -p app"]);
         expect(restored(run.output, "util:test")).toBe(true);
       } finally {
+        if (daemon.NX_DAEMON === "true") {
+          await workspace.nx(["daemon", "--stop"], { ...env, ...daemon });
+        }
         workspace.remove();
       }
     },

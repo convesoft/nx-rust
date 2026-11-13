@@ -93,7 +93,19 @@ describeCacheKeyMatrix("cache keys", [
 
 [`cache-keys.spec.ts`](cache-keys.spec.ts) holds the rows of
 `VER-CACHE-KEYS` that the plugin's inputs decide. `compareCacheKeys(row)`
-returns the hashes instead of failing.
+returns the hashes instead of failing. A state's `prepare(workspace, env)` runs
+once its files are in place, after the base's own, for steps such as a cargo
+command; with `lockfileTask: true` on the row, **`runLockfileTasks(workspace,
+env)`** then runs every lockfile task before the tasks are hashed, as a real run
+does, so that the digest inputs have digests to read.
+[`lockfile-keys.spec.ts`](lockfile-keys.spec.ts) holds the rows about
+`Cargo.lock`.
+
+**`LocalRegistry.create(crates)`** publishes crate versions, packaged by the
+real `cargo package`, to a registry in a temporary folder, with a Cargo home
+whose configuration puts it in place of crates.io: give commands
+`CARGO_HOME: registry.cargoHome`. `publish(crate)` adds another version, and
+`remove()` deletes it all. No network is needed.
 
 **`pnpmLockfile(version, integrity)`** writes a `pnpm-lock.yaml` that lists
 the plugin's package at `version`, with `tslib` behind it, and `left-pad`
