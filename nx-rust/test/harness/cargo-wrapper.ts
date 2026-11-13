@@ -1,0 +1,152 @@
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, join, relative, resolve } from "node:path";
+import { findExecutable, testEnvironment } from "./environment";
+
+/** One cargo invocation, as the wrapper logged it. */
+export interface CargoCall {
+  /** The folder cargo started in. */
+  cwd: string;
+  /** The arguments after `cargo`. */
+  args: string[];
+}
+
+/**
+ * A `cargo` executable that logs every invocation and then runs the real
+ * cargo found on `PATH` in the same folder, with the real cargo's folder
+ * first on `PATH` so that it runs the matching `rustc`. Rustup's proxies
+ * still choose the toolchain, because the real cargo starts in the folder the
+ * wrapper was started in.
+ *
+ * To count what the plugin, Nx or a task runs, the wrapper has to come first
+ * wherever cargo is looked up:
+ *
+ * - {@link CargoWrapper.environment} puts it first on the `PATH` of the
+ *   command a test starts. Graph creation, executors and batches inherit
+ *   that `PATH` from Nx.
+ * - Nx's `nx:run-commands` rebuilds the `PATH` of its tasks: the
+ *   `node_modules/.bin` folders from the task's folder up to the file system
+ *   root come first, then the folder of the Node executable, then the
+ *   inherited `PATH`. A copy in the workspace's `node_modules/.bin`, written
+ *   with {@link CargoWrapper.placeIn}, therefore comes ahead of Node's folder
+ *   for those tasks, wherever Node and cargo are installed.
+ */
+export class CargoWrapper {
+  private constructor(
+    /** The folder holding the `cargo` wrapper. */
+    readonly binDirectory: string,
+    /** The log, one JSON line per invocation. */
+    readonly logFile: string,
+    /** The cargo that the wrapper runs. */
+    readonly realCargo: string,
+  ) {}
+
+  /**
+   * Writes the wrapper into `directory`, which should lie outside any
+   * fixture so that Nx does not see it.
+   *
+   * @param env The environment whose `PATH` holds the real cargo.
+   */
+  static install(directory: string, env: NodeJS.ProcessEnv = testEnvironment()): CargoWrapper {
+    const binDirectory = resolve(directory, "bin");
+    const realCargo = findExecutable("cargo", env.PATH ?? "", binDirectory);
+    if (!realCargo) {
+      throw new Error(`The cargo wrapper found no cargo on PATH: ${env.PATH}`);
+    }
+    const logFile = resolve(directory, "cargo-calls.jsonl");
+    const wrapper = new CargoWrapper(binDirectory, logFile, realCargo);
+    wrapper.placeIn(binDirectory);
+    writeFileSync(logFile, "");
+    return wrapper;
+  }
+
+  /**
+   * Writes another `cargo` into `folder` that logs to the same log, such as a
+   * workspace's `node_modules/.bin`, where Nx's `nx:run-commands` looks first.
+   */
+  placeIn(folder: string): void {
+    const script = join(__dirname, "log-cargo.cjs");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(
+      join(folder, "cargo"),
+      [
+        "#!/bin/sh",
+        "# Written by the nx-rust test harness (cargo-wrapper.ts).",
+        `exec ${[process.execPath, script, this.realCargo, this.logFile].map(shellQuote).join(" ")} "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+  }
+
+  /** `env` with the wrapper first on `PATH`. */
+  environment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    return { ...env, PATH: [this.binDirectory, env.PATH].filter(Boolean).join(delimiter) };
+  }
+
+  /**
+   * The invocations logged so far, oldest first.
+   *
+   * @param root If given, folders become relative to it (`.` for `root`
+   *   itself) and every occurrence of it in an argument becomes
+   *   `{workspaceRoot}`.
+   */
+  calls(root?: string): CargoCall[] {
+    const text = existsSync(this.logFile) ? readFileSync(this.logFile, "utf8") : "";
+    const calls: CargoCall[] = text
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line));
+    if (root === undefined) {
+      return calls;
+    }
+    return calls.map(({ cwd, args }) => ({
+      cwd: relative(root, cwd) || ".",
+      args: args.map((arg) => arg.split(root).join("{workspaceRoot}")),
+    }));
+  }
+
+  /** Forgets the invocations logged so far. */
+  clear(): void {
+    writeFileSync(this.logFile, "");
+  }
+}
+
+/**
+ * The task `<project>:cargo` of a project whose `targets` include
+ * `{ "cargo": { "executor": probeExecutor } }` runs `cargo --version` in the
+ * project's folder from an executor process, the way the plugin's executor
+ * will run cargo. Run in a batch, it runs `cargo -V` for each task instead, so
+ * that a test can tell the two apart in the log. Install it with
+ * {@link installProbeExecutor}.
+ */
+export const probeExecutor = "cargo-probe-executor:cargo";
+
+/**
+ * A `project.json` for a crate folder with a target for each way a task can
+ * run cargo: `probe-command`, an `nx:run-commands` target that prints the
+ * cargo it finds on `PATH` and runs `cargo --version` in the project's
+ * folder, and `probe-executor`, which runs {@link probeExecutor}.
+ */
+export function cargoProbeProject(name: string): string {
+  return JSON.stringify({
+    name,
+    targets: {
+      "probe-command": {
+        executor: "nx:run-commands",
+        options: { command: "command -v cargo && cargo --version", cwd: "{projectRoot}" },
+      },
+      "probe-executor": { executor: probeExecutor },
+    },
+  });
+}
+
+/** Copies the package of {@link probeExecutor} into `root/node_modules`, which Nx ignores. */
+export function installProbeExecutor(root: string): void {
+  cpSync(join(__dirname, "probe-executor"), join(root, "node_modules", "cargo-probe-executor"), {
+    recursive: true,
+  });
+}
+
+function shellQuote(value: string): string {
+  return `'${value.split("'").join(`'"'"'`)}'`;
+}
