@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -8,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { testEnvironment } from "./environment";
 
 /**
  * The fixture repositories in `nx-rust/test/fixtures`, one per situation.
@@ -26,6 +28,31 @@ export const fixtureNames = [
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];
+
+/**
+ * The toolchain that `different-toolchains/pinned/rust-toolchain.toml`
+ * names. The tests never install it, and without it cargo fails in
+ * `different-toolchains/pinned`.
+ */
+export const pinnedToolchain = "1.91.0";
+
+/**
+ * Whether checks of `different-toolchains` can run: rustup has
+ * {@link pinnedToolchain}, or the tests run in CI, which installs it.
+ */
+export function pinnedToolchainAvailable(): boolean {
+  if (process.env.CI) {
+    return true;
+  }
+  const result = spawnSync("rustup", ["toolchain", "list"], {
+    env: testEnvironment(),
+    encoding: "utf8",
+  });
+  return (
+    result.status === 0 &&
+    result.stdout.split("\n").some((line) => line.startsWith(`${pinnedToolchain}-`))
+  );
+}
 
 /** The folder that holds the fixture repositories. */
 export const fixturesDirectory = join(__dirname, "..", "fixtures");
