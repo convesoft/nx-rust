@@ -3,6 +3,7 @@ import { checkNxOnLoad } from "./compatibility/nx-version";
 import { failOnNameCollisions } from "./graph/collisions";
 import { projectEdges } from "./graph/edges";
 import { Registration, registrationOf } from "./graph/registration";
+import { failOnAffectedTestsOption } from "./graph/target-tables";
 
 /**
  * The edges between the projects that this entry's `createNodes` created in
@@ -11,7 +12,9 @@ import { Registration, registrationOf } from "./graph/registration";
  *
  * It fails first when projects of the plugin still share a name once Nx has
  * merged the projects of all plugins and entries, which only the projects
- * and files that Nx passes here can show.
+ * and files that Nx passes here can show, and when what Nx merged over a
+ * crate's `test` target turns on `affectedTests` where the workspace does
+ * not use selection.
  *
  * Nx calls it as a method of its copy of the plugin for the entry, which is
  * `this`.
@@ -26,6 +29,7 @@ function createDependencies(
     return [];
   }
   failOnNameCollisions(graph, context);
+  failOnAffectedTestsOption(graph, context.projects);
   return projectEdges(graph, context.projects);
 }
 
