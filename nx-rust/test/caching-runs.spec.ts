@@ -1,7 +1,16 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
 import {
+  FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   taskCalls as harnessTaskCalls,
@@ -438,6 +447,100 @@ describe("a run with the plugin's executor", () => {
           "cli:build: build.target in rust/.cargo/config.toml chooses the target triple, and this run of the cached build names none in the targetTriple option",
         );
         expect(taskCalls(workspace)).toHaveLength(1);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // Where the plugin entry of cli does not receive the root manifest, its
+  // first report starts in rust/crates/cli, while the task runs cargo in
+  // rust/ (nxr-xrfd50).
+  it.each<[string, FileChanges, Record<string, string>, string]>([
+    [
+      "a member's Cargo configuration sets",
+      { "rust/crates/cli/.cargo/config.toml": '[build]\ntarget-dir = "member-target"\n' },
+      {},
+      "rust/target",
+    ],
+    [
+      "a relative CARGO_TARGET_DIR gives",
+      {},
+      { CARGO_TARGET_DIR: "env-target" },
+      "rust/env-target",
+    ],
+  ])(
+    "restores a binary where cargo writes it, where %s another artifact directory in the first folder that the crate's plugin entry reads",
+    async (_case, files, env, directory) => {
+      const workspace = FixtureWorkspace.create("crate-shapes", files, {
+        // The root manifest goes to a second entry, which gives the
+        // workspace its lockfile task, so that build stays cached.
+        "nx.json": (text) => {
+          const config = JSON.parse(text);
+          const [first] = config.plugins;
+          const plugin = typeof first === "string" ? first : first.plugin;
+          return JSON.stringify({
+            ...config,
+            plugins: [
+              { plugin, exclude: ["rust/Cargo.toml"] },
+              { plugin, include: ["rust/Cargo.toml"] },
+            ],
+          });
+        },
+      });
+      try {
+        const binary = join(workspace.root, directory, "debug", "cli");
+        const built = await nx(workspace, ["run", "cli:build"], env);
+        expect({ status: built.status, output: built.output }).toEqual({
+          status: 0,
+          output: expect.any(String),
+        });
+        expect(existsSync(binary)).toBe(true);
+        rmSync(binary);
+
+        const restored = await nx(workspace, ["run", "cli:build"], env);
+
+        expect(restored.status).toBe(0);
+        expect(restored.output).toMatch(new RegExp(`nx run cli:build\\s+${hit}`));
+        expect(existsSync(binary)).toBe(true);
+        expect(taskCalls(workspace)).toEqual(["build -p cli"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "restores a binary where cargo writes it, where the artifact directory is spelled through a symbolic link and .. (nxr-5gzr0n)",
+    async () => {
+      // tools/link leads to deep/child, so that cargo writes the files of
+      // tools to deep/target, not to tools/target, which the path that
+      // cargo reports, tools/link/../target, gives as text.
+      const workspace = FixtureWorkspace.create("two-workspaces", {
+        ".cargo/config.toml": '[build]\ntarget-dir = "deep/target"\n',
+        "tools/.cargo/config.toml": '[build]\ntarget-dir = "link/../target"\n',
+      });
+      try {
+        mkdirSync(join(workspace.root, "deep", "child"), { recursive: true });
+        symlinkSync("../deep/child", join(workspace.root, "tools", "link"));
+        const binary = join(workspace.root, "deep", "target", "debug", "tools");
+        const built = await nx(workspace, ["run", "tools:build"]);
+        expect({ status: built.status, output: built.output }).toEqual({
+          status: 0,
+          output: expect.any(String),
+        });
+        expect(existsSync(binary)).toBe(true);
+        rmSync(binary);
+
+        const restored = await nx(workspace, ["run", "tools:build"]);
+
+        expect(restored.status).toBe(0);
+        expect(restored.output).toMatch(new RegExp(`nx run tools:build\\s+${hit}`));
+        expect(existsSync(binary)).toBe(true);
+        expect(existsSync(join(workspace.root, "tools", "target"))).toBe(false);
+        expect(taskCalls(workspace)).toEqual(["build -p tools"]);
       } finally {
         workspace.remove();
       }
