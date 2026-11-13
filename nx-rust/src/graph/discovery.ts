@@ -86,7 +86,10 @@ export interface CargoDiscovery {
 
 /**
  * Finds the Cargo workspaces among the manifests that Nx hands to the plugin
- * and requests one `cargo metadata` report for each.
+ * and reads each one's `cargo metadata` report as cargo gives it in the
+ * workspace's root folder, where the workspace's tasks run cargo: where Nx
+ * does not hand the root manifest, that takes a second request
+ * ({@link readWorkspace}).
  *
  * Until every manifest is claimed, the shallowest unclaimed one is read, and
  * the workspace its report describes claims its root manifest and its
@@ -383,21 +386,49 @@ function isDirectorySourcePackage(manifest: string): boolean {
   return existsSync(join(dirname(manifest), ".cargo-checksum.json"));
 }
 
-// Reads the workspace of a manifest that Nx handed to the plugin, in the
-// manifest's folder.
+/**
+ * Reads the workspace of a manifest that Nx handed to the plugin. The
+ * report requested in the manifest's folder names the workspace root. Where
+ * that is another folder, because Nx did not hand the root manifest to the
+ * plugin, one more report is requested in the root folder, where the
+ * workspace's tasks run cargo, and replaces the first: cargo takes its
+ * configuration files, a relative `CARGO_TARGET_DIR` and rustup its
+ * toolchain from the folder it starts in, so only that report names the
+ * artifact and build directories that the tasks use (`DES-DISCOVERY`).
+ */
+// @mara implements DES-DISCOVERY
 async function readWorkspace(
   manifest: string,
   workspaceRoot: string,
   reports: ComputationReports,
 ): Promise<CargoMetadata> {
   const path = join(workspaceRoot, manifest);
-  const folder = dirname(manifest);
+  const found = await requestWorkspace(manifest, workspaceRoot, dirname(path), () =>
+    reports.request(path, dirname(path)),
+  );
+  if (reports.fromRoot(found)) {
+    return found;
+  }
+  const root = found.workspace_root;
+  return requestWorkspace(manifest, workspaceRoot, root, () =>
+    reports.requestFromRoot(join(root, "Cargo.toml")),
+  );
+}
+
+// Makes one request of `readWorkspace`, with cargo started in `cwd`.
+async function requestWorkspace(
+  manifest: string,
+  workspaceRoot: string,
+  cwd: string,
+  request: () => Promise<CargoMetadata>,
+): Promise<CargoMetadata> {
   try {
-    return await reports.request(path, dirname(path));
+    return await request();
   } catch (error) {
+    const folder = displayPath(workspaceRoot, cwd) || "the repository root";
     throw new Error(
       failureMessage(error, `the Cargo workspace of ${manifest}`, [
-        `Fix what cargo reports, so that \`cargo metadata --no-deps\` succeeds in ${folder === "." ? "the repository root" : folder}.`,
+        `Fix what cargo reports, so that \`cargo metadata --no-deps\` succeeds in ${folder}.`,
         `If Nx should not read this manifest, add its path to "exclude" on the @convesoft/nx-rust entry in nx.json.`,
       ]),
     );
