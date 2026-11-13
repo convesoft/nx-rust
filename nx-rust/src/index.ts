@@ -35,7 +35,8 @@ function createDependencies(
  * and `.nxignore` do not ignore and that the entry's `include` and `exclude`
  * in `nx.json` let through. The plugin finds the Cargo workspaces among them
  * with one `cargo metadata` report each, and creates a project for each crate
- * and for each workspace whose root manifest defines no crate.
+ * and for each workspace whose root manifest defines no crate, with the
+ * targets of its shape.
  *
  * `createNodes` is a getter: Nx copies the module's properties once for each
  * entry in `nx.json`, so that each entry gets a registration of its own
