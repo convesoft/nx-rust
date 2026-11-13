@@ -241,7 +241,7 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
                       : line.startsWith(
                             'nx-rust: build.target in tools/.cargo/config.toml picks the target triple "host-tuple"',
                           )
-                        ? "tools sets build.target"
+                        ? "tools picks host-tuple"
                         : line,
               )
               .sort();
@@ -252,12 +252,12 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
           expect(shown.status).toBe(0);
           expect(warnings(shown.output)).toEqual([
             "root shares target",
-            "tools sets build.target",
+            "tools picks host-tuple",
             "tools shares target",
             "unignored target",
           ]);
           expect(warnings(projectWarnings(projects.scaffold)?.join("\n") ?? "")).toEqual([
-            "tools sets build.target",
+            "tools picks host-tuple",
             "tools shares target",
             "unignored target",
           ]);
@@ -271,7 +271,7 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
 
             expect(task.status).toBe(0);
             expect(warnings(task.output)).toEqual([
-              "tools sets build.target",
+              "tools picks host-tuple",
               "tools shares target",
               "unignored target",
             ]);
