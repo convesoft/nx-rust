@@ -291,6 +291,29 @@ The cost is that a toolchain or configuration file inside a member crate changes
 GitHub's hosted macOS runners are in short supply in November 2026, so jobs on them wait long or do not start. The plugin is a JavaScript package with no platform-specific build, so only test runs are affected: this repository's CI runs its unit and end-to-end tests on Linux only for the moment. macOS stays a supported host ([[ADR-COMPATIBILITY]]), and code must not assume Linux. What is deferred is the check: no macOS run backs the claim until the jobs are added, and [[VER-SETUP]] says so. When macOS runners are usable again, the macOS jobs are added to the workflow, the macOS part of the verification is restored, and this decision and its risk are retired.
 :::
 
+:::mara decision ADR-UNKNOWN-OPTIONS
+:mid: 01M7A93PSWEZZPRGCDQCJ8DHE4
+:title: Run tasks without options the executor does not know and say so in their output
+:status: accepted
+:justifies: REQ-UNKNOWN-OPTIONS
+:justifies: REQ-UNKNOWN-METADATA-OPTIONS
+:justifies: DES-UNKNOWN-OPTIONS
+
+Rust targets share their names with JS targets ([[ADR-NX-TARGET-NAMES]]), so options written for JS executors reach the plugin's executor: from a `targetDefaults` entry such as `test: { options: { passWithNoTests: true } }`, from a `project.json` or `package.json`, and from flags such as `--coverage` on `nx affected -t test`, which Nx passes to every task of the target ([[EVD-NX-OPTION-VALIDATION]]). On 13 November 2026 the maintainer chose to run such a task as if the option were absent and to say so in the task's own output when it starts, naming the option, the task and the `targetDefaults` key, the file or the command line the option came from, with a fix for a target default.
+
+Rejected:
+
+- **A closed schema** (`additionalProperties: false`). Nx then fails every task of the batch, those without the option too, with an unhandled `SchemaError` that names neither the option nor a task, and `--verbose` adds nothing. That breaks [[REQ-BATCHING]], under which a task fails only for its own crate.
+- **Failing the task**, with a clear message from the executor. Settings that mixed repositories use routinely would stop Rust tasks until every entry and flag was narrowed, although such an option changes nothing that cargo does.
+- **Ignoring the option silently.** A misspelt option, or one the user expects to have an effect, would go unnoticed ([[NEED-CLEAR-FAILURES]]).
+- **Reporting at graph creation.** As an error it stops every Nx command of the repository, JS ones included ([[REQ-DIAGNOSTICS]]). As a warning it reaches only the daemon's log on a developer machine. A flag on the command line is not in the graph at all.
+- **Naming the exact array entry** of a `targetDefaults` key, which Nx records only in internal files and functions. The key is named instead.
+
+Ignoring is safe for the cache: Nx keeps the option in the task's key, so a run with another value runs again instead of restoring a result made without it ([[GOAL-TRUSTED-CACHE]]). The costs are that a misspelt Rust option set through a target default or a flag only warns, and that the warning repeats on every run until the entry is narrowed. A declared option with a value of the wrong type still fails the whole batch with Nx's message, because the option types stay in the schema for Nx's conversion of command-line values.
+
+The plugin's own tables in Cargo manifests are treated differently. The plugin owns that source and knows at graph creation which options its executor has, so an unknown key under a target's `options` there fails graph creation, the earliest point at which the mistake is known, and names the manifest, the target and the key ([[REQ-DIAGNOSTICS]]).
+:::
+
 ## Risks
 
 Several risks below are assumptions that the design rests on and that nobody
@@ -317,7 +340,7 @@ Another Nx plugin for Rust, or Nx itself, could start reading `[package.metadata
 :threatens: NEED-EFFICIENT-BUILDS
 :threatens: NEED-CORRECT-CACHE
 
-Because Rust targets share the names `build`, `lint` and `test` with JS targets, a `targetDefaults` entry keyed by a bare name applies to them. Nx 24 lays the entry over the inferred target: its `dependsOn`, `inputs`, `outputs` and `cache` replace the inferred values unless a list keeps them with `"..."`, and its `options` reach the executor ([[EVD-NX-TARGET-DEFAULTS]]). A `dependsOn: ["^build"]` then adds a build of every crate a crate depends on ([[EVD-NXRUST-BUILD-DEPS]]); batching ([[DES-BATCH]]) puts them in one batch with the build that needs them. An `inputs` list written for a JS tool drops the toolchain, environment and workspace inputs from the key, so a result built under other settings is restored. An `outputs` list drops the artifacts, so a cache hit restores no binary, and `cache: true` caches the targets that the plugin leaves uncached because their artifacts lie outside the repository. A `filter` on projects, plugin or executor keeps an entry away from Rust targets ([[EVD-NX-24-INSPECTION]]), but a `plugin` filter cannot select targets from `package.json` scripts or `project.json` files. [[REQ-TARGET-DEFAULT-GUARD]] is the planned mitigation.
+Because Rust targets share the names `build`, `lint` and `test` with JS targets, a `targetDefaults` entry keyed by a bare name applies to them. Nx 24 lays the entry over the inferred target: its `dependsOn`, `inputs`, `outputs` and `cache` replace the inferred values unless a list keeps them with `"..."`, and its `options` reach the executor ([[EVD-NX-TARGET-DEFAULTS]]). A `dependsOn: ["^build"]` then adds a build of every crate a crate depends on ([[EVD-NXRUST-BUILD-DEPS]]); batching ([[DES-BATCH]]) puts them in one batch with the build that needs them. An `inputs` list written for a JS tool drops the toolchain, environment and workspace inputs from the key, so a result built under other settings is restored. An `outputs` list drops the artifacts, so a cache hit restores no binary, and `cache: true` caches the targets that the plugin leaves uncached because their artifacts lie outside the repository. A `filter` on projects, plugin or executor keeps an entry away from Rust targets ([[EVD-NX-24-INSPECTION]]), but a `plugin` filter cannot select targets from `package.json` scripts or `project.json` files. The executor runs a task without the options it does not know and says so in the task's output, which mitigates what an entry's options do ([[REQ-UNKNOWN-OPTIONS]]). [[REQ-TARGET-DEFAULT-GUARD]] is the planned mitigation for the rest.
 :::
 
 :::mara risk RISK-UNDECLARED-INPUTS
@@ -560,6 +583,32 @@ An experiment on 13 November 2026 with `nx` 24.0.6, Node.js 26.12.0, pnpm 12.18.
 - **What a plugin sees.** `createNodes` receives `targetDefaults` as written in `nx.json`, not the merged targets. `createDependencies` receives `context.projects` with the merged targets. The batch executor found the merged target in `context.projectsConfigurations` and the added dependency in `context.taskGraph`. Nx's resolver for target defaults, `readTargetDefaultsForTarget`, is exported only from `nx/src/devkit-internals`.
 
 The stand-ins ran no cargo, so this shows how Nx merges, hashes and schedules targets of this shape, not what inherited builds cost in time.
+:::
+
+:::mara evidence EVD-NX-OPTION-VALIDATION
+:mid: 01M7A93PSWDSC2D81P6MX8WZZ7
+:title: How Nx 24.0.6 checks, hashes and reports options of a batch executor
+:status: accepted
+:supports: ADR-UNKNOWN-OPTIONS
+:supports: DES-UNKNOWN-OPTIONS
+:supports: RISK-TARGET-DEFAULTS
+
+An experiment on 13 November 2026 with the `nx` 24.0.6 package that this repository installs, Node 26.12.0, on Linux, in a throwaway workspace outside this repository, together with a reading of that package (paths below are under `dist/src/`). A stand-in plugin, listed in `nx.json` by its package name, made projects of two crates, `core-lib` and `app`, from their `Cargo.toml` files, tagged `lang:rust`, each with `build` and `test` targets that had `cache: true`, the crate's folder as their only input, an output folder and empty `options`. Their executor ran no cargo: it wrote the options it received, the task's overrides and the `targetDefaults` in its context into the task's output. It came in four variants, each with a schema that declared `features` (a list of strings) and `profile` (a string): with `batchImplementation` and `preferBatch: true`, or without them, and in each case once with `additionalProperties` unset and once with `additionalProperties: false`. `createNodes` and `createDependencies` recorded what they received, and could throw or warn. Unless a case says otherwise, commands ran with `NX_DAEMON=false`, `NX_TUI=false` and an emptied `NX_CACHE_DIRECTORY`: `nx run core-lib:test` and `nx run-many -t test build`, with `--output-style=static`, and with `--batch=false`, `--verbose` or flags such as `--coverage --ci` where stated, as well as `nx show projects` and `nx show project core-lib --json`. Hashes were read with `HashPlanInspector.inspectTask` and with `hashTask` of the in-process task hasher (`hasher/hash-plan-inspector.js`, `hasher/create-task-hasher.js`). The `targetDefaults` entry was `test: { options: { passWithNoTests: true } }` unless a case says otherwise.
+
+- **Where Nx checks options.** `combineOptionsForExecutor` (`utils/params.js`) merges a target's options, its configuration and the command line, and checks the result against the executor's schema. Nx calls it per task when the task runs: in the task's process (`command-line/run/run.js`, started by `bin/run-executor.js`) and in the batch process (`tasks-runner/batch/run-batch.js`). The batch process checks every task before it calls the batch implementation, outside its error handling. No caller runs while the graph is created.
+- **Closed schema, one task per process.** With `additionalProperties: false`, and without a batch implementation or with `--batch=false`, each `test` task failed with `'passWithNoTests' is not found in schema` in its own output, and the `build` tasks succeeded.
+- **Closed schema, batch.** With the batch implementation, `nx run core-lib:test` and `nx run-many -t test build` printed only Node's `UnhandledPromiseRejection: … The promise rejected with the reason "#<SchemaError>"` and failed every task of the batch, the two `build` tasks included, which had no unknown option. `--verbose` added nothing. `SchemaError` is not a subclass of `Error`. With the schema open, an entry that gave the declared `profile` the number 1 failed all four tasks in the same way.
+- **Open schema.** The option reached the implementation for a single task and the batch implementation, there as `inputs[taskId]`, among the task's options. The task's overrides were in `context.taskGraph` for the implementation for a single task and in the task graph that the batch implementation receives, and both had the `targetDefaults` of `nx.json` in `context.nxJsonConfiguration`.
+- **Command line.** `nx run-many -t test --coverage --ci` passed `coverage` and `ci` to every `test` task as overrides. With the closed schema and the batch implementation, every `test` task failed as above.
+- **Cache key.** Each task's hash plan held `core-lib:ProjectConfiguration` and the file `nx.json`, although the target's inputs named only the crate's folder. Both tasks of a project had the same value of `ProjectConfiguration`. It changed when the entry's value changed from `true` to `false` and when the entry's `options` were emptied, so the hash of `build` changed as well as that of `test`. A change to `nx.json` that touched no target of the crates, adding `defaultBase` and a `lint` entry, made both tasks run again instead of being restored from the cache. The command line enters each task's hash through `hashCommand` (`hasher/task-hasher.js`): `--passWithNoTests` changed the hashes.
+- **What a plugin sees.** `createNodes` received `targetDefaults` as written in `nx.json`. `createDependencies` received the merged options, `{ "passWithNoTests": true }` on each `test`, as `nx show project core-lib --json` showed them, and its context type also offers `nx.json` (`project-graph/plugins/public-api.d.ts`), but no record of where an option came from. Nx keeps that record in `.nx/workspace-data/source-maps.json`, where an array entry gave `targets.test.options.passWithNoTests` the source `nx.json#targetDefaults.test[1]`, and resolves keys with `readTargetDefaultsForTarget`, which only `devkit-internals` exports. It tries the key named after the target's executor, then the target name, then glob keys longest first, and takes the first key with an entry whose `filter` matches (`project-graph/utils/project-configuration/target-defaults.js`).
+- **Graph creation.** An error thrown in `createDependencies` failed every command, `nx show projects` included, with `Failed to process project graph. The "<plugin>" plugin threw an error while creating dependencies: <message>`. A `console.warn` in `createDependencies` was printed by every command with `NX_DAEMON=false`. With `NX_DAEMON=true`, the default outside CI and Docker (`daemon/client/client.js`), it appeared only in `.nx/workspace-data/d/daemon.log`.
+- **Cache replay.** A cache hit printed the output that the task had produced, the executor's own line included.
+- **Narrowing.** An empty entry keyed by the executor's name beside the `test` entry, or the `test` entry as an array whose element had `filter: { projects: ["!tag:lang:rust"] }`, left the crates' `test` without options.
+- **Known options.** An entry that set `features` replaced the `features` that the stand-in had inferred for `test`.
+- **Conversion.** `coerceTypesInOptions` (`utils/params.js`) converts string values from the command line by the type that the schema declares for the option. This was read, not tried.
+
+The stand-ins ran no cargo, so this shows how Nx checks, hashes and reports options for an executor of this shape, not what the plugin's executor will print. Other Nx versions were not tried.
 :::
 
 :::mara evidence EVD-NX-24-INPUT-SEMANTICS

@@ -61,6 +61,42 @@ to JS projects, and it cannot take yours away. If a JS target declares `^build`
 and its project depends on a crate, Nx also runs that crate's native `build`.
 It stops there, because the crate's `build` depends on nothing.
 
+## Options that cargo does not use
+
+The `options` of a target default reach Rust targets too, and so do flags on
+the command line, which Nx passes to every task of the targets it runs. A Rust
+task runs as if an option it does not know were absent, such as Jest's
+`passWithNoTests` or `--coverage`, and its output says so in one line per
+option: which option, which task, and whether it came from a `targetDefaults`
+key, from a `project.json` or `package.json`, or from the command line. Such an
+option fails no task ([[REQ-UNKNOWN-OPTIONS]]).
+
+To keep a target default away from Rust targets, and so silence the warning,
+narrow the entry with a `filter`. This one assumes that your crates carry the
+tag `lang:rust`, for example through `[workspace.metadata.nx]`:
+
+```json
+{
+  "targetDefaults": {
+    "test": [
+      {
+        "filter": { "projects": ["!tag:lang:rust"] },
+        "options": { "passWithNoTests": true }
+      }
+    ]
+  }
+}
+```
+
+Or add an empty entry keyed by the plugin's executor, the `executor` that
+`nx show project <crate> --json` shows for the target. Nx prefers an entry
+keyed by the executor to one keyed by the target name, so then no entry keyed
+by a target name reaches the Rust targets.
+
+A Rust option with a value of the wrong type, such as a number for `profile`,
+is not ignored: Nx rejects it before the plugin sees it, and fails the Rust
+tasks that run together with it with a message that does not name the option.
+
 ## Formatting
 
 `nx format:check` and `nx format:write` are Nx's own commands, not targets.

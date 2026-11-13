@@ -58,6 +58,19 @@ Load each fixture through the plugin and compare the graph with the expected one
 In a fixture, `[package.metadata.nx]` sets a project name, tags, an option of an inferred target and an extra target, and `[workspace.metadata.nx]` sets defaults. The graph shows the overridden name, the tags, the option on the inferred target and the extra target. A value set for a crate replaces the workspace default for that crate only, except tags: a crate has the workspace's tags and its own. No file other than Cargo manifests is involved. With default options a crate has `lint`, `test` and `build` targets, and `nx run-many -t lint` in a mixed fixture runs both a JS lint target and clippy. With a renaming in the plugin options, the target appears under the new name and not under the default one, for each inferred target, the artifact targets included.
 :::
 
+:::mara verification VER-UNKNOWN-OPTIONS
+:mid: 01M7A93PSW34W2D2S2H4MD3R8X
+:title: Ignore and report options the executor does not know
+:status: accepted
+:methods: test
+:verifies: REQ-UNKNOWN-OPTIONS
+:verifies: REQ-UNKNOWN-METADATA-OPTIONS
+
+In a mixed fixture whose `nx.json` has the entry `test: { options: { passWithNoTests: true } }` under `targetDefaults`, `nx run-many -t test build --coverage` with an empty cache succeeds for every Rust task, and the cargo wrapper logs the same invocations as for the run without the entry and the flag. The output of each Rust `test` task has one warning line that names `passWithNoTests`, the task and `targetDefaults["test"]` and suggests a `filter` and an empty entry keyed by the plugin's executor, and one line that names `coverage` as passed on the command line. The output of each Rust `build` task has only the second line. A second identical run restores every Rust task from the cache and prints the same lines, and a run with `passWithNoTests: false` restores no Rust task. With an empty entry keyed by the plugin's executor beside the `test` entry, or with that entry narrowed by a `filter` that excludes the crates, no line names `passWithNoTests`. With `--batch=false` the lines are the same. An option set for a crate's `test` target in a `project.json` in the crate's folder gives a line that names that folder.
+
+A key under `[package.metadata.nx.targets.test.options]` that is no option of the plugin's executor fails graph creation with a message that names the manifest, the target `test` and the key, and so does the same key under `[workspace.metadata.nx.targets.test.options]`. With known keys only, graph creation succeeds.
+:::
+
 :::mara verification VER-TARGETS
 :mid: 01M78FHG7F71BA7Q5ACKA99V9M
 :title: Infer targets and no task dependencies

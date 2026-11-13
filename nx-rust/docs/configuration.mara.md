@@ -39,6 +39,13 @@ features = ["integration"] # option of the inferred "test" target
 command = "cargo run -p api --bin migrate" # an extra target
 ```
 
+The keys under `options` have to be options of the target. A key that the
+plugin does not know, such as a misspelt `feature`, makes graph creation fail
+with an error that names the manifest, the target and the key. The same holds
+for the workspace table. Options that reach a Rust target from `nx.json` or from the
+command line are ignored with a warning instead: see
+[Targets](targets.mara.md#options-that-cargo-does-not-use).
+
 ## Per workspace
 
 ```toml
@@ -118,6 +125,25 @@ A crate's tags, Nx project name, options of inferred targets and additional targ
 Inferred targets have, by default, the names that Nx projects conventionally use for the same job, so that `lint`, `test` and `build` cover Rust crates and JS projects alike. The name of every inferred target can be changed through the plugin's options.
 :::
 
+:::mara requirement REQ-UNKNOWN-OPTIONS
+:mid: 01M7A93PSWRTX4KDZVJ0ACW62Y
+:title: Run with a warning when a task gets an option the executor does not know
+:status: accepted
+:satisfies: NEED-CLEAR-FAILURES
+:mitigates: RISK-TARGET-DEFAULTS
+
+When a task of a target that runs the plugin's executor receives an option that the executor does not know, from a `targetDefaults` entry in `nx.json`, a `project.json`, a `package.json` or the command line, the task runs as it would without that option, and the option fails no task. The task's own output carries one warning line per such option that names the option, the task, and the `targetDefaults` key, the file or the command line it came from.
+:::
+
+:::mara requirement REQ-UNKNOWN-METADATA-OPTIONS
+:mid: 01M7A93PSWEY0RVZ0WCQM20EFG
+:title: Reject target options in Cargo metadata that the executor does not know
+:status: accepted
+:satisfies: NEED-CLEAR-FAILURES
+
+A key under `options` of a `targets.<name>` table in `[package.metadata.nx]` or `[workspace.metadata.nx]`, where the target runs the plugin's executor and the executor has no option of that name, fails graph creation with a message that names the manifest, the target and the key.
+:::
+
 ## Design
 
 :::mara design DES-METADATA-TABLES
@@ -165,4 +191,26 @@ Two environment variables act on one run and are no options: `NX_RUST_TEST_MODE`
 Precedence is defaults, then plugin options, then the workspace table, then the package table. Tags do not follow it: a crate's tags are added to its workspace's tags ([[DES-METADATA-TABLES]]). A `targets.<name>` table merges over the inferred target key by key, with `options` merged per option. An unknown key in either table is an error that names the manifest and the key.
 
 Open: the final names, and which options a single crate may set.
+:::
+
+:::mara design DES-UNKNOWN-OPTIONS
+:mid: 01M7A93PSWW34M2MF0BAD1S6PJ
+:title: Options the executor does not know
+:status: accepted
+:satisfies: REQ-UNKNOWN-OPTIONS
+:satisfies: REQ-UNKNOWN-METADATA-OPTIONS
+
+The executor's schema declares each target option with its type and leaves `additionalProperties` unset, so that Nx passes any other option on to the executor. Nx checks options against the schema before the batch implementation runs, and with `additionalProperties: false` one unknown option fails every task of the batch with a message that names neither the option nor a task ([[EVD-NX-OPTION-VALIDATION]], [[ADR-UNKNOWN-OPTIONS]]).
+
+When a task starts, the executor compares the keys of the task's options with the options its schema declares. It leaves every other key out of the cargo command and out of the forming of groups ([[TERM-GROUP]]), and writes one warning line per such key at the top of the task's own output, so that a cache hit replays it. The batch implementation and the implementation for a single task, which Nx uses with `--batch=false`, both do this. The line names the option, the task as `<project>:<target>` and the first source that applies, in this order:
+
+1. **The command line**, when the key is among the overrides that the task graph in the executor's context gives for the task. The line suggests no fix, because Nx passes a flag to every task of the targets that the command runs.
+2. **A `targetDefaults` key** of the `nx.json` in the executor's context. The executor tries the keys in Nx's order, the executor's name first, then the target name, then glob patterns that match the target name, longest first, and names the first key with an entry that sets the option, in `options` or in a configuration, as `targetDefaults["<key>"]`. The line suggests two fixes: a `filter` on that entry that keeps it away from Rust projects, or an empty entry keyed by the plugin's executor, which Nx then chooses for the plugin's targets instead of entries keyed by a target name ([[EVD-NX-TARGET-DEFAULTS]]).
+3. **The project's own files** otherwise, a `project.json` or `package.json` in the crate's folder. The line names that folder and suggests removing the option there.
+
+The executor does not read Nx's internal record of which array entry set an option. The ignored option stays in the task's cache key, because Nx hashes the project's merged configuration and `nx.json` into every task and the command line into each task of a run, so a run that ignores the option does the same work under its own key.
+
+Known limitation: Nx checks the types of the declared options in the same place. A target default or `project.json` that gives a declared option a value of the wrong type, such as `profile: 1`, fails every task of the batch with Nx's own message, an unhandled `SchemaError` that names no option. The types stay in the schema, because Nx converts values from the command line by them.
+
+Options in the plugin's own tables are checked when the graph is created. While reading `[package.metadata.nx]` and `[workspace.metadata.nx]` ([[DES-METADATA-TABLES]]), the plugin compares the keys under `options` of each `targets.<name>` table whose target runs its executor with the options the executor declares. An unknown key stops graph creation with a message that names the manifest, the target and the key, as [[REQ-DIAGNOSTICS]] prescribes for problems found at that point.
 :::
