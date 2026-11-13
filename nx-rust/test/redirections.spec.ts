@@ -519,6 +519,39 @@ describe("edges to redirected crates", () => {
     HARNESS_TIMEOUT,
   );
 
+  it(
+    "come from a member that reaches a registry dependency only through a path crate that cargo does not report",
+    async () => {
+      // other lists no members, so cargo builds stray for plain, applying
+      // rust's [patch] to stray's model, but refuses to report it. What stray
+      // depends on is then unknown, so plain may use every redirected crate.
+      const workspace = FixtureWorkspace.create("patched-workspaces", {
+        "rust/crates/plain/Cargo.toml": (manifest) =>
+          `${manifest}\n[dependencies]\nstray = { path = "../../../other/stray" }\n`,
+        "other/Cargo.toml": '[workspace]\nmembers = []\nresolver = "3"\n',
+        "other/stray/Cargo.toml":
+          '[package]\nname = "stray"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nmodel = "0.1"\n',
+        "other/stray/src/lib.rs": "",
+        ".nxignore": "other/\n",
+      });
+      try {
+        const graph = await workspace.graph();
+        const shown = await workspace.nx(["show", "projects"]);
+
+        expect(edges(graph)).toEqual(
+          [...committed, ["plain", "model"], ["plain", "types"]].sort(
+            (a, b) => compare(a[0], b[0]) || compare(a[1], b[1]),
+          ),
+        );
+        expect(shown.status).toBe(0);
+        expect(shown.output).toContain("`cargo metadata` failed for other/stray/Cargo.toml");
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
   // Cargo 1.91 ignores include, so only that version accepts a broken
   // included file; 1.100 fails on it, and so does graph creation.
   if (pinnedToolchainAvailable()) {

@@ -191,7 +191,11 @@ function describeWorkspaces(folders: string[]): string {
  * When cargo fails for a redirected crate, as for a crate inside a
  * workspace's folder that is not its member, which cargo builds as a patch
  * but does not report, graph creation goes on: a warning in `warnings` names
- * the manifest and cargo's message, and the crate has no report.
+ * the manifest and cargo's message, and the crate has no report. So it does
+ * for a path dependency that cargo does not report because it is no member
+ * of the workspace it lies in ({@link isUnreportedNonMember}), which cargo
+ * builds as a dependency all the same; any other failure of a path
+ * dependency's report fails graph creation.
  *
  * A package of a directory source that no workspace report lists as a
  * member gets no report ({@link isDirectorySourcePackage}); like any crate
@@ -217,13 +221,14 @@ async function readPathDependencies(
   const visited = new Set<string>();
   const queue: { pkg: CargoPackage; cwd: string }[] = [];
   // Requests the report of a crate without a project, unless one covers it
-  // already, and queues the crate so that its path dependencies follow. With
-  // `failures`, a report that cargo fails goes there instead of failing.
+  // already, and queues the crate so that its path dependencies follow. A
+  // failure of cargo that `goesOn` accepts becomes a warning and leaves the
+  // crate without a report.
   const reach = async (
     manifest: string,
     cwd: string,
     subject: () => string,
-    failures?: string[],
+    goesOn: (error: CargoError) => boolean,
   ) => {
     if (withProject.has(manifest) || visited.has(manifest)) {
       return;
@@ -239,7 +244,8 @@ async function readPathDependencies(
         cwd,
         workspaceRoot,
         reports,
-        failures,
+        warnings,
+        goesOn,
       );
       if (report === undefined) {
         return;
@@ -266,6 +272,7 @@ async function readPathDependencies(
             cwd,
             () =>
               `a path dependency of ${displayPath(workspaceRoot, dependent.manifest_path)} that has no project of its own`,
+            isUnreportedNonMember,
           );
         }
       }
@@ -292,7 +299,7 @@ async function readPathDependencies(
         workspace.report.workspace_root,
         () =>
           `a crate that ${displayPath(workspaceRoot, file)} redirects dependencies of the Cargo workspace in ${workspace.root} to, which has no project of its own`,
-        warnings,
+        () => true,
       );
       await drain();
     }
@@ -334,24 +341,36 @@ async function readWorkspace(
   }
 }
 
-// Reads a crate without a project. With `failures`, a failure of cargo
-// itself adds a warning there and gives no report.
+/**
+ * Whether cargo refused the report of a crate because the crate lies in the
+ * folder of a workspace, or names one in `package.workspace`, without being
+ * its member. Cargo checks that only for the crate it reports, never for a
+ * path dependency or patch that it builds for another workspace, so such a
+ * crate builds as before. Cargo 1.91 and later state it with this message.
+ */
+function isUnreportedNonMember(error: CargoError): boolean {
+  return error.stderr.includes("current package believes it's in a workspace when it's not");
+}
+
+// Reads a crate without a project. A failure of cargo itself that `goesOn`
+// accepts adds a warning to `warnings` and gives no report.
 async function readPathDependency(
   manifest: string,
   subject: string,
   cwd: string,
   workspaceRoot: string,
   reports: ComputationReports,
-  failures?: string[],
+  warnings: string[],
+  goesOn: (error: CargoError) => boolean,
 ): Promise<CargoMetadata | undefined> {
   const shown = displayPath(workspaceRoot, manifest);
   const folder = displayPath(workspaceRoot, cwd) || "the repository root";
   try {
     return await reports.request(manifest, cwd);
   } catch (error) {
-    if (failures !== undefined && error instanceof CargoError && !error.notStarted) {
+    if (error instanceof CargoError && !error.notStarted && goesOn(error)) {
       const output = error.stderr.trim();
-      failures.push(
+      warnings.push(
         [
           `nx-rust: \`cargo metadata\` failed for ${shown}, ${subject}: ${error.message}.`,
           ...(output === "" ? [] : [output]),

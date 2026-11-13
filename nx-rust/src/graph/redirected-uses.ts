@@ -338,7 +338,8 @@ function reaches(
 // Whether the member, or a path crate that it reaches through its own
 // dependencies and then through normal and build dependencies, has a
 // registry or git dependency. Cargo builds no dev-dependency of a crate
-// other than the one it builds or tests.
+// other than the one it builds or tests. A path crate that no report
+// describes counts as having one: what it depends on is not known.
 function reachesExternal(member: CargoPackage, known: Map<string, CargoPackage>): boolean {
   const visited = new Set<string>([folderOf(member)]);
   const queue = [member];
@@ -352,7 +353,10 @@ function reachesExternal(member: CargoPackage, known: Map<string, CargoPackage>)
         return true;
       }
       const next = known.get(realPath(dependency.path));
-      if (next && !visited.has(folderOf(next))) {
+      if (next === undefined) {
+        return true;
+      }
+      if (!visited.has(folderOf(next))) {
         visited.add(folderOf(next));
         queue.push(next);
       }

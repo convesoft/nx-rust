@@ -14,6 +14,7 @@ import {
   GraphCreationError,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
+  pinnedToolchain,
   pinnedToolchainAvailable,
   ProbeRecord,
   testEnvironment,
@@ -394,6 +395,77 @@ describe("failed discovery", () => {
     },
     HARNESS_TIMEOUT,
   );
+
+  describe("of a path dependency that cargo builds but does not report", () => {
+    // shared lists no members, so cargo builds model for server but refuses
+    // to report it, and .nxignore keeps shared from Nx, so model has no
+    // project. Reading model's report would lead on to lexer.
+    const unreported: FileChanges = {
+      "shared/Cargo.toml": (manifest) => manifest.replace('members = ["crates/*"]', "members = []"),
+      "shared/crates/model/Cargo.toml": (manifest) =>
+        `${manifest}\n[dependencies]\nlexer = { path = "../../../extra/lexer" }\n`,
+      "extra/lexer/Cargo.toml": crateManifest("lexer"),
+      "extra/lexer/src/lib.rs": "",
+      ".nxignore": "shared/\nextra/\n",
+    };
+    const toolchains: [string, FileChanges][] = [["the default cargo", {}]];
+    if (pinnedToolchainAvailable()) {
+      toolchains.push([
+        `cargo ${pinnedToolchain}`,
+        { "backend/rust-toolchain.toml": `[toolchain]\nchannel = "${pinnedToolchain}"\n` },
+      ]);
+    }
+
+    it.each(toolchains)(
+      "goes on with a warning and does not follow the crates behind it, with %s",
+      async (_toolchain, toolchain) => {
+        const workspace = FixtureWorkspace.create("cross-workspace-path", unreported, toolchain);
+        try {
+          const graph = await workspace.graph();
+          const calls = workspace.cargoCalls();
+          const shown = await workspace.nx(["show", "projects"]);
+
+          expect(Object.keys(graph.projects).sort()).toEqual(["backend", "server"]);
+          expect(calls).toEqual([
+            workspaceCall("backend"),
+            metadataCall("backend", "shared/crates/model/Cargo.toml"),
+          ]);
+          expect(shown.status).toBe(0);
+          expect(shown.output).toContain(
+            "`cargo metadata` failed for shared/crates/model/Cargo.toml, a path dependency of backend/crates/server/Cargo.toml that has no project of its own",
+          );
+          expect(shown.output).toContain("believes it's in a workspace when it's not");
+          expect(shown.output).toContain(
+            "it does not follow the path dependencies behind that crate",
+          );
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "fails graph creation when its report fails for another reason",
+      async () => {
+        // With shared's members kept, model's report reads lexer's manifest,
+        // which cargo rejects, as it does when it builds server.
+        const loading = loadFixtureGraph("cross-workspace-path", {
+          files: {
+            ...unreported,
+            "shared/Cargo.toml": (manifest) => manifest,
+            "extra/lexer/Cargo.toml": "[package\n",
+          },
+        });
+
+        await expect(loading).rejects.toThrow(
+          /`cargo metadata` failed for shared\/crates\/model\/Cargo\.toml, a path dependency of backend\/crates\/server\/Cargo\.toml that has no project of its own/,
+        );
+        await expect(loading).rejects.toThrow(/extra\/lexer\/Cargo\.toml/);
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
 });
 
 // These call the plugin in this process, with the cargo wrapper of a fixture
