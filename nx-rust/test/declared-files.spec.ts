@@ -640,6 +640,64 @@ describe("declared files", () => {
       },
       HARNESS_TIMEOUT,
     );
+
+    it(
+      "change the keys of the crate that reaches it and select its tasks where paths pass a symbolic link",
+      async () => {
+        // Four standalone crates: a -> b -> p -> q, with b excluded. alias is
+        // a link to p, and both b's dependency and a's dev-dependency on p
+        // name it: cargo builds q for a, through b and directly.
+        const crate = (name: string, ...lines: string[]) =>
+          [
+            `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n\n[workspace]\n`,
+            ...lines,
+          ].join("\n");
+        const files: FileChanges = {
+          "a/Cargo.toml": crate(
+            "a",
+            '[dependencies]\nb = { path = "../b" }\n',
+            '[dev-dependencies]\np = { path = "../alias" }\n',
+          ),
+          "a/src/lib.rs": "pub fn a() -> u8 {\n    b::b()\n}\n",
+          "b/Cargo.toml": crate("b", '[dependencies]\np = { path = "../alias" }\n'),
+          "b/src/lib.rs": "pub fn b() -> u8 {\n    p::p()\n}\n",
+          "p/Cargo.toml": crate("p", '[dependencies]\nq = { path = "../q" }\n'),
+          "p/src/lib.rs": "pub fn p() -> u8 {\n    q::q()\n}\n",
+          "q/Cargo.toml": crate("q"),
+          "q/src/lib.rs": "pub fn q() -> u8 {\n    1\n}\n",
+          "nx.json": (text) =>
+            JSON.stringify({
+              ...JSON.parse(text),
+              plugins: JSON.parse(text).plugins.map((plugin: string) => ({
+                plugin,
+                exclude: ["b/**"],
+              })),
+            }),
+        };
+        const aTasks = ["a:build", "a:check", "a:lint", "a:test"];
+
+        const outcome = await changeDeclaredFile({
+          files,
+          changed: "q/src/lib.rs",
+          links: { alias: "p" },
+          tasks: aTasks,
+        });
+
+        const selected = ["a", "p", "q"]
+          .flatMap((project) =>
+            ["build", "check", "doc", "fmt-check", "lint", "test"].map(
+              (target) => `${project}:${target}`,
+            ),
+          )
+          .sort();
+        expect(outcome).toEqual({
+          keysDiffer: Object.fromEntries(aTasks.map((task) => [task, true])),
+          afterCommit: selected,
+          withFiles: selected,
+        });
+      },
+      HARNESS_TIMEOUT,
+    );
   });
 
   describe("that Nx cannot hash", () => {

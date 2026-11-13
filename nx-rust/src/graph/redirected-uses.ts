@@ -5,7 +5,7 @@ import type { Redirection } from "../cargo/redirections";
 import { satisfies } from "../cargo/version-req";
 import type { CargoWorkspace } from "./discovery";
 import type { CargoGraph } from "./projects";
-import { knownPackages, projectsBehindCratesWithoutProject } from "./reached-projects";
+import { knownPackages, projectsReachedByPath } from "./reached-projects";
 import { realPath as resolveRealPath } from "./real-path";
 
 /**
@@ -73,8 +73,8 @@ export interface RedirectedUse {
  *   reaches the member through real dependencies of kind normal or build,
  *   and where any other edge between the two projects points the opposite
  *   way: a path dependency, also one through crates without a project
- *   ({@link projectsBehindCratesWithoutProject}), a direct, possible or
- *   other assumed use.
+ *   ({@link projectsReachedByPath}), a direct, possible or other assumed
+ *   use.
  *
  * A requirement that the plugin cannot evaluate, or a source it cannot
  * match to the entry, makes a declaration possible, not direct.
@@ -113,13 +113,7 @@ export function redirectedUses(
       use.kind === "assumed" &&
       use.edge &&
       (edges.has(pair(use.folder, folderOf(use.member))) ||
-        dependsByPath(known.get(use.folder), folderOf(use.member)) ||
-        reachesBehindCratesWithoutProject(
-          known.get(use.folder),
-          folderOf(use.member),
-          hasProject,
-          known,
-        ))
+        reachesByPath(known.get(use.folder), folderOf(use.member), hasProject, known))
     ) {
       use.edge = false;
     }
@@ -127,31 +121,22 @@ export function redirectedUses(
   return uses;
 }
 
-// Whether `pkg` has an edge to the crate in `folder` because it reaches it
-// only through path dependencies on crates without a project.
-function reachesBehindCratesWithoutProject(
+// Whether `pkg` has an edge to the crate in `folder`, which has a project,
+// through its path dependencies: directly, or through crates without a
+// project.
+function reachesByPath(
   pkg: CargoPackage | undefined,
   folder: string,
   hasProject: (folder: string) => boolean,
   known: Map<string, CargoPackage>,
 ): boolean {
   return (
-    pkg !== undefined &&
-    projectsBehindCratesWithoutProject(pkg, hasProject, known, realPath).includes(folder)
+    pkg !== undefined && projectsReachedByPath(pkg, hasProject, known, realPath).includes(folder)
   );
 }
 
 function pair(from: string, to: string): string {
   return JSON.stringify([from, to]);
-}
-
-// Whether `pkg` has a path dependency of any kind on the crate in `folder`.
-function dependsByPath(pkg: CargoPackage | undefined, folder: string): boolean {
-  return (
-    pkg?.dependencies.some(
-      (dependency) => typeof dependency.path === "string" && realPath(dependency.path) === folder,
-    ) ?? false
-  );
 }
 
 /** A crate that a workspace's entries redirect to. */

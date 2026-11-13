@@ -1,3 +1,5 @@
+import { symlinkSync } from "node:fs";
+import { join } from "node:path";
 import {
   applyFileChanges,
   FileChanges,
@@ -445,6 +447,57 @@ describe("edges to crates with a project behind crates without one", () => {
 
         expect(edges(graph)).toEqual(withEdges(["api", "other"], ["other", "api"]));
         expect(Object.keys(hashes).sort()).toEqual(["api:test", "other:test"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("a path dependency through a symbolic link", () => {
+  it(
+    "names the crate at the folder the link leads to, with an edge and no report of its own",
+    async () => {
+      // The standalone crate cross depends on api through alias, a link to
+      // api's folder, which Nx does not walk into.
+      const workspace = FixtureWorkspace.create("declared-files", {
+        "cross/Cargo.toml": `${crateManifest("cross")}\n[workspace]\n\n[dependencies]\napi = { path = "../alias" }\n`,
+        "cross/src/lib.rs": "",
+      });
+      try {
+        symlinkSync("rust/crates/api", join(workspace.root, "alias"));
+
+        const graph = await workspace.graph();
+        const affected = await workspace.nx([
+          "show",
+          "projects",
+          "--affected",
+          "--files=rust/crates/api/src/lib.rs",
+          // Nx prints JSON by itself only where it detects an AI agent.
+          "--json",
+        ]);
+
+        expect(edges(graph)).toEqual(
+          [...expected["declared-files"].edges, ["cross", "api"]].sort(
+            (a, b) => compare(a[0], b[0]) || compare(a[1], b[1]),
+          ),
+        );
+        // api reaches cross's key through its edge, not as a folder.
+        expect(graph.projects.cross.namedInputs.default).not.toContain(
+          "{workspaceRoot}/rust/crates/api/**/*",
+        );
+        expect(
+          workspace.cargoCalls().filter((call) => call.args.join(" ").includes("alias")),
+        ).toEqual([]);
+        expect(affected.status).toBe(0);
+        // The JSON is the last line, after any warning of graph creation.
+        expect(JSON.parse(affected.output.trim().split("\n").pop()).sort()).toEqual([
+          "api",
+          "app",
+          "cross",
+          "rust",
+        ]);
       } finally {
         workspace.remove();
       }
