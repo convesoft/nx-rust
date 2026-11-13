@@ -72,7 +72,9 @@ export function parseLockfile(text: string): Lockfile {
       ...(checksum === undefined ? {} : { checksum }),
       ...(typeof table.replace === "string" ? { replace: table.replace } : {}),
       dependencies: Array.isArray(table.dependencies)
-        ? table.dependencies.filter((dependency): dependency is string => typeof dependency === "string")
+        ? table.dependencies.filter(
+            (dependency): dependency is string => typeof dependency === "string",
+          )
         : [],
     };
   });
@@ -112,7 +114,10 @@ export function memberDigest(lockfile: Lockfile, member: PackageVersion): string
   const queue = [start];
   while (queue.length > 0) {
     const entry = queue.shift() as LockfileEntry;
-    const references = [...entry.dependencies, ...(entry.replace === undefined ? [] : [entry.replace])];
+    const references = [
+      ...entry.dependencies,
+      ...(entry.replace === undefined ? [] : [entry.replace]),
+    ];
     for (const reference of references) {
       const target = resolveReference(byName, reference, entry);
       if (!reached.has(target)) {

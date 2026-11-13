@@ -74,7 +74,9 @@ describe("a member's digest", () => {
       base.map((text) => text.replace('version = "1.0.0"\nsource', 'version = "1.0.1"\nsource')),
       base.map((text) => text.replace("b".repeat(64), "d".repeat(64))),
       base.map((text) =>
-        text.includes('name = "ryu"') ? text.replace(crates, "git+https://example.com/ryu#1234") : text,
+        text.includes('name = "ryu"')
+          ? text.replace(crates, "git+https://example.com/ryu#1234")
+          : text,
       ),
     ]) {
       expect(digest(lockfile(...changed))).not.toBe(original);
@@ -84,7 +86,9 @@ describe("a member's digest", () => {
   it("does not change with an entry that the member does not reach, nor with the order of entries and dependency strings", () => {
     const original = digest(lockfile(...base));
     const unrelated = base.map((text) => text.replace("c".repeat(64), "e".repeat(64)));
-    const reordered = [...base].reverse().map((text) => text.replace('["itoa", "lib"]', '["lib", "itoa"]'));
+    const reordered = [...base]
+      .reverse()
+      .map((text) => text.replace('["itoa", "lib"]', '["lib", "itoa"]'));
 
     expect(digest(lockfile(...unrelated))).toBe(original);
     expect(digest(lockfile(...reordered))).toBe(original);
@@ -98,8 +102,17 @@ describe("a member's digest", () => {
     ];
     const withEdge = (version: string) =>
       lockfile(
-        entry({ name: "app", version: "0.1.0", dependencies: ["wrapper", "zzlib 1.0.0", "zzlib 2.0.0"] }),
-        entry({ name: "wrapper", version: "1.0.0", source: crates, dependencies: [`zzlib ${version}`] }),
+        entry({
+          name: "app",
+          version: "0.1.0",
+          dependencies: ["wrapper", "zzlib 1.0.0", "zzlib 2.0.0"],
+        }),
+        entry({
+          name: "wrapper",
+          version: "1.0.0",
+          source: crates,
+          dependencies: [`zzlib ${version}`],
+        }),
         ...zz,
       );
 
@@ -109,7 +122,11 @@ describe("a member's digest", () => {
   it("follows replace = … to the entry it names, and a reference without a source that two entries share to the one without", () => {
     const replaced = (forkDependency: string) =>
       lockfile(
-        entry({ name: "app", version: "0.1.0", dependencies: ["zzlib 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)"] }),
+        entry({
+          name: "app",
+          version: "0.1.0",
+          dependencies: ["zzlib 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)"],
+        }),
         entry({ name: "zzlib", version: "1.0.0", source: crates, replace: "zzlib 1.0.0" }),
         // The fork shares the name and version, without a source.
         entry({ name: "zzlib", version: "1.0.0", dependencies: [forkDependency] }),
@@ -155,7 +172,10 @@ describe("the digest folder", () => {
     [".", ".nx/workspace-data/nx-rust/lockfile/%2E"],
     ["rust", ".nx/workspace-data/nx-rust/lockfile/rust"],
     ["services/billing", ".nx/workspace-data/nx-rust/lockfile/services%2Fbilling"],
-    ["apps/Billing.API/rust_v2", ".nx/workspace-data/nx-rust/lockfile/apps%2FBilling.API%2Frust_v2"],
+    [
+      "apps/Billing.API/rust_v2",
+      ".nx/workspace-data/nx-rust/lockfile/apps%2FBilling.API%2Frust_v2",
+    ],
     ["a b*[c]%", ".nx/workspace-data/nx-rust/lockfile/a%20b%2A%5Bc%5D%25"],
   ])("of %s is one segment without glob characters", (root, folder) => {
     expect(digestFolder(root)).toBe(folder);

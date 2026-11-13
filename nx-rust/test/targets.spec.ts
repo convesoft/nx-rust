@@ -227,8 +227,12 @@ describe("inferred targets", () => {
         for (const [name, target] of Object.entries(project.targets ?? {})) {
           // An uncached target also carries why (caching.spec.ts), and the
           // targets around the lockfile task the members of its digests.
-          const { uncached, digests: _digests, members: _members, ...cargo } =
-            target.metadata?.cargo ?? {};
+          const {
+            uncached,
+            digests: _digests,
+            members: _members,
+            ...cargo
+          } = target.metadata?.cargo ?? {};
           expect({ name, cargo }).toEqual({ name, cargo: { target: name, locked: true } });
           expect({ name, explained: typeof uncached === "string" }).toEqual({
             name,

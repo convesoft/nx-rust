@@ -132,7 +132,9 @@ describe("the lockfile task", () => {
         expect((await nx(workspace, ["reset"])).status).toBe(0);
         const afterReset = await nx(workspace, ["run", "api:test"]);
         expect(afterReset.status).toBe(0);
-        expect(lockfileCalls(workspace)).toEqual([{ cwd: "rust", args: ["update", "--workspace"] }]);
+        expect(lockfileCalls(workspace)).toEqual([
+          { cwd: "rust", args: ["update", "--workspace"] },
+        ]);
       } finally {
         workspace.remove();
       }
@@ -141,11 +143,24 @@ describe("the lockfile task", () => {
   );
 
   it.each([
-    ["a manifest edited so that the lockfile is stale", "edited"],
-    ["Cargo.lock missing", "missing"],
+    [
+      "a manifest edited so that the lockfile is stale",
+      "edited",
+      // model shares zzlib with codegen, and api depends on both. Under the
+      // workspace-build strategy every member's key also holds codegen's
+      // manifest, so testkit runs too.
+      ["api", "codegen", "model", "testkit"],
+    ],
+    [
+      "Cargo.lock missing",
+      "missing",
+      // Cargo locks the newest zzlib, which model and api use, and the same
+      // yylib; codegen and testkit keep their digests and are restored.
+      ["api", "model"],
+    ],
   ])(
     "updates or creates the lockfile with %s as cargo build would, and runs the crates whose dependencies changed",
-    async (_case, change) => {
+    async (_case, change, running) => {
       const workspace = await subfolder();
       const plain = await subfolder();
       try {
@@ -164,28 +179,14 @@ describe("the lockfile task", () => {
 
         expect(run.status).toBe(0);
         expect(read(workspace, "rust/Cargo.lock")).toBe(read(plain, "rust/Cargo.lock"));
-        if (change === "edited") {
-          // model shares zzlib with codegen, and api depends on both. Under
-          // the workspace-build strategy every member's key also holds
-          // codegen's manifest, so testkit runs too.
-          expect(ran(workspace)).toEqual([
-            "rust: check --all-targets -p api",
-            "rust: check --all-targets -p codegen",
-            "rust: check --all-targets -p model",
-            "rust: check --all-targets -p testkit",
-          ]);
-        } else {
-          // Cargo locks the newest zzlib, which model and api use, and the
-          // same yylib; codegen and testkit keep their digests.
-          expect(ran(workspace)).toEqual([
-            "rust: check --all-targets -p api",
-            "rust: check --all-targets -p model",
-          ]);
-          expect(restored(run.output, "codegen:check")).toBe(true);
-          expect(restored(run.output, "testkit:check")).toBe(true);
-        }
-        for (const task of ["api:check", "model:check"]) {
-          expect(restored(run.output, task)).toBe(false);
+        expect(ran(workspace)).toEqual(
+          running.map((crate) => `rust: check --all-targets -p ${crate}`),
+        );
+        for (const crate of ["api", "codegen", "model", "testkit"]) {
+          expect({ crate, restored: restored(run.output, `${crate}:check`) }).toEqual({
+            crate,
+            restored: !running.includes(crate),
+          });
         }
       } finally {
         workspace.remove();
@@ -316,7 +317,15 @@ describe("nx affected after a change to Cargo.lock", () => {
       const git = (...args: string[]) =>
         spawnSync(
           "git",
-          ["-c", "user.name=nx-rust", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", ...args],
+          [
+            "-c",
+            "user.name=nx-rust",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            ...args,
+          ],
           { cwd: workspace.root, encoding: "utf8" },
         );
       try {

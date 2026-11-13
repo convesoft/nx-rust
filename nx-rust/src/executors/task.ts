@@ -245,7 +245,10 @@ export function taskInvocation(
   let digests: DigestStep | undefined;
   if (metadata.target === "lockfile") {
     digests = { kind: "write", lockfile, folder, members: metadata.members ?? [] };
-  } else if (metadata.digests !== undefined && keyHoldsDigests(context, cargo.workspaceManifest, env)) {
+  } else if (
+    metadata.digests !== undefined &&
+    keyHoldsDigests(context, cargo.workspaceManifest, env)
+  ) {
     digests = {
       kind: "check",
       task,

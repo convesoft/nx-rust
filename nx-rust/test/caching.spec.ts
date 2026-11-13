@@ -227,7 +227,9 @@ describe("caching", () => {
           ),
         ],
         outputs: ["{workspaceRoot}/.nx/workspace-data/nx-rust/lockfile/backend"],
-        metadata: { cargo: { target: "lockfile", members: [{ name: "server", version: "0.1.0" }] } },
+        metadata: {
+          cargo: { target: "lockfile", members: [{ name: "server", version: "0.1.0" }] },
+        },
       });
       expect(backend.targets.lockfile.dependsOn).toBeUndefined();
       expect(shared.targets.doc).toMatchObject({
@@ -259,9 +261,7 @@ describe("caching", () => {
       ]);
       // The root crate of tools depends on its own project's lockfile task.
       expect(graph.projects.tools.targets.test.dependsOn).toEqual([lockfileDependency("tools")]);
-      expect(graph.projects.scaffold.targets.test.dependsOn).toEqual([
-        lockfileDependency("tools"),
-      ]);
+      expect(graph.projects.scaffold.targets.test.dependsOn).toEqual([lockfileDependency("tools")]);
     },
     HARNESS_TIMEOUT,
   );
@@ -278,7 +278,8 @@ describe("caching", () => {
       expect(inputsOf(graph.projects.xtask.targets.test, "fileset")).toEqual([]);
       expect(inputsOf(graph.projects.xtask.targets.test, "dependentTasksOutputFiles")).toEqual([
         {
-          dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/tools%2Fxtask/xtask.digest",
+          dependentTasksOutputFiles:
+            ".nx/workspace-data/nx-rust/lockfile/tools%2Fxtask/xtask.digest",
         },
       ]);
       // The root manifest is among the crate's files.

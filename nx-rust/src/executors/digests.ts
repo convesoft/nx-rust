@@ -87,8 +87,7 @@ export function writeDigests(task: string, step: DigestWrite): string | undefine
 // @mara implements DES-LOCKFILE-HASHING
 // @mara implements DES-DIAGNOSTICS
 export function checkDigests(check: DigestCheck): string | undefined {
-  const where =
-    check.workspace === "." ? "at the repository root" : `in ${check.workspace}`;
+  const where = check.workspace === "." ? "at the repository root" : `in ${check.workspace}`;
   const failure = (reason: string) =>
     [
       `${check.task}: ${reason}`,

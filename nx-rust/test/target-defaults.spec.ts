@@ -190,7 +190,11 @@ describe("a target default that fails graph creation", () => {
 
   it.each([
     ["^build", "^build", '"^build"'],
-    ["an object", { target: "build", dependencies: true }, '{"target":"build","dependencies":true}'],
+    [
+      "an object",
+      { target: "build", dependencies: true },
+      '{"target":"build","dependencies":true}',
+    ],
   ])(
     "replaces the dependsOn of the crates' targets with %s, losing the dependency on the lockfile task, and also warns about the added dependency",
     async (_form, dependency, shown) => {

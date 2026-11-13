@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  CacheKeyRow,
   describeCacheKeyMatrix,
   FileChanges,
   applyFileChanges,
@@ -61,7 +60,10 @@ beforeAll(() => {
     writeFileSync(join(gitRepository, "src", "lib.rs"), source);
     git("add", "-A");
     git("commit", "-q", "-m", "commit");
-    return execFileSync("git", ["rev-parse", "HEAD"], { cwd: gitRepository, encoding: "utf8" }).trim();
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: gitRepository,
+      encoding: "utf8",
+    }).trim();
   });
 }, HARNESS_TIMEOUT);
 
@@ -182,13 +184,17 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
     change: "such a bump in a Cargo.lock that Git ignores",
     fixture: "subfolder-workspace",
     lockfileTask: true,
-    base: { ...subfolderBase, files: { ...subfolderBase.files, ".gitignore": appended("Cargo.lock\n") } },
+    base: {
+      ...subfolderBase,
+      files: { ...subfolderBase.files, ".gitignore": appended("Cargo.lock\n") },
+    },
     before: { prepare: lockedAt("rust", "zzlib", "1.0.0") },
     after: { prepare: lockedAt("rust", "zzlib", "1.0.1") },
     keys: { "model:test": "must differ", "api:test": "must differ" },
   },
   {
-    change: "a locked version bump that a crate reaches only through a path dependency without a project",
+    change:
+      "a locked version bump that a crate reaches only through a path dependency without a project",
     // lib depends on vendor/parser, which nx.json excludes.
     fixture: "vendored-crate",
     lockfileTask: true,
@@ -213,14 +219,17 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
     keys: { "server:test": "must differ", "model:test": "must not differ" },
   },
   {
-    change: "a locked version bump that a crate reaches only through a replace entry of the lockfile",
+    change:
+      "a locked version bump that a crate reaches only through a replace entry of the lockfile",
     // [replace] puts third_party/zzlib, which depends on yylib, in place of zzlib 1.0.0.
     fixture: "subfolder-workspace",
     lockfileTask: true,
     base: {
       files: {
         "rust/crates/model/Cargo.toml": dependencies('zzlib = "=1.0.0"'),
-        "rust/Cargo.toml": appended('\n[replace]\n"zzlib:1.0.0" = { path = "../third_party/zzlib" }\n'),
+        "rust/Cargo.toml": appended(
+          '\n[replace]\n"zzlib:1.0.0" = { path = "../third_party/zzlib" }\n',
+        ),
         "third_party/zzlib/Cargo.toml":
           '[package]\nname = "zzlib"\nversion = "1.0.0"\nedition = "2021"\n\n[dependencies]\nyylib = "1"\n',
         "third_party/zzlib/src/lib.rs": "",
@@ -229,7 +238,11 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
     },
     before: { prepare: lockedAt("rust", "yylib", "1.0.0") },
     after: { prepare: lockedAt("rust", "yylib", "1.0.1") },
-    keys: { "model:test": "must differ", "api:test": "must differ", "codegen:test": "must not differ" },
+    keys: {
+      "model:test": "must differ",
+      "api:test": "must differ",
+      "codegen:test": "must not differ",
+    },
   },
   {
     change: "a change of only the commit of a git dependency",
@@ -242,8 +255,14 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
       },
       env,
     },
-    before: { prepare: (workspace, stateEnv) => lockedAt("rust", "gitlib", gitCommits[0])(workspace, stateEnv) },
-    after: { prepare: (workspace, stateEnv) => lockedAt("rust", "gitlib", gitCommits[1])(workspace, stateEnv) },
+    before: {
+      prepare: (workspace, stateEnv) =>
+        lockedAt("rust", "gitlib", gitCommits[0])(workspace, stateEnv),
+    },
+    after: {
+      prepare: (workspace, stateEnv) =>
+        lockedAt("rust", "gitlib", gitCommits[1])(workspace, stateEnv),
+    },
     keys: { "model:test": "must differ", "testkit:test": "must not differ" },
   },
   {
@@ -252,7 +271,9 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
     fixture: "subfolder-workspace",
     lockfileTask: true,
     base: { ...subfolderBase, prepare: lockedAt("rust", "zzlib", "1.0.0") },
-    after: { prepare: edit({ "rust/crates/codegen/Cargo.toml": dependencies('zzlib = "=1.0.1"') }) },
+    after: {
+      prepare: edit({ "rust/crates/codegen/Cargo.toml": dependencies('zzlib = "=1.0.1"') }),
+    },
     keys: { "model:test": "must differ" },
   },
   {
@@ -267,7 +288,9 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
     },
     after: {
       prepare: edit({
-        "rust/crates/codegen/Cargo.toml": dependencies('wwlib = { version = "1", features = ["extra"] }'),
+        "rust/crates/codegen/Cargo.toml": dependencies(
+          'wwlib = { version = "1", features = ["extra"] }',
+        ),
       }),
     },
     keys: { "model:test": "must differ" },
@@ -289,7 +312,9 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
     },
     after: {
       prepare: edit({
-        "rust/Cargo.toml": appended('\n[replace]\n"zzlib:1.0.0" = { path = "../third_party/zzlib" }\n'),
+        "rust/Cargo.toml": appended(
+          '\n[replace]\n"zzlib:1.0.0" = { path = "../third_party/zzlib" }\n',
+        ),
       }),
     },
     keys: { "model:test": "must differ" },
@@ -310,7 +335,11 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
         }
       },
     },
-    keys: { "model:test": "must differ", "api:test": "must differ", "testkit:test": "must not differ" },
+    keys: {
+      "model:test": "must differ",
+      "api:test": "must differ",
+      "testkit:test": "must not differ",
+    },
   },
   {
     change:
@@ -337,7 +366,9 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
           /(name = "wrapper"[^[]*dependencies = \[\s*)"zzlib 2\.0\.0"/,
           '$1"zzlib 1.0.1"',
         );
-        expect(edited).not.toBe(lockfile);
+        if (edited === lockfile) {
+          throw new Error(`wrapper does not depend on zzlib 2.0.0 in ${file}:\n${lockfile}`);
+        }
         writeFileSync(file, edited);
       },
     },
@@ -427,7 +458,11 @@ describeCacheKeyMatrix("keys with the lockfile task: must not differ after", [
     },
     before: { prepare: lockedAt("rust", "zzlib", "1.0.0") },
     after: { prepare: lockedAt("rust", "zzlib", "1.0.1") },
-    keys: { "legacy:test": "must not differ", "legacy:build": "must not differ", "app:test": "must differ" },
+    keys: {
+      "legacy:test": "must not differ",
+      "legacy:build": "must not differ",
+      "app:test": "must differ",
+    },
   },
   {
     change: "a change in the lockfile of another workspace",
@@ -441,7 +476,11 @@ describeCacheKeyMatrix("keys with the lockfile task: must not differ after", [
     before: { prepare: lockedAt("shared", "zzlib", "1.0.0") },
     after: { prepare: lockedAt("shared", "zzlib", "1.0.1") },
     // server, in backend, depends on model, in shared, and is keyed on backend's lockfile.
-    keys: { "server:test": "must not differ", "server:build": "must not differ", "model:test": "must differ" },
+    keys: {
+      "server:test": "must not differ",
+      "server:build": "must not differ",
+      "model:test": "must differ",
+    },
   },
 ]);
 
@@ -452,7 +491,14 @@ describe("the digests of a run", () => {
       const workspace = FixtureWorkspace.create("subfolder-workspace", subfolderBase.files);
       try {
         const digests = () => {
-          const folder = join(workspace.root, ".nx", "workspace-data", "nx-rust", "lockfile", "rust");
+          const folder = join(
+            workspace.root,
+            ".nx",
+            "workspace-data",
+            "nx-rust",
+            "lockfile",
+            "rust",
+          );
           return Object.fromEntries(
             ["api", "codegen", "model", "testkit"].map((name) => [
               name,

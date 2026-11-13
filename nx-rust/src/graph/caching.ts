@@ -186,9 +186,7 @@ export function configureCaching(
     }
     const readsDigest = target.cache && cachedTargets.has(name) && name !== "fmt-check";
     if (readsDigest) {
-      target.dependsOn = [
-        lockfileDependency(workspaceRoot, options.lockfileTarget ?? "lockfile"),
-      ];
+      target.dependsOn = [lockfileDependency(workspaceRoot, options.lockfileTarget ?? "lockfile")];
       if (metadata !== undefined) {
         metadata.digests =
           name === "doc" || subject.pkg === undefined ? members : [packageVersion(subject.pkg)];

@@ -1391,7 +1391,8 @@ describe("tasks of targets that the tables configure", () => {
       .cargoCalls()
       .filter(
         (call) =>
-          call.args[0] !== "metadata" && !(call.args[0] === "update" && call.args[1] === "--workspace"),
+          call.args[0] !== "metadata" &&
+          !(call.args[0] === "update" && call.args[1] === "--workspace"),
       );
   }
 

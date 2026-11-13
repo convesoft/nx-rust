@@ -295,7 +295,9 @@ describe("@convesoft/nx-rust", () => {
         for (const [task, on] of Object.entries(dependencies)) {
           expect({
             task,
-            on: on.map((dependency) => (typeof dependency === "string" ? dependency : dependency.id)),
+            on: on.map((dependency) =>
+              typeof dependency === "string" ? dependency : dependency.id,
+            ),
           }).toEqual({ task, on: task === "rust:lockfile" ? [] : ["rust:lockfile"] });
         }
       },
@@ -688,7 +690,8 @@ describe("@convesoft/nx-rust", () => {
       it(
         "runs a cached task in a run that excludes task dependencies, and a normal run then restores its own result",
         () => {
-          const hit = /nx run model:check\s+\[(local cache|existing outputs match the cache, left as is)\]/;
+          const hit =
+            /nx run model:check\s+\[(local cache|existing outputs match the cache, left as is)\]/;
           expect(nxResult(projectDirectory, cargo, ["run", "model:check"]).status).toBe(0);
           for (const args of [
             ["run", "model:check", "--exclude-task-dependencies"],
