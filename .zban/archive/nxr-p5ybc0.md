@@ -46,4 +46,4 @@ Inputs do not exist yet: the folder inputs for `edge: false` uses and the `VER-C
 
 Filed: nxr-9ezy43 (`cargo vendor` output in the graph), nxr-dj5tvp (git-ignored configuration with redirections), nxr-m60y0c (a path dependency that cargo builds but does not report fails graph creation).
 
-Checks run, on `main` at 36d6c6b merged in: `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e`, `mara schema validate`, `mara project validate` (valid, complete evaluation, 0 errors, 0 warnings) and `zban check`. CI on the pull request covers the remaining runs.
+Checks run, on `main` at 8995967 merged in: `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e`, `mara schema validate`, `mara project validate` (valid, complete evaluation, 0 errors, 0 warnings) and `zban check`. CI on the pull request covers the remaining runs.
