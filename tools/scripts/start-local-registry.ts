@@ -6,10 +6,10 @@
 /// <reference path="registry.d.ts" />
 
 import { workspaceRoot } from "@nx/devkit";
-import { startLocalRegistry } from "@nx/js/plugins/jest/local-registry";
 import { rmSync } from "fs";
 import { join } from "path";
 import { releasePublish, releaseVersion } from "nx/release";
+import { startLocalRegistry } from "./local-registry";
 
 export default async () => {
   // local registry target to run
@@ -26,24 +26,28 @@ export default async () => {
   rmSync(pnpmCache, { recursive: true, force: true });
   process.env.pnpm_config_cache_dir = pnpmCache;
 
-  global.stopLocalRegistry = await startLocalRegistry({
-    localRegistryTarget,
-    storage,
-    verbose: false,
-  });
+  const stopLocalRegistry = await startLocalRegistry(localRegistryTarget, storage);
+  global.stopLocalRegistry = stopLocalRegistry;
 
-  await releaseVersion({
-    specifier: "0.0.0-e2e",
-    stageChanges: false,
-    gitCommit: false,
-    gitTag: false,
-    firstRelease: true,
-    versionActionsOptionsOverrides: {
-      skipLockFileUpdate: true,
-    },
-  });
-  await releasePublish({
-    tag: "e2e",
-    firstRelease: true,
-  });
+  try {
+    await releaseVersion({
+      specifier: "0.0.0-e2e",
+      stageChanges: false,
+      gitCommit: false,
+      gitTag: false,
+      firstRelease: true,
+      versionActionsOptionsOverrides: {
+        skipLockFileUpdate: true,
+      },
+    });
+    await releasePublish({
+      tag: "e2e",
+      firstRelease: true,
+    });
+  } catch (error) {
+    // Jest runs no global teardown when the global setup fails. A registry
+    // left running would make the next run in this checkout fail to start one.
+    await stopLocalRegistry();
+    throw error;
+  }
 };

@@ -1,1 +1,1 @@
-declare function stopLocalRegistry(): void;
+declare function stopLocalRegistry(): Promise<void>;
