@@ -10,7 +10,8 @@ come from actual test runs, cited when an issue is closed.
   built to show one situation: a workspace in a subfolder, two workspaces, a
   standalone crate, an excluded member, a path dependency across workspaces, a
   vendored crate that is excluded and used by path, a name collision, a
-  dev-dependency cycle, workspaces with different toolchains.
+  dev-dependency cycle, workspaces with different toolchains, a crate whose
+  build script and macros read files outside its folder.
 - **Graph tests** load a fixture through the plugin and compare projects,
   targets, inputs and edges with the expected graph. They need `cargo` but
   compile nothing.
@@ -88,12 +89,29 @@ Each workspace project has `doc`, `audit` and `update`, and `deny` only in a fix
 :verifies: REQ-EXTERNAL-DEPS
 :verifies: REQ-TEST-MODE-KEY
 :verifies: REQ-ARTIFACT-CACHE
+:verifies: REQ-BUILD-SCRIPT-INPUTS
 
 Compute task hashes with the real Nx hasher for pairs of states and check the verdict.
 
-Keys must differ after: a change in any file of the crate's folder, such as a source file, `build.rs`, `Cargo.toml`, a README or a template; a change in a normal, build or dev-dependency crate, also two edges away; a change in an excluded crate that the crate depends on by path, directly or through another crate; a change in the root `Cargo.toml`, in a `rust-toolchain.toml` at crate or workspace level, or in a `.cargo/config.toml` at crate level, workspace level or a folder in between; a change in a `clippy.toml` for `lint`, in a `rustfmt.toml` for `fmt-check`, and in `.config/nextest.toml` for a `test` that nextest runs; a change of each environment variable in the list and of a variable the repository added, `CARGO_BUILD_WARNINGS` among them for every target that compiles; a change in the output of an added runtime command; a toolchain update, and another toolchain chosen through `RUSTUP_TOOLCHAIN`; a change of features, profile or target triple; a locked version bump of an external crate the crate depends on, directly or transitively; a switch of test mode between `full` and `affected`, and between two baseline commits; for artifact targets, another target triple or another version of a post-processing tool.
+Keys must differ after: a change in any file of the crate's folder, such as a source file, `build.rs`, `Cargo.toml`, a README or a template; a change in a normal, build or dev-dependency crate, also two edges away; a change in an excluded crate that the crate depends on by path, directly or through another crate; a change in the root `Cargo.toml`, in a `rust-toolchain.toml` at crate or workspace level, or in a `.cargo/config.toml` at crate level, workspace level or a folder in between; a change in a file outside the crate's folder that a `fileInputs` pattern of the crate's package table or of its workspace table declares, also one that Git ignores, and in one that a dependency's pattern declares; a change in a `clippy.toml` for `lint`, in a `rustfmt.toml` for `fmt-check`, and in `.config/nextest.toml` for a `test` that nextest runs; a change of each environment variable in the list and of a variable the repository added, `CARGO_BUILD_WARNINGS` among them for every target that compiles; a change in the output of an added runtime command; a toolchain update, and another toolchain chosen through `RUSTUP_TOOLCHAIN`; a change of features, profile or target triple; a locked version bump of an external crate the crate depends on, directly or transitively; a switch of test mode between `full` and `affected`, and between two baseline commits; for artifact targets, another target triple or another version of a post-processing tool.
 
-Keys must not differ after: a change in a crate that is not a dependency; a change of an environment variable outside the list; a locked version bump of an external crate outside the crate's resolved dependencies; a toolchain update for a toolchain the crate does not use, in a fixture where two workspaces use different toolchains; a change in a file that an artifact target generates in the source tree; a change in the lockfile or toolchain file of another workspace.
+Keys must not differ after: a change in a crate that is not a dependency; a change of an environment variable outside the list; a locked version bump of an external crate outside the crate's resolved dependencies; a toolchain update for a toolchain the crate does not use, in a fixture where two workspaces use different toolchains; a change in a file that an artifact target generates in the source tree; a change in the lockfile or toolchain file of another workspace; a change in a file outside every crate's folder that no `fileInputs` pattern covers.
+
+A commit that changes only a declared file makes `nx affected` select the cached tasks of the crate that declares it, of the crates that depend on it and the `doc` of their workspace project. Graph creation fails, with a message naming the manifest and the pattern, for a `fileInputs` pattern that resolves outside the repository, where the message points to `runtimeInputs`, and for one that resolves into the build or artifact directory of the workspace.
+:::
+
+:::mara verification VER-BUILD-INPUT-CHECK
+:mid: 01M7ACMK1QE541D0CPTPKKBHSC
+:title: Fail a build that read an undeclared file
+:status: accepted
+:methods: test
+:verifies: REQ-BUILD-INPUT-CHECK
+
+In an end-to-end fixture, a crate's build script names a repository file outside the crate with `cargo::rerun-if-changed` and a folder outside it, its library includes another file outside it with `include_str!`, and nothing declares them. `nx run <crate>:build` fails. The message names the crate and each file and the folder relative to the repository root, and shows a `fileInputs` line with patterns relative to the crate's folder, the folder as `<folder>/**/*`. A second run is not restored from the cache and fails again, also when its cargo call compiles nothing. After the line is added to the crate's `[package.metadata.nx]`, `build` succeeds, and the next run is a cache hit. `build` succeeds as well when the files are declared in the workspace table instead, or by a crate that the crate depends on, and the check still finds an undeclared file with `build.dep-info-basedir` set and for a file whose name contains a space.
+
+A file that the build script generates in `OUT_DIR`, a path outside the repository that it names with `rerun-if-changed`, and the files of a registry dependency fail nothing. `check`, `lint` and `test` of the crate succeed while the files are undeclared.
+
+With the batch executor, `nx run-many -t build` over a workspace where one crate reads an undeclared file and two others do not runs the group as one cargo call: the task of that crate fails, and the other two succeed and are restored from the cache on the next run.
 :::
 
 :::mara verification VER-CARGO-UNCHANGED

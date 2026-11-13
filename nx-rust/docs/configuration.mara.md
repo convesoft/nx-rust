@@ -16,8 +16,8 @@ describes it. Repository-wide choices go into the plugin's entry in `nx.json`.
 | The plugin's entry in `nx.json`                              | The repository                 | Target names in `options`, excluded paths in `exclude` |
 
 A value for a crate wins over the workspace default, which wins over the
-plugin options. Tags are the exception: a crate has its workspace's tags and
-its own.
+plugin options. Tags and `fileInputs` are the exceptions: a crate has its
+workspace's and its own.
 
 ## Per crate
 
@@ -32,6 +32,7 @@ name = "api"
 [package.metadata.nx]
 name = "backend-api" # Nx project name; Cargo still sees "api"
 tags = ["scope:backend"]
+fileInputs = ["../../../proto/**/*.proto"] # files outside the crate that it reads
 
 [package.metadata.nx.targets.test.options]
 features = ["integration"] # option of the inferred "test" target
@@ -39,6 +40,9 @@ features = ["integration"] # option of the inferred "test" target
 [package.metadata.nx.targets.migrate]
 command = "cargo run -p api --bin migrate" # an extra target
 ```
+
+`fileInputs` patterns are relative to the `Cargo.toml` that holds them;
+[Caching](caching.mara.md#files-outside-the-crate) says when you need them.
 
 ## Per workspace
 
@@ -148,11 +152,12 @@ Overrides are read from the `metadata` values in the `cargo metadata` report ([[
 | `tags`                        | package, workspace | Nx tags. A crate has its workspace's tags and its own.                                                                                                          |
 | `targets.<name>`              | package, workspace | A table shaped like an Nx target. For an inferred target it overrides that target's settings, such as `options`. For any other name it defines an extra target. |
 | `testRunner`, `affectedTests` | workspace          | The test settings in [[DES-TEST-RUN]].                                                                                                                          |
+| `fileInputs`                  | package, workspace | Glob patterns of files outside the crate that it reads, relative to the manifest's folder. They add up ([[REQ-BUILD-SCRIPT-INPUTS]]).                           |
 | `project`                     | workspace          | The [[TERM-WORKSPACE-PROJECT]] itself: its own `name`, `tags` and `targets.<name>`, as in a package table. An error in a root manifest that defines a crate.    |
 
 In the `project` table, `name` replaces the default name ([[DES-PROJECT-GRAPH]]), `tags` are added to the workspace's tags, and `targets.<name>` overrides a target of the workspace project or adds one. The workspace table's own `targets.<name>` do not reach the workspace project.
 
-For a setting that both tables can hold, the crate's value wins over the workspace default; only tags add up. Key names use the spelling of the matching Nx option, so one name works in `Cargo.toml`, in `nx.json` and on the command line. The remaining keys, the merge rules and the handling of unknown keys are in [[DES-PLUGIN-OPTIONS]].
+For a setting that both tables can hold, the crate's value wins over the workspace default; only tags and `fileInputs` add up. Key names use the spelling of the matching Nx option, so one name works in `Cargo.toml`, in `nx.json` and on the command line. The remaining keys, the merge rules and the handling of unknown keys are in [[DES-PLUGIN-OPTIONS]].
 :::
 
 :::mara design DES-PLUGIN-OPTIONS

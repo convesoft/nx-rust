@@ -318,6 +318,26 @@ A diagnostic says what is wrong, where, and what to do ([[REQ-DIAGNOSTICS]]). In
 Codes may be introduced later without breaking anything, because adding a code to a message takes away nothing a user or a script relies on. They would serve people or tools that need to refer to one problem across releases: a documentation page per problem, filtering warnings in a pipeline, or wording that changes often. One possible scheme is a stable code for each row of [[DES-DIAGNOSTICS]], listed in the setup guidance and never reused for another problem. Whether to introduce codes, and in what form, is decided when such a need arises.
 :::
 
+:::mara decision ADR-DECLARED-FILE-INPUTS
+:mid: 01M7ACMK1QTQXRJFFNXHPB53FS
+:title: Declare files outside a crate instead of learning them from builds
+:status: accepted
+:justifies: REQ-BUILD-SCRIPT-INPUTS
+:justifies: REQ-BUILD-INPUT-CHECK
+:justifies: DES-INPUTS
+:justifies: DES-BUILD-INPUT-CHECK
+
+A build script, a macro or a test can read files outside its crate's folder, which the crate-file input does not cover. The cache key has to name such files before the task runs, and nothing reports them then: neither the `cargo metadata` report nor Cargo's JSON messages carry them ([[EVD-CARGO-NO-DEPS]], [[EVD-CARGO-DEP-INFO]]). Only Cargo's records of a finished build do. The repository therefore declares these files in its Cargo manifests under `fileInputs`, and the plugin turns each pattern into an Nx fileset. The key is named to pair with the keys that add environment variables and commands to the key.
+
+Three alternatives were rejected:
+
+- **Learning the paths from earlier builds.** Only `cargo build` leaves a documented record, the dependency file beside each artifact. The records of `check`, `lint`, `test` and `doc` exist only in the build directory, whose layout moved between Cargo 1.97 and 1.100 and which the plugin never reads ([[DES-BUILD-DIRS]]). Records exist per machine and only after a build, so a fresh CI checkout has none: its first run would either compute a key without the files, which a shared cache could later answer with a result built from other files, or a key that never hits. Carried in a runtime input, the learned files would change keys but never make a task affected, because task-based affected matches changed files against declared file inputs only ([[ADR-DECLARED-INPUTS]], [[EVD-NX-24-INPUT-SEMANTICS]], [[EVD-NX-24-FILE-INPUTS]]).
+- **Scanning `build.rs` and the sources for literal paths.** Build helpers such as tauri-build and bindgen print `rerun-if-changed` for paths they compute, and a proc macro can open files itself ([[EVD-CARGO-DEP-INFO]]). A scan would find a part and suggest it found all.
+- **Leaving the files out of v1.** A runtime command under `runtimeInputs` that hashes the files changes keys, but `nx affected` ignores it, and it applies to every crate of the workspace. A change to a shared protocol definition would then leave `nx affected -t build` green without building the crates that embed it, which [[NEED-AFFECTED]] rules out.
+
+A declaration also covers what no record shows: a file that a proc macro opens by itself, which Cargo does not track either. Its cost is that the repository has to state the files. To catch what it forgot, a `build` task that ran cargo compares the dependency files Cargo wrote with its inputs, and fails when one names a repository file that no input covers ([[REQ-BUILD-INPUT-CHECK]]). It fails instead of warning because Nx stores every successful result and an executor cannot report success without it being stored, so a warning would leave a result under a key known to miss a file ([[EVD-NX-24-FILE-INPUTS]]). Nx Cloud can record the files a task reads, but nothing records them without it, so that is no substitute.
+:::
+
 ## Risks
 
 Several risks below are assumptions that the design rests on and that nobody
@@ -356,7 +376,9 @@ Because Rust targets share the names `build`, `lint` and `test` with JS targets,
 :threatens: GOAL-TRUSTED-CACHE
 :threatens: NEED-CORRECT-CACHE
 
-A build script, proc macro or test can read files outside the crate, environment variables outside the allowlist, or the network. A change there does not change the key, and a stale result is restored. The plugin declares what it knows, hashes the whole folder of a crate and of a path dependency without a project, warns where Nx cannot see such a dependency's files, lets a repository add variables and commands, and plans to cover build-script paths outside the crate ([[REQ-BUILD-SCRIPT-INPUTS]]). Without a sandbox it cannot detect the rest. [[ADR-V1-SCOPE]] accepts this.
+A build script, proc macro or test can read files outside the crate, environment variables outside the allowlist, or the network. A change there does not change the key, and a stale result is restored. The plugin declares what it knows: it hashes the whole folder of a crate and of a path dependency without a project, and warns where Nx cannot see such a dependency's files. A repository adds the files outside a crate that the crate reads ([[REQ-BUILD-SCRIPT-INPUTS]]), and variables and commands. A `build` that ran cargo fails when Cargo's dependency files name a repository file that no input covers ([[REQ-BUILD-INPUT-CHECK]]).
+
+What remains: a file that a proc macro opens without an include macro, which Cargo does not track and no dependency file shows; files that only `check`, `lint`, `test` or `doc` read, or that tests open at run time, since Cargo records those reads only in its build directory or not at all; any undeclared read of a crate whose `build` does not run through Nx, as in a pipeline that runs only `lint` and `test`; files outside the repository, which Nx cannot hash; environment variables outside the list; and the network ([[EVD-CARGO-DEP-INFO]]). Without a sandbox the plugin cannot detect these. [[ADR-V1-SCOPE]] accepts this.
 :::
 
 :::mara risk RISK-HOST-ENVIRONMENT
@@ -830,6 +852,46 @@ An experiment and a reading of the `nx`, `@nx/js` and `@nx/workspace` 24.0.6 pac
 - **nx watch.** `nx watch` runs its command once for each batch of changes and takes the next batch only after the command has exited, so it cannot restart a command that keeps running (`command-line/watch/watch.js`).
 - **Command names.** `run` and `watch` are Nx commands, so `nx run <project>` never runs a target named `run`. `check`, `doc`, `bench`, `fmt`, `fmt-check`, `audit`, `deny`, `update` and `typecheck` are not command names (the command handlers of `command-line/nx-commands.js` and `isKnownCommand` in `bin/init-local.js`).
 - **typecheck.** `@nx/js` adds its TypeScript plugin with the target name `typecheck` (`src/utils/typescript/add-typescript-plugin.js`), and the CI workflow generator of `@nx/workspace` writes `nx affected -t lint test build typecheck` when a workspace has that target (`src/generators/ci-workflow/ci-workflow.js`).
+
+The targets of the experiment ran no cargo. The points marked with a source file were read, not run.
+:::
+
+:::mara evidence EVD-CARGO-DEP-INFO
+:mid: 01M7ACMK1Q7ATJKRRHC2WPJE1Z
+:title: Where Cargo 1.100 records the files that build scripts and macros read
+:status: accepted
+:supports: ADR-DECLARED-FILE-INPUTS
+:supports: DES-BUILD-INPUT-CHECK
+:supports: RISK-UNDECLARED-INPUTS
+
+Experiments on 13 November 2026 with cargo and rustc 1.100.0 (cargo 3acc79c0c 2026-11-05) and, where named, cargo 1.97.1, on Linux x86-64, in throwaway folders outside this repository, with no Cargo configuration in the home folder and no toolchain pinned. The fixture was a virtual workspace `ws` with the members `app` and `dep`, beside the folders `proto`, `shared` and `assets` outside it. `app` depended on `dep` by path. Its build script printed `cargo::rerun-if-changed` for `../../../proto/app.proto`, for the folder `../../../assets` and for `build.rs`, read the proto file and set a variable with `cargo::rustc-env`; its library used `include_str!` on `shared/data.txt`, its binary called the library, and an integration test used `include_bytes!` on `shared/test-data.bin`. `dep`'s build script named `../../../proto/dep.proto`, and its library included `shared/dep.txt`. Later steps added `pm`, a proc-macro crate whose macro read `shared/pm.txt` with `std::fs`, used by `app2`, which also depended on the registry crate `libc` (built with `--offline` from the local registry cache); `gen`, whose build script wrote a file into `OUT_DIR`, which its library included with `include!`, and named `/etc/hostname`; and `cd`, with the crate types `cdylib`, `rlib` and `staticlib`, whose library included a file with a space in its name.
+
+- **check, clippy, test and doc.** After `cargo check --workspace`, `cargo clippy --workspace --all-targets`, `cargo test --workspace --no-run` and `cargo doc --workspace`, `find target -name '*.d'` showed dependency files only under `target/debug/build/<package>/<hash>/out/`, in the build directory of the default layout, and none in `target/debug` itself or in `target/doc`. The build script's `rerun-if-changed` lines were in `build/<package>/<hash>/run/stdout`, and its fingerprint `run-build-script-build-script-build.json` listed the paths under `RerunIfChanged`, relative to the package's folder. rustc's dependency file for the library, `out/app-<hash>.d`, listed `crates/app/src/../../../../shared/data.txt` beside the source, and an `# env-dep:PROTO_LEN=7` line. The file that the integration test included appeared only in the test's dependency file in the build directory.
+- **build.** `cargo build --workspace` also wrote `target/debug/app.d`, `libapp.d` and `libdep.d` beside the binary and the `rlib` files, in Makefile syntax with absolute paths. `app.d` listed both proto files, the `assets` folder as one path, both build scripts, both included text files and the sources of `app` and `dep`; `libdep.d` listed only `dep`'s files. None listed the file of the integration test. With `build.build-dir` set to a folder outside the workspace, the three files stayed in `target/debug`, and every other dependency file was in the build directory. With cargo 1.97.1 and the same setting, `cargo build --workspace` wrote the three files in `target/debug` as well, and the build script's record lay at `<build directory>/debug/build/app-<hash>/output` instead.
+- **More of build.** `app2.d` listed the sources of `app2` and `pm` and no file of `libc`. `libgen.d` listed `/etc/hostname` and the generated file under `target/debug/build/`. For `cd`, Cargo wrote `libcd.a`, `libcd.rlib`, `libcd.so` and a single `libcd.d`, which escaped the space as `with\ space.txt`. `cargo build -p app` rewrote `app.d` and `libapp.d` and not `libdep.d`. After `app.d` was deleted, `cargo build -p app` compiled nothing and wrote it again. With `--config build.dep-info-basedir=<folder>`, the paths were relative to that folder.
+- **JSON messages.** `cargo build --workspace --message-format=json` gave `build-script-executed` messages with the keys `cfgs`, `env`, `linked_libs`, `linked_paths`, `out_dir`, `package_id` and `reason`, and `compiler-artifact` messages whose `filenames` held the artifacts and no dependency file. No message named a `rerun-if-changed` path.
+- **What Cargo tracks.** After `proto/app.proto` changed, the next `cargo build` ran `app`'s build script and compiled `app` again. `cargo build -p app -v` reported `app` dirty, naming the path `crates/app/../../../assets`, after a file in that folder changed and again after a file was added to it. After `shared/pm.txt` changed, `cargo build -p app2` finished in 0.00s without compiling, and the binary still printed the old content: Cargo does not track a file that a proc macro opens itself.
+- **Build helpers.** In the sources in the local registry, tauri-build 2.6.3 prints `cargo:rerun-if-changed` for paths it computes from its configuration (`src/codegen/context.rs`, from line 91), and bindgen 0.72.1 prints it for the headers that a binding includes (`lib.rs`, lines 1302 and 1307). include_dir 0.7.4 tracks a folder only with its `nightly` feature, through `proc_macro::tracked_path`, and otherwise expands to an `include_bytes!` per file (`include_dir_macros/src/lib.rs`).
+- **Documentation.** The Cargo book of the 1.100.0 toolchain (`reference/build-cache.html`, "Dep-info files") says that the file with the `.d` suffix next to each compiled artifact indicates the files the artifact depends on, that these files are "intended to be used with external build systems", and that their paths are absolute unless `build.dep-info-basedir` is set. The same page calls the intermediate artifacts in the build directory "internal to Cargo and the Rust compiler".
+
+The workspace was a toy on Linux, so the names of macOS libraries, such as `.dylib`, were not seen.
+:::
+
+:::mara evidence EVD-NX-24-FILE-INPUTS
+:mid: 01M7ACMK1QCT1DZYXHK8C0D50R
+:title: How Nx 24.0.6 treats files outside a project and stores task results
+:status: accepted
+:supports: ADR-DECLARED-FILE-INPUTS
+:supports: DES-INPUTS
+:supports: DES-BUILD-INPUT-CHECK
+
+Experiments on 13 November 2026 with the `nx` 24.0.6 package installed in this repository, linked into a throwaway git repository outside it, with Node.js 26.12.0 and git 2.56.0, and a reading of that package. Nx ran as `node node_modules/nx/dist/bin/nx.js` with `NX_DAEMON=false`, `NX_NO_CLOUD=true` and `NX_TUI=false`. The repository had two projects whose cached `build` target ran `echo` through `nx:run-commands`: `a`, with the inputs `{projectRoot}/**/*` and the runtime input `sha256sum shared/a.txt`, and `b`, with `{projectRoot}/**/*` and a fileset for `{workspaceRoot}/shared/b.txt`. Both files lay outside the projects' folders.
+
+- **Affected.** `nx affected -t build --files=shared/a.txt,shared/b.txt` ran `b:build` only, and `nx affected -t build --files=shared/a.txt` ran no task. The runtime input still keyed the cache: `nx run a:build` was a cache hit twice in a row and a miss after `shared/a.txt` changed.
+- **Outside the repository.** With a fileset for `{workspaceRoot}/../outside.txt` on `b`, Nx printed no error or warning, and `nx run b:build` was a cache hit after that file changed.
+- **Ignored files.** With `gen/` in `.gitignore` and a fileset for `{workspaceRoot}/gen/g.txt`, `b:build` was a cache hit after the file changed. With `"includeIgnored": true` on the same fileset, it was a miss after the change and a hit on the next run.
+- **Failed tasks.** As read in the source, Nx stores a task's result only when the task is cacheable and its exit code is 0, unless `NX_CACHE_FAILURES` is `true` (`shouldCacheTaskResult` in `tasks-runner/task-orchestrator.js`). A batch executor reports a `TaskResult` per task, with `success` and an optional `status` of `success`, `failure` or `skipped`, and with nothing else that decides whether the result is stored (`config/misc-interfaces.d.ts`).
+- **Recorded reads.** A target accepts an `ultracache` setting whose modes record the files a task reads and let the recording stand in for the declared inputs (`on`, the default), report undeclared reads (`warn`, and `error`, which behaves as `warn` for now), or record nothing (`off`). The typings call it Nx Cloud only and say that "nothing in the OSS runner records or applies IO" (`UltracacheMode` in `native/index.d.ts`, `ultracache/config.d.ts`).
 
 The targets of the experiment ran no cargo. The points marked with a source file were read, not run.
 :::
