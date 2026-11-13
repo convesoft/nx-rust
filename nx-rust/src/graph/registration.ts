@@ -84,8 +84,9 @@ export class Registration {
    *   {@link checkNxForGraph}), when the options are invalid, when discovery
    *   fails (see {@link discoverWorkspaces}), when a metadata table is
    *   invalid (see {@link readSettings}), when entries disagree on the
-   *   settings of a workspace, or when the targets cannot be given their
-   *   names and tables (see {@link inferProjects}).
+   *   settings of a workspace, when a `fileInputs` pattern resolves where
+   *   Nx cannot hash it, or when the targets cannot be given their names
+   *   and tables (see {@link inferProjects}).
    */
   async discover(
     manifests: readonly string[],
