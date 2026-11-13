@@ -67,14 +67,37 @@ nx add @convesoft/nx-rust
 
 Nx first installs the package, which adds it to your `package.json` and
 lockfile, and then runs the plugin's `init` generator. `init` registers the
-plugin in `nx.json` and changes nothing else in your repository: no crate, no
-Cargo manifest, no `.cargo/config.toml`.
+plugin in `nx.json`, adds two empty entries to its `targetDefaults`, and changes
+nothing else in your repository: no crate, no Cargo manifest, no
+`.cargo/config.toml`.
 
-Before it registers anything, `init` checks the repository the way Nx will once
-the plugin is active. If Nx could not build the project graph, for example
-because cargo is not installed or two crates have the same name, `init` stops
-with that error and `nx.json` stays as it was. The package stays installed. Fix
-the problem and run `nx add @convesoft/nx-rust` again.
+Rust targets share names such as `build`, `lint` and `test` with JS targets, so
+a target default keyed by one of those names would reach them too. `init`
+therefore adds an empty entry keyed by each executor of the Rust targets, where
+`targetDefaults` has none:
+
+```json
+{
+  "targetDefaults": {
+    "build": { "dependsOn": ["^build"], "cache": true },
+    "@convesoft/nx-rust:cargo": {},
+    "@convesoft/nx-rust:run": {}
+  }
+}
+```
+
+Nx chooses an entry keyed by a target's executor before one keyed by its name,
+so `build` keeps applying to your JS projects and leaves the Rust targets as the
+plugin infers them
+([Targets](targets.mara.md#target-defaults-that-reach-rust-targets)). `init`
+says which entries it added. It never changes or removes an entry that is there,
+also not one keyed by these executors.
+
+Before it writes anything, `init` checks the repository the way Nx will once
+the plugin and those entries are in place. If Nx could not build the project
+graph, for example because cargo is not installed or two crates have the same
+name, `init` stops with that error and `nx.json` stays as it was. The package
+stays installed. Fix the problem and run `nx add @convesoft/nx-rust` again.
 
 Then it reports what it found:
 
@@ -90,7 +113,8 @@ Then it reports what it found:
 
 In a repository without any `Cargo.toml`, it registers the plugin and tells you
 how to create your first crate. Running it again leaves your plugin entry in
-`nx.json`, options included, as it is, and prints the report again.
+`nx.json`, options included, and your `targetDefaults` as they are, adds an
+empty entry only where one is missing, and prints the report again.
 
 Afterwards:
 
@@ -100,11 +124,16 @@ nx graph                  # with their dependencies
 nx run-many -t lint test  # Rust and JS together
 ```
 
-To add the plugin by hand, put it into `nx.json`:
+To add the plugin by hand, put it into `nx.json`, with the entries that `init`
+adds:
 
 ```json
 {
-  "plugins": ["@convesoft/nx-rust"]
+  "plugins": ["@convesoft/nx-rust"],
+  "targetDefaults": {
+    "@convesoft/nx-rust:cargo": {},
+    "@convesoft/nx-rust:run": {}
+  }
 }
 ```
 
@@ -218,12 +247,16 @@ The plugin does not write `Cargo.toml`, `Cargo.lock` or `.cargo/config.toml`. Th
 :satisfies: REQ-INIT
 :satisfies: REQ-CRATE-GENERATORS
 
-**`init`**, which `nx add` runs after Nx has installed the package. In v1 it takes no options of its own: it registers the plugin and reports. Options can be added later without breaking anything. The only change `init` makes is the plugin entry in `nx.json`. It works in three steps.
+**`init`**, which `nx add` runs after Nx has installed the package. In v1 it takes no options of its own: it registers the plugin, keeps target defaults keyed by target names away from the plugin's targets, and reports. Options can be added later without breaking anything. Its only changes are in `nx.json`: the plugin entry and empty `targetDefaults` entries. It works in three steps.
 
-1. **Check.** It runs the checks that graph creation runs once the plugin is registered ([[DES-DIAGNOSTICS]]): the Nx version and, for the `Cargo.toml` files that Nx would hand the plugin, cargo, the Cargo version and toolchain of each workspace, each workspace's `cargo metadata` report, the project names, and what the `targetDefaults` of `nx.json` do to the inferred targets ([[DES-TARGET-DEFAULT-GUARD]]). A problem that would stop graph creation stops `init` before it writes anything, with the message graph creation would give. A registered plugin whose graph fails stops every Nx command that requires the project graph, the tasks of JS projects and `nx g` included ([[EVD-NX-24-SETUP]]). In a repository without any `Cargo.toml`, only the Nx version is checked and no cargo runs.
-2. **Register.** It adds the plugin to `plugins` in `nx.json`. When `nx.json` lists the plugin already, that entry, with whatever options the user set, stays exactly as it is, and `init` still runs its checks and prints its report.
+1. **Check.** It runs the checks that graph creation runs on `nx.json` as step 2 will leave it ([[DES-DIAGNOSTICS]]): the Nx version and, for the `Cargo.toml` files that Nx would hand the plugin, cargo, the Cargo version and toolchain of each workspace, each workspace's `cargo metadata` report, the project names, and what the `targetDefaults` of `nx.json` do to the inferred targets ([[DES-TARGET-DEFAULT-GUARD]]). A problem that would stop graph creation stops `init` before it writes anything, with the message graph creation would give. A registered plugin whose graph fails stops every Nx command that requires the project graph, the tasks of JS projects and `nx g` included ([[EVD-NX-24-SETUP]]). In a repository without any `Cargo.toml`, only the Nx version is checked and no cargo runs.
+2. **Register.** It adds the plugin to `plugins` in `nx.json`. When `nx.json` lists the plugin already, that entry, with whatever options the user set, stays exactly as it is, and `init` still runs its checks, adds the entries below and prints its report.
+
+   For each executor of the plugin's targets ([[DES-TARGETS]]) that `targetDefaults` has no entry for, it adds an empty entry keyed by that executor. Nx chooses an entry keyed by a target's executor before one keyed by the target's name or a glob, even when it is empty ([[EVD-NX-TARGET-DEFAULTS]]), so entries keyed by names that Rust targets share with JS targets, such as `build`, keep applying to JS targets and do not reach the plugin's. An entry that is there, keyed by one of these executors or by anything else, stays exactly as it is, whatever it sets, and [[DES-TARGET-DEFAULT-GUARD]] judges it in step 1: `init` never changes or removes an entry of `targetDefaults`. Where `nx.json` extends another file and only that file has `targetDefaults`, the combined entries go into `nx.json`, which Nx then reads instead.
+
 3. **Report.** It prints, without writing anything:
-   - the warnings that graph creation gives ([[DES-DIAGNOSTICS]]), among them a `targetDefaults` entry that adds dependencies to inferred targets, with the ways to narrow it. `init` leaves `targetDefaults` as they are: the user applies the fix by hand;
+   - the `targetDefaults` entries it added, naming their executors and saying that entries keyed by a target's name or a glob reach the other projects and not the plugin's targets;
+   - the warnings that graph creation gives ([[DES-DIAGNOSTICS]]), among them an entry keyed by one of the plugin's executors that adds dependencies to inferred targets, with the ways to narrow it. The user applies the fix by hand;
    - each tool of the table below that the repository's configuration needs and that is missing, as a warning that names the tool, what needs it and how to get it;
    - the tools of the table that are missing and that nothing in the repository needs, on one informational line marked "not needed by your settings";
    - each workspace whose build directory lies inside the repository, with the `build.build-dir` setting that the caching guidance suggests. `init` never writes that setting: where Cargo keeps its files stays the repository's choice ([[DES-BUILD-DIRS]], [[EVD-CARGO-DIRECTORIES]]);
