@@ -26,9 +26,23 @@ testRunner = "nextest"
 affectedTests = true
 ```
 
-Turning on `affectedTests` without nextest fails when the graph is created,
-with a message that says so. A crate can opt out of selection in its own
-metadata and then always runs its full suite.
+Both go into the plugin options for every workspace, or into
+`[workspace.metadata.nx]` for one; a crate cannot change them
+([Configuration](configuration.mara.md#all-settings)). Turning on
+`affectedTests` without nextest fails when the graph is created, with a message
+that says so.
+
+A crate can opt out of selection with the option of its `test` target that
+`--affectedTests=false` sets for one run, and then always runs its full suite:
+
+```toml
+# rust/crates/legacy/Cargo.toml
+[package.metadata.nx.targets.test.options]
+affectedTests = false
+```
+
+Setting the option to `true` in a workspace without `affectedTests` fails when
+the graph is created: the workspace setting turns selection on.
 
 Doctests always run when nextest is the runner: nextest does not run them, so
 the plugin runs `cargo test --doc` as a second step.
@@ -181,7 +195,7 @@ With the `cargo` runner, a group's test tasks run as `cargo test` for the select
 
 In mode `full`, and in a workspace without `affectedTests`, steps 1 and 2 are skipped and step 3 runs every test of the selected crates. When cargo-affected falls back to the full suite, the task output says so and gives the reason.
 
-cargo-affected only selects. nextest runs the tests, and the selector is a replaceable step ([[ADR-TEST-SELECTOR]]). A crate that opts out of selection always contributes all its tests. Rules for non-Rust inputs such as SQL files, snapshots and templates can be added per repository; there are none by default.
+cargo-affected only selects. nextest runs the tests, and the selector is a replaceable step ([[ADR-TEST-SELECTOR]]). A crate that opts out of selection, with `affectedTests = false` among the options of its `test` target ([[DES-PLUGIN-OPTIONS]]), always contributes all its tests. Rules for non-Rust inputs such as SQL files, snapshots and templates can be added per repository; there are none by default.
 
 Whether the report is sufficient for steps 3 and 4, and what step 1 costs, is not confirmed ([[RISK-CARGO-AFFECTED]]).
 :::

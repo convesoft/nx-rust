@@ -837,6 +837,56 @@ An experiment and a reading of the `nx`, `@nx/js` and `@nx/workspace` 24.0.6 pac
 The targets of the experiment ran no cargo. The points marked with a source file were read, not run.
 :::
 
+:::mara evidence EVD-NX-24-OPTION-SEMANTICS
+:mid: 01M7AD4BCYERDMG40D5WH2XMAK
+:title: What Nx 24.0.6 does with dependency inputs, target merges and its own flags
+:status: accepted
+:supports: DES-PLUGIN-OPTIONS
+:supports: DES-INPUTS
+
+An experiment and a reading of the `nx` 24.0.6 package installed in this repository, on 13 November 2026, with Node.js 26.12.0.
+
+The experiment ran in a throwaway Git repository outside this one, with this repository's `node_modules` linked in. Its `nx.json` defined a named input `crate` as `["{projectRoot}/**/*"]`, and it had two projects with `project.json` files. Project `b` redefined `crate` with an `env` entry `B_NAMED` and a `runtime` entry `echo b-named`, and its `test` target had the inputs `crate`, `^crate`, `{ "env": "B_TARGET" }` and `{ "runtime": "echo b-target" }`. Project `a` had an implicit dependency on `b`, a file `a/docs/readme.md`, and a `test` target with the inputs `crate`, `^crate` and `!{projectRoot}/docs/**`. Nx's `HashPlanInspector` (`hasher/hash-plan-inspector.js`) listed the inputs of each task with `NX_DAEMON=false`. Then `nx run a:test --exclude-task-dependencies --output-style=static` ran with `NX_DAEMON=false` and a fresh `NX_CACHE_DIRECTORY`, after each change of a variable or file.
+
+- **Inputs of a dependency.** The plan of `a:test` held `B_NAMED` and `echo b-named` from the named input of `b`, and neither `B_TARGET` nor `echo b-target` from the target of `b`. With `B_NAMED` changed, `a:test` ran again; with only `B_TARGET` changed, it was restored from the cache. The source splits a target's inputs the same way: entries of a named input that a `^` input names are hashed for each dependency, and the target's other entries for the task's own project only (`splitInputsIntoSelfAndDependencies` in `hasher/task-hasher.js`).
+- **Negated patterns.** `a/docs/readme.md` was not in the plan of `a:test`, and a change to it was a cache hit. A negated pattern in a target's inputs takes out files that another entry of the same list brings in.
+- **`nx.json`.** `nx.json` was among the files of every task's plan, although no input named it.
+- **Merging two configurations of one target.** `mergeTargetConfigurations` in `project-graph/utils/project-configuration/target-merging.js`, with `getMergeValueResult` and `mergeArrayValue` in `utils.js` beside it: a field that the later configuration sets replaces the earlier value; `options` and `configurations` are merged key by key; a list without the element `"..."` replaces the earlier list, and `"..."` stands for the earlier entries at its place. When both configurations name an executor and the executors differ, or both run `nx:run-commands` with different commands, the targets are incompatible (`isCompatibleTarget`): the later one is used in place of the earlier one, and the earlier options are discarded. A `command` becomes `nx:run-commands` with that command (`resolveCommandSyntacticSugar`).
+- **Nx's own flags.** `nx run-many` and `nx affected` take `--targets`, with the aliases `--target` and `-t`, and `--configuration` with `-c`; `nx run` takes `--target` and `-t`, `--project` and `-p`, and `--configuration` (`command-line/yargs-utils/shared-options.js`). `--projects`, `--exclude`, `--runner`, `--parallel` and `--verbose` are Nx's flags too. A target option with one of these names cannot be given on the command line.
+- **`env` of `nx:run-commands`.** That executor's `env` option holds "Environment variables that will be made available to the commands" (`executors/run-commands/schema.json`).
+
+The projects came from `project.json` files, not from a plugin. That a plugin's named inputs and targets are hashed and merged in the same way is read from the source, where both reach the hasher as project configuration.
+:::
+
+:::mara evidence EVD-CARGO-NX-TABLES
+:mid: 01M7AD4BCY1KGNGB0BSH140SNV
+:title: How cargo 1.100.0 reports the nx tables of the option reference
+:status: accepted
+:supports: DES-PLUGIN-OPTIONS
+:supports: DES-METADATA-TABLES
+
+An experiment with cargo 1.100.0 and rustc 1.100.0 on 13 November 2026, with an empty Cargo home and `--offline`, in a throwaway workspace outside this repository. Its root `Cargo.toml` listed the members `crates/*` and excluded `tools/x`, and its `[workspace.metadata.nx]` table set `tags`, `namePrefix`, `envInputs` and a `project` sub-table with `name`. The member `api` set `name` and `implicitDependencies` in `[package.metadata.nx]`, `inputs = ["...", { env = "DATABASE_URL" }, "!{projectRoot}/docs/**"]` in `[package.metadata.nx.targets.test]`, and `affectedTests = false` and `features` among that target's options. The excluded crate `tools/x` had a `[workspace.metadata.nx]` table of its own with `testRunner`.
+
+- `cargo metadata --format-version 1 --no-deps --offline` in the workspace root reported both tables as written: the `"..."` string, the inline table inside the list and the booleans kept their types and order, under `metadata.nx` of the workspace and of the package. A member without a table had `null` there.
+- `cargo build --offline` built the workspace without a warning about any of the keys.
+- In `tools/x`, the report named that folder as the workspace root, with one member and the crate's `[workspace.metadata.nx]` table as the workspace's metadata, and `cargo build --offline` built it. A standalone crate can therefore carry workspace settings in its own manifest.
+:::
+
+:::mara evidence EVD-CARGO-LOCKED-CHECK
+:mid: 01M7AD4BCY0KKX34EHF23320MQ
+:title: cargo metadata --locked fails on an outdated lockfile without changing it
+:status: accepted
+:supports: DES-INVOCATION
+
+An experiment with cargo 1.100.0 on 13 November 2026, in the workspace of [[EVD-CARGO-NX-TABLES]] with two members and no registry dependencies, an empty Cargo home and `--offline`. After `cargo generate-lockfile`, a path dependency of `api` on `core` was added to `api`'s manifest, so that `Cargo.lock` was out of date.
+
+- `cargo metadata --format-version 1 --no-deps --locked --offline` succeeded: the report that builds the graph does not notice an outdated lockfile.
+- `cargo metadata --format-version 1 --locked --offline` exited with code 101 and the message "cannot update the lock file … because --locked was passed to prevent this". `Cargo.lock` was byte for byte unchanged.
+- After `cargo generate-lockfile`, the same command succeeded.
+
+`cargo metadata` without `--no-deps` resolves the dependencies, so in a workspace with registry dependencies it needs what the full report needs, the registry or a filled Cargo home ([[EVD-CARGO-NO-DEPS]]). That case was not run here.
+:::
+
 ## Sources
 
 Pages and repositories read for the design discussion, on 12 November 2026.

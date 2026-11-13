@@ -36,9 +36,16 @@ Typical cases are a system library version or a code generator.
 ```toml
 # rust/Cargo.toml
 [workspace.metadata.nx]
-env = ["PROTOC", "DATABASE_URL"]
+envInputs = ["PROTOC", "DATABASE_URL"]
 runtimeInputs = ["protoc --version"]
 ```
+
+`envInputs` and `runtimeInputs` work in the plugin options for every crate, in
+`[workspace.metadata.nx]` for the members of a workspace and in
+`[package.metadata.nx]` for one crate. The three add up, and what a crate adds
+also reaches the keys of the crates that depend on it, because they compile it
+too. An input that you add to one target's `inputs` stays with that target
+([Configuration](configuration.mara.md#changing-an-inferred-target)).
 
 Files **outside** the crate that a build script names with
 `cargo::rerun-if-changed`, or that a macro such as `include_str!` pulls in, are
@@ -63,6 +70,11 @@ are those at the workspace root and above it.
   targets never pass it: `update`, which exists to change the lockfile, and
   `fmt` and `fmt-check`, because `cargo fmt` reads no lockfile and rejects the
   flag. Building the project graph never touches `Cargo.lock`.
+- Locked mode guards only the tasks that run. A task restored from the cache
+  runs no cargo, and its key does not depend on locked mode, so a result that
+  a developer stored before Cargo updated the lockfile can pass in CI. To fail
+  on an outdated `Cargo.lock` every time, run the check under
+  [Continuous integration](ci.mara.md#cache-two-things-in-two-places).
 
 ## What is stored
 
@@ -213,6 +225,8 @@ The environment list:
 - `CLIPPY_CONF_DIR`, on `lint` only.
 - `CARGO_BUILD_WARNINGS`, on every target that compiles: `build`, `check`, `lint`, `test`, `bench`, `run`, `doc` and the artifact targets, the uncached `bench` and `run` included. Cargo's `build.warnings` setting turns warnings into failures, so a result that passed with warnings allowed must not be restored where they are denied ([[EVD-CARGO-TARGET-COMMANDS]]).
 
+The variables and commands that the repository adds, with `envInputs` and `runtimeInputs` in the plugin options, in the workspace table or in a crate's table ([[DES-PLUGIN-OPTIONS]]), go into the crate's own named input, the one that its dependents hash through `^` inputs, and not onto single targets. A dependent's key therefore changes with them, also in another workspace, because Nx hashes the `env` and `runtime` entries of a dependency's named input into the dependent's key and those of a dependency's target into no other key ([[EVD-NX-24-OPTION-SEMANTICS]]).
+
 A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate is hashed with the crate's files, although it does not apply to the commands the plugin runs ([[DES-INVOCATION]]). An input the plugin cannot see is the repository's to declare, through the extra environment variables and commands ([[RISK-UNDECLARED-INPUTS]]).
 :::
 
@@ -264,5 +278,5 @@ Every cargo command of a task starts in the root folder of the crate's workspace
 
 The plugin adds no flag that changes what Cargo builds or where. It sets no build or artifact directory ([[DES-BUILD-DIRS]]) and passes only what the target's options ask for.
 
-By default the plugin does not pass `--locked`. Cargo may then create or update `Cargo.lock` during a task, exactly as it does for the same plain cargo command. That is Cargo's write, not the plugin's. With the `locked` option on, every cargo command of a task passes `--locked` and fails instead of changing the lockfile. Two kinds of command never pass the flag: `update`, whose purpose is to change the lockfile and which `--locked` fails whenever the lockfile would change, and the `cargo fmt` of `fmt` and `fmt-check`, which resolves no dependencies and rejects `--locked`. cargo-deny takes `--locked` like a cargo command, and cargo-audit only reads the lockfile ([[DES-WORKSPACE-TARGETS]]). Creating the graph never touches `Cargo.lock`, with or without the option, because its report is requested with `--no-deps` ([[DES-METADATA-REPORT]]). The environment variable `NX_RUST_LOCKED`, set to `true` or `false`, replaces the option for one run, which is how a pipeline switches it on without changing what developers get.
+By default the plugin does not pass `--locked`. Cargo may then create or update `Cargo.lock` during a task, exactly as it does for the same plain cargo command. That is Cargo's write, not the plugin's. With the `locked` option on, every cargo command of a task passes `--locked` and fails instead of changing the lockfile. Two kinds of command never pass the flag: `update`, whose purpose is to change the lockfile and which `--locked` fails whenever the lockfile would change, and the `cargo fmt` of `fmt` and `fmt-check`, which resolves no dependencies and rejects `--locked`. cargo-deny takes `--locked` like a cargo command, and cargo-audit only reads the lockfile ([[DES-WORKSPACE-TARGETS]]). Creating the graph never touches `Cargo.lock`, with or without the option, because its report is requested with `--no-deps` ([[DES-METADATA-REPORT]]). The environment variable `NX_RUST_LOCKED`, set to `true` or `false`, replaces the option for one run, which is how a pipeline switches it on without changing what developers get. Locked mode is no input of a task's key, so it guards only the tasks that run, and a pipeline that is to fail on an outdated lockfile runs `cargo metadata --format-version 1 --locked` in each workspace root as a command of its own, outside Nx's cache, which fails on such a lockfile without changing it ([[EVD-CARGO-LOCKED-CHECK]]).
 :::
