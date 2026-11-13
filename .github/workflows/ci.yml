@@ -13,6 +13,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Linux only for the moment: the macOS runs are deferred (ADR-CI-LINUX-ONLY).
+#
+# The names of both jobs are required status checks in the branch protection
+# of `main`. Change a name there too, or pull requests wait for a check that
+# never reports.
 jobs:
   check:
     name: Build, lint, test and format
