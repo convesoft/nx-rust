@@ -28,7 +28,9 @@ call.
 A group is the tasks of one kind, such as `test` or `lint`, in one Cargo
 workspace with one feature set, profile and target triple. Tasks in one group
 share one cargo invocation. Tasks that differ in any of these run separately,
-one group after another.
+one group after another. So do tasks whose `.env` files, such as one in a
+crate's folder, give them different environment variables: each cargo call runs
+with the environment its tasks were keyed with.
 
 Known limit: while a batch runs, Nx starts no other task. In a mixed repository
 JS tasks wait for the Rust batch ([[RISK-BATCH-BEHAVIOUR]]).
@@ -114,10 +116,13 @@ The features with which a crate and its dependencies are compiled do not depend 
 :title: Batch executor
 :status: accepted
 :satisfies: REQ-BATCHING
+:mitigates: RISK-NX-INPUT-SEMANTICS
 
 The plugin's cargo executor declares a `batchImplementation` and `preferBatch: true` in `executors.json`. Nx then hands the executor all runnable tasks of that executor at once, without `--batch`, and still hashes, restores and caches each task individually ([[ADR-BATCH-EXECUTOR]]).
 
 The batch implementation splits its tasks into groups ([[TERM-GROUP]]): one per kind of task, Cargo workspace, feature set, profile and target triple. It runs the groups one after another, because each cargo call already uses every core and the groups of one workspace share a build lock. Each group is one cargo call, started in the workspace root ([[DES-INVOCATION]]), that selects the crates of the group's tasks as [[DES-UNIFICATION]] prescribes.
+
+Nx computes each task's key with that task's environment, which includes the dotenv files it loads for the task: those in the crate's folder and those at the repository root named for the target or a configuration, such as `.env.test`. The batch process gets only the environment of the `nx` command and the root `.env`, `.env.local` and `.local.env` ([[EVD-NX-24-INPUT-SEMANTICS]]). The batch implementation therefore rebuilds each task's environment from the same files, in the order Nx reads them, splits a group further where those environments differ, and runs each cargo call with the environment of its tasks. No task runs with another environment than the one its key was computed with.
 
 Cargo is told to continue after a failure: `--keep-going` for builds, checks and clippy, and `--no-fail-fast` for test runs. The plugin maps cargo's output back to one result per task. A task fails when its own crate fails, or when a crate it depends on fails to compile. A failure in a crate that a task does not depend on does not fail it. When that crate is outside the selection, which can happen under `workspace-build`, the failure is reported as a warning and fails no task.
 

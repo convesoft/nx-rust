@@ -180,5 +180,5 @@ All of them start in the workspace root, and whether they pass `--locked` is the
 
 The [[TERM-WORKSPACE-PROJECT]] hosts `fmt`, `audit` (`cargo audit`), `deny` (`cargo deny check`), a lockfile update target and coverage collection ([[DES-BASELINE]]).
 
-Open: the name of the workspace project and how it avoids colliding with a crate or a JS project at the same folder, which is decided once it is known how Nx merges two projects at one root ([[RISK-MIXED-PROJECT-MERGE]]); which of these targets exist when the tool they need is not installed; and their cache inputs, which include the whole `Cargo.lock` and the configuration file of the tool, such as `deny.toml`.
+Open: the name of the workspace project and how it avoids colliding with a crate or a JS project at the same folder, which applies only where its folder is not already an Nx project, since otherwise the workspace project merges into that project and takes its name and its same-named targets ([[EVD-NX-PROJECT-MERGE]]); which of these targets exist when the tool they need is not installed; and their cache inputs, which include the whole `Cargo.lock` and the configuration file of the tool, such as `deny.toml`.
 :::

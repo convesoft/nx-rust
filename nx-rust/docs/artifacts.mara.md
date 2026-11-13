@@ -87,7 +87,10 @@ use wasm-pack, whose home organisation was sunset in 2025.
   are outputs of the target and are left out of its inputs.
 - **One folder, two plugins.** A napi or wasm crate usually has `Cargo.toml`
   and `package.json` side by side, so this plugin and Nx's JS plugin describe
-  the same project. How the two are merged is not specified yet
+  the same project. Nx merges them into one project named by the
+  `package.json` ([Project names](workspaces.mara.md#project-names)), and a
+  script there with the name of an inferred target, such as `build` or `test`,
+  replaces that target. What the plugin does about this is not specified yet
   ([[REQ-MIXED-PROJECTS]]).
 
 Not in v1: cross-compiling Node addons to other platforms, wasm tests, and
@@ -122,7 +125,7 @@ The cache key of an [[TERM-ARTIFACT-TARGET]] includes the target triple and the 
 
 A folder that holds both a `Cargo.toml` and a `package.json` is one Nx project that has the targets inferred by this plugin and those inferred by Nx's JS plugin, under a name the user can predict.
 
-Open: how Nx merges two plugins' projects for one root, which name wins, and what happens to targets both plugins infer, such as `build` and `test`. Also open: how the dependency of a JS consumer on the crate enters the project graph, so that a change in the crate reaches the consumer, and what the consumer's own `^build` then runs on the crate ([[ADR-NO-RUST-BUILD-DEPS]]). The design discussion of 12 November 2026 did not cover this area.
+Open: what the plugin does about targets that `package.json` or `project.json` replaces, given that Nx names the project from those files and lets a same-named script or target replace an inferred one ([[EVD-NX-PROJECT-MERGE]]): keep the names and document `nx.includedScripts`, rename colliding inferred targets, or report the collision. Also open: how the dependency of a JS consumer on the crate enters the project graph, so that a change in the crate reaches the consumer, and what the consumer's own `^build` then runs on the crate ([[ADR-NO-RUST-BUILD-DEPS]]). The design discussion of 12 November 2026 did not cover this area.
 :::
 
 ## Design
