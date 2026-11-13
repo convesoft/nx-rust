@@ -21,22 +21,31 @@ Done when: the user has agreed to the answers, the items are accepted, and `mara
 
 ## Summary of Changes
 
-On 2026-11-13 the maintainer answered the nine questions of the decision brief, each with the recommended option, and named the task `lockfile`. After the review of pull request #14 he also decided two more points: a stale lockfile falls back to the whole lockfile, and the plugin carries its own version where Nx has no npm node for it. The checks of Nx 24.0.6 and cargo 1.100.0 behind the design are recorded as `EVD-NX-24-EXTERNAL-NODES`, `EVD-NX-24-PLUGIN-VERSION`, `EVD-NX-24-LOCKFILE-TASK` and `EVD-CARGO-LOCKFILE`.
+The design follows the maintainer's decisions of 2026-11-13: the nine answers of the first brief; the task name `lockfile`; the plugin carrying its own version where Nx has no npm node for it; and, after the research on how cargo judges the lockfile, letting cargo update a stale lockfile first.
 
-- `DES-LOCKFILE-HASHING` is rewritten and accepted:
-  - One cached `lockfile` task per workspace writes a digest per crate into `.nx/workspace-data/nx-rust/lockfile/`, and every cached crate target depends on it and hashes its own digest. There are no external nodes in v1.
-  - The task compares every lockfile entry with the dependencies the manifests declare, which the plugin passes as an option of the task. Where anything does not match or cannot be decided, every crate of the workspace gets one digest over the whole lockfile and the declarations. A stale entry for one crate changed what cargo built for its sibling, so the fallback applies to the whole workspace.
-- `ADR-LOCKFILE-TASK` supersedes `ADR-EXTERNAL-NODES`, which is retired, and so is `TERM-EXTERNAL-NODE`.
+- `DES-LOCKFILE-HASHING` is accepted:
+  - Each workspace has one uncached `lockfile` task. It runs `cargo update --workspace`, with `--locked` in locked mode, so that a current lockfile stays as it is and a stale or missing one is updated as the crates' own cargo commands would update it.
+  - It then writes, into `.nx/workspace-data/nx-rust/lockfile/`, one digest per crate over the closure of its lockfile entry, following `replace`.
+  - Every cached crate target other than `fmt-check` depends on it and hashes its digest. None takes `Cargo.lock` as a plain file input.
+  - After each cargo call, the executor checks the crate's digest again and fails the task if it no longer matches.
+  - There are no external nodes in v1.
+- `ADR-LOCKFILE-TASK` supersedes `ADR-EXTERNAL-NODES`; both that decision and `TERM-EXTERNAL-NODE` are retired.
 - Accepted items changed:
-  - `REQ-EXTERNAL-DEPS`, `REQ-INPUT-FILES` and `REQ-NO-RUST-TASK-DEPS`
-  - `DES-INPUTS`: digest, member manifests, the plugin package or its version, and the root crate's own lockfile left out
-  - `DES-PROJECT-GRAPH` ("External crates" and "Cycles"), `DES-METADATA-REPORT` (one sentence beside main's)
-  - `DES-TARGETS`, `DES-WORKSPACE-TARGETS`, `DES-OUTPUTS`, `DES-BUILD-DIRS`, `REQ-CARGO-UNCHANGED`
+  - `REQ-EXTERNAL-DEPS`, `REQ-INPUT-FILES`, `REQ-NO-RUST-TASK-DEPS`, `REQ-NO-MANIFEST-WRITES`, `REQ-CARGO-UNCHANGED`
+  - `DES-INPUTS`, `DES-INVOCATION`, `DES-OUTPUTS`, `DES-BUILD-DIRS`, `DES-TARGETS`, `DES-WORKSPACE-TARGETS`, `DES-DIAGNOSTICS`
+  - `DES-PROJECT-GRAPH` ("External crates", "Cycles"), `DES-METADATA-REPORT` (one sentence)
   - `ADR-NO-RUST-BUILD-DEPS`, `ADR-ALL-DEP-KINDS`
-  - two rows of `DES-DIAGNOSTICS`
-  - `VER-TARGETS`, `VER-CACHE-KEYS` and `VER-SETUP`
-- Guidance updated in `workspaces.mara.md`, `caching.mara.md` (new "Lockfile changes" section), `targets.mara.md` and `product.mara.md`.
-- Updated issues: nxr-xq9ava, nxr-fy4t4k, nxr-1bv0wm and nxr-ym403k. The follow-ups filed earlier were settled in this pull request and removed: nxr-5yw5p3, nxr-vxjvzg and nxr-6cm44q.
-- Rejected: external nodes alone, because `nx affected` ignores them after a change to `Cargo.lock`; external nodes with a constant-output task, because they invalidate JS targets; a digest in a target option, which `nx affected` never selects; the whole lockfile; and a fallback only for the crate whose entry is stale.
+  - `VER-TARGETS`, `VER-CACHE-KEYS`, `VER-SETUP`
+- Evidence: `EVD-NX-24-EXTERNAL-NODES`, `EVD-NX-24-PLUGIN-VERSION`, `EVD-NX-24-LOCKFILE-TASK`, `EVD-CARGO-LOCKFILE`, `EVD-CARGO-LOCK-CHECK` and `EVD-NX-24-LOCKFILE-UPDATE`.
+- Guidance updated in `workspaces.mara.md`, `caching.mara.md`, `targets.mara.md`, `ci.mara.md` and `product.mara.md`.
+- Issues: nxr-xq9ava has the implementation steps, nxr-fy4t4k the plugin-package input, nxr-ym403k a replaced `lockfile` target. nxr-p5ybc0 has a step for `paths` overrides and the path packages reached through `[patch]` or `[replace]`.
+- Rejected:
+  - external nodes, because `nx affected` ignores them after a change to `Cargo.lock`, and they invalidate JS targets;
+  - a digest in a target option;
+  - the whole lockfile;
+  - a comparison of manifests with lockfile entries written by the plugin, which missed cases that cargo catches;
+  - failing on a stale lockfile;
+  - running a stale workspace's crates uncached;
+  - a cached lockfile task, because cargo's verdict depends on files outside the repository.
 
-Checks run on the final commit: `pnpm nx format:write` (exit 0), `mara schema validate` (valid), `mara project validate` (`valid: true`, evaluation complete, 0 errors, 0 warnings), `zban check` (exit 0), `pnpm nx run-many -t build lint test --skip-nx-cache` (exit 0, 6 suites, 63 tests passed) and `pnpm nx format:check --all` (exit 0). The end-to-end suite was not run because no plugin behaviour changed.
+Checks run on the final commit: `pnpm nx format:write` (exit 0), `mara schema validate` (valid), `mara project validate` (`valid: true`, evaluation complete, 0 errors, 0 warnings), `zban check` (exit 0), `pnpm nx run-many -t build lint test --skip-nx-cache` (exit 0, 6 suites, 117 tests passed) and `pnpm nx format:check --all` (exit 0). The end-to-end suite was not run because no plugin behaviour changed.

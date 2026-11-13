@@ -15,23 +15,26 @@ built to show one situation. Every Cargo workspace in it has a current
 [`fixtures.spec.ts`](fixtures.spec.ts) checks against `cargo metadata` that
 each fixture still has the workspaces and members listed there.
 
-| Fixture                | Situation                                                                                                                                                                                                                                                         |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `subfolder-workspace`  | One workspace in `rust/`, not at the repository root. `api` has a normal dependency on `model`, a build dependency on `codegen` and a dev-dependency on `testkit`.                                                                                                |
-| `two-workspaces`       | A virtual workspace at the repository root (`app` depends on `util`) and a workspace in `tools/` whose root manifest is also a crate (`tools`, with the member `scaffold`).                                                                                       |
-| `standalone-crate`     | A workspace in `rust/` and a crate outside every workspace, `tools/xtask`, with its own lockfile.                                                                                                                                                                 |
-| `excluded-member`      | A workspace in `rust/` whose `exclude` names `crates/legacy`, which is therefore a standalone crate with its own lockfile.                                                                                                                                        |
-| `cross-workspace-path` | `server` in the `backend/` workspace depends by path on `model`, a member of the `shared/` workspace.                                                                                                                                                             |
-| `vendored-crate`       | `app` depends on `lib`, which depends by path on `vendor/parser`, which depends by path on `vendor/lexer`. Neither vendored crate belongs to a workspace, and the fixture's `nx.json` excludes `vendor/**` from the plugin.                                       |
-| `name-collision`       | Two crates called `api`: a member of the `rust/` workspace and the standalone crate `tools/api`.                                                                                                                                                                  |
-| `dev-dependency-cycle` | `model` dev-depends on `testkit`, and `testkit` depends on `model`.                                                                                                                                                                                               |
-| `different-toolchains` | The `pinned/` workspace names toolchain `1.91.0` in its `rust-toolchain.toml`, and `stable/` names `stable`. The tests never install a toolchain: without `1.91.0`, cargo fails in `pinned/`, and the tests skip it outside of CI (`pinnedToolchainAvailable()`). |
+| Fixture                | Situation                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subfolder-workspace`  | One workspace in `rust/`, not at the repository root. `api` has a normal dependency on `model`, a build dependency on `codegen` and a dev-dependency on `testkit`.                                                                                                                                                                                                               |
+| `two-workspaces`       | A virtual workspace at the repository root (`app` depends on `util`) and a workspace in `tools/` whose root manifest is also a crate (`tools`, with the member `scaffold`).                                                                                                                                                                                                      |
+| `standalone-crate`     | A workspace in `rust/` and a crate outside every workspace, `tools/xtask`, with its own lockfile.                                                                                                                                                                                                                                                                                |
+| `excluded-member`      | A workspace in `rust/` whose `exclude` names `crates/legacy`, which is therefore a standalone crate with its own lockfile.                                                                                                                                                                                                                                                       |
+| `cross-workspace-path` | `server` in the `backend/` workspace depends by path on `model`, a member of the `shared/` workspace.                                                                                                                                                                                                                                                                            |
+| `vendored-crate`       | `app` depends on `lib`, which depends by path on `vendor/parser`, which depends by path on `vendor/lexer`. Neither vendored crate belongs to a workspace, and the fixture's `nx.json` excludes `vendor/**` from the plugin.                                                                                                                                                      |
+| `name-collision`       | Two crates called `api`: a member of the `rust/` workspace and the standalone crate `tools/api`.                                                                                                                                                                                                                                                                                 |
+| `dev-dependency-cycle` | `model` dev-depends on `testkit`, and `testkit` depends on `model`.                                                                                                                                                                                                                                                                                                              |
+| `different-toolchains` | The `pinned/` workspace names toolchain `1.91.0` in its `rust-toolchain.toml`, and `stable/` names `stable`. The tests never install a toolchain: without `1.91.0`, cargo fails in `pinned/`, and the tests skip it outside of CI (`pinnedToolchainAvailable()`).                                                                                                                |
+| `mixed-folders`        | A workspace in `libs/rust/` whose folder has a `project.json` without a name. In `crates/addon`, the crate `napi-addon` has a `package.json` named `@mixed/napi-addon` with an empty `project.json` beside it; `crates/engine` has a `project.json` named `rust-engine`; in `crates/unnamed`, the crate `plain` has a `project.json` without a name. `cli` depends on the three. |
+| `nested-folders`       | Workspaces in `services/billing/` and `apps/Billing.API/rust_v2/`, each with one member.                                                                                                                                                                                                                                                                                         |
 
 A fixture has no `nx.json` unless it needs plugin options. The harness writes
 one that registers the plugin, and in a fixture's own `nx.json` it points
 every entry for `@convesoft/nx-rust` at the plugin under test. A fixture
-must not contain `package.json`, `pnpm-lock.yaml` or `pnpm-workspace.yaml`,
-which the end-to-end test project keeps. `target` folders are never copied.
+must not have `package.json`, `pnpm-lock.yaml` or `pnpm-workspace.yaml` at
+its root, where the end-to-end test project keeps its own. `target` folders
+are never copied.
 
 To add a situation, add a folder, list it in `fixtureNames`
 ([`harness/fixtures.ts`](harness/fixtures.ts)), in `fixtures.spec.ts` and in
@@ -58,9 +61,6 @@ const broken = loadFixtureGraph("two-workspaces", {
 });
 await expect(broken).rejects.toThrow(/tools\/Cargo\.toml/);
 ```
-
-The plugin creates no projects yet (nxr-1bv0wm), so `projects` holds only
-those that a test adds with a `project.json`.
 
 `files` changes the copy before Nx sees it: a string replaces a file, `null`
 deletes it, and a function receives the current content and returns the new
@@ -91,7 +91,8 @@ instead of failing.
 **`FixtureWorkspace.create(fixture, files)`** is the copy both helpers use:
 `graph()`, `hashTasks(tasks, { env, overrides })`, `nx(args, env)`, which
 runs the Nx command line there and returns its status and output,
-`cargoCalls()`, `reset(files)` and `remove()`. Besides the fixture, the copy
+`cargoCalls()`, `files()`, which returns every file outside `node_modules`
+and `.nx` with its content, `reset(files)` and `remove()`. Besides the fixture, the copy
 has a `tsconfig.base.json` that lets Nx compile the plugin's TypeScript
 source, and a `node_modules`, which Nx ignores, with a link to this
 repository's Nx and a copy of the cargo wrapper in `.bin`. If creating it

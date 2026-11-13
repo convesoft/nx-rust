@@ -1,7 +1,8 @@
-import { NX_VERSION } from "@nx/devkit";
+import { NX_VERSION, workspaceRoot } from "@nx/devkit";
 import { execFileSync, execSync } from "child_process";
-import { join } from "path";
-import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
+import { join, relative } from "path";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import {
   CargoWrapper,
   cargoProbeProject,
@@ -49,6 +50,15 @@ describe("@convesoft/nx-rust", () => {
     ).not.toThrow();
   });
 
+  // Every run publishes the same version, so a package that an earlier run
+  // published, still known to a cache, would install without an error.
+  it("installs the plugin that the global setup built", () => {
+    const installed = join(projectDirectory, "node_modules", "@convesoft", "nx-rust");
+    const built = join(workspaceRoot, "dist", "nx-rust");
+
+    expect(fileDigests(installed)).toEqual(fileDigests(built));
+  });
+
   describe("with a fixture", () => {
     // Outside the test project, so that Nx does not see the wrapper.
     const wrapperDirectory = join(process.cwd(), "tmp", "cargo-wrapper");
@@ -70,13 +80,12 @@ describe("@convesoft/nx-rust", () => {
     });
 
     it(
-      "reads the fixture's workspace through the installed plugin",
+      "creates the fixture's projects and edges through the installed plugin",
       () => {
         const projects = JSON.parse(nx(projectDirectory, cargo, ["show", "projects", "--json"]));
 
-        // The plugin creates no project yet (nxr-1bv0wm), but it reads the
-        // workspace with one cargo call.
-        expect(projects).toEqual([]);
+        // A project per crate and the workspace project, from one cargo call.
+        expect([...projects].sort()).toEqual(["api", "codegen", "model", "rust", "testkit"]);
         expect(cargo.calls(projectDirectory)).toEqual([
           {
             cwd: "rust",
@@ -90,6 +99,28 @@ describe("@convesoft/nx-rust", () => {
             ],
           },
         ]);
+
+        // Outside the test project, like the wrapper.
+        const file = join(wrapperDirectory, "graph.json");
+        nx(projectDirectory, cargo, ["graph", `--file=${file}`]);
+        const dependencies: Record<string, { source: string; target: string }[]> = JSON.parse(
+          readFileSync(file, "utf8"),
+        ).graph.dependencies;
+        const edges = Object.values(dependencies)
+          .flat()
+          .map((edge) => [edge.source, edge.target]);
+        expect(edges).toEqual(
+          expect.arrayContaining([
+            ["api", "model"],
+            ["api", "codegen"],
+            ["api", "testkit"],
+            ["rust", "api"],
+            ["rust", "codegen"],
+            ["rust", "model"],
+            ["rust", "testkit"],
+          ]),
+        );
+        expect(edges).toHaveLength(7);
       },
       HARNESS_TIMEOUT,
     );
@@ -192,6 +223,23 @@ function nx(projectDirectory: string, cargo: CargoWrapper, args: string[]): stri
     env: cargo.environment(testEnvironment()),
     encoding: "utf8",
   });
+}
+
+/**
+ * Maps the path of each file below `directory`, relative to it, to the SHA-256
+ * digest of its contents.
+ */
+function fileDigests(directory: string): Record<string, string> {
+  const digests: Record<string, string> = {};
+  for (const entry of readdirSync(directory, { recursive: true, withFileTypes: true })) {
+    if (entry.isFile()) {
+      const path = join(entry.parentPath, entry.name);
+      digests[relative(directory, path)] = createHash("sha256")
+        .update(readFileSync(path))
+        .digest("hex");
+    }
+  }
+  return digests;
 }
 
 /**
