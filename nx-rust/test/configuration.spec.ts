@@ -542,6 +542,7 @@ describe("graph-creation errors", () => {
       },
       [
         'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build] sets "executor" to "nx:run-commands" on the inferred target "build", which runs "@convesoft/nx-rust:cargo".',
+        "To run something else, define a target under a name of its own.",
       ],
     ],
     [
@@ -554,6 +555,7 @@ describe("graph-creation errors", () => {
       },
       [
         'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc] sets "command" on the inferred target "doc".',
+        "To run another command, define a target under a name of its own.",
       ],
     ],
     ...(
@@ -603,6 +605,7 @@ describe("graph-creation errors", () => {
       },
       [
         'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.options] sets "affectedTests" to true, but the Cargo workspace in rust/Cargo.toml does not use the selection of affected tests',
+        "Remove it, or turn selection on with affectedTests = true under [workspace.metadata.nx] in rust/Cargo.toml.",
       ],
     ],
     [
@@ -627,6 +630,7 @@ describe("graph-creation errors", () => {
       },
       [
         'rust/crates/api/Cargo.toml: "implicitDependencies" in [package.metadata.nx] has the entries "!model" and "!nothing", but the key only adds dependencies, so an entry starting with "!" is an error, whatever it names.',
+        "Remove them; nx-rust keeps the edge of every Cargo dependency.",
       ],
     ],
     [
@@ -697,6 +701,9 @@ describe("graph-creation errors", () => {
 
       expect(message).toContain(
         'The target "test" of the project "model" (rust/crates/model/Cargo.toml) sets "affectedTests" to true among its options, but the Cargo workspace in rust/Cargo.toml does not use the selection of affected tests',
+      );
+      expect(message).toContain(
+        "Remove it there, or turn selection on with affectedTests = true under [workspace.metadata.nx] in rust/Cargo.toml.",
       );
     },
     HARNESS_TIMEOUT,
