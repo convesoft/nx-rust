@@ -1,0 +1,162 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
+import {
+  copyFixture,
+  FixtureName,
+  fixtureNames,
+  HARNESS_TIMEOUT,
+  pluginPackageName,
+  testEnvironment,
+} from "./harness";
+
+// What cargo must make of each fixture: the members of each workspace, by
+// the workspace's root folder, relative to the repository root. Manifests
+// that belong to no workspace are listed under `others`.
+const expected: Record<FixtureName, { workspaces: Record<string, string[]>; others?: string[] }> = {
+  "subfolder-workspace": {
+    workspaces: {
+      rust: ["rust/crates/api", "rust/crates/codegen", "rust/crates/model", "rust/crates/testkit"],
+    },
+  },
+  "two-workspaces": {
+    workspaces: { ".": ["crates/app", "crates/util"], tools: ["tools", "tools/scaffold"] },
+  },
+  "standalone-crate": {
+    workspaces: { rust: ["rust/crates/api"], "tools/xtask": ["tools/xtask"] },
+  },
+  "excluded-member": {
+    workspaces: { rust: ["rust/crates/app"], "rust/crates/legacy": ["rust/crates/legacy"] },
+  },
+  "cross-workspace-path": {
+    workspaces: { backend: ["backend/crates/server"], shared: ["shared/crates/model"] },
+  },
+  "vendored-crate": {
+    workspaces: { rust: ["rust/crates/app", "rust/crates/lib"] },
+    others: ["vendor/lexer", "vendor/parser"],
+  },
+  "name-collision": {
+    workspaces: { rust: ["rust/crates/api"], "tools/api": ["tools/api"] },
+  },
+  "dev-dependency-cycle": {
+    workspaces: { rust: ["rust/crates/model", "rust/crates/testkit"] },
+  },
+  "different-toolchains": {
+    workspaces: { pinned: ["pinned/crates/pinned-lib"], stable: ["stable/crates/stable-lib"] },
+  },
+};
+
+// The toolchain that `different-toolchains/pinned/rust-toolchain.toml` names.
+// The tests never install it. Without it, that fixture is not checked, except
+// in CI, which installs it.
+const pinnedToolchain = "1.91.0";
+const pinnedToolchainAvailable = hasRustupToolchain(pinnedToolchain) || Boolean(process.env.CI);
+const checkedFixtures = fixtureNames.filter(
+  (fixture) => fixture !== "different-toolchains" || pinnedToolchainAvailable,
+);
+
+describe("fixtures", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-fixture-check-")));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(checkedFixtures)(
+    "%s is what cargo reports, with a current lockfile per workspace",
+    (fixture) => {
+      copyFixture(fixture, root, { plugin: pluginPackageName });
+      const { workspaces, others = [] } = expected[fixture];
+
+      for (const [folder, members] of Object.entries(workspaces)) {
+        const metadata = cargoMetadata(join(root, folder));
+        expect(relative(root, metadata.workspace_root) || ".").toBe(folder);
+        const memberIds = new Set(metadata.workspace_members);
+        const memberFolders = metadata.packages
+          .filter((p) => memberIds.has(p.id))
+          .map((p) => relative(root, dirname(p.manifest_path)) || ".")
+          .sort();
+        expect(memberFolders).toEqual(members);
+        expect(existsSync(join(root, folder, "Cargo.lock"))).toBe(true);
+      }
+
+      const listed = new Set([
+        ...Object.keys(workspaces),
+        ...Object.values(workspaces).flat(),
+        ...others,
+      ]);
+      expect(manifestFolders(root)).toEqual([...listed].sort());
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  if (pinnedToolchainAvailable) {
+    it(
+      "different-toolchains uses two toolchains",
+      () => {
+        copyFixture("different-toolchains", root, { plugin: pluginPackageName });
+        const pinned = rustcVersion(join(root, "pinned"));
+        const stable = rustcVersion(join(root, "stable"));
+
+        expect(pinned).toContain(`rustc ${pinnedToolchain} `);
+        expect(stable).not.toBe(pinned);
+      },
+      HARNESS_TIMEOUT,
+    );
+  } else {
+    it.todo(
+      `different-toolchains: install the ${pinnedToolchain} toolchain with rustup to check it`,
+    );
+  }
+});
+
+interface CargoMetadata {
+  workspace_root: string;
+  workspace_members: string[];
+  packages: { id: string; manifest_path: string }[];
+}
+
+// The full report, offline and locked: it fails if a lockfile is missing a
+// package or would change.
+function cargoMetadata(cwd: string): CargoMetadata {
+  return JSON.parse(
+    execFileSync("cargo", ["metadata", "--format-version", "1", "--offline", "--locked"], {
+      cwd,
+      env: testEnvironment(),
+      encoding: "utf8",
+    }),
+  );
+}
+
+function rustcVersion(cwd: string): string {
+  return execFileSync("rustc", ["-V"], { cwd, env: testEnvironment(), encoding: "utf8" }).trim();
+}
+
+function hasRustupToolchain(toolchain: string): boolean {
+  const result = spawnSync("rustup", ["toolchain", "list"], {
+    env: testEnvironment(),
+    encoding: "utf8",
+  });
+  return (
+    result.status === 0 &&
+    result.stdout.split("\n").some((line) => line.startsWith(`${toolchain}-`))
+  );
+}
+
+function manifestFolders(root: string, folder = "."): string[] {
+  const entries = readdirSync(join(root, folder), { withFileTypes: true });
+  return entries
+    .flatMap((entry) => {
+      const path = folder === "." ? entry.name : `${folder}/${entry.name}`;
+      if (entry.isDirectory()) {
+        return manifestFolders(root, path);
+      }
+      return entry.name === "Cargo.toml" ? [folder] : [];
+    })
+    .sort();
+}
