@@ -32,7 +32,9 @@ Cargo.
 
 The plugin looks at every `Cargo.toml` in the repository and runs
 `cargo metadata` once per Cargo workspace. Workspaces can sit anywhere,
-including the repository root, and there can be any number of them.
+including the repository root, and there can be any number of them. It asks
+again each time Nx creates the graph and keeps no answer in between; for a
+workspace of 600 crates that takes about 0.2 seconds on a fast machine.
 
 - A crate outside every workspace is a **standalone crate**: a workspace of
   one, with its own `Cargo.lock` and its own build directory. The plugin does
@@ -298,12 +300,12 @@ A change in `Cargo.lock` changes a crate's cache keys when it changes a package 
 :::mara requirement REQ-METADATA-DISK-CACHE
 :mid: 01M78FHG7FM7J2WAZSP8WESWVG
 :title: Reuse the cargo metadata report between Nx processes
-:status: draft
+:status: retired
 :satisfies: NEED-EFFICIENT-BUILDS
 
 The `cargo metadata` report of a workspace is reused across Nx processes for as long as the files it depends on are unchanged.
 
-Open: which files the report depends on, where it is kept, and whether a disk cache is still worth having now that the report is requested with `--no-deps` and needs neither the network nor dependency resolution ([[DES-METADATA-REPORT]]). To measure on a large workspace. The design discussion of 12 November 2026 named this area without choosing a mechanism.
+Retired on 13 November 2026: the report is requested afresh in every graph computation, because a stored report would save little and could go stale ([[ADR-NO-METADATA-CACHE]]).
 :::
 
 ## Design
@@ -335,7 +337,7 @@ When cargo cannot be started, or `cargo metadata` fails for a manifest, graph cr
 :satisfies: REQ-INFERRED-PROJECTS
 :satisfies: REQ-MULTI-WORKSPACE
 
-Nodes, targets and edges of a workspace all come from one `cargo metadata` report. Project creation and dependency creation (the plugin's `createNodes` and `createDependencies` hooks) of one plugin entry in `nx.json` share that report, so the two hooks cannot disagree and a graph computation runs cargo once per workspace for the entry. A workspace whose manifests two entries receive is reported once for each of them, because Nx runs each entry in a process of its own unless plugin isolation is off; entries in one process share the report ([[EVD-NX-PLUGIN-ENTRIES]]). Workspace and package metadata tables ([[DES-METADATA-TABLES]]) are read from the same report, not by parsing manifests. Keeping the report between Nx processes is [[REQ-METADATA-DISK-CACHE]].
+Nodes, targets and edges of a workspace all come from one `cargo metadata` report. Project creation and dependency creation (the plugin's `createNodes` and `createDependencies` hooks) of one plugin entry in `nx.json` share that report, so the two hooks cannot disagree and a graph computation runs cargo once per workspace for the entry. A workspace whose manifests two entries receive is reported once for each of them, because Nx runs each entry in a process of its own unless plugin isolation is off; entries in one process share the report ([[EVD-NX-PLUGIN-ENTRIES]]). Workspace and package metadata tables ([[DES-METADATA-TABLES]]) are read from the same report, not by parsing manifests. The report is requested afresh in every graph computation ([[ADR-NO-METADATA-CACHE]]).
 
 The report is requested with `--no-deps` ([[ADR-METADATA-NO-DEPS]]). It then holds the members of the workspace with their targets, their declared dependencies and the metadata tables, and Cargo's two directories. It needs no network, downloads nothing and never creates or changes `Cargo.lock` ([[EVD-CARGO-NO-DEPS]]). A dependency on another crate in the repository is recognised by the path its entry carries. Dependencies are not resolved in this report, so the locked versions of external crates come from `Cargo.lock` itself ([[DES-LOCKFILE-HASHING]]). The lockfile task lets cargo bring that file up to date and reads it when it runs; graph creation does not read it.
 
