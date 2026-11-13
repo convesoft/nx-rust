@@ -4,7 +4,12 @@ import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { PackageVersion } from "../cargo/lockfile";
 import { cargoMetadataOf } from "../graph/collisions";
-import { digestFolder, runIdVariable } from "../graph/lockfile-task";
+import {
+  commandDigestFolder,
+  commandIdVariable,
+  digestFolder,
+  runIdVariable,
+} from "../graph/lockfile-task";
 import { uncachedByDesign } from "../graph/outputs";
 import {
   cachedTargets,
@@ -14,7 +19,7 @@ import {
   targetCargoMetadataKey,
 } from "../graph/targets";
 import { cargoArguments, type CargoTargetOptions, pluginVersionOption } from "./command";
-import { checkDigests, DigestCheck, writeDigests } from "./digests";
+import { checkDigests, DigestCheck, DigestWrite, writeDigests } from "./digests";
 import { recordedNxCommand } from "./nx-command";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
 
@@ -68,17 +73,7 @@ export interface TaskInvocation extends CargoInvocation {
 }
 
 /** What a task does with digests after its cargo call ({@link TaskInvocation.digests}). */
-export type DigestStep =
-  | {
-      kind: "write";
-      /** The absolute path of the workspace's `Cargo.lock`. */
-      lockfile: string;
-      /** The absolute path of the workspace's digest folder. */
-      folder: string;
-      /** The members whose digests the task writes. */
-      members: PackageVersion[];
-    }
-  | ({ kind: "check" } & DigestCheck);
+export type DigestStep = ({ kind: "write" } & DigestWrite) | ({ kind: "check" } & DigestCheck);
 
 /**
  * Runs one task of an inferred target as one cargo command: in the root
@@ -251,9 +246,15 @@ export function taskInvocation(
   const cwd = join(context.root, workspaceRoot);
   const lockfile = join(cwd, "Cargo.lock");
   const folder = join(context.root, digestFolder(workspaceRoot));
+  // The private copies of this nx command's lockfile tasks.
+  const commandId = (env[commandIdVariable] ?? "").replace(/[^A-Za-z0-9-]/g, "");
+  const commandFolder =
+    commandId === ""
+      ? undefined
+      : join(context.root, commandDigestFolder(workspaceRoot, commandId));
   let digests: DigestStep | undefined;
   if (metadata.target === "lockfile") {
-    digests = { kind: "write", lockfile, folder, members: metadata.members ?? [] };
+    digests = { kind: "write", lockfile, folder, commandFolder, members: metadata.members ?? [] };
   } else if (
     metadata.digests !== undefined &&
     keyHoldsDigests(context, cargo.workspaceManifest, env)
@@ -263,6 +264,7 @@ export function taskInvocation(
       task,
       lockfile,
       folder,
+      commandFolder,
       members: metadata.digests,
       workspace: workspaceRoot,
     };

@@ -14,6 +14,17 @@ export const digestRoot = ".nx/workspace-data/nx-rust/lockfile";
 export const runIdVariable = "NX_RUST_RUN_ID";
 
 /**
+ * The variable that gives each `nx` command an id of its own, under which
+ * its lockfile tasks keep a private copy of the digests they write
+ * (`DES-LOCKFILE-HASHING`, "Post-check"). No target names it as an input,
+ * so it never reaches a cache key.
+ */
+export const commandIdVariable = "NX_RUST_COMMAND_ID";
+
+/** The folder in a workspace's digest folder that holds the private copies of each command. */
+export const commandsFolderName = "commands";
+
+/**
  * The folder of a workspace's digests, relative to the repository root: one
  * path segment under {@link digestRoot} per workspace, so that the folders
  * of nested workspaces, such as one at the repository root and one below it,
@@ -50,6 +61,18 @@ export function digestFile(workspaceRoot: string, packageName: string): string {
 /** The name of the file of a member's digest in its workspace's folder. */
 export function digestFileName(packageName: string): string {
   return `${packageName}.digest`;
+}
+
+/**
+ * The folder of the copies of a workspace's digests that the lockfile task
+ * of one `nx` command writes for that command alone, relative to the
+ * repository root. No glob of a digest input reaches into it: `*.digest`
+ * stops at a folder.
+ *
+ * @param commandId The command's {@link commandIdVariable}.
+ */
+export function commandDigestFolder(workspaceRoot: string, commandId: string): string {
+  return posix.join(digestFolder(workspaceRoot), commandsFolderName, commandId);
 }
 
 /**

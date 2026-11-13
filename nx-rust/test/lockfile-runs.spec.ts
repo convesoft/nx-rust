@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   applyFileChanges,
@@ -8,6 +8,7 @@ import {
   FixtureName,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  holdCargo,
   LocalRegistry,
   lockfileCalls,
   runNx,
@@ -26,8 +27,9 @@ const env: Env = {};
 
 beforeAll(() => {
   registry = LocalRegistry.create([
-    { name: "zzlib", version: "1.0.0" },
-    { name: "zzlib", version: "1.0.1" },
+    // value() tells a test which version cargo built.
+    { name: "zzlib", version: "1.0.0", source: 'pub fn value() -> &\'static str { "1.0.0" }\n' },
+    { name: "zzlib", version: "1.0.1", source: 'pub fn value() -> &\'static str { "1.0.1" }\n' },
     { name: "yylib", version: "1.0.0" },
     { name: "yylib", version: "1.0.1" },
   ]);
@@ -90,7 +92,8 @@ async function locked(
   const workspace = FixtureWorkspace.create(fixture, files);
   for (const folder of folders) {
     cargo(workspace, folder, "generate-lockfile");
-    cargo(workspace, folder, "update", "-p", "zzlib", "--precise", "1.0.0");
+    // The index is fetched; the second call needs no fetch.
+    cargo(workspace, folder, "update", "-p", "zzlib", "--precise", "1.0.0", "--offline");
   }
   return workspace;
 }
@@ -393,9 +396,7 @@ describe("the check after cargo's call", () => {
         const first = await nx(workspace, ["run", "api:check"]);
 
         expect(first.status).toBe(1);
-        expect(first.output).toContain(
-          "api:check: Cargo.lock changed while the task ran: the locked dependencies of api now have the digest",
-        );
+        expect(first.output).toContain("api:check: the locked dependencies of api had the digest");
         expect(ran(workspace)).toEqual(["rust: check --all-targets -p api"]);
 
         // The next run keys api on the new digest and stores it.
@@ -413,7 +414,7 @@ describe("the check after cargo's call", () => {
   );
 
   it(
-    "fails a task before cargo runs where no project lies at the workspace's root folder to run the lockfile task",
+    "runs the crates' targets that would read a digest uncached, with a warning, where Nx hands the workspace's root manifest to no entry of the plugin",
     async () => {
       const workspace = await subfolder();
       try {
@@ -430,15 +431,100 @@ describe("the check after cargo's call", () => {
               ),
             }),
         });
+        const warning =
+          "nx-rust: Nx hands the root manifest rust/Cargo.toml of the Cargo workspace in rust to no entry of @convesoft/nx-rust";
 
-        const run = await nx(workspace, ["run", "model:check"]);
+        for (const run of [1, 2]) {
+          const result = await nx(workspace, ["run", "model:check"]);
 
-        expect(run.status).toBe(1);
-        expect(run.output).toContain(
-          "model:check: this task does not depend on the lockfile task of its Cargo workspace, in rust",
-        );
-        expect(ran(workspace)).toEqual([]);
+          // The task runs, also the second time, and repeats the warning.
+          expect({ run, status: result.status }).toEqual({ run, status: 0 });
+          expect(ran(workspace)).toEqual(["rust: check --all-targets -p model"]);
+          expect(lockfileCalls(workspace)).toEqual([]);
+          expect(result.output).toContain(warning);
+          expect(restored(result.output, "model:check")).toBe(false);
+        }
       } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails a task whose key holds another lockfile's digest because another nx command rewrote the digests meanwhile, and Nx stores nothing for it",
+    async () => {
+      // The reviewer's race: model's test passes only with zzlib 1.0.1, and
+      // the lockfile locks 1.0.0 when Nx computes the task's key.
+      const workspace = await subfolder();
+      const hold = holdCargo("test");
+      try {
+        applyFileChanges(workspace.root, {
+          "rust/crates/model/src/lib.rs": (source = "") =>
+            `${source}\n#[test]\nfn version_probe() {\n    assert_eq!(zzlib::value(), "1.0.1");\n}\n`,
+        });
+        const lockfile = read(workspace, "rust/Cargo.lock");
+        const first = nx(workspace, ["run", "model:test"], hold.env);
+        await hold.held();
+        // Meanwhile the lockfile moves to 1.0.1, and another command's
+        // lockfile task writes the digests of that.
+        cargo(workspace, "rust", "update", "-p", "zzlib", "--precise", "1.0.1");
+        const other = await runNx(workspace, ["run", "rust:lockfile"], env);
+        expect(other.status).toBe(0);
+        hold.release();
+        const raced = await first;
+
+        // Cargo built 1.0.1, which the key does not describe.
+        expect(raced.status).toBe(1);
+        expect(raced.output).toContain("test version_probe ... ok");
+        expect(raced.output).toContain(
+          "model:test: the locked dependencies of model had the digest",
+        );
+        expect(raced.output).toContain("through another nx command that ran at the same time");
+
+        // Back on 1.0.0, the task runs again, and fails as plain cargo does.
+        writeFileSync(join(workspace.root, "rust", "Cargo.lock"), lockfile);
+        const again = await nx(workspace, ["run", "model:test"]);
+        expect(restored(again.output, "model:test")).toBe(false);
+        expect(again.status).toBe(1);
+        expect(again.output).toContain("version_probe");
+      } finally {
+        hold.release();
+        hold.remove();
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "passes the tasks of two nx commands that run at the same time on an unchanged lockfile, and removes each command's private digests when it ends",
+    async () => {
+      const workspace = await subfolder();
+      const hold = holdCargo("check");
+      try {
+        const first = nx(workspace, ["run", "model:check"], hold.env);
+        await hold.held();
+        const second = await runNx(workspace, ["run", "api:check"], env);
+        expect(second.status).toBe(0);
+        hold.release();
+        const held = await first;
+
+        expect(held.status).toBe(0);
+        expect(held.output).not.toContain("changed while the run went on");
+        // Both results were stored.
+        for (const task of ["model:check", "api:check"]) {
+          const repeat = await nx(workspace, ["run", task]);
+          expect({ task, restored: restored(repeat.output, task) }).toEqual({
+            task,
+            restored: true,
+          });
+        }
+        const commands = join(digestFolder(workspace), "commands");
+        expect(existsSync(commands) ? readdirSync(commands) : []).toEqual([]);
+      } finally {
+        hold.release();
+        hold.remove();
         workspace.remove();
       }
     },

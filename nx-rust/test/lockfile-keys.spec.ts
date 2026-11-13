@@ -124,7 +124,12 @@ function cargo(folder: string, ...commands: string[][]): Prepare {
 
 /** Locks `pkg` at `version` in the workspace in `folder`, after cargo has locked the rest. */
 function lockedAt(folder: string, pkg: string, version: string): Prepare {
-  return cargo(folder, ["generate-lockfile"], ["update", "-p", pkg, "--precise", version]);
+  // generate-lockfile has fetched the index, so the second call needs no fetch.
+  return cargo(
+    folder,
+    ["generate-lockfile"],
+    ["update", "-p", pkg, "--precise", version, "--offline"],
+  );
 }
 
 /** Lets cargo lock the workspace in `folder` at the newest versions. */
@@ -161,10 +166,14 @@ const subfolderBase = {
 describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
   {
     change:
-      "a locked version bump of an external crate the crate depends on, directly or transitively, and not for fmt-check",
+      "a locked version bump of an external crate the crate depends on, directly or transitively, and not for fmt-check, in a Cargo.lock that Git ignores",
     fixture: "subfolder-workspace",
     lockfileTask: true,
-    base: subfolderBase,
+    // Git ignores Cargo.lock, which the lockfile task reads all the same.
+    base: {
+      ...subfolderBase,
+      files: { ...subfolderBase.files, ".gitignore": appended("Cargo.lock\n") },
+    },
     before: { prepare: lockedAt("rust", "zzlib", "1.0.0") },
     after: { prepare: lockedAt("rust", "zzlib", "1.0.1") },
     keys: {
@@ -179,18 +188,6 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
       "rust:doc": "must differ",
       "model:fmt-check": "must not differ",
     },
-  },
-  {
-    change: "such a bump in a Cargo.lock that Git ignores",
-    fixture: "subfolder-workspace",
-    lockfileTask: true,
-    base: {
-      ...subfolderBase,
-      files: { ...subfolderBase.files, ".gitignore": appended("Cargo.lock\n") },
-    },
-    before: { prepare: lockedAt("rust", "zzlib", "1.0.0") },
-    after: { prepare: lockedAt("rust", "zzlib", "1.0.1") },
-    keys: { "model:test": "must differ", "api:test": "must differ" },
   },
   {
     change:

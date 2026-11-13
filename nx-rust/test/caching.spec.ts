@@ -247,6 +247,66 @@ describe("caching", () => {
     HARNESS_TIMEOUT,
   );
 
+  describe("where Nx hands a workspace's root manifest to no entry of the plugin", () => {
+    /** Replaces the plugin's entries with one entry per argument, each naming the plugin under test. */
+    const entries =
+      (...given: object[]) =>
+      (nxJson: string | undefined) => {
+        const config = JSON.parse(nxJson ?? "{}");
+        const [first] = config.plugins;
+        const plugin = typeof first === "string" ? first : first.plugin;
+        return JSON.stringify({ ...config, plugins: given.map((entry) => ({ plugin, ...entry })) });
+      };
+    const warning =
+      'nx-rust: Nx hands the root manifest rust/Cargo.toml of the Cargo workspace in rust to no entry of @convesoft/nx-rust, so the workspace has no project and no lockfile task, which keys its crates\' cached targets on their locked dependencies. The build, check, lint and test targets of its crates therefore run uncached; fmt-check stays cached. To cache them, let Nx hand rust/Cargo.toml to the plugin: remove what keeps it out, such as the "include" or "exclude" of the plugin\'s entry in nx.json, .gitignore or .nxignore.';
+
+    it(
+      "leaves the crates' targets that would read a digest uncached, with Cargo.lock as an input for nx affected, and warns",
+      async () => {
+        const graph = await loadFixtureGraph("subfolder-workspace", {
+          files: { "nx.json": entries({ exclude: ["rust/Cargo.toml"] }) },
+        });
+        const { api } = graph.projects;
+
+        expect(graph.projects.rust).toBeUndefined();
+        for (const name of ["build", "check", "lint", "test"]) {
+          expect({ name, cache: api.targets[name].cache }).toEqual({ name, cache: false });
+          expect(api.targets[name].dependsOn).toBeUndefined();
+          expect(api.targets[name].metadata?.cargo.uncached).toMatch(
+            /^its Cargo workspace has no lockfile task, because Nx hands the workspace's root manifest rust\/Cargo.toml to no entry of the plugin/,
+          );
+          expect(inputsOf(api.targets[name], "fileset")).toEqual([
+            { fileset: "{workspaceRoot}/rust/Cargo.lock", includeIgnored: true },
+          ]);
+          expect(inputsOf(api.targets[name], "dependentTasksOutputFiles")).toEqual([]);
+        }
+        expect(api.targets["fmt-check"].cache).toBe(true);
+        expect(api.metadata.cargo.warnings).toEqual([warning]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "keeps them cached where another entry of the plugin receives the root manifest",
+      async () => {
+        const graph = await loadFixtureGraph("subfolder-workspace", {
+          files: {
+            "nx.json": entries({ exclude: ["rust/Cargo.toml"] }, { include: ["rust/Cargo.toml"] }),
+          },
+        });
+        const { api } = graph.projects;
+
+        expect(graph.projects.rust.targets.lockfile).toBeDefined();
+        expect(api.targets.test).toMatchObject({
+          cache: true,
+          dependsOn: [lockfileDependency("rust")],
+        });
+        expect(api.metadata.cargo.warnings).toBeUndefined();
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
   it(
     "names the digest folder of a workspace at the repository root and of one nested below it in one segment each",
     async () => {

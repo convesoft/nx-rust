@@ -1,6 +1,24 @@
 import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { LockfileError, memberDigest, parseLockfile } from "../src/cargo/lockfile";
-import { commandRecords, excludesTaskDependencies } from "../src/executors/nx-command";
+import { checkDigests, commandCopyLifetime, writeDigests } from "../src/executors/digests";
+import {
+  commandRecords,
+  excludesTaskDependencies,
+  postTasksExecution,
+} from "../src/executors/nx-command";
 import { digestFolder, lockfileDependency } from "../src/graph/lockfile-task";
 
 // Checks the digest of DES-LOCKFILE-HASHING on lockfiles written here, the
@@ -210,6 +228,14 @@ describe("a command that excludes task dependencies", () => {
     expect(excludesTaskDependencies([...nx, ...args])).toBe(excludes);
   });
 
+  it("gets a command id that starts with Nx's id of its hooks and is new each time", () => {
+    const first = commandRecords([...nx, "run", "a:check"], "123").NX_RUST_COMMAND_ID;
+    const second = commandRecords([...nx, "run", "a:check"], "123").NX_RUST_COMMAND_ID;
+
+    expect(first).toMatch(/^123-[0-9a-f-]{36}$/);
+    expect(second).not.toBe(first);
+  });
+
   it("gets a new run id each time, and a normal command the empty string", () => {
     const excluded = [...nx, "run", "a:check", "--exclude-task-dependencies"];
     const first = commandRecords(excluded).NX_RUST_RUN_ID;
@@ -220,3 +246,124 @@ describe("a command that excludes task dependencies", () => {
     expect(commandRecords([...nx, "run", "a:check"]).NX_RUST_RUN_ID).toBe("");
   });
 });
+
+describe("the digests of a run", () => {
+  const member = { name: "app", version: "0.1.0" };
+  let folder: string;
+  let lockfilePath: string;
+  const write = (lockfileText: string) => writeFileSync(lockfilePath, lockfileText);
+
+  beforeEach(() => {
+    folder = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-digests-")));
+    lockfilePath = join(folder, "Cargo.lock");
+    write(lockfile(...base));
+  });
+
+  afterEach(() => rmSync(folder, { recursive: true, force: true }));
+
+  /** The workspace's digest folder and the private folder of a command. */
+  const places = (command: string) => ({
+    shared: join(folder, "digests"),
+    own: join(folder, "digests", "commands", command),
+  });
+
+  function writeFor(command: string, now = Date.now()) {
+    const { shared, own } = places(command);
+    return writeDigests(
+      "rust:lockfile",
+      { lockfile: lockfilePath, folder: shared, commandFolder: own, members: [member] },
+      now,
+    );
+  }
+
+  function checkFor(command: string | undefined) {
+    const { shared, own } = places(command ?? "");
+    return checkDigests({
+      task: "app:test",
+      lockfile: lockfilePath,
+      folder: shared,
+      commandFolder: command === undefined ? undefined : own,
+      members: [member],
+      workspace: "rust",
+    });
+  }
+
+  it("are written to the shared folder and to the command's own, and pass the check while all three agree", () => {
+    expect(writeFor("1-a")).toBeUndefined();
+
+    const expected = `${digest(lockfile(...base))}\n`;
+    expect(readFileSync(join(places("1-a").shared, "app.digest"), "utf8")).toBe(expected);
+    expect(readFileSync(join(places("1-a").own, "app.digest"), "utf8")).toBe(expected);
+    expect(checkFor("1-a")).toBeUndefined();
+  });
+
+  it("fail the check when another command's lockfile task rewrote the shared digest from another lockfile", () => {
+    writeFor("1-a");
+    write(lockfile(...base.map((text) => text.replace("b".repeat(64), "d".repeat(64)))));
+    writeFor("2-b");
+
+    expect(checkFor("1-a")).toMatch(
+      /^app:test: the locked dependencies of app had the digest \w+ when this command's lockfile task ran; now Cargo\.lock gives \w+, and the digest file that Nx hashed holds \w+\.\n[^]*another nx command that ran at the same time/,
+    );
+    expect(checkFor("2-b")).toBeUndefined();
+  });
+
+  it("fail the check when Cargo.lock changed alone, without a private copy, and without a command id", () => {
+    writeFor("1-a");
+    write(lockfile(...base.map((text) => text.replace("b".repeat(64), "d".repeat(64)))));
+    expect(checkFor("1-a")).toContain("now Cargo.lock gives");
+
+    write(lockfile(...base));
+    expect(checkFor("9-z")).toContain(
+      "the digest of the locked dependencies of app that this command's lockfile task wrote is missing",
+    );
+    expect(checkFor(undefined)).toContain("this nx command has no id");
+  });
+
+  it("keep the commands folder when stale files are removed, and remove private folders older than a day", () => {
+    writeFor("1-old");
+    writeFor("2-new");
+    const old = places("1-old").own;
+    const twoDaysAgo = (Date.now() - 2 * commandCopyLifetime) / 1000;
+    utimesSync(old, twoDaysAgo, twoDaysAgo);
+    writeFileSync(join(places("3").shared, "removed.digest"), "0\n");
+
+    writeFor("3-now");
+
+    expect(existsSync(old)).toBe(false);
+    expect(existsSync(places("2-new").own)).toBe(true);
+    expect(existsSync(join(places("3").shared, "removed.digest"))).toBe(false);
+    expect(checkFor("3-now")).toBeUndefined();
+  });
+
+  it("of a command are removed by its postTasksExecution, in every workspace, and no other command's", () => {
+    const root = folder;
+    const workspaces = [
+      ".nx/workspace-data/nx-rust/lockfile/rust",
+      ".nx/workspace-data/nx-rust/lockfile/%2E",
+    ];
+    for (const workspace of workspaces) {
+      for (const command of ["42-a", "42-b", "43-a"]) {
+        mkdirSync(join(root, workspace, "commands", command), { recursive: true });
+      }
+    }
+
+    postTasksExecution(undefined, {
+      id: "42",
+      workspaceRoot: root,
+      nxJsonConfiguration: {},
+      taskResults: {},
+      argv: [],
+      startTime: 0,
+      endTime: 0,
+    });
+
+    for (const workspace of workspaces) {
+      expect(readdirNames(join(root, workspace, "commands"))).toEqual(["43-a"]);
+    }
+  });
+});
+
+function readdirNames(path: string): string[] {
+  return readdirSync(path).sort();
+}

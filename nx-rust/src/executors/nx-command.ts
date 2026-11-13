@@ -1,7 +1,14 @@
-import type { PreTasksExecutionContext } from "@nx/devkit";
+import type { PostTasksExecutionContext, PreTasksExecutionContext } from "@nx/devkit";
 import { randomUUID } from "node:crypto";
+import { readdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
-import { runIdVariable } from "../graph/lockfile-task";
+import { join } from "node:path";
+import {
+  commandIdVariable,
+  commandsFolderName,
+  digestRoot,
+  runIdVariable,
+} from "../graph/lockfile-task";
 
 /**
  * The variable in which the plugin's `preTasksExecution` hook records the
@@ -33,15 +40,30 @@ export const maxRecordBytes = 64 * 1024;
  *   (`DES-LOCKFILE-HASHING`, "Excluded dependencies"). Every cached target
  *   that depends on the lockfile task hashes it, so that such a run, which
  *   runs no lockfile task, runs those tasks and stores nothing that is
- *   restored again, while a normal run keeps its keys.
+ *   restored again, while a normal run keeps its keys;
+ * - `NX_RUST_COMMAND_ID`, an id of the command's own, under which its
+ *   lockfile tasks keep a private copy of their digests for the check after
+ *   cargo's call (`DES-LOCKFILE-HASHING`, "Post-check"). It starts with the
+ *   id that Nx gives the command's hooks, so that
+ *   {@link postTasksExecution} finds the copies, and ends with a random
+ *   value, because Nx makes that id from the arguments and the millisecond.
+ *   No target names it as an input.
+ *
+ * @param commandId The `id` that Nx gives the command's hooks.
  */
 // @mara implements DES-LOCKFILE-HASHING
-export function commandRecords(argv: readonly string[]): Record<string, string> {
+export function commandRecords(argv: readonly string[], commandId = ""): Record<string, string> {
   const record = JSON.stringify(argv);
   return {
     [nxCommandVariable]: Buffer.byteLength(record) <= maxRecordBytes ? record : "",
     [runIdVariable]: excludesTaskDependencies(argv) ? randomUUID() : "",
+    [commandIdVariable]: `${commandIdPrefix(commandId)}${randomUUID()}`,
   };
+}
+
+/** The start of the {@link commandIdVariable} of the command whose hooks get `id`. */
+function commandIdPrefix(id: string): string {
+  return `${id.replace(/[^A-Za-z0-9]/g, "")}-`;
 }
 
 /**
@@ -75,8 +97,45 @@ export function excludesTaskDependencies(argv: readonly string[]): boolean {
  */
 // @mara implements DES-UNKNOWN-OPTIONS
 export function preTasksExecution(_options: unknown, context: PreTasksExecutionContext): void {
-  for (const [name, value] of Object.entries(commandRecords(context.argv ?? []))) {
+  for (const [name, value] of Object.entries(
+    commandRecords(context.argv ?? [], context.id ?? ""),
+  )) {
     process.env[name] = value;
+  }
+}
+
+/**
+ * The plugin's `postTasksExecution` hook, which Nx calls once per entry of
+ * the plugin after a command has run its tasks, with the `id` that the
+ * command's `preTasksExecution` got. It removes the private copies of the
+ * digests that the command's lockfile tasks wrote (`DES-LOCKFILE-HASHING`).
+ * A command that does not get here, because it was stopped, leaves its
+ * copies to the next lockfile task of the workspace, which removes those
+ * older than a day.
+ */
+// @mara implements DES-LOCKFILE-HASHING
+export function postTasksExecution(_options: unknown, context: PostTasksExecutionContext): void {
+  const prefix = commandIdPrefix(context.id ?? "");
+  if (prefix === "-") {
+    return;
+  }
+  const root = join(context.workspaceRoot, digestRoot);
+  for (const workspace of entries(root)) {
+    const commands = join(root, workspace, commandsFolderName);
+    for (const command of entries(commands)) {
+      if (command.startsWith(prefix)) {
+        rmSync(join(commands, command), { recursive: true, force: true });
+      }
+    }
+  }
+}
+
+// The names in a folder, none where it does not exist.
+function entries(folder: string): string[] {
+  try {
+    return readdirSync(folder);
+  } catch {
+    return [];
   }
 }
 

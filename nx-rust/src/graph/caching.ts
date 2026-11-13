@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import type { PackageVersion } from "../cargo/lockfile";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
+import { workspacesWithoutRootProject } from "./entries";
 import {
   defaultInputSettings,
   Input,
@@ -33,6 +34,12 @@ export interface CacheContext extends InputContext {
   artifactDirectories: ReadonlyMap<string, ArtifactDirectory>;
   /** The warnings for each project, by the manifest path of its crate or of its workspace. */
   warnings: ReadonlyMap<string, readonly string[]>;
+  /**
+   * The root folders of the workspaces that have no lockfile task, because
+   * Nx hands their root manifest to no entry of the plugin
+   * ({@link workspacesWithoutRootProject}).
+   */
+  withoutLockfileTask?: ReadonlySet<string>;
 }
 
 /**
@@ -102,11 +109,13 @@ export async function cacheContext(
   }
   const artifactDirectories = locateArtifactDirectories(discovery);
   const directoryWarnings = unignoredDirectoryWarnings(discovery.workspaces, workspaceRoot);
+  const withoutLockfileTask = await workspacesWithoutRootProject(discovery, nxJson);
   for (const workspace of discovery.workspaces) {
     const messages = [
       artifactDirectoryWarning(workspace, discovery, artifactDirectories),
       buildTargetWarning(workspace, workspaceRoot),
       ...(directoryWarnings.get(workspace) ?? []),
+      withoutLockfileTask.has(workspace.root) ? noLockfileTaskWarning(workspace) : undefined,
     ];
     for (const message of messages.filter((message) => message !== undefined)) {
       for (const manifest of workspaceManifests(workspace)) {
@@ -129,7 +138,38 @@ export async function cacheContext(
     pathPackageManifests: pathPackageManifests(discovery),
     artifactDirectories,
     warnings,
+    withoutLockfileTask,
   };
+}
+
+// The warning of `DES-LOCKFILE-HASHING` for a workspace without a lockfile
+// task, whose crates' targets that would read a digest run uncached.
+// @mara implements DES-DIAGNOSTICS
+function noLockfileTaskWarning(workspace: CargoWorkspace): string {
+  return [
+    `nx-rust: Nx hands the root manifest ${workspace.rootManifest} of ${describeWorkspace(workspace)} to no entry of @convesoft/nx-rust, so the workspace has no project and no lockfile task, which keys its crates' cached targets on their locked dependencies.`,
+    `The build, check, lint and test targets of its crates therefore run uncached; fmt-check stays cached.`,
+    `To cache them, let Nx hand ${workspace.rootManifest} to the plugin: remove what keeps it out, such as the "include" or "exclude" of the plugin's entry in nx.json, .gitignore or .nxignore.`,
+  ].join(" ");
+}
+
+/**
+ * Why the plugin leaves a target uncached because its workspace has no
+ * lockfile task (`DES-LOCKFILE-HASHING`): the targets that would read a
+ * digest, the cached ones but `fmt-check`, where Nx hands the workspace's
+ * root manifest to no entry of the plugin. `undefined` otherwise.
+ */
+// @mara implements DES-LOCKFILE-HASHING
+function noLockfileTaskReason(
+  name: InferredTargetName,
+  subject: CacheSubject,
+  context: CacheContext,
+): string | undefined {
+  return context.withoutLockfileTask?.has(subject.workspace.root) &&
+    cachedTargets.has(name) &&
+    name !== "fmt-check"
+    ? `its Cargo workspace has no lockfile task, because Nx hands the workspace's root manifest ${subject.workspace.rootManifest} to no entry of the plugin, so the plugin cannot key the target on the crate's locked dependencies`
+    : undefined;
 }
 
 /** What caching needs to know about a project. */
@@ -165,7 +205,8 @@ export interface CacheOptions {
  *
  * A target that stays cached, other than `fmt-check`, depends on the
  * lockfile task of its workspace, the project at the workspace's root
- * folder, and hashes the digests it writes; its metadata names the members
+ * folder, and hashes the digests it writes; where the workspace has no
+ * lockfile task, such a target is left uncached instead; its metadata names the members
  * whose digests those are, for the executor's check after cargo's call
  * (`DES-LOCKFILE-HASHING`). It is the one dependency of a crate's target on
  * another task (`REQ-NO-RUST-TASK-DEPS`).
@@ -189,11 +230,11 @@ export function configureCaching(
   for (const [name, target] of targets) {
     const reason =
       target.cache === true
-        ? uncachedReason(
+        ? (uncachedReason(
             name,
             place,
             alwaysNamesTriple([target, ...(options.targetTables?.(name) ?? [])]),
-          )
+          ) ?? noLockfileTaskReason(name, subject, context))
         : (uncachedByDesign[name] ?? "the plugin does not cache this target");
     target.cache = reason === undefined;
     const metadata = target.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
