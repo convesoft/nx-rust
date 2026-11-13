@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import { readLocked, readTargetNames, TargetNames } from "./options";
+import { targetFieldProblems } from "./target-fields";
 
 /** The test runner of a workspace (`DES-TEST-RUN`). */
 export type TestRunner = "cargo" | "nextest";
@@ -553,7 +554,11 @@ class TableReader {
     return entries.filter((entry) => !entry.startsWith("!"));
   }
 
-  /** The `targets.<name>` tables, each a table shaped like an Nx target. */
+  /**
+   * The `targets.<name>` tables, each a table shaped like an Nx target whose
+   * fields have the types that Nx gives them ({@link targetFieldProblems}).
+   * A table with a field of another type is reported and left out.
+   */
   targets(): TargetTable[] {
     const targets = this.table("targets") ?? {};
     const tables: TargetTable[] = [];
@@ -562,6 +567,15 @@ class TableReader {
         this.problems.push(
           `${this.file}: ${targetHeader(this.label as MetadataTable, name)} has to be a table shaped like an Nx target, not ${JSON.stringify(target)}.`,
         );
+        continue;
+      }
+      const header = targetHeader(this.label as MetadataTable, name);
+      const problems = targetFieldProblems(
+        target,
+        (field) => `${this.file}: ${quote(field)} in ${header}`,
+      );
+      if (problems.length > 0) {
+        this.problems.push(...problems);
         continue;
       }
       tables.push({

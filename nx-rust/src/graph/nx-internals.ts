@@ -39,9 +39,13 @@ const loaded = new Map<string, NxGraphInternals>();
  * The internal parts of the Nx installed in the repository that graph
  * creation uses, from the same module that Nx itself loaded. They are no
  * public API and can change between majors (`RISK-UPSTREAM-CHANGES`), so
- * each part is checked to be a function.
+ * each part is checked to be a function, and each result to have the shape
+ * that the plugin reads, as `init`'s graph check does: a changed part fails
+ * graph creation with a message that names it, instead of giving a wrong
+ * graph.
  *
- * @throws {Error} When the module cannot be loaded or lacks a part, naming it.
+ * @throws {Error} When the module cannot be loaded or lacks a part, naming
+ *   it; the returned functions throw such an error for a result of another shape.
  */
 export function nxGraphInternals(workspaceRoot: string): NxGraphInternals {
   const cached = loaded.get(workspaceRoot);
@@ -60,9 +64,53 @@ export function nxGraphInternals(workspaceRoot: string): NxGraphInternals {
       throw unsupported(`${part} from ${path} is not a function`);
     }
   }
-  const internals = module as unknown as NxGraphInternals;
+  const nx = module as unknown as NxGraphInternals;
+  const internals: NxGraphInternals = {
+    mergeTargetConfigurations: (...args) =>
+      checked(
+        nx.mergeTargetConfigurations(...args),
+        "mergeTargetConfigurations",
+        "no target configuration",
+        isTable,
+      ),
+    findMatchingConfigFiles: (...args) =>
+      checked(
+        nx.findMatchingConfigFiles(...args),
+        "findMatchingConfigFiles",
+        "no list of file paths",
+        isPathList,
+      ),
+    globWithWorkspaceContext: async (...args) =>
+      checked(
+        await nx.globWithWorkspaceContext(...args),
+        "globWithWorkspaceContext",
+        "no list of file paths",
+        isPathList,
+      ),
+  };
   loaded.set(workspaceRoot, internals);
   return internals;
+}
+
+// The result, or an error that names the part and what its result lacks.
+function checked<T>(
+  result: T,
+  part: (typeof parts)[number],
+  lacking: string,
+  isExpected: (value: unknown) => boolean,
+): T {
+  if (!isExpected(result)) {
+    throw unsupported(`the result of ${part} from nx/src/devkit-internals is ${lacking}`);
+  }
+  return result;
+}
+
+function isTable(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPathList(value: unknown): boolean {
+  return Array.isArray(value) && value.every((path) => typeof path === "string");
 }
 
 // Where Nx resolves from the repository, as the version check does; otherwise

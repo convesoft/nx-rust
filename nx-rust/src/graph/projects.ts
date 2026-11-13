@@ -121,6 +121,7 @@ export function inferProjects(discovery: CargoDiscovery, settings: GraphSettings
   const targets = applyTargetTables(
     projects.map((project, index) => ({ project, targets: named[index] })),
     discovery.workspaceRoot,
+    settings.options.targetNames,
   );
   return projects.map((project, index) => ({ ...project, targets: targets[index] }));
 }

@@ -2,7 +2,8 @@ import type { CreateDependenciesContext, TargetConfiguration } from "@nx/devkit"
 import { nxGraphInternals } from "./nx-internals";
 import type { CargoGraph } from "./projects";
 import { ProjectSettings, TargetTable, targetHeader } from "./settings";
-import { cargoExecutor, targetCargoMetadataKey } from "./targets";
+import type { TargetNames } from "./options";
+import { cargoExecutor, inferredTargetNames, targetCargoMetadataKey } from "./targets";
 
 /** What laying the target tables over a project's targets needs to know about the project. */
 export interface TableSubject {
@@ -16,12 +17,18 @@ export interface TableSubject {
  * crate's own. Each table is merged by Nx's own rule for laying one
  * configuration of a target over another, as Nx lays a `project.json` over a
  * plugin's target. A table under a name that no inferred target of the
- * project has defines an extra target.
+ * project has defines an extra target, apart from one in the workspace table
+ * under the final name of a target that the plugin infers for some projects
+ * (`inferredTargetNames`, after `targetNames`): that table applies only to
+ * the members that have the inferred target and creates nothing on the
+ * others, so that a workspace's `bench` table gives a crate without benches
+ * no target.
  *
  * Every table is checked against the target it lays itself over by
  * {@link tableProblems} first.
  *
  * @param workspaceRoot The repository root, from which Nx's merge is loaded.
+ * @param targetNames The names that the plugin options give the inferred targets.
  * @returns Each project's targets, in the order of `projects`.
  * @throws {Error} Naming every manifest, target and field that breaks a rule.
  */
@@ -30,17 +37,29 @@ export interface TableSubject {
 export function applyTargetTables(
   projects: readonly { project: TableSubject; targets: Record<string, TargetConfiguration> }[],
   workspaceRoot: string,
+  targetNames: TargetNames,
 ): Record<string, TargetConfiguration>[] {
   if (projects.every(({ project }) => project.settings.targets.length === 0)) {
     return projects.map(({ targets }) => targets);
   }
   const { mergeTargetConfigurations } = nxGraphInternals(workspaceRoot);
+  const inferredNames = new Set<string>(
+    inferredTargetNames.map((name) => targetNames[name] ?? name),
+  );
   // One message per problem, also for a workspace table that every member has.
   const problems = new Set<string>();
   const merged = projects.map(({ project, targets }) => {
     const result = { ...targets };
     for (const table of project.settings.targets) {
-      for (const problem of tableProblems(table, targets[table.name], project.settings)) {
+      const inferred = targets[table.name];
+      if (
+        inferred === undefined &&
+        table.table === "[workspace.metadata.nx]" &&
+        inferredNames.has(table.name)
+      ) {
+        continue;
+      }
+      for (const problem of tableProblems(table, inferred, project.settings)) {
         problems.add(problem);
       }
       // A copy for each project, so that no two projects share an object Nx may change.

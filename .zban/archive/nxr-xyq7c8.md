@@ -21,6 +21,7 @@ Implements `REQ-METADATA-OVERRIDES`, `DES-METADATA-TABLES` and `DES-PLUGIN-OPTIO
 - [x] The cases of `VER-TARGETS` that need the tables: `check` and `lint` without `--all-targets` for a crate whose metadata sets `allTargets = false`, and a `run` made continuous with `readyWhen` that starts before a dependent that waits for it. `nx-rust/test/executors.spec.ts` (nxr-kmdpgj) checks the commands with the option set in a `project.json`
 - [x] The check of the "Several entries" paragraph of `DES-PLUGIN-OPTIONS`, with plugin isolation on and off (`EVD-NX-24-ENTRY-CONTEXT`)
 - [x] The graph-creation errors that `DES-DIAGNOSTICS` attributes to `DES-PLUGIN-OPTIONS` for the metadata tables and the plugin options; the one for colliding target names belongs to nxr-t1ht7j, and the task-time one for `--affectedTests=true` to nxr-tabkjx
+- [x] The graph-creation error for a `[workspace.metadata.nx.project]` table in a root manifest that defines a crate, as the "Workspace project" paragraph of `DES-PROJECT-GRAPH` and the `project` row of `DES-METADATA-TABLES` give it, worded as its row in `DES-DIAGNOSTICS`; checked by `VER-CONFIGURATION`
 - [x] Project names from `name` and `namePrefix` as `DES-PROJECT-GRAPH` gives them, and both resolving a collision
 - [x] The remedies in the collision message (`nx-rust/src/graph/collisions.ts`) offered only where `DES-PLUGIN-OPTIONS` lets the setting apply to that project
 

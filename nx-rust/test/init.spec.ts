@@ -556,6 +556,20 @@ describe("init", () => {
         },
         'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test] sets "inputs" without "..." on the inferred target "test".',
       ],
+      ...(
+        [
+          ['options = "broken"', 'has to be a table, not "broken".'],
+          ["outputs = 3", "has to be a list of strings, not 3."],
+          ['continuous = "false"', 'has to be true or false, not "false".'],
+        ] as const
+      ).map(([field, expected]): [string, FileChanges, string] => [
+        `a target field of another type than Nx gives it, ${field}`,
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx.targets.build]\n${field}\n`,
+        },
+        `rust/crates/model/Cargo.toml: "${field.split(" ")[0]}" in [package.metadata.nx.targets.build] ${expected}`,
+      ]),
     ])(
       "stops with graph creation's message for %s",
       (_case, files, message) =>

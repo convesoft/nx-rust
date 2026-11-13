@@ -1,7 +1,9 @@
 import type { CreateNodesContext } from "@nx/devkit";
-import { readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin = require("../src");
+import { nxGraphInternals } from "../src/graph/nx-internals";
 import type { CargoProject } from "../src/graph/projects";
 import { registrationOf } from "../src/graph/registration";
 import {
@@ -205,6 +207,47 @@ features = ["extra"]
       expect(graph.projects.model.targets.check.options).toEqual({
         allTargets: true,
         features: ["extra"],
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "accept each field of an Nx target with the type that Nx gives it",
+    async () => {
+      const graph = await loadFixtureGraph("subfolder-workspace", {
+        files: {
+          "web/project.json": JSON.stringify({
+            name: "web",
+            targets: { build: { command: "true" } },
+          }),
+          "rust/crates/model/Cargo.toml": appendTo(
+            [
+              "[package.metadata.nx.targets.serve]",
+              'command = "cargo run -p model"',
+              "cache = false",
+              "continuous = true",
+              "parallelism = true",
+              'defaultConfiguration = "local"',
+              'outputs = ["{projectRoot}/out"]',
+              "syncGenerators = []",
+              'inputs = ["default", { env = "PORT" }, { runtime = "node -v" }, { fileset = "{projectRoot}/static/**", includeIgnored = true }, { externalDependencies = [] }, { input = "default", projects = ["web"] }, { dependentTasksOutputFiles = "**/*.json", transitive = true }, { json = "{projectRoot}/config.json", fields = ["port"] }]',
+              'dependsOn = ["^build", { target = "build", projects = ["web"], params = "forward", waitFor = "started" }, { target = "build", dependencies = true }]',
+              'readyWhen = { port = 8080, host = "localhost", timeout = 1000 }',
+              'options = { cwd = "rust" }',
+              'configurations = { local = { env = { MODE = "local" } } }',
+              'metadata = { description = "Serves the model" }',
+            ].join("\n"),
+          ),
+        },
+      });
+
+      expect(graph.projects.model.targets.serve).toMatchObject({
+        executor: "nx:run-commands",
+        continuous: true,
+        readyWhen: { port: 8080, host: "localhost", timeout: 1000 },
+        defaultConfiguration: "local",
+        outputs: ["{projectRoot}/out"],
       });
     },
     HARNESS_TIMEOUT,
@@ -503,6 +546,43 @@ describe("graph-creation errors", () => {
         'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc] sets "command" on the inferred target "doc".',
       ],
     ],
+    ...(
+      [
+        [
+          'options = "broken"',
+          '"options" in [package.metadata.nx.targets.build] has to be a table, not "broken".',
+        ],
+        [
+          "outputs = 3",
+          '"outputs" in [package.metadata.nx.targets.build] has to be a list of strings, not 3.',
+        ],
+        [
+          'continuous = "false"',
+          '"continuous" in [package.metadata.nx.targets.build] has to be true or false, not "false".',
+        ],
+        [
+          'inputs = ["...", { env = 1 }]',
+          '"inputs" in [package.metadata.nx.targets.build] has to be a list of inputs, each a string or one of the input tables of Nx',
+        ],
+        [
+          'dependsOn = [{ projects = ["web"] }]',
+          '"dependsOn" in [package.metadata.nx.targets.build] has to be a list of dependencies',
+        ],
+        [
+          'readyWhen = { port = 8080, url = "http://localhost:8080" }',
+          '"readyWhen" in [package.metadata.nx.targets.build] has to be a table with one of the keys',
+        ],
+        [
+          "configurations = { ci = 1 }",
+          '"configurations" in [package.metadata.nx.targets.build] has to be a table of configurations, each a table of options, not {"ci":1}.',
+        ],
+      ] as const
+    ).map(([field, message]): [string, FixtureName, FileChanges, string[]] => [
+      `a target field of another type than Nx gives it: ${field}`,
+      "subfolder-workspace",
+      { "rust/crates/model/Cargo.toml": appendTo(`[package.metadata.nx.targets.build]\n${field}`) },
+      [`rust/crates/model/Cargo.toml: ${message}`],
+    ]),
     [
       "affectedTests = true among the options of test, without the setting",
       "subfolder-workspace",
@@ -1021,24 +1101,38 @@ describe("tasks of targets that the tables configure", () => {
   );
 
   it(
-    "run an extra target with a command, and fail one that repeats the cargo executor where the crate has no such inferred target",
+    "apply a workspace table named like an inferred target only to the members that have it, and define extra targets elsewhere",
     async () => {
       const workspace = FixtureWorkspace.create("crate-shapes", {
         "rust/Cargo.toml": appendTo(
-          `[workspace.metadata.nx.targets.hello]\ncommand = "echo hello from {projectName}"\n\n[workspace.metadata.nx.targets.bench]\nexecutor = "${cargoExecutor}"`,
+          `[workspace.metadata.nx.targets.hello]\ncommand = "echo hello from {projectName}"\n\n[workspace.metadata.nx.targets.bench]\nexecutor = "${cargoExecutor}"\noptions = { features = ["fast"] }`,
+        ),
+        // A crate's own table still defines an extra target.
+        "rust/crates/cli/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.bench]\ncommand = "echo cli bench"',
         ),
       });
       try {
+        const { projects } = await workspace.graph();
         const hello = await run(workspace, ["run", "core-lib:hello"]);
-        // core-lib has no bench target, so the table defines an extra one.
-        const bench = await run(workspace, ["run", "core-lib:bench"]);
 
+        expect(projects.perf.targets.bench).toMatchObject({
+          executor: cargoExecutor,
+          options: { features: ["fast"] },
+          metadata: { cargo: { target: "bench" } },
+        });
+        // core-lib has no bench target, and the workspace's table gives it none.
+        expect(projects["core-lib"].targets.bench).toBeUndefined();
+        expect(projects.server.targets.bench).toBeUndefined();
+        expect(projects.cli.targets.bench).toMatchObject({
+          executor: "nx:run-commands",
+          options: { command: "echo cli bench" },
+        });
+        for (const name of ["core-lib", "cli", "server", "perf", "internal"]) {
+          expect(projects[name].targets.hello).toMatchObject({ executor: "nx:run-commands" });
+        }
         expect(hello.status).toBe(0);
         expect(hello.output).toContain("hello from core-lib");
-        expect(bench.status).toBe(1);
-        expect(bench.output).toContain(
-          `core-lib:bench: ${cargoExecutor} runs only the targets that @convesoft/nx-rust infers`,
-        );
         expect(taskCalls(workspace)).toEqual([]);
       } finally {
         workspace.remove();
@@ -1046,6 +1140,69 @@ describe("tasks of targets that the tables configure", () => {
     },
     HARNESS_TIMEOUT,
   );
+
+  it(
+    "run test with a custom Cargo profile that a crate's table sets",
+    async () => {
+      const workspace = FixtureWorkspace.create("subfolder-workspace", {
+        "rust/Cargo.toml": appendTo('[profile.review]\ninherits = "test"'),
+        "rust/crates/model/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.test.options]\nprofile = "review"',
+        ),
+      });
+      try {
+        const result = await run(workspace, ["run", "model:test"]);
+
+        expect(result.status).toBe(0);
+        expect(taskCalls(workspace)).toEqual([
+          { cwd: "rust", args: ["test", "-p", "model", "--profile", "review"] },
+        ]);
+        expect(existsSync(join(workspace.root, "rust", "target", "review"))).toBe(true);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("the parts of Nx that graph creation uses", () => {
+  let root: string;
+
+  beforeEach(() => {
+    // An installed Nx whose parts are functions that return something else.
+    root = mkdtempSync(join(tmpdir(), "nx-rust-internals-"));
+    const nx = join(root, "node_modules", "nx");
+    mkdirSync(join(nx, "src"), { recursive: true });
+    writeFileSync(join(nx, "package.json"), '{ "name": "nx" }\n');
+    writeFileSync(
+      join(nx, "src", "devkit-internals.js"),
+      [
+        "exports.mergeTargetConfigurations = () => undefined;",
+        'exports.findMatchingConfigFiles = () => "Cargo.toml";',
+        "exports.globWithWorkspaceContext = async () => [1];",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("fail graph creation with a message that names a part whose result has another shape", async () => {
+    const nx = nxGraphInternals(root);
+    const unsupported = (part: string, lacking: string) =>
+      `nx-rust cannot create the project graph with the installed Nx: the result of ${part} from nx/src/devkit-internals is ${lacking}.`;
+
+    expect(() =>
+      nx.mergeTargetConfigurations({}, undefined, undefined, undefined, undefined, false),
+    ).toThrow(unsupported("mergeTargetConfigurations", "no target configuration"));
+    expect(() => nx.findMatchingConfigFiles(["Cargo.toml"], undefined, undefined)).toThrow(
+      unsupported("findMatchingConfigFiles", "no list of file paths"),
+    );
+    await expect(nx.globWithWorkspaceContext(root, ["**/Cargo.toml"])).rejects.toThrow(
+      unsupported("globWithWorkspaceContext", "no list of file paths"),
+    );
+  });
 });
 
 /** The root of the project called `name`. */
