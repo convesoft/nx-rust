@@ -32,7 +32,7 @@ How it was shown, with pnpm 12.18.0 on Linux and the user's shared cache untouch
 
 Checks run: `pnpm nx run-many -t build lint test` (63 tests passed), `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache` on the final code (7 passed), `mara schema validate` and `mara project validate` (valid, complete evaluation) and `zban check`. CI on the pull request covers the empty-cache case.
 
-The same checks passed again after `origin/main` (493b814) was merged into the branch. One end-to-end run in between failed in the global setup on an error in Nx's task database, left its registry running, and hung the next run; once those processes were stopped, the suite passed.
+The same checks passed again after `origin/main` (1a7fb29) was merged into the branch. One end-to-end run in between failed in the global setup on an error in Nx's task database, left its registry running, and hung the next run; once those processes were stopped, the suite passed.
 
 Found on the way and filed:
 
