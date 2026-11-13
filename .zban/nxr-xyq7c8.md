@@ -21,6 +21,7 @@ Implements `REQ-METADATA-OVERRIDES`, `DES-METADATA-TABLES` and `DES-PLUGIN-OPTIO
 - [ ] For `REQ-UNKNOWN-METADATA-OPTIONS`, compare the keys with the `properties` of the executors' schemas (`nx-rust/src/executors/cargo/schema.json` and `run/schema.json`), so that the check and the executors cannot disagree
 - [ ] The check of the "Several entries" paragraph of `DES-PLUGIN-OPTIONS`, with plugin isolation on and off (`EVD-NX-24-ENTRY-CONTEXT`)
 - [ ] The graph-creation errors that `DES-DIAGNOSTICS` attributes to `DES-PLUGIN-OPTIONS` for the metadata tables and the plugin options; the one for colliding target names belongs to nxr-t1ht7j, and the task-time one for `--affectedTests=true` to nxr-tabkjx
+- [ ] The graph-creation error for a `[workspace.metadata.nx.project]` table in a root manifest that defines a crate, as the "Workspace project" paragraph of `DES-PROJECT-GRAPH` and the `project` row of `DES-METADATA-TABLES` give it, worded as its row in `DES-DIAGNOSTICS`; checked by `VER-CONFIGURATION`
 - [ ] Project names from `name` and `namePrefix` as `DES-PROJECT-GRAPH` gives them, and both resolving a collision
 - [ ] The remedies in the collision message (`nx-rust/src/graph/collisions.ts`) offered only where `DES-PLUGIN-OPTIONS` lets the setting apply to that project
 
