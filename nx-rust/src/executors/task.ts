@@ -281,6 +281,7 @@ export function taskInvocation(
  *   exclude task dependencies: its key then holds no digest, and the task
  *   fails before cargo runs, so that Nx stores no result for it.
  */
+// @mara implements DES-LOCKFILE-HASHING
 function keyHoldsDigests(
   context: ExecutorContext,
   workspaceManifest: string,

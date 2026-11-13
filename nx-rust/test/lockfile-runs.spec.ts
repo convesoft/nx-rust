@@ -403,6 +403,39 @@ describe("the check after cargo's call", () => {
   );
 
   it(
+    "fails a task before cargo runs where no project lies at the workspace's root folder to run the lockfile task",
+    async () => {
+      const workspace = await subfolder();
+      try {
+        // Nx hands the plugin the members' manifests and not the root manifest.
+        applyFileChanges(workspace.root, {
+          "nx.json": (text) =>
+            JSON.stringify({
+              ...JSON.parse(text ?? "{}"),
+              plugins: JSON.parse(text ?? "{}").plugins.map(
+                (entry: string | { plugin: string }) => ({
+                  plugin: typeof entry === "string" ? entry : entry.plugin,
+                  exclude: ["rust/Cargo.toml"],
+                }),
+              ),
+            }),
+        });
+
+        const run = await nx(workspace, ["run", "model:check"]);
+
+        expect(run.status).toBe(1);
+        expect(run.output).toContain(
+          "model:check: this task does not depend on the lockfile task of its Cargo workspace, in rust",
+        );
+        expect(ran(workspace)).toEqual([]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "fails a task before cargo runs where a project.json takes away its dependency on the lockfile task",
     async () => {
       const workspace = await subfolder();

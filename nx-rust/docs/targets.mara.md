@@ -1,11 +1,9 @@
 # Targets
 
 > **Status:** the plugin infers the targets of this page, apart from the
-> artifact and release targets and `lockfile`, `targetNames` renames them, and
-> they run the commands below, each task with a cargo call of its own until
-> the batching of milestone 0.2. The `lockfile` target and the crate targets'
-> dependency on it are not implemented yet and arrive with nxr-xq9ava; until
-> then `targetNames` rejects the key `lockfile`. Without cargo-audit or
+> artifact and release targets, `targetNames` renames them, and they run the
+> commands below, each task with a cargo call of its own until the batching
+> of milestone 0.2. Without cargo-audit or
 > cargo-deny, `audit` and `deny` fail with cargo's own message for an unknown
 > command. The warnings of
 > [Target defaults that reach Rust targets](#target-defaults-that-reach-rust-targets)
@@ -192,7 +190,10 @@ first, as the one that `nx add` adds does.
 }
 ```
 
-The plugin warns about such an entry and says how to narrow it: see
+Such an entry replaces the `dependsOn` of the Rust `build` targets, which
+depend on their workspace's `lockfile` task, so it fails graph creation. With
+`"..."`, as in `["...", "^build"]`, it keeps that dependency and adds `^build`,
+and the plugin warns. Either way the message says how to narrow the entry: see
 [Target defaults that reach Rust targets](#target-defaults-that-reach-rust-targets).
 
 A JS project that consumes a Rust crate depends on the crate's artifact target:
@@ -211,11 +212,12 @@ lays the entry over what the plugin infers: its `dependsOn`, `inputs`,
 `outputs` and `cache` replace the plugin's values, unless a list keeps them
 with `"..."` ([[EVD-NX-TARGET-DEFAULTS]]).
 
-`nx add` adds `"@convesoft/nx-rust:cargo": {}` and `"@convesoft/nx-rust:run": {}`
-where `targetDefaults` lacks them ([Setup](setup.mara.md#adding-the-plugin)).
-Nx chooses an entry keyed by a target's executor before one keyed by its name
-or a glob, so with these entries in place only an entry keyed by one of the two
-executors reaches Rust targets. The plugin checks its targets when Nx creates
+`nx add` adds `"@convesoft/nx-rust:cargo": {}`, `"@convesoft/nx-rust:run": {}`
+and `"@convesoft/nx-rust:lockfile": {}` where `targetDefaults` lacks them
+([Setup](setup.mara.md#adding-the-plugin)). Nx chooses an entry keyed by a
+target's executor before one keyed by its name or a glob, so with these entries
+in place only an entry keyed by one of the three executors reaches Rust
+targets. The plugin checks its targets when Nx creates
 the project graph, and `nx add` checks them before it writes anything
 ([[DES-TARGET-DEFAULT-GUARD]]):
 
@@ -280,8 +282,9 @@ of these ways:
   ```
 
 - Add an empty entry keyed by the executor of the Rust targets,
-  `"@convesoft/nx-rust:cargo": {}`, and `"@convesoft/nx-rust:run": {}` for
-  `run`, as `nx add` does where they are missing. Nx chooses an entry keyed by a
+  `"@convesoft/nx-rust:cargo": {}`, `"@convesoft/nx-rust:run": {}` for `run`
+  and `"@convesoft/nx-rust:lockfile": {}` for `lockfile`, as `nx add` does
+  where they are missing. Nx chooses an entry keyed by a
   target's executor before one keyed by its name, so no entry keyed by a target
   name reaches those targets.
 - Where the entry is keyed by one of those executors, remove the field that the
@@ -337,8 +340,9 @@ tag `lang:rust`, for example through `[workspace.metadata.nx]`:
 ```
 
 Or add an empty entry keyed by the target's executor, the `executor` that
-`nx show project <crate> --json` shows for it: `@convesoft/nx-rust:cargo`, or
-`@convesoft/nx-rust:run` for `run`. `nx add` adds both where they are missing.
+`nx show project <crate> --json` shows for it: `@convesoft/nx-rust:cargo`,
+`@convesoft/nx-rust:run` for `run`, or `@convesoft/nx-rust:lockfile` for
+`lockfile`. `nx add` adds all three where they are missing.
 Nx prefers an entry keyed by the executor to one keyed by the target name, so
 then no entry keyed by a target name reaches the targets of that executor.
 
@@ -444,7 +448,7 @@ Only `clippy` is renamed, to `lint`: `lint`, `test` and `build` are the target n
 
 Targets come from the `cargo metadata` report ([[DES-METADATA-REPORT]]): `run` exists when the crate has a binary target, `bench` when it has a bench target, an [[TERM-ARTIFACT-TARGET]] when the crate produces that artifact ([[DES-ARTIFACT-STEPS]]), and the release targets unless the manifest sets `publish = false`. The last five rows are targets of the [[TERM-WORKSPACE-PROJECT]]; `deny` exists only where a cargo-deny configuration file is in the workspace root. Whether a tool is installed never decides whether a target exists.
 
-**Executors.** Every inferred target runs the plugin's cargo executor, `@convesoft/nx-rust:cargo`, which has the batch implementation of [[DES-BATCH]], apart from `run`, which runs `@convesoft/nx-rust:run`, an executor without one ([[DES-TARGET-COMMANDS]]). Each target carries its default name from the table in its metadata, as `metadata.cargo.target`, so that the executor runs the same command whatever name `targetNames` gives the target. It also carries the `locked` option of the plugin entry that created its project, as `metadata.cargo.locked`, from which the executor decides locked mode ([[DES-INVOCATION]]). A target that names one of these executors but that the plugin did not infer has no such name, and its task fails before cargo runs ([[DES-DIAGNOSTICS]]).
+**Executors.** Every inferred target runs the plugin's cargo executor, `@convesoft/nx-rust:cargo`, which has the batch implementation of [[DES-BATCH]], apart from `run`, which runs `@convesoft/nx-rust:run`, and `lockfile`, which runs `@convesoft/nx-rust:lockfile`, two executors without one ([[DES-TARGET-COMMANDS]], [[DES-LOCKFILE-HASHING]]). Each target carries its default name from the table in its metadata, as `metadata.cargo.target`, so that the executor runs the same command whatever name `targetNames` gives the target. It also carries the `locked` option of the plugin entry that created its project, as `metadata.cargo.locked`, from which the executor decides locked mode ([[DES-INVOCATION]]). A target that names one of these executors but that the plugin did not infer has no such name, and its task fails before cargo runs ([[DES-DIAGNOSTICS]]).
 
 No inferred target has a `dependsOn` entry that names another Rust crate's target, except that every cached crate target other than `fmt-check` depends on the lockfile task of its workspace ([[REQ-NO-RUST-TASK-DEPS]]), and none uses `^build` ([[ADR-NO-RUST-BUILD-DEPS]]). Dependencies reach a target through `^` inputs ([[DES-INPUTS]]). The plugin adds no `dependsOn` entry to a JS project. A JS target's own `^build` reaches the `build` of the crates its project depends on directly, which is how Nx defines `^build`, and ends there.
 :::

@@ -151,6 +151,8 @@ export interface CacheOptions {
  */
 // @mara implements DES-INPUTS
 // @mara implements DES-OUTPUTS
+// @mara implements DES-LOCKFILE-HASHING
+// @mara implements REQ-NO-RUST-TASK-DEPS
 export function configureCaching(
   targets: Map<InferredTargetName, TargetConfiguration>,
   subject: CacheSubject,
