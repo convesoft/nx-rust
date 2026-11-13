@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { readRedirections } from "../src/cargo/redirections";
+import { cargoMetadataOf } from "../src/graph/collisions";
 import {
   applyFileChanges,
   FileChanges,
@@ -13,6 +14,7 @@ import {
   pinnedToolchain,
   pinnedToolchainAvailable,
   testEnvironment,
+  withoutColours,
 } from "./harness";
 
 // Checks the parts of VER-GRAPH about crates that [patch], [replace] and
@@ -175,6 +177,22 @@ function roots(graph: FixtureGraph): Record<string, string> {
   );
 }
 
+/**
+ * The projects whose metadata holds a warning that contains `text`, which
+ * the executor prints at the start of each of their tasks.
+ */
+function warnedProjects(graph: FixtureGraph, text: string): string[] {
+  return Object.entries(graph.projects)
+    .filter(([, project]) =>
+      (cargoMetadataOf(project)?.warnings ?? []).some((warning) => warning.includes(text)),
+    )
+    .map(([name]) => name)
+    .sort();
+}
+
+/** The projects of the fixture's workspace in rust. */
+const rustProjects = ["api", "harness", "model", "plain", "rust", "util", "viaw"];
+
 /** rust/Cargo.toml with only the given lines below its [workspace] table. */
 function rootManifest(...lines: string[]): string {
   return ['[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n', ...lines].join("\n") + "\n";
@@ -294,7 +312,48 @@ describe("edges to redirected crates", () => {
         // with a registry dependency, so it gets no edge.
         expect(after.output).toContain("the Cargo workspaces in rust and shared through [patch]");
         expect(after.output).toContain("outside the repository");
+        // Every project of both workspaces repeats it at the start of its tasks.
+        expect(warnedProjects(graph, `nx-rust: ${config} redirects dependencies`)).toEqual(
+          Object.keys(graph.projects).sort(),
+        );
       } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "warn about configuration outside the repository again at the start of a task, where the Nx daemon keeps graph creation's output in its log",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", {
+        "rust/Cargo.toml": rootManifest(...patchWithoutModel),
+      });
+      const cargoHome = join(dirname(workspace.root), "cargo-home");
+      mkdirSync(cargoHome);
+      const config = join(cargoHome, "config.toml");
+      writeFileSync(
+        config,
+        `[patch.crates-io]\nmodel = { path = "${basename(workspace.root)}/rust/crates/model" }\n`,
+      );
+      const env = { CARGO_HOME: cargoHome, NX_DAEMON: "true" };
+      const warning = `nx-rust: ${config} redirects dependencies`;
+      try {
+        for (const task of ["types:fmt-check", "api:fmt-check"]) {
+          const { status, output } = await workspace.nx(
+            ["run", task, "--output-style=static"],
+            env,
+          );
+
+          expect({ task, status }).toEqual({ task, status: 0 });
+          expect({ task, warned: withoutColours(output).includes(warning) }).toEqual({
+            task,
+            warned: true,
+          });
+        }
+        expect(workspace.daemonLog()).toContain(warning);
+      } finally {
+        await workspace.nx(["daemon", "--stop"], env);
         workspace.remove();
       }
     },
@@ -514,6 +573,11 @@ describe("edges to redirected crates", () => {
         expect(shown.status).toBe(0);
         expect(shown.output).toContain("`cargo metadata` failed for rust/local/Cargo.toml");
         expect(shown.output).toContain("believes it's in a workspace");
+        // The projects of rust, whose [patch] names the crate, repeat it at
+        // the start of their tasks, and those of shared do not.
+        expect(
+          warnedProjects(graph, "nx-rust: `cargo metadata` failed for rust/local/Cargo.toml"),
+        ).toEqual(rustProjects);
       } finally {
         workspace.remove();
       }
@@ -630,6 +694,7 @@ describe("edges to redirected crates", () => {
           expect(edges(graph)).toEqual(committed);
           expect(shown.status).toBe(0);
           expect(shown.output).toContain("rust/.cargo/broken.toml, which");
+          expect(warnedProjects(graph, "rust/.cargo/broken.toml, which")).toEqual(rustProjects);
         } finally {
           workspace.remove();
         }

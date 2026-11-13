@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 /** A Cargo workspace as far as the table of tools needs it. */
 export interface ToolWorkspace {
@@ -18,8 +18,9 @@ export interface ToolContext {
   /** The environment whose `PATH` and `CARGO_HOME` say where tools are installed. */
   env: NodeJS.ProcessEnv;
   /**
-   * The absolute path of the folder whose toolchain counts for the wasm
-   * target, where a task's cargo runs; the repository root when absent.
+   * The absolute path of the folder where a task's cargo runs, against which
+   * relative entries of `PATH` and a relative `CARGO_HOME` count, and whose
+   * toolchain counts for the wasm target; the repository root when absent.
    */
   folder?: string;
 }
@@ -79,14 +80,14 @@ export const optionalTools: readonly OptionalTool[] = [
     id: "cargo-nextest",
     name: "cargo-nextest",
     install: "Install it as https://nexte.st/docs/installation/ describes.",
-    installed: (context) => cargoSubcommandInstalled("nextest", context.env),
+    installed: (context) => cargoSubcommandInstalled("nextest", context.env, toolFolder(context)),
     neededBy: () => [],
   },
   {
     id: "cargo-affected",
     name: "cargo-affected",
     install: "Install it as https://github.com/max-sixty/cargo-affected describes.",
-    installed: (context) => cargoSubcommandInstalled("affected", context.env),
+    installed: (context) => cargoSubcommandInstalled("affected", context.env, toolFolder(context)),
     neededBy: () => [],
   },
   {
@@ -94,7 +95,7 @@ export const optionalTools: readonly OptionalTool[] = [
     name: "cargo-hakari",
     install:
       "Install it with `cargo install --locked cargo-hakari` (https://docs.rs/cargo-hakari).",
-    installed: (context) => cargoSubcommandInstalled("hakari", context.env),
+    installed: (context) => cargoSubcommandInstalled("hakari", context.env, toolFolder(context)),
     neededBy: () => [],
   },
   {
@@ -102,7 +103,8 @@ export const optionalTools: readonly OptionalTool[] = [
     name: "the wasm-bindgen CLI",
     install:
       "Install the version of the wasm-bindgen crate in your Cargo.lock with `cargo install --locked wasm-bindgen-cli --version <version>`.",
-    installed: (context) => findExecutable("wasm-bindgen", searchPath(context.env)) !== undefined,
+    installed: (context) =>
+      findExecutable("wasm-bindgen", searchPath(context.env, toolFolder(context))) !== undefined,
     neededBy: () => [],
   },
   {
@@ -119,7 +121,7 @@ export const optionalTools: readonly OptionalTool[] = [
     installed: (context) =>
       findExecutable("napi", [
         join(context.workspaceRoot, "node_modules", ".bin"),
-        ...searchPath(context.env),
+        ...searchPath(context.env, toolFolder(context)),
       ]) !== undefined,
     neededBy: () => [],
   },
@@ -128,7 +130,7 @@ export const optionalTools: readonly OptionalTool[] = [
     name: "cargo-deny",
     install:
       "Install it with `cargo install --locked cargo-deny` (https://crates.io/crates/cargo-deny).",
-    installed: (context) => cargoSubcommandInstalled("deny", context.env),
+    installed: (context) => cargoSubcommandInstalled("deny", context.env, toolFolder(context)),
     neededBy: (context) =>
       context.workspaces.flatMap((workspace) => {
         const file = cargoDenyConfigurationFiles.find((name) =>
@@ -149,7 +151,7 @@ export const optionalTools: readonly OptionalTool[] = [
     name: "cargo-audit",
     install:
       "Install it with `cargo install --locked cargo-audit` (https://crates.io/crates/cargo-audit).",
-    installed: (context) => cargoSubcommandInstalled("audit", context.env),
+    installed: (context) => cargoSubcommandInstalled("audit", context.env, toolFolder(context)),
     neededBy: () => [],
   },
 ];
@@ -212,14 +214,22 @@ export function describeFolder(folder: string): string {
 }
 
 /**
- * Whether cargo would find the subcommand `cargo <name>`: an executable
- * `cargo-<name>` in the `bin` folder of the Cargo home or on `PATH`, where
- * cargo looks for it.
+ * Whether cargo, started in the folder `cwd`, would find the subcommand
+ * `cargo <name>`: an executable `cargo-<name>` in the `bin` folder of the
+ * Cargo home or on `PATH`, where cargo looks for it. Cargo resolves a
+ * relative `CARGO_HOME` and relative entries of `PATH` against the folder
+ * it runs in.
  */
-export function cargoSubcommandInstalled(name: string, env: NodeJS.ProcessEnv): boolean {
-  const cargoHome = env.CARGO_HOME || join(env.HOME || homedir(), ".cargo");
+export function cargoSubcommandInstalled(
+  name: string,
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+): boolean {
+  const cargoHome = env.CARGO_HOME
+    ? resolve(cwd, env.CARGO_HOME)
+    : join(env.HOME || homedir(), ".cargo");
   return (
-    findExecutable(`cargo-${name}`, [join(cargoHome, "bin"), ...searchPath(env)]) !== undefined
+    findExecutable(`cargo-${name}`, [join(cargoHome, "bin"), ...searchPath(env, cwd)]) !== undefined
   );
 }
 
@@ -244,8 +254,18 @@ export function findExecutable(name: string, folders: readonly string[]): string
   return undefined;
 }
 
-function searchPath(env: NodeJS.ProcessEnv): string[] {
-  return (env.PATH ?? "").split(delimiter);
+// The folders of `PATH` for a command started in `cwd`, where the operating
+// system and cargo look for an executable: a relative entry counts from
+// `cwd`, and an empty one stands for `cwd` itself. Without `PATH`, none.
+function searchPath(env: NodeJS.ProcessEnv, cwd: string): string[] {
+  return env.PATH === undefined
+    ? []
+    : env.PATH.split(delimiter).map((entry) => resolve(cwd, entry));
+}
+
+// The folder where the command that runs a tool starts.
+function toolFolder(context: ToolContext): string {
+  return context.folder ?? context.workspaceRoot;
 }
 
 // Whether the toolchain that rustc picks in the context's folder has the
