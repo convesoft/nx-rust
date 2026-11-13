@@ -13,6 +13,8 @@ Goal: the test infrastructure that every later feature of the plugin is checked 
 
 Described under "How the plugin is tested" in `nx-rust/docs/verification.mara.md`. Used first by `VER-GRAPH` and `VER-CACHE-KEYS`.
 
+Since nxr-qvgptg the end-to-end test project is written by hand in `createTestProject` (`nx-rust-e2e/src/nx-rust.spec.ts`), without `create-nx-workspace`: an empty Nx workspace with the Nx version of this repository, in `nx-rust-e2e/tmp/test-project`. Build on that helper. It runs no git command and the test project is not a git repository, so a test that needs git has to create one inside the test project first.
+
 - [ ] Fixture Cargo workspaces under version control: a workspace in a subfolder, two workspaces, a standalone crate, an excluded member, a path dependency across workspaces, a vendored crate that is excluded and used by path, a name collision, a dev-dependency cycle, workspaces with different toolchains
 - [ ] A helper that loads a fixture through the plugin and returns the project graph for comparison
 - [ ] A cache-key matrix runner: pairs of states with the verdict "must differ" or "must not differ", hashed with the real Nx hasher
