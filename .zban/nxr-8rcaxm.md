@@ -1,6 +1,6 @@
 ---
 title: Let nx add write empty target defaults for the plugin's executors
-status: todo
+status: in-progress
 type: feature
 priority: high
 parent: nxr-w9qa5f
