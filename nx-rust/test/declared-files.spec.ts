@@ -594,6 +594,54 @@ describe("declared files", () => {
     );
   });
 
+  describe("of a crate with a project behind a crate without one", () => {
+    // bridge, a member of rust that nx.json excludes, depends on api by path,
+    // and the standalone crate cross depends on bridge: cross builds api.
+    const withBridge: FileChanges = {
+      "rust/crates/bridge/Cargo.toml":
+        '[package]\nname = "bridge"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\napi = { path = "../api" }\n',
+      "rust/crates/bridge/src/lib.rs": "pub fn text() -> &'static str {\n    api::banner()\n}\n",
+      "cross/Cargo.toml":
+        '[package]\nname = "cross"\nversion = "0.1.0"\nedition = "2024"\n\n[workspace]\n\n[dependencies]\nbridge = { path = "../rust/crates/bridge" }\n',
+      "cross/src/lib.rs":
+        '#[test]\nfn reads_the_banner() {\n    assert_eq!(bridge::text(), "Built with nx-rust");\n}\n',
+      "nx.json": (text) =>
+        JSON.stringify({
+          ...JSON.parse(text),
+          plugins: JSON.parse(text).plugins.map((plugin: string) => ({
+            plugin,
+            exclude: ["rust/crates/bridge/**"],
+          })),
+        }),
+    };
+    // The cached tasks of api, of the crates that build it and of rust's doc.
+    const withCross = [
+      ...apiAndDependents,
+      ...["build", "check", "doc", "fmt-check", "lint", "test"].map((target) => `cross:${target}`),
+    ].sort();
+
+    it.each([
+      ["a source file of api", "rust/crates/api/src/lib.rs"],
+      ["a file that api declares", "docs/banner.txt"],
+    ])(
+      "change the keys of the crate that reaches it and select its tasks for %s",
+      async (_file, changed) => {
+        const outcome = await changeDeclaredFile({
+          files: withBridge,
+          changed,
+          tasks: ["cross:test"],
+        });
+
+        expect(outcome).toEqual({
+          keysDiffer: { "cross:test": true },
+          afterCommit: withCross,
+          withFiles: withCross,
+        });
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
   describe("that Nx cannot hash", () => {
     /** The message of the graph-creation error for each manifest and pattern, in order. */
     async function graphErrors(workspace: FixtureWorkspace): Promise<string[]> {

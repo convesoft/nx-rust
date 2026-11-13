@@ -1,6 +1,6 @@
 ---
 title: Reach a crate with a project that a crate reaches only through crates without a project
-status: draft
+status: in-progress
 type: bug
 priority: high
 parent: nxr-w9qa5f

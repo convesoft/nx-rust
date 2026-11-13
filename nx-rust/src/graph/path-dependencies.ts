@@ -65,8 +65,10 @@ export interface CrateFolders {
  * whose folder holds `.cargo-checksum.json`. One that a path dependency or a
  * redirection reaches counts with the crates without a project behind it
  * where a report describes it; without a report, as for such a package or
- * one whose report failed, its folder counts alone. What lies behind a crate with a project
- * reaches the crate through that project's own input.
+ * one whose report failed, its folder counts alone. A crate with a project
+ * behind such crates is no folder here: the crate has an edge to it
+ * (`projectsBehindCratesWithoutProject` in `reached-projects.ts`), and its
+ * input, with what lies behind it, reaches the crate through `^` inputs.
  *
  * Whether Nx sees a crate's files is whether it sees its manifest, or any
  * file of a folder without one. The files that a crate seen there declares
