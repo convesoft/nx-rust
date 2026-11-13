@@ -60,6 +60,8 @@ A workspace project whose root manifest defines no crate is named after its fold
 In a fixture, `[package.metadata.nx]` sets a project name, tags, an option of an inferred target and an extra target, and `[workspace.metadata.nx]` sets defaults. The graph shows the overridden name, the tags, the option on the inferred target and the extra target. A value set for a crate replaces the workspace default for that crate only, except tags: a crate has the workspace's tags and its own. No file other than Cargo manifests is involved. With default options a crate has `lint`, `test` and `build` targets, and `nx run-many -t lint` in a mixed fixture runs both a JS lint target and clippy. With a renaming in the plugin options, the target appears under the new name and not under the default one, for each inferred target, the artifact targets and the targets of the workspace project included.
 
 In a workspace whose root manifest defines no crate, `[workspace.metadata.nx.project]` sets a name, tags, an option of an inferred target of the workspace project and an extra target. The graph shows them on the workspace project, whose tags also include those of the workspace table, while a target set under `[workspace.metadata.nx.targets]` appears on the members and not on the workspace project. A `[workspace.metadata.nx.project]` table in a root manifest that defines a crate fails graph creation with an error that names the manifest and `[package.metadata.nx]`.
+
+In a fixture whose crate folder also has a `package.json` that Nx reads, the project has the name from that file whatever `name` the crate's metadata sets, and the tags of both.
 :::
 
 :::mara verification VER-UNKNOWN-OPTIONS
