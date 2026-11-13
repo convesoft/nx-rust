@@ -73,6 +73,16 @@ function cargoNewCalls(workspace: FixtureWorkspace) {
   return workspace.cargoCalls().filter((call) => call.args[0] === "new");
 }
 
+/**
+ * The lines in which Nx lists the changes a generator made to its file tree,
+ * as `CREATE <path>`, `UPDATE <path>` or `DELETE <path>`. Nx prints them
+ * after the generator returns, with and without `--dry-run`, and init's
+ * `--dry-run` test shows such a line.
+ */
+function treeChanges(output: string): string[] {
+  return output.split("\n").filter((line) => /^(CREATE|UPDATE|DELETE) /.test(line));
+}
+
 /** The names of the workspace members, as `cargo metadata` reports them, in `folder`. */
 function memberNames(workspace: FixtureWorkspace, folder: string): string[] {
   const result = spawnSync("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
@@ -123,7 +133,9 @@ describe.each([
               args: ["new", "--vcs", "none", flag, "rust/libs/parsing/core-kit"],
             },
           ]);
+          // Cargo added the member; the generator wrote nothing through Nx's tree.
           expect(output).toContain("Adding `core-kit` as member of workspace");
+          expect(treeChanges(output)).toEqual([]);
           const expected = filesAfterCargoNew("subfolder-workspace", {}, [
             "--vcs",
             "none",
@@ -179,8 +191,9 @@ describe("the crate generators", () => {
           "host/src/lib.rs": "",
         },
         [`${pluginName}:library`, "host/crates/part"],
-        (workspace, { status }) => {
+        (workspace, { status, output }) => {
           expect(status).toBe(0);
+          expect(output).toContain("Adding `part` as member of workspace");
           expect(read(workspace, "host/Cargo.toml")).toContain('members = ["crates/part"]');
           expect(memberNames(workspace, "host")).toEqual(["host", "part"]);
         },
@@ -234,6 +247,39 @@ describe("the crate generators", () => {
   );
 
   it(
+    "leave the fields of [workspace.package] and the lints of [workspace.lints] to cargo, as cargo new does",
+    () => {
+      const files: FileChanges = {
+        "rust/Cargo.toml": (manifest) =>
+          `${manifest}\n[workspace.package]\nlicense = "MIT"\nrust-version = "1.91"\n\n[workspace.lints.rust]\nunsafe_code = "forbid"\n`,
+      };
+      return generate(
+        "subfolder-workspace",
+        files,
+        [`${pluginName}:library`, "rust/libs/inherits"],
+        (workspace, { status }) => {
+          expect(status).toBe(0);
+          const manifest = read(workspace, "rust/libs/inherits/Cargo.toml");
+          expect(manifest).toContain("license.workspace = true");
+          expect(manifest).toContain("rust-version.workspace = true");
+          expect(manifest).toMatch(/\[lints\]\nworkspace = true/);
+          // No edition in [workspace.package]: cargo's default.
+          expect(manifest).toMatch(/^edition = "\d{4}"$/m);
+          expect(repositoryFiles(workspace.root)).toEqual(
+            filesAfterCargoNew("subfolder-workspace", files, [
+              "--vcs",
+              "none",
+              "--lib",
+              "rust/libs/inherits",
+            ]),
+          );
+        },
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "resolve a relative directory against the folder nx runs in",
     () =>
       generate(
@@ -278,6 +324,45 @@ describe("the crate generators", () => {
   );
 
   it(
+    "go by the nearest workspace where one lies in the folder of another",
+    () => {
+      // The outer workspace's exclude matches the folder, the inner
+      // workspace's does not: cargo adds the crate to the inner one.
+      const files: FileChanges = {
+        "rust/Cargo.toml": (manifest) =>
+          manifest.replace('resolver = "3"', 'resolver = "3"\nexclude = ["nested"]'),
+        "rust/nested/Cargo.toml": '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n',
+        "rust/nested/crates/inner/Cargo.toml":
+          '[package]\nname = "inner"\nversion = "0.1.0"\nedition = "2024"\n',
+        "rust/nested/crates/inner/src/lib.rs": "",
+      };
+      return generate(
+        "subfolder-workspace",
+        files,
+        [`${pluginName}:library`, "rust/nested/libs/deep"],
+        (workspace, { status, output, changed }) => {
+          expect(status).toBe(0);
+          expect(output).not.toContain("nx-rust did not create a crate");
+          expect(cargoNewCalls(workspace)).toEqual([
+            { cwd: ".", args: ["new", "--vcs", "none", "--lib", "rust/nested/libs/deep"] },
+          ]);
+          expect(changed).toEqual([
+            "rust/nested/Cargo.toml",
+            "rust/nested/libs/deep/Cargo.toml",
+            "rust/nested/libs/deep/src/lib.rs",
+          ]);
+          expect(read(workspace, "rust/nested/Cargo.toml")).toContain(
+            'members = ["crates/*", "libs/deep"]',
+          );
+          expect(memberNames(workspace, "rust/nested")).toEqual(["deep", "inner"]);
+          expect(memberNames(workspace, "rust")).toEqual(["api", "codegen", "model", "testkit"]);
+        },
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "say that a crate outside every workspace is standalone",
     () =>
       generate(
@@ -314,6 +399,7 @@ describe("the crate generators", () => {
           expect(output).toContain(
             "Without --dry-run, nx-rust would run `cargo new --vcs none --lib --name dry-run rust/crates/dry` in the repository root.",
           );
+          expect(treeChanges(output)).toEqual([]);
           expect(changed).toEqual([]);
           expect(cargoNewCalls(workspace)).toEqual([]);
         },

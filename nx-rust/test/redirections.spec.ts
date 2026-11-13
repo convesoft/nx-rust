@@ -312,6 +312,9 @@ describe("edges to redirected crates", () => {
         // with a registry dependency, so it gets no edge.
         expect(after.output).toContain("the Cargo workspaces in rust and shared through [patch]");
         expect(after.output).toContain("outside the repository");
+        expect(after.output).toContain(
+          "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository.",
+        );
         // Every project of both workspaces repeats it at the start of its tasks.
         expect(warnedProjects(graph, `nx-rust: ${config} redirects dependencies`)).toEqual(
           Object.keys(graph.projects).sort(),
@@ -573,6 +576,9 @@ describe("edges to redirected crates", () => {
         expect(shown.status).toBe(0);
         expect(shown.output).toContain("`cargo metadata` failed for rust/local/Cargo.toml");
         expect(shown.output).toContain("believes it's in a workspace");
+        expect(shown.output).toContain(
+          "To have them followed, fix what cargo reports, so that `cargo metadata --no-deps --manifest-path rust/local/Cargo.toml` succeeds in rust.",
+        );
         // The projects of rust, whose [patch] names the crate, repeat it at
         // the start of their tasks, and those of shared do not.
         expect(

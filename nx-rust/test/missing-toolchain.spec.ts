@@ -87,6 +87,9 @@ describeWithRustup("graph creation with a pinned toolchain that is not installed
       );
       // rustup's message, which names the toolchain with its host triple.
       await expect(loading).rejects.toThrow(/toolchain '1\.92\.0-[^']+' is not installed/);
+      await expect(loading).rejects.toThrow(
+        "Fix what cargo reports, so that `cargo metadata --no-deps` succeeds in rust.",
+      );
       expect(installedToolchains()).toEqual(toolchains);
     },
     HARNESS_TIMEOUT,
