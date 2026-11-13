@@ -1,7 +1,11 @@
 # Setup and compatibility
 
-> **Status:** specified, not implemented yet. The package is not published to
-> npm yet.
+> **Status:** `nx add` and the `library` and `binary` generators are
+> implemented. So far `init` stops only for the problems that graph creation
+> detects already, which are a missing cargo and a failing `cargo metadata`,
+> and of the tools below it counts only cargo-deny as needed by your settings.
+> The version checks, the warnings and the errors for missing tools are not
+> implemented yet. The package is not published to npm yet.
 
 ## What you need
 

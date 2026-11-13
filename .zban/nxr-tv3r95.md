@@ -17,5 +17,6 @@ Implements `REQ-ARTIFACT-TARGETS`, `REQ-ARTIFACT-CACHE`, `DES-ARTIFACT-STEPS` an
 - [ ] The compile step for the host triple, inside the batch
 - [ ] The napi CLI step: `.node` file, JS and type definitions
 - [ ] The napi CLI version and target triple in the key; generated files as outputs, not inputs
+- [ ] Count the napi CLI as needed in `init`'s table of tools (`nx-rust/src/tools/optional-tools.ts`) where a crate has a `napi-build` target, with the fixture for that row that `VER-SETUP` asks for
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

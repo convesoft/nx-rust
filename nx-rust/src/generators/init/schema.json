@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/schema",
+  "$id": "NxRustInit",
+  "title": "Set up nx-rust",
+  "description": "Registers @convesoft/nx-rust in nx.json after checking that Nx can create the project graph with it, and reports missing tools and Cargo build directories inside the repository. `nx add @convesoft/nx-rust` runs it.",
+  "cli": "nx",
+  "type": "object",
+  "properties": {}
+}

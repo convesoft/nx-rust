@@ -1,35 +1,73 @@
 import { NX_VERSION } from "@nx/devkit";
-import { execFileSync, execSync } from "child_process";
+import { execFileSync, execSync, spawnSync } from "child_process";
 import { join } from "path";
-import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import {
+  CargoCall,
   CargoWrapper,
   cargoProbeProject,
+  changedFiles,
   HARNESS_TIMEOUT,
   installFixture,
   installProbeExecutor,
+  repositoryFiles,
   testEnvironment,
+  withoutColours,
 } from "../../nx-rust/test/harness";
+
+/** The cargo call with which graph creation reads the workspace in `rust/` of `subfolder-workspace`. */
+const readRustWorkspace: CargoCall = {
+  cwd: "rust",
+  args: [
+    "metadata",
+    "--format-version",
+    "1",
+    "--no-deps",
+    "--manifest-path",
+    "{workspaceRoot}/rust/Cargo.toml",
+  ],
+};
 
 describe("@convesoft/nx-rust", () => {
   let projectDirectory: string;
+  // Outside the test project, so that Nx does not see the wrapper.
+  const wrapperDirectory = join(process.cwd(), "tmp", "cargo-wrapper");
+  let cargo: CargoWrapper;
+  /** What `nx add` printed, the files it changed and the cargo calls it made. */
+  let added: { output: string; changed: string[]; calls: CargoCall[] };
 
   // This hook shells out synchronously twice, so its budget has to cover both
   // installs on a cold package manager cache. Otherwise work that succeeded
   // still fails on return.
   beforeAll(() => {
     projectDirectory = createTestProject();
+    rmSync(wrapperDirectory, { recursive: true, force: true });
+    cargo = CargoWrapper.install(wrapperDirectory);
 
-    // The plugin has been built and published to a local registry in the globalSetup
-    // Install the plugin built with the latest source code into the test repo
-    execSync(`pnpm add -D --config.frozen-lockfile=false @convesoft/nx-rust@e2e`, {
+    // A repository with a Cargo workspace that does not know the plugin yet.
+    installFixture(projectDirectory, "subfolder-workspace", { "nx.json": "{}\n" });
+    const before = repositoryFiles(projectDirectory);
+
+    // The plugin has been built and published to a local registry in the
+    // globalSetup. `nx add` installs it from there and runs its init generator.
+    const result = spawnSync("pnpm", ["exec", "nx", "add", "@convesoft/nx-rust@e2e"], {
       cwd: projectDirectory,
-      stdio: "inherit",
-      env: process.env,
+      env: cargo.environment(testEnvironment()),
+      encoding: "utf8",
     });
+    const output = withoutColours(`${result.stdout}${result.stderr}`);
+    if (result.status !== 0) {
+      throw new Error(`nx add exited with status ${result.status}:\n${output}`);
+    }
+    added = {
+      output,
+      changed: changedFiles(before, repositoryFiles(projectDirectory)),
+      calls: cargo.calls(projectDirectory),
+    };
   }, 300_000);
 
   afterAll(() => {
+    rmSync(wrapperDirectory, { recursive: true, force: true });
     if (projectDirectory) {
       // Cleanup the test project
       rmSync(projectDirectory, {
@@ -49,25 +87,60 @@ describe("@convesoft/nx-rust", () => {
     ).not.toThrow();
   });
 
-  describe("with a fixture", () => {
-    // Outside the test project, so that Nx does not see the wrapper.
-    const wrapperDirectory = join(process.cwd(), "tmp", "cargo-wrapper");
-    let cargo: CargoWrapper;
+  it("is registered by nx add, which changes no other file than the install's", () => {
+    // The install changes the package manager's files: package.json, the
+    // lockfile and pnpm-workspace.yaml, where pnpm records build scripts.
+    // init writes nx.json and nothing else.
+    const installFiles = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"];
+    expect(added.changed.filter((path) => !installFiles.includes(path))).toEqual(["nx.json"]);
+    expect(added.changed).toContain("package.json");
+    expect(JSON.parse(readFileSync(join(projectDirectory, "nx.json"), "utf8"))).toEqual({
+      plugins: ["@convesoft/nx-rust"],
+    });
+    expect(
+      JSON.parse(readFileSync(join(projectDirectory, "package.json"), "utf8")).devDependencies,
+    ).toHaveProperty("@convesoft/nx-rust");
+    // init checked the workspace as graph creation does, before registering.
+    expect(added.calls).toEqual([readRustWorkspace]);
+    // Its report: the tools that are missing and not needed, and the build
+    // directory inside the repository.
+    expect(added.output).toMatch(/Not installed and not needed by your settings: .*cargo-audit/);
+    expect(added.output).toContain("  rust: rust/target\n");
+    expect(added.output).toContain('build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"');
+  });
 
+  it(
+    "creates a crate with the installed library generator",
+    () => {
+      cargo.clear();
+      const output = nx(projectDirectory, cargo, [
+        "g",
+        "@convesoft/nx-rust:library",
+        "rust/crates/fresh",
+      ]);
+
+      expect(output).toContain("Generating @convesoft/nx-rust:library");
+      expect(cargo.calls(projectDirectory)).toEqual([
+        // Nx creates the graph before it runs the generator.
+        readRustWorkspace,
+        { cwd: ".", args: ["new", "--vcs", "none", "--lib", "rust/crates/fresh"] },
+      ]);
+      expect(
+        readFileSync(join(projectDirectory, "rust/crates/fresh/Cargo.toml"), "utf8"),
+      ).toContain('name = "fresh"');
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  describe("with a fixture", () => {
     beforeAll(() => {
       installFixture(projectDirectory, "subfolder-workspace");
-      rmSync(wrapperDirectory, { recursive: true, force: true });
-      cargo = CargoWrapper.install(wrapperDirectory);
       // Ahead of Node's folder on the PATH that nx:run-commands builds.
       cargo.placeIn(join(projectDirectory, "node_modules", ".bin"));
       installProbeExecutor(projectDirectory);
     });
 
     beforeEach(() => cargo.clear());
-
-    afterAll(() => {
-      rmSync(wrapperDirectory, { recursive: true, force: true });
-    });
 
     it(
       "reads the fixture's workspace through the installed plugin",

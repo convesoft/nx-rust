@@ -16,6 +16,9 @@
     "access": "public"
   },
   "dependencies": {
+    "@nx/devkit": "^24.0.6",
+    "smol-toml": "^1.9.0",
     "tslib": "^2.3.0"
-  }
+  },
+  "generators": "./generators.json"
 }

@@ -98,6 +98,22 @@ repository's Nx and a copy of the cargo wrapper in `.bin`. If creating it
 fails, nothing is left behind. Set `NX_RUST_KEEP_FIXTURES=1` to keep the
 copies for inspection.
 
+**`nx(args, env, cwd)`** runs Nx in the subfolder `cwd` of the copy when it is
+given. The copy's `node_modules` also links to the plugin's package folder, so
+that `nx g @convesoft/nx-rust:<generator>` runs the generators from source.
+Graph creation cannot load the plugin by its package name from that link,
+because the package names its built entry point: a test that runs a
+generator on an `nx.json` that lists `@convesoft/nx-rust` passes
+`--skipProjectGraph`, and the end-to-end tests cover the installed package.
+
+**`repositoryFiles(root)`** returns every file below `root` with its content,
+leaving out `node_modules` and `.nx`, and **`changedFiles(before, after)`**
+lists the paths that differ between two such results. Together they show
+which files a command wrote, such as `init`, which may write `nx.json` only.
+**`withoutColours(output)`** removes the colour codes that Nx writes when the
+environment asks for colours, as `nx run-many` does for this repository's
+tests, so that a test can compare the text.
+
 **`CargoWrapper.install(directory)`** writes a `cargo` that appends one JSON
 line per invocation (`cwd`, `args`) to a log and then runs the real cargo in
 the same folder, with the real cargo's folder first on `PATH`, so that cargo
