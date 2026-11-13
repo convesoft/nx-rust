@@ -7,6 +7,7 @@ import {
   HARNESS_TIMEOUT,
   inFixture,
   linesWith,
+  lockfileCalls,
   runNx as runNxWithCache,
   sortedCalls,
   taskCalls,
@@ -16,8 +17,8 @@ import {
 
 // VER-UNKNOWN-OPTIONS, as far as one cargo call per task can show it: real Nx
 // runs in the crate-shapes fixture, whose tasks run cargo through the logging
-// wrapper of the harness. The parts about cache hits are nxr-e2mz9s's, and
-// those about groups wait for the batching of milestone 0.2.
+// wrapper of the harness. The parts about groups wait for the batching of
+// milestone 0.2.
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 
@@ -43,10 +44,19 @@ const linesFor = (output: string, task: string, option: string) =>
 
 const rust = (args: string[]) => ({ cwd: "rust", args });
 
+/** How Nx marks a task that it restored from the cache, with or without copying outputs. */
+const hit = String.raw`\[(?:local cache|existing outputs match the cache, left as is)\]`;
+
+/** The tasks that Nx says it restored from the cache, sorted. */
+const restoredTasks = (output: string) =>
+  [...output.matchAll(new RegExp(String.raw`nx run (\S+)[^\n]*?${hit}`, "g"))]
+    .map((match) => match[1])
+    .sort();
+
 /**
  * Runs Nx without its cache: the cached targets would be restored on a
  * second run of the same command, while these checks need each task to run
- * its cargo command. The cache hits of `DES-UNKNOWN-OPTIONS` are nxr-e2mz9s's.
+ * its cargo command. Only the first test also runs Nx with its cache.
  */
 const runNx = (workspace: FixtureWorkspace, args: string[], env: Env = {}) =>
   runNxWithCache(workspace, args, { NX_SKIP_NX_CACHE: "true", ...env });
@@ -112,6 +122,46 @@ describe("an option that the executor does not know", () => {
             ]);
           }
         }
+
+        // With Nx's cache, a second identical run restores every crate task
+        // and prints the same lines. The first run stores the results, unless
+        // the runs above already did.
+        const lines = ["core-lib", "cli"]
+          .flatMap((crate) => [
+            fromConfiguration(`${crate}:test`, "passWithNoTests"),
+            fromCommandLine(`${crate}:test`, "coverage"),
+            fromCommandLine(`${crate}:build`, "coverage"),
+          ])
+          .sort();
+        const cached = [...command, "--coverage"];
+        const stored = await runNxWithCache(workspace, cached);
+        expect(stored.status).toBe(0);
+        expect(linesWith(stored.output, "ignoring").sort()).toEqual(lines);
+
+        workspace.cargo.clear();
+        const restored = await runNxWithCache(workspace, cached);
+
+        expect(restored.status).toBe(0);
+        expect(restoredTasks(restored.output)).toEqual([
+          "cli:build",
+          "cli:test",
+          "core-lib:build",
+          "core-lib:test",
+        ]);
+        // No crate task runs cargo. The workspace's lockfile task, which the
+        // crate tasks depend on, is not cached and runs its own cargo call.
+        expect(taskCalls(workspace)).toEqual([]);
+        expect(lockfileCalls(workspace)).toEqual([rust(["update", "--workspace"])]);
+        expect(linesWith(restored.output, "ignoring").sort()).toEqual(lines);
+
+        // The ignored option stays in the key: another value restores no Rust task.
+        setTargetDefaults(workspace, { test: { options: { passWithNoTests: false } } });
+        workspace.cargo.clear();
+        const changed = await runNxWithCache(workspace, cached);
+
+        expect(changed.status).toBe(0);
+        expect(restoredTasks(changed.output)).toEqual([]);
+        expect(sortedCalls(taskCalls(workspace))).toEqual(plain);
       }),
     HARNESS_TIMEOUT,
   );
