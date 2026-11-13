@@ -14,6 +14,7 @@ Implements `REQ-TEST-RUNNER`, `REQ-DOCTESTS`, `DES-TEST-PHASES` and steps 3 to 5
 - [ ] The `testRunner` option in plugin options and workspace metadata
 - [ ] One `cargo nextest run` per group, with results mapped to crates
 - [ ] Doctests as a second step, failing the crate's task when they fail
+- [ ] The `profile` option passed as `--cargo-profile` to `cargo nextest run` and as `--profile` to `cargo test --doc` (`DES-PLUGIN-OPTIONS`, `EVD-NEXTEST-CARGO-FLAGS`)
 - [ ] Build and run as separate phases inside the executor
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

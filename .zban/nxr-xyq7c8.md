@@ -16,7 +16,8 @@ Implements `REQ-METADATA-OVERRIDES`, `DES-METADATA-TABLES` and `DES-PLUGIN-OPTIO
 - [ ] `targets.<name>` overriding an inferred target and defining an extra target
 - [ ] Workspace defaults, with precedence defaults, plugin options, workspace table, package table; tags, `implicitDependencies`, `envInputs` and `runtimeInputs` added up
 - [ ] The settings of `DES-PLUGIN-OPTIONS` read from the places it gives for each: `namePrefix`, `featureUnification`, `testRunner`, `affectedTests`, `artifacts`, `implicitDependencies`, `envInputs`, `runtimeInputs`, and `targetNames` and `locked` from the plugin options
-- [ ] `targets.<name>` merged by Nx's rule with `"..."`; errors for `inputs` without `"..."` and for an `executor` or `command` on an inferred target
+- [ ] `targets.<name>` merged by Nx's rule with `"..."`; errors for `inputs` without `"..."` and for a different `executor` or a `command` on an inferred target; a repeated inferred executor is accepted
+- [ ] The error for entries of the plugin that receive manifests of one workspace and give different values of `testRunner`, `affectedTests` or `featureUnification` that its table does not set, found through the `plugins` of `nx.json` in the context, with plugin isolation on and off (`DES-PLUGIN-OPTIONS`, `EVD-NX-24-ENTRY-CONTEXT`)
 - [ ] Errors for unknown top-level keys of both tables, the `project` sub-table and the plugin options, for any `implicitDependencies` entry starting with `!`, and for `affectedTests = true` as a `test` option without the workspace setting
 - [ ] The name override and `namePrefix` resolve a collision; the prefix is used as it is and does not apply to a crate with `name` or to the workspace project
 
