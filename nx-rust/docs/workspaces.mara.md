@@ -1,6 +1,8 @@
 # Workspaces and projects
 
-> **Status:** specified, not implemented yet.
+> **Status:** discovery is implemented: the plugin finds the Cargo workspaces
+> and reads each with `cargo metadata`. Projects, names and edges are not
+> implemented yet, so no crate appears in the graph so far.
 
 nx-rust finds every Cargo workspace in the repository and turns each member
 crate into an Nx project. You do not list crates anywhere: the plugin asks
@@ -35,7 +37,9 @@ including the repository root, and there can be any number of them.
   `exclude` on the plugin's entry in `nx.json` for vendored or generated crates
   that are checked in ([Configuration](configuration.mara.md)). A crate that depends by
   path on a skipped crate still gets that crate's files into its cache key
-  ([Caching](caching.mara.md)).
+  ([Caching](caching.mara.md)). To find them, the plugin still asks Cargo about
+  the skipped crate, so a broken manifest there fails the graph even when it
+  is excluded, just as plain cargo fails for the crate that depends on it.
 - If cargo is not installed, or `cargo metadata` fails for a manifest, the
   graph fails with cargo's message. Nothing is left out silently, so every
   machine that runs `nx` in the repository needs cargo
@@ -203,7 +207,7 @@ Discovery repeats one step until no manifest is unclaimed: take the shallowest u
 
 A member whose manifest was left out or removed gets no project, although the report lists it.
 
-When cargo cannot be started, or `cargo metadata` fails for a manifest, graph creation fails with an error that names the manifest and carries cargo's message. The plugin never leaves a workspace out of the graph to get past such a failure ([[ADR-CARGO-SOURCE-OF-TRUTH]]). A manifest that should not be read is taken out with the `exclude` setting.
+When cargo cannot be started, or `cargo metadata` fails for a manifest, graph creation fails with an error that names the manifest and carries cargo's message. The plugin never leaves a workspace out of the graph to get past such a failure ([[ADR-CARGO-SOURCE-OF-TRUTH]]). A manifest matched by `exclude` gets no project and is not read as a workspace, but a crate that depends on it by path still makes the plugin request one report for it, because its files are inputs of that crate.
 :::
 
 :::mara design DES-METADATA-REPORT
@@ -213,7 +217,7 @@ When cargo cannot be started, or `cargo metadata` fails for a manifest, graph cr
 :satisfies: REQ-INFERRED-PROJECTS
 :satisfies: REQ-MULTI-WORKSPACE
 
-Nodes, targets and edges of a workspace all come from one `cargo metadata` report. Project creation and dependency creation (the plugin's `createNodes` and `createDependencies` hooks) share that report, so a graph computation never runs cargo twice for one workspace and the two hooks cannot disagree. Workspace and package metadata tables ([[DES-METADATA-TABLES]]) are read from the same report, not by parsing manifests. Keeping the report between Nx processes is [[REQ-METADATA-DISK-CACHE]].
+Nodes, targets and edges of a workspace all come from one `cargo metadata` report. Project creation and dependency creation (the plugin's `createNodes` and `createDependencies` hooks) of one plugin entry in `nx.json` share that report, so the two hooks cannot disagree and a graph computation runs cargo once per workspace for the entry. A workspace whose manifests two entries receive is reported once for each of them, because Nx runs each entry in a process of its own unless plugin isolation is off; entries in one process share the report ([[EVD-NX-PLUGIN-ENTRIES]]). Workspace and package metadata tables ([[DES-METADATA-TABLES]]) are read from the same report, not by parsing manifests. Keeping the report between Nx processes is [[REQ-METADATA-DISK-CACHE]].
 
 The report is requested with `--no-deps` ([[ADR-METADATA-NO-DEPS]]). It then holds the members of the workspace with their targets, their declared dependencies and the metadata tables, and Cargo's two directories. It needs no network, downloads nothing and never creates or changes `Cargo.lock` ([[EVD-CARGO-NO-DEPS]]). A dependency on another crate in the repository is recognised by the path its entry carries. Dependencies are not resolved in this report, so the locked versions of external crates come from `Cargo.lock` itself ([[DES-LOCKFILE-HASHING]]).
 

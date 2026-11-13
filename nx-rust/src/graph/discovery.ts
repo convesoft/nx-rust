@@ -1,6 +1,7 @@
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { CargoMetadata, CargoPackage, requestMetadata } from "../cargo/metadata";
+import { CargoMetadata, CargoPackage } from "../cargo/metadata";
 import { CargoError } from "../cargo/run-cargo";
+import { ComputationReports } from "./computation-reports";
 
 /** A Cargo workspace, which may be a standalone crate: a workspace of one. */
 export interface CargoWorkspace {
@@ -52,12 +53,15 @@ export interface CargoDiscovery {
  *
  * @param manifests The `Cargo.toml` files, relative to `workspaceRoot`.
  * @param workspaceRoot The absolute path of the repository root.
+ * @param reports Where the reports come from: the reports of the graph
+ *   computation, which other plugin entries may share.
  * @throws {Error} When cargo cannot be started or a report fails, naming the manifest.
  */
 // @mara implements DES-DISCOVERY
 export async function discoverWorkspaces(
   manifests: readonly string[],
   workspaceRoot: string,
+  reports: ComputationReports = new ComputationReports(),
 ): Promise<CargoDiscovery> {
   const handed = new Set(manifests);
   const claimed = new Set<string>();
@@ -66,7 +70,7 @@ export async function discoverWorkspaces(
     if (claimed.has(manifest)) {
       continue;
     }
-    const report = await readWorkspace(manifest, workspaceRoot);
+    const report = await readWorkspace(manifest, workspaceRoot, reports);
     const members = new Set(report.workspace_members);
     const memberPackages = report.packages.filter((pkg) => members.has(pkg.id));
     claimed.add(manifest);
@@ -82,7 +86,7 @@ export async function discoverWorkspaces(
         .sort((a, b) => compare(a.manifest_path, b.manifest_path)),
     });
   }
-  const pathDependencyReports = await readPathDependencies(workspaces, workspaceRoot);
+  const pathDependencyReports = await readPathDependencies(workspaces, workspaceRoot, reports);
   return { workspaceRoot, workspaces, pathDependencyReports };
 }
 
@@ -97,6 +101,7 @@ export async function discoverWorkspaces(
 async function readPathDependencies(
   workspaces: CargoWorkspace[],
   workspaceRoot: string,
+  reports: ComputationReports,
 ): Promise<PathDependencyReport[]> {
   const withProject = new Set(
     workspaces.flatMap((workspace) => workspace.members.map((pkg) => pkg.manifest_path)),
@@ -107,7 +112,7 @@ async function readPathDependencies(
       known.set(pkg.manifest_path, pkg);
     }
   }
-  const reports: PathDependencyReport[] = [];
+  const pathDependencyReports: PathDependencyReport[] = [];
   const visited = new Set<string>();
   const queue = workspaces.flatMap((workspace) =>
     workspace.members.map((pkg) => ({ dependent: pkg, cwd: workspace.report.workspace_root })),
@@ -124,8 +129,8 @@ async function readPathDependencies(
       }
       visited.add(manifest);
       if (!known.has(manifest)) {
-        const report = await readPathDependency(manifest, dependent, cwd, workspaceRoot);
-        reports.push({ manifest: repositoryPath(workspaceRoot, manifest), report });
+        const report = await readPathDependency(manifest, dependent, cwd, workspaceRoot, reports);
+        pathDependencyReports.push({ manifest: repositoryPath(workspaceRoot, manifest), report });
         for (const pkg of report.packages) {
           if (!known.has(pkg.manifest_path)) {
             known.set(pkg.manifest_path, pkg);
@@ -138,16 +143,20 @@ async function readPathDependencies(
       }
     }
   }
-  return reports;
+  return pathDependencyReports;
 }
 
 // Reads the workspace of a manifest that Nx handed to the plugin, in the
 // manifest's folder.
-async function readWorkspace(manifest: string, workspaceRoot: string): Promise<CargoMetadata> {
+async function readWorkspace(
+  manifest: string,
+  workspaceRoot: string,
+  reports: ComputationReports,
+): Promise<CargoMetadata> {
   const path = join(workspaceRoot, manifest);
   const folder = dirname(manifest);
   try {
-    return await requestMetadata(path, dirname(path));
+    return await reports.request(path, dirname(path));
   } catch (error) {
     throw new Error(
       failureMessage(error, `the Cargo workspace of ${manifest}`, [
@@ -163,11 +172,12 @@ async function readPathDependency(
   dependent: CargoPackage,
   cwd: string,
   workspaceRoot: string,
+  reports: ComputationReports,
 ): Promise<CargoMetadata> {
   const shown = displayPath(workspaceRoot, manifest);
   const folder = displayPath(workspaceRoot, cwd) || "the repository root";
   try {
-    return await requestMetadata(manifest, cwd);
+    return await reports.request(manifest, cwd);
   } catch (error) {
     throw new Error(
       failureMessage(

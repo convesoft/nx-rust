@@ -646,6 +646,22 @@ Inspection of the `nx` 24.0.6 package installed in this repository, and two expe
 The prototype was not run through `nx format` itself; that Nx filters `.rs` out is read from its source, and that the filter excludes plugin languages was tested against prettier directly. Covering Rust in `nx format` would need Nx to pass the configured plugins to its filter, and would still not reach workspaces that use oxfmt.
 :::
 
+:::mara evidence EVD-NX-PLUGIN-ENTRIES
+:mid: 01M7ABYX5EADNXFRHAA2F17VBK
+:title: How Nx 24.0.6 runs several entries of one plugin
+:status: accepted
+:supports: DES-METADATA-REPORT
+
+A reading of the `nx` 24.0.6 package and an experiment on 13 November 2026 with cargo 1.100.0 and Node 26.12.0 on Linux. The experiment ran through the plugin's own tests (`nx-rust/test/discovery.spec.ts`), which list a stand-in that behaves as the plugin twice in `nx.json`, with `include` filters that split the manifests between the two entries, and build the graph with plugin isolation on and off.
+
+- **Isolation on**, Nx's default: Nx starts one plugin worker per entry, keyed by the plugin, the workspace root and the entry's position in `nx.json` (`project-graph/plugins/isolation/load-isolated-plugin.js`). Two entries of one plugin run in two processes and share nothing.
+- **Isolation off** (`NX_ISOLATE_PLUGINS=false`): Nx loads the plugin module once per process with `require` and gives each entry a shallow copy of its exports (`plugins/load-resolved-plugin.js`), so a module-level variable is shared by all entries. An entry without `options` passes `undefined` to both hooks, so their arguments do not tell entries apart. Nx calls `createDependencies` as a method of the entry's copy and the `createNodes` function as a member of the pair it read from that copy (`plugins/loaded-nx-plugin.js`).
+- **Order.** Nx starts the `createNodes` calls of all entries of one computation one after another in a single synchronous loop, and calls `createDependencies` once all of them have settled, also when one of them failed (`utils/project-configuration-utils.js`, `project-graph.js`).
+- **Measured.** With a workspace's root manifest given to one entry and its members to the other, the workspace was reported twice with isolation on, once in each worker. With isolation off it was reported once, when the second entry reused the report that the first had requested in the same computation. The version of the plugin reviewed on 13 November 2026 kept the result of `createNodes` in one module-level variable: with isolation off, both entries' `createDependencies` then received the discovery of the second entry.
+
+The plugin therefore makes each entry's copy carry a `createNodes` of its own and finds the entry in `createDependencies` through that copy. These are Nx internals, which the tests check in both modes and which have to be checked again for another Nx major.
+:::
+
 ## Sources
 
 Pages and repositories read for the design discussion, on 12 November 2026.

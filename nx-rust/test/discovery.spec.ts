@@ -2,11 +2,12 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { CreateDependenciesContext, CreateNodesContext } from "@nx/devkit";
-import { createDependencies, createNodes } from "../src";
+import plugin = require("../src");
 import { discoverWorkspaces } from "../src/graph/discovery";
-import { discoverForNodes, discoveryForDependencies } from "../src/graph/graph-discovery";
+import { registrationOf } from "../src/graph/registration";
 import {
   CargoCall,
+  discoveryProbeEntry,
   FileChanges,
   FixtureName,
   FixtureWorkspace,
@@ -14,6 +15,7 @@ import {
   HARNESS_TIMEOUT,
   loadFixtureGraph,
   pinnedToolchainAvailable,
+  ProbeRecord,
   testEnvironment,
 } from "./harness";
 
@@ -413,12 +415,14 @@ describe("discovery in the plugin", () => {
     async () => {
       const { root } = copy("two-workspaces");
       const manifests = manifestsIn(root);
+      const entry = loadEntry();
 
-      const first = await discoverForNodes(manifests, root);
-      expect(discoveryForDependencies(root)).toBe(first);
-      const second = await discoverForNodes(manifests, root);
-      expect(discoveryForDependencies(root)).toBe(second);
+      await entry.createNodes[1](manifests, undefined, nodesContext(root));
+      const first = registrationOf(entry).discoveryForDependencies(root);
+      await entry.createNodes[1](manifests, undefined, nodesContext(root));
+      const second = registrationOf(entry).discoveryForDependencies(root);
 
+      expect(first.workspaces.map((found) => found.root)).toEqual([".", "tools"]);
       expect(second).not.toBe(first);
       expect(workspace.cargoCalls()).toEqual([
         workspaceCall("."),
@@ -434,13 +438,41 @@ describe("discovery in the plugin", () => {
     "runs cargo only in createNodes, once per workspace",
     async () => {
       const { root } = copy("two-workspaces");
+      const entry = loadEntry();
 
-      const nodes = await createNodes[1](manifestsIn(root), undefined, nodesContext(root));
-      const dependencies = await createDependencies(undefined, dependenciesContext(root));
+      const nodes = await entry.createNodes[1](manifestsIn(root), undefined, nodesContext(root));
+      const dependencies = await entry.createDependencies(undefined, dependenciesContext(root));
 
       expect(nodes).toEqual([]);
       expect(dependencies).toEqual([]);
       expect(workspace.cargoCalls()).toEqual([workspaceCall("."), workspaceCall("tools")]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "keeps what two entries discovered apart, and reads a workspace they split once",
+    async () => {
+      const { root } = copy("subfolder-workspace");
+      const [rootManifest, ...members] = manifestsIn(root).sort();
+      const first = loadEntry();
+      const second = loadEntry();
+
+      // As Nx starts them: one after the other, without waiting.
+      await Promise.all([
+        first.createNodes[1]([rootManifest], undefined, nodesContext(root)),
+        second.createNodes[1](members, undefined, nodesContext(root)),
+      ]);
+
+      expect(rootManifest).toBe("rust/Cargo.toml");
+      expect(seenBy(first, root)).toEqual([["rust", []]]);
+      expect(seenBy(second, root)).toEqual([
+        [
+          "rust",
+          ["rust/crates/api", "rust/crates/codegen", "rust/crates/model", "rust/crates/testkit"],
+        ],
+      ]);
+      expect(workspace.cargoCalls()).toEqual([workspaceCall("rust")]);
     },
     HARNESS_TIMEOUT,
   );
@@ -451,23 +483,143 @@ describe("discovery in the plugin", () => {
       const { root } = copy("subfolder-workspace", {
         "rust/Cargo.toml": (manifest) => `${manifest}\nnot toml\n`,
       });
+      const entry = loadEntry();
 
       await expect(
-        createNodes[1](manifestsIn(root), undefined, nodesContext(root)),
+        entry.createNodes[1](manifestsIn(root), undefined, nodesContext(root)),
       ).rejects.toThrow(/rust\/Cargo\.toml/);
 
-      expect(discoveryForDependencies(root)).toBeUndefined();
-      expect(await createDependencies(undefined, dependenciesContext(root))).toEqual([]);
+      expect(registrationOf(entry).discoveryForDependencies(root)).toBeUndefined();
+      expect(await entry.createDependencies(undefined, dependenciesContext(root))).toEqual([]);
     },
     HARNESS_TIMEOUT,
   );
 
-  it("refuses createDependencies for a repository that createNodes has not seen", () => {
-    expect(() => discoveryForDependencies("/no/such/repository")).toThrow(
-      /asked for the dependencies before the projects/,
-    );
+  it("refuses createDependencies for a repository that the entry's createNodes has not seen", () => {
+    expect(() =>
+      loadEntry().createDependencies(undefined, dependenciesContext("/no/such")),
+    ).toThrow(/asked for the dependencies before the projects/);
+  });
+
+  it("refuses createDependencies that is not called on an entry", () => {
+    expect(() =>
+      plugin.createDependencies.call(undefined, undefined, dependenciesContext("/x")),
+    ).toThrow(/could not tell which of its entries in nx.json/);
   });
 });
+
+// Two entries of the plugin in nx.json, with include filters that split the
+// manifests between them, through real Nx with and without plugin isolation.
+// The probe stands in for the plugin and records what each entry's
+// createDependencies sees.
+describe.each([
+  ["in plugin workers", "true"],
+  ["in one process", "false"],
+])("two plugin entries %s", (_mode, isolation) => {
+  let workspace: FixtureWorkspace | undefined;
+
+  afterEach(() => {
+    workspace?.remove();
+    workspace = undefined;
+  });
+
+  /** Builds the graph with one probe entry per `include` list and returns what the entries saw. */
+  async function graphWithEntries(
+    fixture: FixtureName,
+    includes: string[][],
+  ): Promise<{ seen: ProbeRecord[]; calls: CargoCall[] }> {
+    workspace = FixtureWorkspace.create(fixture, {
+      "nx.json": JSON.stringify({
+        plugins: includes.map((include) => ({ plugin: discoveryProbeEntry, include })),
+      }),
+    });
+    const log = join(dirname(workspace.root), "probe.jsonl");
+    await workspace.graph({ NX_ISOLATE_PLUGINS: isolation, DISCOVERY_PROBE_LOG: log });
+    const seen = readFileSync(log, "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as ProbeRecord);
+    return { seen: sortedByJson(seen), calls: sortedByJson(workspace.cargoCalls()) };
+  }
+
+  it(
+    "gives each entry's createDependencies what its own createNodes discovered",
+    async () => {
+      const { seen, calls } = await graphWithEntries("two-workspaces", [
+        ["Cargo.toml", "crates/**"],
+        ["tools/**"],
+      ]);
+
+      expect(seen).toEqual(
+        sortedByJson([
+          { workspaces: [[".", ["crates/app", "crates/util"]]], pathDependencies: [] },
+          { workspaces: [["tools", ["tools", "tools/scaffold"]]], pathDependencies: [] },
+        ]),
+      );
+      expect(calls).toEqual(sortedByJson([workspaceCall("."), workspaceCall("tools")]));
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "reads a workspace whose manifests the entries split once per process",
+    async () => {
+      const { seen, calls } = await graphWithEntries("subfolder-workspace", [
+        ["rust/Cargo.toml"],
+        ["rust/crates/**"],
+      ]);
+
+      expect(seen).toEqual(
+        sortedByJson([
+          { workspaces: [["rust", []]], pathDependencies: [] },
+          {
+            workspaces: [
+              [
+                "rust",
+                [
+                  "rust/crates/api",
+                  "rust/crates/codegen",
+                  "rust/crates/model",
+                  "rust/crates/testkit",
+                ],
+              ],
+            ],
+            pathDependencies: [],
+          },
+        ]),
+      );
+      // Isolated plugin workers are separate processes, which cannot share a report.
+      expect(calls).toEqual(
+        isolation === "false"
+          ? [workspaceCall("rust")]
+          : sortedByJson([
+              workspaceCall("rust"),
+              metadataCall("rust/crates/api", "rust/crates/api/Cargo.toml"),
+            ]),
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+/** An entry of the plugin as Nx loads it: a copy of the module's properties. */
+function loadEntry(): typeof plugin {
+  return { ...plugin };
+}
+
+/** What an entry's createDependencies sees: the workspace roots with the folders of their members. */
+function seenBy(entry: typeof plugin, root: string): [string, string[]][] {
+  return registrationOf(entry)
+    .discoveryForDependencies(root)
+    .workspaces.map((found) => [
+      found.root,
+      found.members.map((member) => relative(root, dirname(member.manifest_path))),
+    ]);
+}
+
+function sortedByJson<T>(values: T[]): T[] {
+  return [...values].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+}
 
 /** Changes to two-workspaces that add `xtask`, a crate outside every workspace. */
 const standaloneXtask: FileChanges = {

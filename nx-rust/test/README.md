@@ -51,11 +51,16 @@ holds every error that Nx and the plugin reported.
 
 ```ts
 const graph = await loadFixtureGraph("two-workspaces");
-expect(graph.projects.app.root).toBe("crates/app");
 expect(graph.cargoCalls.map((call) => call.cwd)).toEqual([".", "tools"]);
 
-await expect(loadFixtureGraph("name-collision")).rejects.toThrow(/tools\/api\/Cargo.toml/);
+const broken = loadFixtureGraph("two-workspaces", {
+  files: { "tools/Cargo.toml": (manifest) => `${manifest}\nnot toml\n` },
+});
+await expect(broken).rejects.toThrow(/tools\/Cargo\.toml/);
 ```
+
+The plugin creates no projects yet (nxr-1bv0wm), so `projects` holds only
+those that a test adds with a `project.json`.
 
 `files` changes the copy before Nx sees it: a string replaces a file, `null`
 deletes it, and a function receives the current content and returns the new
@@ -79,7 +84,9 @@ describeCacheKeyMatrix("cache keys", [
 ]);
 ```
 
-`compareCacheKeys(row)` returns the hashes instead of failing.
+This row shows the intended use: it needs the `test` target, which the plugin
+does not infer yet (nxr-t1ht7j). `compareCacheKeys(row)` returns the hashes
+instead of failing.
 
 **`FixtureWorkspace.create(fixture, files)`** is the copy both helpers use:
 `graph()`, `hashTasks(tasks, { env, overrides })`, `nx(args, env)`, which
@@ -154,6 +161,13 @@ daemon off, stops rustup from installing toolchains, and puts rustup's
 folder first on `PATH`: Nx runs this repository's tests through
 `nx:run-commands`, which puts the folder of the Node executable first, where
 a system cargo would otherwise shadow rustup.
+
+**`discoveryProbeEntry`** is the path of a plugin that behaves as the plugin
+under test and also appends, for each call of an entry's
+`createDependencies`, what that entry discovered (a `ProbeRecord`) as a JSON
+line to the file that the variable `DISCOVERY_PROBE_LOG` names. List it in a
+fixture's `nx.json` in place of the plugin to check which entry sees what,
+also in plugin workers, where a test cannot reach the plugin's state.
 
 **`pinnedToolchainAvailable()`** says whether checks of `different-toolchains`
 can run: rustup has the toolchain that `pinned/` names
