@@ -17,6 +17,7 @@ import { digestFolder, lockfileDependency } from "./lockfile-task";
 import { ArtifactDirectory, targetOutputs, uncachedByDesign, uncachedReason } from "./outputs";
 import { crateInputs, findCrateFolders, unseenPathDependencyWarning } from "./path-dependencies";
 import { pluginInput } from "./plugin-package";
+import { realPath } from "./real-path";
 import { redirectedUses } from "./redirected-uses";
 import {
   cachedTargets,
@@ -41,7 +42,9 @@ export interface CacheContext extends InputContext {
  * reach, the redirected crates whose edges are left out, and where each
  * workspace's artifact directory lies; and the warnings of `DES-DIAGNOSTICS`
  * that these give, together with those about Cargo directories that Nx reads
- * ({@link unignoredDirectoryWarnings}), which it also prints, each once.
+ * ({@link unignoredDirectoryWarnings}), which it also prints, each once. A
+ * path dependency whose report cargo refused adds its warning to the crates
+ * that reach it; discovery has printed that one already.
  *
  * The redirected uses come from `redirectedUses`, which `createDependencies`
  * asks again with the projects of every plugin and entry. Here it knows only
@@ -65,9 +68,20 @@ export async function cacheContext(
   };
   const pathDependencyInputs = new Map<string, Input[]>();
   const redirectedInputs = new Map<string, Input[]>();
+  const repositoryRoot = realPath(workspaceRoot);
   for (const workspace of discovery.workspaces) {
     for (const crate of workspace.members) {
       const dependencies = folders.withoutProject.get(crate.manifest_path) ?? [];
+      for (const dependency of dependencies) {
+        // Its folder relative to the repository's real path, or absolute.
+        const folder = isAbsolute(dependency.folder)
+          ? dependency.folder
+          : join(repositoryRoot, dependency.folder);
+        const message = discovery.unreportedPathDependencies.get(folder);
+        if (message !== undefined) {
+          warn(crate.manifest_path, message);
+        }
+      }
       pathDependencyInputs.set(crate.manifest_path, [
         ...new Set(dependencies.flatMap(crateInputs)),
       ]);
@@ -100,8 +114,11 @@ export async function cacheContext(
       }
     }
   }
+  const printed = new Set(discovery.warnings);
   for (const message of new Set([...warnings.values()].flat())) {
-    console.warn(message);
+    if (!printed.has(message)) {
+      console.warn(message);
+    }
   }
   return {
     repositoryRoot: workspaceRoot,

@@ -52,6 +52,41 @@ const listedMembers = (manifest: string) =>
     'members = ["crates/api", "crates/codegen", "crates/model", "crates/testkit"]',
   );
 
+/** nx.json with `exclude` set on every entry of the plugin. */
+function excludedFromPlugin(...patterns: string[]) {
+  return (current: string | undefined) => {
+    const nxJson = JSON.parse(current ?? "{}");
+    nxJson.plugins = (nxJson.plugins ?? []).map((entry: string | { plugin: string }) =>
+      typeof entry === "string"
+        ? { plugin: entry, exclude: patterns }
+        : { ...entry, exclude: patterns },
+    );
+    return `${JSON.stringify(nxJson, null, 2)}\n`;
+  };
+}
+
+// In backend, rust's [patch] redirects server and b to themselves. server
+// depends on the registry crate wrapper, vendored with leaf, which b depends
+// on by path. leaf, a crate of a directory source, has no report.
+const crate = (name: string) =>
+  `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n`;
+const assumedUseFiles: FileChanges = {
+  "backend/Cargo.toml":
+    '[workspace]\nmembers = ["crates/server", "crates/b"]\nresolver = "3"\n\n[patch.crates-io]\nserver = { path = "crates/server" }\nb = { path = "crates/b" }\n',
+  "backend/.cargo/config.toml":
+    '[source.crates-io]\nreplace-with = "vendor"\n\n[source.vendor]\ndirectory = "../vendor"\n',
+  "backend/crates/server/Cargo.toml": `${crate("server")}\n[dependencies]\nwrapper = "0.1"\n`,
+  "backend/crates/b/Cargo.toml": `${crate("b")}\n[dependencies]\nleaf = { path = "../../../vendor/leaf" }\n`,
+  "backend/crates/b/src/lib.rs": "",
+  "vendor/leaf/Cargo.toml": crate("leaf"),
+  "vendor/leaf/src/lib.rs": "",
+  "vendor/leaf/.cargo-checksum.json": '{"files":{},"package":null}\n',
+  "vendor/wrapper/Cargo.toml": `${crate("wrapper")}\n[dependencies]\nb = "0.1"\n`,
+  "vendor/wrapper/src/lib.rs": "",
+  "vendor/wrapper/.cargo-checksum.json": '{"files":{},"package":null}\n',
+  "nx.json": excludedFromPlugin("shared/**"),
+};
+
 const withLeaf: FileChanges = {
   "rust/crates/leaf/Cargo.toml": '[package]\nname = "leaf"\nversion = "0.1.0"\nedition = "2024"\n',
   "rust/crates/leaf/src/lib.rs": "",
@@ -128,6 +163,38 @@ describeCacheKeyMatrix("keys must differ after", [
     after: { files: { "vendor/lexer/src/lib.rs": changed } },
     keys: { "lib:test": "must differ", "lib:build": "must differ", "app:test": "must differ" },
   },
+  // shared lists no members, so cargo builds model for server but refuses
+  // to report it; excluded from the plugin, model has no project.
+  {
+    change:
+      "a change in a path dependency without a project whose report cargo refuses, because it is no member of the workspace whose folder holds it",
+    fixture: "cross-workspace-path",
+    base: {
+      files: {
+        "shared/Cargo.toml": (manifest) => manifest.replace(/members = \[[^\]]*\]/, "members = []"),
+        "nx.json": excludedFromPlugin("shared/**"),
+      },
+    },
+    after: { files: { "shared/crates/model/src/lib.rs": changed } },
+    keys: {
+      "server:check": "must differ",
+      "server:build": "must differ",
+      "server:test": "must differ",
+    },
+  },
+  // b's use of server rests only on leaf, which has no report, so it gives
+  // way to server's possible use of b: server keeps its edge to b, and b
+  // takes server's files as an input instead.
+  ...[
+    ["server", "backend/crates/server/src/lib.rs", "b"],
+    ["b", "backend/crates/b/src/lib.rs", "server"],
+  ].map(([crate, path, user]): CacheKeyRow => ({
+    change: `a change in ${crate}, a redirected member that ${user} may use, where b may use server only through a crate without a report`,
+    fixture: "cross-workspace-path",
+    base: { files: assumedUseFiles },
+    after: { files: { [path]: changed } },
+    keys: { [`${user}:check`]: "must differ", [`${user}:test`]: "must differ" },
+  })),
   ...[
     [
       "without a project",

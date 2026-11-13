@@ -1465,6 +1465,22 @@ Experiments on 13 November 2026 with cargo 1.100.0 and repeated with 1.91.0, on 
 So what decides a dependency when another workspace builds it is its folder and its workspace's root manifest; the configuration, toolchain and profiles come from the consumer's own context.
 :::
 
+:::mara evidence EVD-CARGO-UNREPORTED-CRATES
+:mid: 01M7B1MZ86KN4JWTFJCVPWY64E
+:title: Which path dependencies cargo builds but does not report
+:status: accepted
+:supports: DES-METADATA-REPORT
+
+Experiments on 13 November 2026 with cargo 1.100.0 and 1.91.0 on Linux, which gave the same results. In each, a workspace `w1` had a member `app` with a path dependency on a crate `x` outside `w1`'s folder. The commands were `cargo check --offline` and `cargo metadata --format-version 1 --no-deps --offline` in `w1`, and the same report for `x`'s manifest through `--manifest-path`, also started in `w1`.
+
+- **Not a member.** With `x` in the folder of a workspace `w2` whose `members` did not list it, `cargo check` succeeded and `x`'s report failed with "current package believes it's in a workspace when it's not", naming both manifests and the remedies: listing `x` in `members` or `exclude`, or an empty `[workspace]` table in `x`'s manifest. So it did with `x` in a subfolder of `w2` that named `w2` in `package.workspace`, and with `x` taking its `version` from `w2`'s `[workspace.package]`. The fixture `cross-workspace-path` with `members = []` in `shared/Cargo.toml` behaved the same.
+- **Its workspace broken elsewhere.** With `x` in `w2`'s folder while `w2` listed a missing member, with `package.workspace` naming a manifest without `[workspace]`, and with `package.workspace` naming a missing folder, `cargo check` succeeded and `x`'s report failed with "failed to load manifest for workspace member", "root of a workspace inferred but wasn't a root" and "failed to read".
+- **A manifest that cargo rejects.** With `x`'s manifest no valid TOML, missing, or inheriting a key that its workspace does not define, `cargo check` failed and so did `w1`'s own report, which reads the manifest of each member's path dependency outside the workspace's folder. With `x` a valid workspace of its own that depends by path on a crate `y` whose manifest is no valid TOML, `cargo check` failed while the reports of `w1` and `x` succeeded and `y`'s failed. With `x` a member of `w2` that depends by path on a missing member of `w2`, `cargo check` failed and `x`'s report failed with "failed to load manifest for workspace member", the message of the case above in which `cargo check` succeeded. With `x` a non-member of `w2` that depends on such a `y`, `cargo check` failed and `x`'s report failed with the membership message, before cargo read `y`.
+- **Redirections through it.** In a copy of the fixture `patched-workspaces` in which the member `plain` depended by path on a non-member of another workspace's folder that declared `model = "0.1"`, `cargo tree -p plain --offline` showed that crate using the `model` to which `rust/Cargo.toml` redirects. In the reproduction of the review of pull request #42, a workspace whose root manifest redirected its members `server` and `b` to themselves, with `server` depending on a vendored registry crate `wrapper` that depends on `b`, and `b` depending by path only on a vendored crate `leaf` without a report, `cargo check -p server` succeeded and `cargo tree -p server` showed `server -> wrapper -> b -> leaf`.
+
+So only the membership message says by itself that the failure is one that cargo does not make for a crate it builds as a dependency: the message about a workspace member also comes when cargo rejects a crate that `x` needs.
+:::
+
 ## Sources
 
 Pages and repositories read for the design discussion, on 12 November 2026.
