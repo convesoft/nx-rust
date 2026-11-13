@@ -4,6 +4,7 @@ import { CargoMetadata, CargoPackage } from "../cargo/metadata";
 import { readRedirections, Redirection } from "../cargo/redirections";
 import { CargoError } from "../cargo/run-cargo";
 import { ComputationReports } from "./computation-reports";
+import { realPath } from "./real-path";
 
 /** A Cargo workspace, which may be a standalone crate: a workspace of one. */
 export interface CargoWorkspace {
@@ -88,6 +89,7 @@ export async function discoverWorkspaces(
   const handed = new Set(manifests);
   const claimed = new Set<string>();
   const workspaces: CargoWorkspace[] = [];
+  const warnings: string[] = [];
   for (const manifest of [...manifests].sort(shallowestFirst)) {
     if (claimed.has(manifest)) {
       continue;
@@ -101,6 +103,8 @@ export async function discoverWorkspaces(
     for (const pkg of memberPackages) {
       claimed.add(repositoryPath(workspaceRoot, pkg.manifest_path));
     }
+    const found = await readRedirections(report.workspace_root);
+    warnings.push(...found.warnings);
     workspaces.push({
       root: repositoryPath(workspaceRoot, report.workspace_root) || ".",
       rootManifest,
@@ -109,16 +113,17 @@ export async function discoverWorkspaces(
       members: memberPackages
         .filter((pkg) => handed.has(repositoryPath(workspaceRoot, pkg.manifest_path)))
         .sort((a, b) => compare(a.manifest_path, b.manifest_path)),
-      redirections: await readRedirections(report.workspace_root),
+      redirections: found.redirections,
     });
   }
-  const pathDependencyReports = await readPathDependencies(workspaces, workspaceRoot, reports);
-  return {
-    workspaceRoot,
+  const pathDependencyReports = await readPathDependencies(
     workspaces,
-    pathDependencyReports,
-    warnings: outsideRedirectionWarnings(workspaces, workspaceRoot),
-  };
+    workspaceRoot,
+    reports,
+    warnings,
+  );
+  warnings.push(...outsideRedirectionWarnings(workspaces, workspaceRoot));
+  return { workspaceRoot, workspaces, pathDependencyReports, warnings: [...new Set(warnings)] };
 }
 
 /**
@@ -168,13 +173,20 @@ function describeWorkspaces(folders: string[]): string {
  * the crate: there the member's tasks run, and so there plain cargo reads
  * the crate. A redirection to a folder without a `Cargo.toml` gets no
  * report: cargo fails when it applies one, and the plugin leaves that
- * failure to the cargo of the tasks.
+ * failure to the cargo of the tasks. A redirected crate is compared with the
+ * crates that have projects by its real path, through symbolic links.
+ *
+ * When cargo fails for a redirected crate, as for a crate inside a
+ * workspace's folder that is not its member, which cargo builds as a patch
+ * but does not report, graph creation goes on: a warning in `warnings` names
+ * the manifest and cargo's message, and the crate has no report.
  */
 // @mara implements DES-METADATA-REPORT
 async function readPathDependencies(
   workspaces: CargoWorkspace[],
   workspaceRoot: string,
   reports: ComputationReports,
+  warnings: string[],
 ): Promise<PathDependencyReport[]> {
   const withProject = new Set(
     workspaces.flatMap((workspace) => workspace.members.map((pkg) => pkg.manifest_path)),
@@ -189,14 +201,30 @@ async function readPathDependencies(
   const visited = new Set<string>();
   const queue: { pkg: CargoPackage; cwd: string }[] = [];
   // Requests the report of a crate without a project, unless one covers it
-  // already, and queues the crate so that its path dependencies follow.
-  const reach = async (manifest: string, cwd: string, subject: () => string) => {
+  // already, and queues the crate so that its path dependencies follow. With
+  // `failures`, a report that cargo fails goes there instead of failing.
+  const reach = async (
+    manifest: string,
+    cwd: string,
+    subject: () => string,
+    failures?: string[],
+  ) => {
     if (withProject.has(manifest) || visited.has(manifest)) {
       return;
     }
     visited.add(manifest);
     if (!known.has(manifest)) {
-      const report = await readPathDependency(manifest, subject(), cwd, workspaceRoot, reports);
+      const report = await readPathDependency(
+        manifest,
+        subject(),
+        cwd,
+        workspaceRoot,
+        reports,
+        failures,
+      );
+      if (report === undefined) {
+        return;
+      }
       pathDependencyReports.push({ manifest: repositoryPath(workspaceRoot, manifest), report });
       for (const pkg of report.packages) {
         if (!known.has(pkg.manifest_path)) {
@@ -233,15 +261,21 @@ async function readPathDependencies(
   for (const workspace of workspaces) {
     for (const { table, folder, file } of workspace.redirections) {
       const manifest = join(folder, "Cargo.toml");
-      if (table !== "paths" && existsSync(manifest)) {
-        await reach(
-          manifest,
-          workspace.report.workspace_root,
-          () =>
-            `a crate that ${displayPath(workspaceRoot, file)} redirects dependencies of the Cargo workspace in ${workspace.root} to, which has no project of its own`,
-        );
-        await drain();
+      if (table === "paths" || !existsSync(manifest)) {
+        continue;
       }
+      // The spelling under which a report or a project already knows it.
+      const real = realPath(manifest);
+      const spelled =
+        [...withProject, ...known.keys()].find((path) => realPath(path) === real) ?? manifest;
+      await reach(
+        spelled,
+        workspace.report.workspace_root,
+        () =>
+          `a crate that ${displayPath(workspaceRoot, file)} redirects dependencies of the Cargo workspace in ${workspace.root} to, which has no project of its own`,
+        warnings,
+      );
+      await drain();
     }
   }
   return pathDependencyReports;
@@ -268,18 +302,33 @@ async function readWorkspace(
   }
 }
 
+// Reads a crate without a project. With `failures`, a failure of cargo
+// itself adds a warning there and gives no report.
 async function readPathDependency(
   manifest: string,
   subject: string,
   cwd: string,
   workspaceRoot: string,
   reports: ComputationReports,
-): Promise<CargoMetadata> {
+  failures?: string[],
+): Promise<CargoMetadata | undefined> {
   const shown = displayPath(workspaceRoot, manifest);
   const folder = displayPath(workspaceRoot, cwd) || "the repository root";
   try {
     return await reports.request(manifest, cwd);
   } catch (error) {
+    if (failures !== undefined && error instanceof CargoError && !error.notStarted) {
+      const output = error.stderr.trim();
+      failures.push(
+        [
+          `nx-rust: \`cargo metadata\` failed for ${shown}, ${subject}: ${error.message}.`,
+          ...(output === "" ? [] : [output]),
+          "nx-rust goes on without its report, so it does not follow the path dependencies behind that crate; the crates that may use it take its whole folder into their cache keys.",
+          `To have them followed, fix what cargo reports, so that \`cargo metadata --no-deps --manifest-path ${shown}\` succeeds in ${folder}.`,
+        ].join("\n"),
+      );
+      return undefined;
+    }
     throw new Error(
       failureMessage(error, `${shown}, ${subject}`, [
         "nx-rust reads such a manifest to find the path dependencies behind it.",

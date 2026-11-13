@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -24,6 +25,19 @@ export interface Redirection {
   folder: string;
   /** The absolute path of the manifest or configuration file that holds it. */
   file: string;
+  /**
+   * The key of the entry's table: the source of a `[patch.<source>]` entry,
+   * such as `crates-io`, a registry's name or a URL, or the package id
+   * specification of a `[replace]` entry. Absent for `paths`.
+   */
+  key?: string;
+}
+
+/** What {@link readRedirections} found. */
+export interface WorkspaceRedirections {
+  redirections: Redirection[];
+  /** One message for each included file that the plugin skipped. */
+  warnings: string[];
 }
 
 /**
@@ -34,56 +48,62 @@ export interface Redirection {
  *   manifest, resolved against the manifest's folder; cargo ignores these
  *   tables in other manifests;
  * - every `[patch.<source>]` entry with a `path`, and every `paths` entry, in
- *   `.cargo/config.toml` and `.cargo/config` in `workspaceRoot` and in every
- *   folder above it, and in `config.toml` and `config` in the Cargo home,
- *   following `include`. Cargo resolves a path there against the folder
- *   above the one that holds the file.
+ *   the configuration of `workspaceRoot`, of every folder above it and of the
+ *   Cargo home, following `include`. In each of these folders cargo reads
+ *   `.cargo/config` where it exists, and `.cargo/config.toml` otherwise; in
+ *   the Cargo home, `config` or `config.toml` in the same way. It resolves a
+ *   path in such a file against the folder above the one that holds the file.
  *
  * The plugin's cargo commands start in the workspace root, so cargo reads
  * these configuration files for them. An `include` is followed whatever the
  * Cargo version: Cargo 1.91 ignores it, and a redirection that cargo does
- * not apply only adds edges. A file that does not exist is skipped.
+ * not apply only adds edges. For the same reason, an included file that
+ * cannot be read or parsed is skipped with a warning instead of failing.
+ * A file that does not exist is skipped.
  *
  * @param env Where `CARGO_HOME` is read from; without it, the Cargo home is
  *   `~/.cargo`.
- * @throws {Error} When a file exists but is no valid TOML, naming the file.
+ * @throws {Error} When the root manifest or a configuration file that cargo
+ *   reads in any version is no valid TOML, naming the file.
  */
 // @mara implements DES-METADATA-REPORT
 export async function readRedirections(
   workspaceRoot: string,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<Redirection[]> {
+): Promise<WorkspaceRedirections> {
   const manifest = join(workspaceRoot, "Cargo.toml");
-  const redirections: Redirection[] = [];
+  const found: WorkspaceRedirections = { redirections: [], warnings: [] };
   const table = await readToml(manifest);
   if (table !== undefined) {
-    redirections.push(...patchEntries(table.patch, dirname(manifest), manifest));
-    for (const entry of Object.values(asTable(table.replace))) {
+    found.redirections.push(...patchEntries(table.patch, dirname(manifest), manifest));
+    for (const [key, entry] of Object.entries(asTable(table.replace))) {
       const path = asTable(entry).path;
       if (typeof path === "string") {
-        redirections.push({
+        found.redirections.push({
           table: "replace",
           folder: resolve(workspaceRoot, path),
           file: manifest,
+          key,
         });
       }
     }
   }
   const read = new Set<string>();
-  for (const file of configFiles(workspaceRoot, env)) {
-    redirections.push(...(await readConfig(file, read)));
+  for (const [legacy, current] of configFiles(workspaceRoot, env)) {
+    await readConfig(existsSync(legacy) ? legacy : current, read, found);
   }
-  return redirections;
+  return found;
 }
 
 // The configuration files cargo reads for a command started in `folder`, as
-// candidates that may not exist: `.cargo/config` and `.cargo/config.toml` in
-// the folder and each one above it, then those of the Cargo home.
-function configFiles(folder: string, env: NodeJS.ProcessEnv): string[] {
-  const files: string[] = [];
+// pairs of the older and the current name, of which cargo reads the older
+// where it exists: those of the folder and each one above it, then those of
+// the Cargo home.
+function configFiles(folder: string, env: NodeJS.ProcessEnv): [string, string][] {
+  const files: [string, string][] = [];
   let current = resolve(folder);
   for (;;) {
-    files.push(join(current, ".cargo", "config"), join(current, ".cargo", "config.toml"));
+    files.push([join(current, ".cargo", "config"), join(current, ".cargo", "config.toml")]);
     const parent = dirname(current);
     if (parent === current) {
       break;
@@ -91,27 +111,48 @@ function configFiles(folder: string, env: NodeJS.ProcessEnv): string[] {
     current = parent;
   }
   const cargoHome = env.CARGO_HOME ? resolve(folder, env.CARGO_HOME) : join(homedir(), ".cargo");
-  files.push(join(cargoHome, "config"), join(cargoHome, "config.toml"));
+  files.push([join(cargoHome, "config"), join(cargoHome, "config.toml")]);
   return files;
 }
 
-// The redirections in a configuration file and the files it includes, each
-// file read once.
-async function readConfig(file: string, read: Set<string>): Promise<Redirection[]> {
+// Adds the redirections of a configuration file and of the files it
+// includes, reading each file once. An included file that cannot be read or
+// parsed adds a warning instead.
+async function readConfig(
+  file: string,
+  read: Set<string>,
+  found: WorkspaceRedirections,
+  includedFrom?: string,
+): Promise<void> {
   if (read.has(file)) {
-    return [];
+    return;
   }
   read.add(file);
-  const table = await readToml(file);
+  let table: Record<string, unknown> | undefined;
+  try {
+    table = await readToml(file);
+  } catch (error) {
+    if (includedFrom === undefined) {
+      throw error;
+    }
+    const reason = error instanceof TomlError ? error.reason : String(error);
+    found.warnings.push(
+      [
+        `nx-rust: ${file}, which ${includedFrom} includes, cannot be read: ${reason}`,
+        "nx-rust skips it, so a [patch] or paths entry in it gives no edges. Cargo 1.91 ignores include, and later versions fail on such a file.",
+      ].join("\n"),
+    );
+    return;
+  }
   if (table === undefined) {
-    return [];
+    return;
   }
   const base = dirname(dirname(file));
-  const redirections = patchEntries(table.patch, base, file);
+  found.redirections.push(...patchEntries(table.patch, base, file));
   if (Array.isArray(table.paths)) {
     for (const path of table.paths) {
       if (typeof path === "string") {
-        redirections.push({ table: "paths", folder: resolve(base, path), file });
+        found.redirections.push({ table: "paths", folder: resolve(base, path), file });
       }
     }
   }
@@ -119,24 +160,41 @@ async function readConfig(file: string, read: Set<string>): Promise<Redirection[
   for (const include of includes) {
     const path = typeof include === "string" ? include : asTable(include).path;
     if (typeof path === "string") {
-      redirections.push(...(await readConfig(resolve(dirname(file), path), read)));
+      await readConfig(resolve(dirname(file), path), read, found, file);
     }
   }
-  return redirections;
 }
 
 // The `[patch.<source>]` entries with a path, resolved against `base`.
 function patchEntries(patch: unknown, base: string, file: string): Redirection[] {
   const redirections: Redirection[] = [];
-  for (const source of Object.values(asTable(patch))) {
+  for (const [key, source] of Object.entries(asTable(patch))) {
     for (const entry of Object.values(asTable(source))) {
       const path = asTable(entry).path;
       if (typeof path === "string") {
-        redirections.push({ table: "patch", folder: resolve(base, path), file });
+        redirections.push({ table: "patch", folder: resolve(base, path), file, key });
       }
     }
   }
   return redirections;
+}
+
+/** A file that exists but is no valid TOML. */
+class TomlError extends Error {
+  constructor(
+    file: string,
+    /** The parser's message. */
+    readonly reason: string,
+  ) {
+    super(
+      [
+        `nx-rust could not parse ${file}: ${reason}`,
+        "nx-rust reads this file for the [patch], [replace] and paths entries that cargo applies, because a crate that cargo may build in place of a dependency needs an edge in the graph.",
+        "If cargo accepts the file, please report this at https://github.com/convesoft/nx-rust/issues.",
+      ].join("\n"),
+    );
+    this.name = "TomlError";
+  }
 }
 
 // The parsed file, or undefined when it does not exist.
@@ -154,14 +212,7 @@ async function readToml(file: string): Promise<Record<string, unknown> | undefin
   try {
     return parse(text) as Record<string, unknown>;
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      [
-        `nx-rust could not parse ${file}: ${reason}`,
-        "nx-rust reads this file for the [patch], [replace] and paths entries that cargo applies, because a crate that cargo may build in place of a dependency needs an edge in the graph.",
-        "If cargo accepts the file, please report this at https://github.com/convesoft/nx-rust/issues.",
-      ].join("\n"),
-    );
+    throw new TomlError(file, error instanceof Error ? error.message : String(error));
   }
 }
 

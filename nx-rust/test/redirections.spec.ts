@@ -1,14 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { readRedirections } from "../src/cargo/redirections";
 import {
+  applyFileChanges,
   FileChanges,
   FixtureGraph,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
+  pinnedToolchain,
+  pinnedToolchainAvailable,
   testEnvironment,
 } from "./harness";
 
@@ -35,11 +38,11 @@ describe("reading redirections", () => {
 
   /** The redirections of the workspace in `folder`, with paths relative to the temporary root. */
   async function read(folder: string, env: NodeJS.ProcessEnv = {}): Promise<string[][]> {
-    const found = await readRedirections(join(root, folder), {
+    const { redirections } = await readRedirections(join(root, folder), {
       CARGO_HOME: join(root, "cargo-home"),
       ...env,
     });
-    return found.map(({ table, folder, file }) => [
+    return redirections.map(({ table, folder, file }) => [
       table,
       relative(root, folder) || ".",
       relative(root, file),
@@ -69,17 +72,48 @@ describe("reading redirections", () => {
     ]);
   });
 
-  it("takes [patch] and paths from .cargo/config.toml and .cargo/config in the workspace folder and above, against the folder that holds .cargo", async () => {
+  it("takes [patch] and paths from .cargo/config.toml or .cargo/config in the workspace folder and above, against the folder that holds .cargo", async () => {
     write("ws/Cargo.toml", "[workspace]\n");
-    write("ws/.cargo/config.toml", '[patch.crates-io]\nmodel = { path = "crates/model" }\n');
     write("ws/.cargo/config", 'paths = ["local/lexer"]\n');
     write(".cargo/config.toml", '[patch.crates-io]\ntypes = { path = "shared/types" }\n');
     write("ws/crates/api/.cargo/config.toml", '[patch.crates-io]\nignored = { path = "x" }\n');
 
     expect(await read("ws")).toEqual([
       ["paths", "ws/local/lexer", "ws/.cargo/config"],
-      ["patch", "ws/crates/model", "ws/.cargo/config.toml"],
       ["patch", "shared/types", ".cargo/config.toml"],
+    ]);
+  });
+
+  it("reads only .cargo/config where .cargo/config.toml exists beside it, as cargo does, also when the other is no valid TOML", async () => {
+    write("ws/Cargo.toml", "[workspace]\n");
+    write("ws/.cargo/config", '[patch.crates-io]\nmodel = { path = "crates/model" }\n');
+    write(
+      "ws/.cargo/config.toml",
+      '[patch.crates-io]\nother = { path = "crates/other" }\nnot toml [\n',
+    );
+
+    expect(await read("ws")).toEqual([["patch", "ws/crates/model", "ws/.cargo/config"]]);
+  });
+
+  it("skips an included file that is no valid TOML, with a warning that names it", async () => {
+    write("ws/Cargo.toml", "[workspace]\n");
+    write(
+      "ws/.cargo/config.toml",
+      'include = ["broken.toml"]\n[patch.crates-io]\nmodel = { path = "crates/model" }\n',
+    );
+    write("ws/.cargo/broken.toml", "not toml [\n");
+
+    const found = await readRedirections(join(root, "ws"), {
+      CARGO_HOME: join(root, "cargo-home"),
+    });
+
+    expect(found.redirections.map((entry) => relative(root, entry.folder))).toEqual([
+      "ws/crates/model",
+    ]);
+    expect(found.warnings).toEqual([
+      expect.stringContaining(
+        `nx-rust: ${join(root, "ws/.cargo/broken.toml")}, which ${join(root, "ws/.cargo/config.toml")} includes, cannot be read`,
+      ),
     ]);
   });
 
@@ -132,6 +166,13 @@ function edges(graph: FixtureGraph): [string, string][] {
 
 function compare(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Each project's name with its folder. */
+function roots(graph: FixtureGraph): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(graph.projects).map(([name, project]) => [name, project.root]),
+  );
 }
 
 /** rust/Cargo.toml with only the given lines below its [workspace] table. */
@@ -367,6 +408,216 @@ describe("edges to redirected crates", () => {
           "rust",
           "viaw",
         ]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "keep a direct redirection whose crate a possible one would reach back",
+    async () => {
+      // util 0.2.0 is patched in and needs model = "0.1", which is patched
+      // in as well; model needs the registry's util = "0.1", which local
+      // util 0.2.0 does not satisfy. Cargo builds util against local model.
+      const workspace = FixtureWorkspace.create("patched-workspaces", {
+        "rust/Cargo.toml": (manifest) => `${manifest}util = { path = "crates/util" }\n`,
+        "rust/crates/util/Cargo.toml": (manifest) =>
+          manifest.replace('version = "0.1.0"', 'version = "0.2.0"') + 'model = "0.1"\n',
+        "rust/crates/model/Cargo.toml": (manifest) =>
+          manifest.replace('util = { path = "../util" }', 'util = "0.1"'),
+        "rust/Cargo.lock": null,
+      });
+      try {
+        const graph = await workspace.graph();
+        const affected = await workspace.nx([
+          "show",
+          "projects",
+          "--affected",
+          "--files=rust/crates/model/src/lib.rs",
+          "--json",
+        ]);
+
+        expect(edges(graph)).toContainEqual(["util", "model"]);
+        // A possible use of util by model would close a cycle with that real
+        // edge: model gets util's files as an input instead.
+        expect(edges(graph)).not.toContainEqual(["model", "util"]);
+        expect(JSON.parse(affected.output.slice(affected.output.indexOf("[")))).toContain("util");
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "are left out both ways between two redirected crates that may only possibly use each other",
+    async () => {
+      const graph = await loadFixtureGraph("patched-workspaces", {
+        files: {
+          "rust/Cargo.toml": (manifest) =>
+            `${manifest}util = { path = "crates/util" }\nharness = { path = "crates/harness" }\n`,
+        },
+      });
+
+      expect(edges(graph)).not.toContainEqual(["util", "harness"]);
+      expect(edges(graph)).not.toContainEqual(["harness", "util"]);
+      // The positive control: both keep their direct edge to types.
+      expect(edges(graph)).toContainEqual(["util", "types"]);
+      expect(edges(graph)).toContainEqual(["harness", "types"]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "reach a crate through a symbolic link in the redirection's path",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", {
+        "rust/Cargo.toml": (manifest) =>
+          manifest.replace('"../shared/crates/types"', '"alias/crates/types"'),
+      });
+      try {
+        symlinkSync("../shared", join(workspace.root, "rust/alias"));
+
+        const graph = await workspace.graph();
+
+        expect(roots(graph)).toMatchObject({ types: "shared/crates/types" });
+        expect(edges(graph)).toEqual(committed);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "do not fail the graph for a redirected crate that cargo cannot report, and warn",
+    async () => {
+      // rust/local lies in the folder of rust without being its member:
+      // cargo builds it as a patch but refuses to report it.
+      const workspace = FixtureWorkspace.create("patched-workspaces", {
+        "rust/Cargo.toml": (manifest) =>
+          manifest.replace('fork = { path = "../third_party/fork" }', 'fork = { path = "local" }'),
+        "rust/local/Cargo.toml":
+          '[package]\nname = "fork"\nversion = "0.1.0"\nedition = "2024"\n\n[dependencies]\nmodel = "0.1"\n',
+        "rust/local/src/lib.rs": "",
+        ".nxignore": "rust/local/\n",
+      });
+      try {
+        const graph = await workspace.graph();
+        const shown = await workspace.nx(["show", "projects"]);
+
+        expect(edges(graph)).toEqual(committed);
+        expect(shown.status).toBe(0);
+        expect(shown.output).toContain("`cargo metadata` failed for rust/local/Cargo.toml");
+        expect(shown.output).toContain("believes it's in a workspace");
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // Cargo 1.91 ignores include, so only that version accepts a broken
+  // included file; 1.100 fails on it, and so does graph creation.
+  if (pinnedToolchainAvailable()) {
+    it(
+      `do not fail the graph for an included file that is no valid TOML, which cargo ${pinnedToolchain} ignores`,
+      async () => {
+        const workspace = FixtureWorkspace.create("patched-workspaces", {
+          "rust/rust-toolchain.toml": `[toolchain]\nchannel = "${pinnedToolchain}"\n`,
+          "rust/.cargo/config.toml": 'include = ["broken.toml"]\n',
+          "rust/.cargo/broken.toml": "not toml [\n",
+        });
+        try {
+          const graph = await workspace.graph();
+          const shown = await workspace.nx(["show", "projects"]);
+
+          expect(edges(graph)).toEqual(committed);
+          expect(shown.status).toBe(0);
+          expect(shown.output).toContain("rust/.cargo/broken.toml, which");
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+  } else {
+    it.todo(
+      `do not fail the graph for an included file that is no valid TOML: install the ${pinnedToolchain} toolchain with rustup to check it`,
+    );
+  }
+
+  it.each<[string, FileChanges]>([
+    [
+      "a .cargo/config.toml that is no valid TOML beside the .cargo/config that cargo reads",
+      {
+        "rust/.cargo/config": 'paths = ["crates/model"]\n',
+        "rust/.cargo/config.toml": "not toml [\n",
+      },
+    ],
+  ])(
+    "do not fail the graph for %s",
+    async (_file, files) => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", files);
+      try {
+        const graph = await workspace.graph();
+        const shown = await workspace.nx(["show", "projects"]);
+
+        expect(edges(graph)).toEqual(committed);
+        expect(shown.status).toBe(0);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "come from a git dependency that [patch] redirects to a crate of the repository",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces");
+      try {
+        // A git repository outside the repository holds remote 0.1.0.
+        const repository = join(dirname(workspace.root), "remote.git");
+        mkdirSync(join(repository, "src"), { recursive: true });
+        writeFileSync(
+          join(repository, "Cargo.toml"),
+          '[package]\nname = "remote"\nversion = "0.1.0"\nedition = "2024"\n',
+        );
+        writeFileSync(join(repository, "src/lib.rs"), "");
+        const git = (...args: string[]) =>
+          execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+            cwd: repository,
+            env: testEnvironment(),
+          });
+        git("init", "-q");
+        git("add", "-A");
+        git("commit", "-q", "-m", "remote");
+        const url = `file://${repository}`;
+        applyFileChanges(workspace.root, {
+          "rust/Cargo.toml": (manifest) =>
+            `${manifest}\n[patch."${url}"]\nremote = { path = "../shared/crates/remote" }\n`,
+          "shared/crates/remote/Cargo.toml":
+            '[package]\nname = "remote"\nversion = "0.1.0"\nedition = "2024"\n',
+          "shared/crates/remote/src/lib.rs": "",
+          "rust/crates/plain/Cargo.toml": (manifest) =>
+            `${manifest}\n[dependencies]\nremote = { git = "${url}" }\n`,
+        });
+
+        const graph = await workspace.graph();
+        const affected = await workspace.nx([
+          "show",
+          "projects",
+          "--affected",
+          "--files=shared/crates/remote/src/lib.rs",
+          "--json",
+        ]);
+
+        // plain's only dependency is the git one, so its edge is the direct one.
+        expect(edges(graph)).toContainEqual(["plain", "remote"]);
+        expect(JSON.parse(affected.output.slice(affected.output.indexOf("[")))).toContain("plain");
       } finally {
         workspace.remove();
       }
