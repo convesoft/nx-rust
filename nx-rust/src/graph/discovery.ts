@@ -7,6 +7,13 @@ import { ComputationReports } from "./computation-reports";
 export interface CargoWorkspace {
   /** The folder of the root manifest, relative to the repository root: `.` for the root itself. */
   root: string;
+  /** The root manifest, relative to the repository root. */
+  rootManifest: string;
+  /**
+   * Whether Nx handed the root manifest to the plugin. A root manifest that
+   * is ignored or matched by `exclude` gives no project, like a member's.
+   */
+  rootManifestHanded: boolean;
   /** The workspace's `cargo metadata` report. */
   report: CargoMetadata;
   /**
@@ -73,13 +80,16 @@ export async function discoverWorkspaces(
     const report = await readWorkspace(manifest, workspaceRoot, reports);
     const members = new Set(report.workspace_members);
     const memberPackages = report.packages.filter((pkg) => members.has(pkg.id));
+    const rootManifest = repositoryPath(workspaceRoot, join(report.workspace_root, "Cargo.toml"));
     claimed.add(manifest);
-    claimed.add(repositoryPath(workspaceRoot, join(report.workspace_root, "Cargo.toml")));
+    claimed.add(rootManifest);
     for (const pkg of memberPackages) {
       claimed.add(repositoryPath(workspaceRoot, pkg.manifest_path));
     }
     workspaces.push({
       root: repositoryPath(workspaceRoot, report.workspace_root) || ".",
+      rootManifest,
+      rootManifestHanded: handed.has(rootManifest),
       report,
       members: memberPackages
         .filter((pkg) => handed.has(repositoryPath(workspaceRoot, pkg.manifest_path)))
