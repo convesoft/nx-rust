@@ -20,6 +20,7 @@ Implements `REQ-AFFECTED-TESTS`, `REQ-SELECTION-SAFETY` and steps 1 and 2 of `DE
 - [ ] Pass the selection to nextest through a generated configuration file
 - [ ] Report a fallback to the full suite with its reason
 - [ ] Warn when cargo-affected is missing in a run in mode `full`
-- [ ] `--affectedTests=false` and the per-crate opt-out
+- [ ] `--affectedTests=false` and the per-crate opt-out (`DES-TEST-RUN`, `DES-PLUGIN-OPTIONS`); the graph-time error for `affectedTests = true` belongs to nxr-xyq7c8
+- [ ] The task-time error for `--affectedTests=true` that `DES-DIAGNOSTICS` lists, for a single task and in a batch
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
