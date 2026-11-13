@@ -8,14 +8,19 @@ export type Env = Record<string, string | undefined>;
 /**
  * Runs Nx in the workspace with static output, its colours removed. The
  * output style comes first, so that it stays an option of Nx also when
- * `args` holds `--`.
+ * `args` holds `--`. `NX_SKIP_LOG_GROUPING` keeps that output the same in
+ * GitHub Actions, where Nx would otherwise wrap each task's output in a log
+ * group and start its `> nx run` line with `::group::` and a status icon.
  */
 export async function runNx(
   workspace: FixtureWorkspace,
   args: string[],
   env: Env = {},
 ): Promise<{ status: number | null; output: string }> {
-  const { status, output } = await workspace.nx(["--output-style=static", ...args], env);
+  const { status, output } = await workspace.nx(["--output-style=static", ...args], {
+    NX_SKIP_LOG_GROUPING: "true",
+    ...env,
+  });
   return { status, output: withoutColours(output) };
 }
 
