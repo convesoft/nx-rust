@@ -399,13 +399,15 @@ describe("edges to redirected crates", () => {
         ]);
 
         expect(status).toBe(0);
-        // util has no edge to model, which depends on it; plain has no
+        // util has no edge to model, which depends on it, but its targets
+        // hash model's folder (DES-INPUTS, "Redirected crates"); plain has no
         // registry dependency.
         expect(JSON.parse(output.slice(output.indexOf("["))).sort()).toEqual([
           "api",
           "harness",
           "model",
           "rust",
+          "util",
           "viaw",
         ]);
       } finally {

@@ -3,13 +3,13 @@
 > **Status:** the plugin finds the Cargo workspaces and creates a project for
 > each crate and each workspace, with the default names and an edge for each
 > path dependency. The projects have the targets that the status note of
-> [Targets](targets.mara.md) names, which do not run yet. The `name`, `namePrefix` and `project` settings of the
+> [Targets](targets.mara.md) names. The `name`, `namePrefix` and `project` settings of the
 > metadata tables are not read yet, so for now only a `name` in a crate
 > folder's `project.json` or `package.json` resolves a name collision. A crate gets edges to the crates that `[patch]`,
 > `[replace]` and `paths` redirect its workspace's dependencies to, so
 > `nx affected` follows them. Where such an edge is left out to avoid a cycle,
-> and for a redirected crate without a project, the crate's files become
-> inputs only together with the cache inputs (nxr-fy4t4k).
+> and for a redirected crate without a project, the crate's files are inputs
+> of the crate's targets ([Caching](caching.mara.md)).
 
 nx-rust finds every Cargo workspace in the repository and turns each member
 crate into an Nx project. You do not list crates anywhere: the plugin asks

@@ -11,9 +11,11 @@ invocations. The unit tests in this folder and the end-to-end tests in
 
 Each folder under [`fixtures`](fixtures) is the root of a small repository
 built to show one situation. Every Cargo workspace in it has a current
-`Cargo.lock`, and every crate builds and passes `cargo test --locked`.
+`Cargo.lock`, every crate builds and passes `cargo test --locked`, and its
+sources are formatted as `cargo fmt` leaves them.
 [`fixtures.spec.ts`](fixtures.spec.ts) checks against `cargo metadata` that
-each fixture still has the workspaces and members listed there.
+each fixture still has the workspaces and members listed there, and with
+`rustfmt --check` that its sources are formatted.
 
 | Fixture                | Situation                                                                                                                                                                                                                                                                                                                                                                        |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -129,15 +131,6 @@ Graph creation cannot load the plugin by its package name from that link,
 because the package names its built entry point: a test that runs a
 generator on an `nx.json` that lists `@convesoft/nx-rust` passes
 `--skipProjectGraph`, and the end-to-end tests cover the installed package.
-
-Nx looks up a target's executor whenever it hashes the target, and fails the
-hash when the executor's package declares none. Until the plugin's
-`package.json` declares its executors (nxr-kmdpgj), the link is a folder of
-its own: it links every file of the plugin's package folder but
-`package.json`, which it copies with an `executors` entry added, and holds the
-probe executor (`cargoProbeProject` below) under the names of the plugin's
-executors, `cargo` and `run`. Nx then hashes the inferred targets as the
-plugin writes them; running one runs the probe.
 
 **`repositoryFiles(root)`** returns every file below `root` with its content,
 leaving out `node_modules` and `.nx`, and **`changedFiles(before, after)`**

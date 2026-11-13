@@ -23,6 +23,12 @@ export interface ProjectCargoMetadata {
   workspaceManifest: string;
   /** The crate's real package name; absent for a workspace project without a crate. */
   packageName?: string;
+  /**
+   * The warnings that graph creation found for the project, which the
+   * executor prints again at the start of each of its tasks
+   * (`DES-DIAGNOSTICS`, "Warnings where they are seen"); absent without any.
+   */
+  warnings?: string[];
 }
 
 /** The metadata that {@link ProjectCargoMetadata} describes, for one project. */
@@ -141,7 +147,13 @@ function heldElsewhere(files: readonly { file: string }[], roots: readonly strin
   );
 }
 
-function cargoMetadataOf(project: ProjectConfiguration): ProjectCargoMetadata | undefined {
+/**
+ * The {@link ProjectCargoMetadata} of a project, or `undefined` for a
+ * project that the plugin did not create.
+ */
+export function cargoMetadataOf(
+  project: Pick<ProjectConfiguration, "metadata">,
+): ProjectCargoMetadata | undefined {
   const value = project.metadata?.[cargoMetadataKey] as Partial<ProjectCargoMetadata> | undefined;
   return typeof value?.projectName === "string" &&
     typeof value.manifest === "string" &&

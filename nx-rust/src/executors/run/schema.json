@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/schema",
+  "version": 2,
+  "outputCapture": "pipe",
+  "title": "cargo run",
+  "description": "Runs a binary of a crate with cargo run, in the root folder of the Cargo workspace.",
+  "type": "object",
+  "properties": {
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Features to activate, passed as --features. Taken by build, check, lint, test, bench, run and doc."
+    },
+    "allFeatures": {
+      "type": "boolean",
+      "description": "Activate all features, passed as --all-features. Taken by build, check, lint, test, bench, run and doc."
+    },
+    "noDefaultFeatures": {
+      "type": "boolean",
+      "description": "Do not activate the default features, passed as --no-default-features. Taken by build, check, lint, test, bench, run and doc."
+    },
+    "profile": {
+      "type": "string",
+      "description": "The Cargo profile to build with, passed as --profile. Taken by build, check, lint, test, bench, run and doc."
+    },
+    "targetTriple": {
+      "type": "string",
+      "description": "The platform triple to build for, passed as --target. Taken by build, check, lint, bench, run and doc; test runs on the host triple only."
+    },
+    "bin": {
+      "type": "string",
+      "description": "The binary to run, passed as --bin, for a crate with several binaries and no default-run."
+    },
+    "pluginVersion": {
+      "type": "string",
+      "description": "The plugin's version, which the plugin sets for the cache key. Not meant to be set by hand."
+    }
+  }
+}

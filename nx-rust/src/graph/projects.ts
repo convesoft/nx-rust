@@ -75,6 +75,7 @@ export interface CargoGraph {
  *
  * @param targetNames The names of the inferred targets from the plugin options.
  * @param context What the caching of the projects shares (`cacheContext` in `caching.ts`).
+ * @param locked The `locked` option from the plugin options.
  * @throws {Error} When `targetNames` gives two targets of one project the same name.
  */
 // @mara implements DES-PROJECT-GRAPH
@@ -82,6 +83,7 @@ export function inferProjects(
   discovery: CargoDiscovery,
   targetNames: TargetNames,
   context: CacheContext,
+  locked = false,
 ): CargoProject[] {
   const projects: Omit<CargoProject, "targets" | "namedInputs" | "warnings">[] = [];
   for (const workspace of discovery.workspaces) {
@@ -110,7 +112,7 @@ export function inferProjects(
   const targets = nameTargets(
     projects.map((project) => ({
       project,
-      targets: inferTargets(project, context),
+      targets: inferTargets(project, context, locked),
     })),
     targetNames,
   );

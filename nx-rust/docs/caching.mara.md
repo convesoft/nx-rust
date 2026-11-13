@@ -1,16 +1,17 @@
 # Caching
 
-> **Status:** the inferred targets declare the inputs and outputs of this page,
-> and those that it caches are cached, but no target runs yet, because the
-> plugin's executors are still missing (nxr-kmdpgj). Until nxr-xq9ava brings
-> the `lockfile` task, a cached crate target hashes its workspace's whole
-> `Cargo.lock` in place of the crate's digest: any change to the lockfile
-> changes the keys of every crate of that workspace, and a lockfile that cargo
-> would still change is not handled, so a task can be keyed on the lockfile
-> before its own cargo command updates it. `fileInputs`, `envInputs` and
-> `runtimeInputs` are not read yet (nxr-xyq7c8, nxr-d371vy), every workspace
-> counts as using the `workspace-build` strategy, and the check of a build's
-> dependency files is not implemented (nxr-agyqmz).
+> **Status:** each task's cargo command starts in the workspace root, and
+> locked mode works as [Where cargo runs](#where-cargo-runs) describes. The
+> inferred targets declare the inputs and outputs of this page, and those
+> that it caches are cached. Until nxr-xq9ava brings the `lockfile` task, a
+> cached crate target hashes its workspace's whole `Cargo.lock` in place of
+> the crate's digest: any change to the lockfile changes the keys of every
+> crate of that workspace, and a lockfile that cargo would still change is not
+> handled, so a task can be keyed on the lockfile before its own cargo command
+> updates it. `fileInputs`, `envInputs` and `runtimeInputs` are not read yet
+> (nxr-xyq7c8, nxr-d371vy), every workspace counts as using the
+> `workspace-build` strategy, and the check of a build's dependency files is
+> not implemented (nxr-agyqmz).
 
 Nx caches the **result** of a Rust task and, for a few targets, its **final
 artifacts**. It never stores or restores Cargo's intermediate files: Cargo owns
@@ -196,6 +197,7 @@ are those at the workspace root and above it.
   every cargo command of a task passes `--locked` and fails instead. Three
   targets never pass it: `update`, which exists to change the lockfile, and
   `fmt` and `fmt-check`, because `cargo fmt` reads no lockfile and rejects the
+  flag. `audit` runs cargo-audit, which only reads `Cargo.lock` and has no such
   flag. Building the project graph never touches `Cargo.lock`.
 - In locked mode, every run in which the `lockfile` task runs fails on an
   outdated `Cargo.lock`, also when every crate task is then restored from the

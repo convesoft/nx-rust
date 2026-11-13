@@ -1,7 +1,10 @@
 # Continuous integration
 
-> **Status:** specified, not implemented yet. The coverage baseline arrives
-> with milestone 0.3.
+> **Status:** `NX_RUST_LOCKED` works; the `lockfile` task that checks
+> `Cargo.lock` in every run does not exist yet (nxr-xq9ava), so a cached crate
+> target hashes its workspace's whole `Cargo.lock` until then
+> ([Caching](caching.mara.md)). The coverage baseline arrives with milestone
+> 0.3.
 
 v1 targets a single machine: all Rust tasks of a pipeline run on one runner.
 JS tasks can be distributed as before.

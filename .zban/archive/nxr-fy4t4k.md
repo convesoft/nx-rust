@@ -1,0 +1,55 @@
+---
+title: Declare cache inputs and outputs
+status: done
+type: feature
+priority: high
+parent: nxr-w9qa5f
+blocked_by:
+  - nxr-t1ht7j
+  - nxr-5p9zq5
+related:
+  - nxr-1ydrfd
+created_at: 2026-11-12T18:20:01Z
+closed_at: 2026-11-13T16:32:02Z
+---
+
+Goal: every cached target declares complete inputs and only final outputs.
+
+Implements `REQ-INPUT-FILES`, `REQ-ENV-ALLOWLIST`, `REQ-TOOLCHAIN-KEY`, `REQ-CACHE-OUTPUTS`, `DES-INPUTS`, `DES-OUTPUTS` and `DES-BUILD-DIRS` (`nx-rust/docs/caching.mara.md`). Checked by `VER-CACHE-KEYS` and `VER-CARGO-UNCHANGED`. The whole `Cargo.lock` is the interim input for external dependencies.
+
+- [x] The whole crate folder as the crate-file input, and real paths for workspace files, including every `.cargo/config.toml` and `rust-toolchain.toml` that applies
+- [x] Inputs for path dependencies without a project, with the warning where Nx cannot see them, and for tool configuration files
+- [x] A test that `init` prints the warning for a path dependency that Nx cannot see (`VER-SETUP`); `init` runs `createNodes` through Nx (`nx-rust/src/generators/init/graph-check.ts`), so a warning printed there reaches it
+- [x] `^` inputs over normal, build and dev-dependency edges
+- [x] The environment allowlist and the inputs the repository adds, placed as `DES-INPUTS` says
+- [x] `externalDependencies: ["@convesoft/nx-rust"]` on every cached target where Nx has a node for the package, and otherwise `[]` with the plugin's version in the option `pluginVersion` of every inferred target (`DES-INPUTS`, `DES-PLUGIN-OPTIONS`); the graph and cache-key harness loads the plugin from source, which is the second case
+- [x] Under the `cargo` and `workspace-build` strategies, the manifest of every member as an input of every member of the workspace (`DES-INPUTS`)
+- [x] The toolchain runtime input, run in the workspace root
+- [x] The toolchain input's command for a missing pinned toolchain (`DES-INPUTS`, `ADR-GRAPH-NO-TOOLCHAIN-INSTALL`), with the missing-toolchain case of `VER-CACHE-KEYS`
+- [x] Outputs: executables, `cdylib` and `staticlib` files for `build`, the whole doc folder of the artifact directory for the workspace project's `doc`, none elsewhere; nothing inside the build directory; no caching of `build` and `doc` when the artifact directory is outside the repository, and none of `doc` when two workspaces share one artifact directory
+- [x] The warning when two or more workspaces share an artifact directory (`DES-OUTPUTS`, its row in `DES-DIAGNOSTICS`), also from the executor at the start of a task of each workspace concerned and in `init`'s output ("Warnings where they are seen" in `DES-DIAGNOSTICS`), with its case in the last paragraph of `VER-SETUP`
+- [x] Inputs for redirected crates (`DES-INPUTS`, row "Redirected crates", `ADR-REDIRECTION-EDGES`): every use that `redirectedUses` in `nx-rust/src/graph/redirected-uses.ts` returns with `edge: false` gives the member's targets a fileset for the use's `folder`; where the use has no `projectRoot` and is `reported`, that crate is handled like a path dependency without a project, the path dependencies behind it and the warning where Nx cannot see its files included; where it is not `reported`, its folder alone
+- [x] The cache-key matrix rows for all of the above, the `VER-CACHE-KEYS` rows for redirected crates included
+- [x] Set `cache: true` on `build`, `check`, `lint`, `test`, `fmt-check` and `doc` together with their inputs and outputs, as `DES-TARGETS` and `DES-OUTPUTS` give them. Until then nxr-t1ht7j leaves every inferred target uncached, because Nx's default inputs miss `Cargo.lock`, the workspace's manifest, the toolchain and the environment (`GOAL-TRUSTED-CACHE`); `target()` in `nx-rust/src/graph/targets.ts` sets it
+- [x] If this issue lands before nxr-kmdpgj: make sure that a `targetDefaults` entry in `nx.json` that sets `cache: true` on an inferred target, keyed by the target's name or by its executor, cannot cache a result under Nx's default inputs while the plugin infers `cache: false` for the target (`GOAL-TRUSTED-CACHE`; the interim rule is in the status note of `nx-rust/docs/targets.mara.md`, the cached targets in `DES-TARGETS`). Declaring the inputs on the targets that `DES-TARGETS` caches settles it for them, because such an entry then keeps the inferred inputs; the uncached ones keep the question. If nxr-kmdpgj landed first and dealt with it, tick this. nxr-kmdpgj landed first: the executor fails, before cargo runs, a task whose merged configuration has `cache: true` while its default name is not in `cachedTargets` (`taskInvocation` in `nx-rust/src/executors/task.ts`)
+- [x] Turn caching on by putting the targets that `DES-TARGETS` caches into `cachedTargets` (`nx-rust/src/graph/targets.ts`): that sets their `cache: true` and lifts the executor's interim check for them, which stays for `fmt`, `bench`, `run`, `audit`, `deny` and `update`. Change the tests of that check in `nx-rust/test/executors.spec.ts` ("a target that the configuration caches") and its sentence in the status note of `nx-rust/docs/targets.mara.md` with it
+- [x] Inputs of the uncached `fmt`, `bench` and `run`, as `DES-INPUTS` lists them (`CARGO_BUILD_WARNINGS` on `bench` and `run`), so that `nx affected` selects them; nxr-t1ht7j leaves them, and those of the cached targets, to Nx's default inputs, which select no crate target after a change to `Cargo.lock` or the workspace's manifest
+
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
+
+## Summary of Changes
+
+Every inferred target declares its caching, inputs and outputs (`DES-INPUTS`, `DES-OUTPUTS`, `DES-BUILD-DIRS`), from new modules beside the target inference: `nx-rust/src/graph/inputs.ts` (named input, target inputs, environment list, toolchain command), `outputs.ts` (outputs, and the artifact-directory cases that leave `build` and `doc` uncached), `path-dependencies.ts` and `visibility.ts` (crates without a project that path dependencies and redirections reach, and whether Nx sees them), `plugin-package.ts` (npm node or `pluginVersion`) and `caching.ts` (per-graph context, warnings, wiring). `targets.ts`, `projects.ts` and `registration.ts` only call them.
+
+- Caching: `cachedTargets` in `nx-rust/src/graph/targets.ts`, which #28's executor guard also reads, now holds `build`, `check`, `lint`, `test`, `fmt-check` and `doc`; it is the one source. `configureCaching` turns `build` and `doc` off where the artifact directory lies outside the repository and `doc` where two workspaces share it, each with a warning. The guard keeps failing a task of `fmt`, `bench`, `run`, `audit`, `deny` or `update` that the configuration caches, and its message now says why the plugin leaves that target uncached.
+- Inputs: the crate's own named input is `default` (its folder, minus `Cargo.lock` at a workspace root, plus the folders of crates without a project that path dependencies and redirections reach); a custom name fails the hash wherever a crate depends on a project of another plugin (`EVD-NX-24-INPUTS-OUTPUTS`). Targets hash `default` and `^default`, workspace files by real path from the crate's parent up to the root, the folder of a redirected crate whose edge `redirectedUses` leaves out, member manifests (every workspace counts as `workspace-build` until the setting is read), clippy and rustfmt files, the environment list with the host's triples (GNU and musl on Linux) and the configured ones, `CARGO_BUILD_WARNINGS` and `CLIPPY_CONF_DIR` where `DES-INPUTS` puts them, the toolchain command `cd '<ws>' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom`, and `externalDependencies: ["@convesoft/nx-rust"]` where the plugin runs from the installed package and Nx analyses a lockfile that lists it, `[]` with `pluginVersion` on every target otherwise. `fmt`, `bench` and `run` get the inputs of `fmt-check`, `build` and `build`.
+- Interim: the workspace's whole `Cargo.lock`, with `includeIgnored`, on every cached target but `fmt-check` (and on `bench` and `run`); nxr-xq9ava replaces it with the digest and has the step. The status note of `caching.mara.md` says so.
+- Outputs: executables and `cdylib`/`staticlib` files in `<artifact dir>/{options.targetTriple ?? .}/{options.profile ?? debug}`, `doc`'s `<artifact dir>/{options.targetTriple ?? .}/doc`, `[]` on every other target. Profiles `dev`, `test` and `bench` given by name are nxr-fqkbw9; a triple from Cargo's configuration is nxr-3svm6z.
+- Warnings for a crate without a project that Nx cannot see, for an artifact directory outside the repository (so nxr-jpvf82 is cancelled) and for a shared one (#29's step): printed when the graph is created and by `init`, recorded in `metadata.cargo.warnings`, and printed again by the executor at the start of each task of the project (`projectWarnings` in `nx-rust/src/executors/task.ts`).
+- Harness: the hashing script loads dotenv files as `nx run` does; the stand-in executors are gone now that the package declares its own.
+
+Mara: new `EVD-NX-24-INPUTS-OUTPUTS`; `DES-INPUTS` (named input, host triples, redirected uses, uncached targets, how the npm node is established), `DES-OUTPUTS` ("Paths"), `DES-DIAGNOSTICS` (where warnings are recorded); status notes of the caching, targets, setup, CI and workspaces pages.
+
+Follow-ups: nxr-fqkbw9, nxr-sz27cj and nxr-acm0pn (spec questions), nxr-2ermb0 (JS lockfile and `nx affected` end to end); steps added to nxr-xq9ava, nxr-xyq7c8, nxr-d371vy, nxr-k64tm5, nxr-jb6g5y and nxr-zqvnrh. nxr-a3z17c, which held the redirected-crate step while #24 was open, was deleted unmerged once #24 merged and the step was done here.
+
+Checks run, after merging `main` at e14459a: `pnpm nx run-many -t build lint test` passed (17 suites, 468 tests, among them `cache-keys.spec.ts` with the real Nx hasher, `caching.spec.ts` and `caching-runs.spec.ts` with real Nx runs of the executor: stores and restores the cached targets with their artifacts and nothing of the build directory, runs `fmt` every time, a missing toolchain never restores even with `NX_CACHE_FAILURES=true`, and warnings repeat in a task's output); `pnpm nx format:check --all` passed; `pnpm nx e2e nx-rust-e2e` passed (19 tests, with a restore from the cache and Nx resolving the installed plugin's npm node); `mara schema validate` and `mara project validate` valid, evaluation complete, 0 errors and 0 warnings; `zban check` passed.

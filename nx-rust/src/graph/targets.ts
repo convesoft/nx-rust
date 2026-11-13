@@ -60,7 +60,32 @@ export const targetCargoMetadataKey = "cargo";
 export interface TargetCargoMetadata {
   /** The target's default name in `DES-TARGETS`. */
   target: InferredTargetName;
+  /**
+   * The `locked` option of the plugin entry that created the project, which
+   * `NX_RUST_LOCKED` replaces for one run (`DES-INVOCATION`). It is no input
+   * of a task's key; `nx.json`, where it is set, is part of every key anyway.
+   */
+  locked: boolean;
 }
+
+/**
+ * The inferred targets that the plugin caches, as `DES-TARGETS` and
+ * `DES-OUTPUTS` give them, with the inputs of `DES-INPUTS` and the outputs
+ * of `DES-OUTPUTS` (`configureCaching` in `caching.ts`). `build` and `doc`
+ * are left uncached where their artifact directory lies outside the
+ * repository, and `doc` where two workspaces share one. The executor fails a
+ * task of any other target that its configuration caches after all, such as
+ * through a `targetDefaults` entry in `nx.json`, so that Nx stores no result
+ * for it.
+ */
+export const cachedTargets: ReadonlySet<InferredTargetName> = new Set<InferredTargetName>([
+  "build",
+  "check",
+  "lint",
+  "test",
+  "fmt-check",
+  "doc",
+]);
 
 /** What the inference of a project's targets needs to know about the project. */
 export interface TargetSubject {
@@ -85,10 +110,14 @@ export interface TargetSubject {
  * crate gets both sets. Whether a tool is installed decides nothing.
  *
  * No target depends on another task, so no target of a crate depends on one
- * of another crate (`REQ-NO-RUST-TASK-DEPS`). Whether a target is cached,
- * and its inputs and outputs, come from `configureCaching` in `caching.ts`.
+ * of another crate (`REQ-NO-RUST-TASK-DEPS`). Only the targets in
+ * {@link cachedTargets} are cached; their inputs and outputs, and the
+ * exceptions for the artifact directory, come from `configureCaching` in
+ * `caching.ts`.
  *
  * @param context What the caching of the graph's projects shares.
+ * @param locked The `locked` option of the plugin entry, which each target
+ *   carries in its metadata for the executor ({@link TargetCargoMetadata}).
  */
 // @mara implements DES-TARGETS
 // @mara implements DES-TARGET-COMMANDS
@@ -96,9 +125,15 @@ export interface TargetSubject {
 export function inferTargets(
   subject: TargetSubject,
   context: CacheContext,
+  locked = false,
 ): Map<InferredTargetName, TargetConfiguration> {
   const targets = new Map<InferredTargetName, TargetConfiguration>();
   const { pkg, workspace } = subject;
+  const target = (
+    inferred: InferredTargetName,
+    description: string,
+    options: Record<string, unknown> = {},
+  ) => inferredTarget(inferred, description, options, locked);
   if (pkg !== undefined) {
     const kinds = new Set(pkg.targets.flatMap((target) => target.kind));
     targets.set("build", target("build", "Builds the crate with cargo build."));
@@ -207,16 +242,18 @@ export function nameTargets<P extends { name: string; manifest: string }>(
   return named;
 }
 
-// A target of the plugin, before `configureCaching` gives it its caching.
-function target(
+// A target of the plugin, cached only if it is in cachedTargets.
+function inferredTarget(
   inferred: InferredTargetName,
   description: string,
-  options: Record<string, unknown> = {},
+  options: Record<string, unknown>,
+  locked: boolean,
 ): TargetConfiguration {
-  const metadata: TargetCargoMetadata = { target: inferred };
+  const metadata: TargetCargoMetadata = { target: inferred, locked };
   return {
     executor: cargoExecutor,
     options,
+    cache: cachedTargets.has(inferred),
     metadata: {
       description,
       technologies: ["cargo"],

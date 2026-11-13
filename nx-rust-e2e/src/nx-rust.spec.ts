@@ -254,8 +254,7 @@ describe("@convesoft/nx-rust", () => {
           expect(target).not.toHaveProperty("dependsOn");
         }
 
-        // Nx builds the task graph without running a task, which needs no
-        // executor yet (nxr-kmdpgj).
+        // Nx builds the task graph without running a task.
         const file = join(wrapperDirectory, "tasks.json");
         nx(projectDirectory, cargo, ["run-many", "-t", "build", "test", "lint", `--graph=${file}`]);
         const { tasks } = JSON.parse(readFileSync(file, "utf8"));
@@ -392,6 +391,159 @@ describe("@convesoft/nx-rust", () => {
           expect(output).toContain(untested);
           expect(output).toContain("It continues because NX_RUST_ALLOW_UNSUPPORTED_NX is true");
           expect(output).toContain("api");
+        },
+        HARNESS_TIMEOUT,
+      );
+    });
+
+    // VER-CARGO-UNCHANGED, as far as tasks that run one cargo call each show
+    // it: the test project becomes a git repository of its own, with the
+    // ignore rules of a real one.
+    describe("when Nx runs the inferred targets", () => {
+      const crates = ["api", "codegen", "model", "testkit"];
+      const rustFolder = () => join(projectDirectory, "rust");
+      const git = (...args: string[]) =>
+        execFileSync(
+          "git",
+          [
+            "-c",
+            "user.name=nx-rust e2e",
+            "-c",
+            "user.email=e2e@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            ...args,
+          ],
+          { cwd: projectDirectory, encoding: "utf8" },
+        );
+      // The plain cargo commands that do what `nx run-many -t build test lint` does.
+      const plainCargo = () =>
+        crates
+          .flatMap((crate) => [
+            ["build", "-p", crate],
+            ["test", "-p", crate],
+            ["clippy", "--all-targets", "-p", crate],
+          ])
+          .map((args) => {
+            const result = spawnSync("cargo", args, {
+              cwd: rustFolder(),
+              env: cargo.environment(testEnvironment()),
+              encoding: "utf8",
+            });
+            return { args, status: result.status, output: `${result.stdout}${result.stderr}` };
+          });
+      const compiles = /^\s*(Compiling|Checking) /m;
+
+      beforeAll(() => {
+        installFixture(projectDirectory, "subfolder-workspace", {
+          ".gitignore": "node_modules/\n.nx/cache\n.nx/workspace-data\ntarget/\n",
+        });
+        cargo.placeIn(join(projectDirectory, "node_modules", ".bin"));
+        git("init", "--quiet");
+        git("add", "--all");
+        git("commit", "--quiet", "--message", "The fixture");
+      });
+
+      afterAll(() => rmSync(join(projectDirectory, ".git"), { recursive: true, force: true }));
+
+      it(
+        "runs a target through the installed plugin's executor",
+        () => {
+          const output = withoutColours(
+            nx(projectDirectory, cargo, ["run", "api:build", "--output-style=static"]),
+          );
+
+          expect(output).toContain("Compiling api v0.1.0");
+          expect(output).toContain("Successfully ran target build for project api");
+          expect(cargo.calls(projectDirectory)).toEqual([
+            readRustWorkspace,
+            { cwd: "rust", args: ["build", "-p", "api"] },
+          ]);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "restores a cached task from the cache, running no cargo",
+        () => {
+          cargo.clear();
+          const output = withoutColours(
+            nx(projectDirectory, cargo, ["run", "api:build", "--output-style=static"]),
+          );
+
+          expect(output).toMatch(
+            /nx run api:build\s+\[(local cache|existing outputs match the cache, left as is)\]/,
+          );
+          expect(cargo.calls(projectDirectory)).toEqual([readRustWorkspace]);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      // Without Nx's cache, which would restore the tasks instead of running cargo.
+      it(
+        "shares its builds with plain cargo in both orders",
+        () => {
+          // Nx first, then plain cargo, which finds nothing to compile.
+          nx(projectDirectory, cargo, [
+            "run-many",
+            "-t",
+            "build",
+            "test",
+            "lint",
+            "--skip-nx-cache",
+          ]);
+          for (const result of plainCargo()) {
+            expect(result).toEqual({ ...result, status: 0 });
+            expect(result.output).not.toMatch(compiles);
+          }
+
+          // Plain cargo from scratch, then Nx, whose tasks compile nothing.
+          execFileSync("cargo", ["clean"], {
+            cwd: rustFolder(),
+            env: cargo.environment(testEnvironment()),
+          });
+          for (const result of plainCargo()) {
+            expect(result).toEqual({ ...result, status: 0 });
+          }
+          cargo.clear();
+          const output = withoutColours(
+            nx(projectDirectory, cargo, [
+              "run-many",
+              "-t",
+              "build",
+              "test",
+              "lint",
+              "--skip-nx-cache",
+              "--output-style=static",
+            ]),
+          );
+          expect(output).toContain("Successfully ran targets build, test, lint for 4 projects");
+          expect(output).not.toMatch(compiles);
+          // Each task ran cargo, which found everything up to date.
+          expect(cargo.calls(projectDirectory)).toHaveLength(1 + 3 * crates.length);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "leaves no file changed or new in the repository",
+        () => {
+          nx(projectDirectory, cargo, [
+            "run-many",
+            "-t",
+            "build",
+            "check",
+            "lint",
+            "test",
+            "fmt-check",
+            "fmt",
+            "doc",
+            "update",
+          ]);
+
+          expect(git("status", "--porcelain", "--untracked-files=all")).toEqual("");
         },
         HARNESS_TIMEOUT,
       );

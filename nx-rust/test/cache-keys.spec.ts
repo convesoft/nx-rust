@@ -1,4 +1,12 @@
-import { chmodSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { environmentVariables, hostTriples } from "../src/graph/inputs";
@@ -86,21 +94,23 @@ describeCacheKeyMatrix("keys must differ after", [
     keys: { "lib:test": "must differ", "lib:build": "must differ", "app:test": "must differ" },
   })),
   ...[
-    ["without a project", "third_party/fork/src/lib.rs", ["api", "viaw", "util", "harness", "model"]],
+    [
+      "without a project",
+      "third_party/fork/src/lib.rs",
+      ["api", "viaw", "util", "harness", "model"],
+    ],
     ["whose edge is left out to avoid a cycle", "rust/crates/model/src/lib.rs", ["util"]],
     ["with a project in another workspace", "shared/crates/types/src/lib.rs", ["api", "util"]],
-  ].map(
-    ([which, path, members]): CacheKeyRow => ({
-      change: `a change in a redirected crate ${which as string}, for every member that may use it`,
-      // rust/Cargo.toml's [patch.crates-io] redirects model, types and fork.
-      fixture: "patched-workspaces",
-      after: { files: { [path as string]: changed } },
-      keys: all(
-        (members as string[]).map((member) => `${member}:test`),
-        "must differ",
-      ),
-    }),
-  ),
+  ].map(([which, path, members]): CacheKeyRow => ({
+    change: `a change in a redirected crate ${which as string}, for every member that may use it`,
+    // rust/Cargo.toml's [patch.crates-io] redirects model, types and fork.
+    fixture: "patched-workspaces",
+    after: { files: { [path as string]: changed } },
+    keys: all(
+      (members as string[]).map((member) => `${member}:test`),
+      "must differ",
+    ),
+  })),
   {
     change: "a change in the root Cargo.toml",
     fixture: "subfolder-workspace",
@@ -519,11 +529,13 @@ describe("keys with the plugin's version", () => {
       const copy = mkdtempSync(join(tmpdir(), "nx-rust-plugin-copy-"));
       const source = join(pluginSourceEntry, "..");
       cpSync(source, join(copy, "src"), { recursive: true });
+      // The packages that the plugin loads, from this repository's root.
+      symlinkSync(join(source, "..", "..", "node_modules"), join(copy, "node_modules"), "dir");
+      // The plugin's own package.json with another version: the plugin reads
+      // its supported Nx versions from it as well.
+      const manifest = JSON.parse(readFileSync(join(source, "..", "package.json"), "utf8"));
       const version = (value: string) =>
-        writeFileSync(
-          join(copy, "package.json"),
-          JSON.stringify({ name: "@convesoft/nx-rust", version: value }),
-        );
+        writeFileSync(join(copy, "package.json"), JSON.stringify({ ...manifest, version: value }));
       const files: FileChanges = {
         "nx.json": JSON.stringify({
           plugins: [join(copy, "src", "index.ts")],

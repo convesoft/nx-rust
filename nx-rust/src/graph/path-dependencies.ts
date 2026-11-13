@@ -130,17 +130,14 @@ export async function findCrateFolders(
       }),
     );
   }
-  const seen = await foldersNxSees(
-    workspaceRoot,
-    [
-      ...new Set(
-        [...located.values()]
-          .flat()
-          .map((crate) => crate.inside)
-          .filter((path): path is string => path !== undefined),
-      ),
-    ],
-  );
+  const seen = await foldersNxSees(workspaceRoot, [
+    ...new Set(
+      [...located.values()]
+        .flat()
+        .map((crate) => crate.inside)
+        .filter((path): path is string => path !== undefined),
+    ),
+  ]);
   const withoutProject = new Map<string, PathDependency[]>();
   for (const [manifest, crates] of located) {
     withoutProject.set(

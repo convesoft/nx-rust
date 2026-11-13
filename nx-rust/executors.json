@@ -1,0 +1,14 @@
+{
+  "executors": {
+    "cargo": {
+      "implementation": "./src/executors/cargo/executor",
+      "schema": "./src/executors/cargo/schema.json",
+      "description": "Runs the cargo command of an inferred target of a crate or a Cargo workspace."
+    },
+    "run": {
+      "implementation": "./src/executors/run/executor",
+      "schema": "./src/executors/run/schema.json",
+      "description": "Runs a binary of a crate with cargo run."
+    }
+  }
+}

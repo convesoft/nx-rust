@@ -3,7 +3,7 @@ import { checkNxForGraph } from "../compatibility/nx-version";
 import { cacheContext } from "./caching";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
-import { readTargetNames } from "./options";
+import { readLocked, readTargetNames } from "./options";
 import { CargoGraph, inferProjects, projectNodes } from "./projects";
 
 /** What the `createNodes` call that started last found. */
@@ -73,7 +73,8 @@ export class Registration {
    * all its manifests in one call, so each call is taken as a computation of
    * its own.
    *
-   * @param options The entry's plugin options, of which `targetNames` is read.
+   * @param options The entry's plugin options, of which `targetNames` and
+   *   `locked` are read.
    * @param nxJson `nx.json`, which says whether Nx analyses the JS lockfile
    *   (`pluginInput` in `plugin-package.ts`).
    * @throws {Error} When the installed Nx is not supported (see
@@ -94,9 +95,10 @@ export class Registration {
     try {
       checkNxForGraph(workspaceRoot, reports);
       const targetNames = readTargetNames(options);
+      const locked = readLocked(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
       const context = await cacheContext(discovery, nxJson);
-      graph = { discovery, projects: inferProjects(discovery, targetNames, context) };
+      graph = { discovery, projects: inferProjects(discovery, targetNames, context, locked) };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {
