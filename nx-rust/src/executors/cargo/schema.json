@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/schema",
+  "version": 2,
+  "outputCapture": "pipe",
+  "title": "cargo",
+  "description": "Runs the cargo command of a target that @convesoft/nx-rust infers, in the root folder of the Cargo workspace.",
+  "type": "object",
+  "properties": {
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Features to activate, passed as --features. Taken by build, check, lint, test, bench, run and doc."
+    },
+    "allFeatures": {
+      "type": "boolean",
+      "description": "Activate all features, passed as --all-features. Taken by build, check, lint, test, bench, run and doc."
+    },
+    "noDefaultFeatures": {
+      "type": "boolean",
+      "description": "Do not activate the default features, passed as --no-default-features. Taken by build, check, lint, test, bench, run and doc."
+    },
+    "profile": {
+      "type": "string",
+      "description": "The Cargo profile to build with, passed as --profile. Taken by build, check, lint, test, bench, run and doc."
+    },
+    "targetTriple": {
+      "type": "string",
+      "description": "The platform triple to build for, passed as --target. Taken by build, check, lint, bench, run and doc; test runs on the host triple only."
+    },
+    "allTargets": {
+      "type": "boolean",
+      "description": "Check the tests, benches and examples too, passed as --all-targets. Taken by check and lint, where the inferred target sets it."
+    },
+    "noDeps": {
+      "type": "boolean",
+      "description": "Document the workspace's members only, passed as --no-deps. Taken by doc, where the inferred target sets it."
+    },
+    "affectedTests": {
+      "type": "boolean",
+      "description": "Whether test selects affected tests in a workspace that uses selection. Taken by test."
+    },
+    "pluginVersion": {
+      "type": "string",
+      "description": "The plugin's version, which the plugin sets for the cache key. Not meant to be set by hand."
+    }
+  }
+}

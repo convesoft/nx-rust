@@ -1,8 +1,10 @@
 # Configuration
 
-> **Status:** of these settings, only `targetNames` in the plugin options is
-> implemented. The metadata tables and the other plugin options are not read
-> yet.
+> **Status:** of these settings, only `targetNames` and `locked` in the plugin
+> options are implemented, together with `NX_RUST_LOCKED`. The metadata tables
+> and the other plugin options are not read yet. The options of targets work
+> where Nx sets them: on the command line, in a `project.json` and in
+> `targetDefaults`.
 
 Most repositories need no configuration. When a crate or workspace needs
 something other than the default, you say so in the `Cargo.toml` that already

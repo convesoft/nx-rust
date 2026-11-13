@@ -141,7 +141,13 @@ function heldElsewhere(files: readonly { file: string }[], roots: readonly strin
   );
 }
 
-function cargoMetadataOf(project: ProjectConfiguration): ProjectCargoMetadata | undefined {
+/**
+ * The {@link ProjectCargoMetadata} of a project, or `undefined` for a
+ * project that the plugin did not create.
+ */
+export function cargoMetadataOf(
+  project: Pick<ProjectConfiguration, "metadata">,
+): ProjectCargoMetadata | undefined {
   const value = project.metadata?.[cargoMetadataKey] as Partial<ProjectCargoMetadata> | undefined;
   return typeof value?.projectName === "string" &&
     typeof value.manifest === "string" &&

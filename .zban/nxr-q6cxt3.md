@@ -16,7 +16,7 @@ Implements `REQ-COMPATIBILITY` and `REQ-DIAGNOSTICS` (`nx-rust/docs/setup.mara.m
 - [ ] Version checks for Nx and Cargo with the found and required versions in the message
 - [ ] The peer dependency range of the package names the supported Nx majors, `^24` at first
 - [ ] Graph-time errors for the problems the design lists
-- [ ] Task-time errors for a missing tool, naming the tool, the feature that needs it and how to get it
+- [ ] Task-time errors for a missing tool, naming the tool, the feature that needs it and how to get it (the missing-tool row of `DES-DIAGNOSTICS`), with the `audit` and `deny` case of `VER-TARGETS`: since nxr-kmdpgj those targets run `cargo audit` and `cargo deny check` through the cargo executor (`nx-rust/src/executors/`) and, without the tool, fail with cargo's own message for an unknown command
 - [ ] Nothing is installed by the plugin
 - [ ] `init` stops for each of these errors too, and for an unsupported Nx also in a repository without a `Cargo.toml`, with the tests that the third paragraph of `VER-SETUP` lists, the name collision of nxr-1bv0wm included. `init` runs the plugin's `createNodes` through Nx (`nx-rust/src/generators/init/graph-check.ts`), so a check made there reaches it; a check made when the plugin loads has to reach it as well
 - [ ] `init`'s check also covers what graph creation checks in `createDependencies`, which it does not run yet: since nxr-1bv0wm, the collision between two projects of the plugin that hold one name once Nx has merged the projects of all plugins and entries (`DES-PROJECT-GRAPH`, `REQ-PROJECT-NAMES`, the collision row of `DES-DIAGNOSTICS`)
