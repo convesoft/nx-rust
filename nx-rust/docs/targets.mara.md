@@ -1,9 +1,6 @@
 # Targets
 
-> **Status:** specified, not implemented yet. Target names, commands, caching
-> and outputs are decided. The options that switch a target's flags have no
-> names yet; they are chosen in the option reference
-> ([Configuration](configuration.mara.md)).
+> **Status:** specified, not implemented yet.
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.
@@ -24,7 +21,7 @@ workspace. Nothing is declared per crate.
 | `audit`                    | `cargo audit`                                    | The workspace project                             | No     | None                                                              |
 | `deny`                     | `cargo deny check`                               | The workspace project, where cargo-deny is set up | No     | None                                                              |
 | `update`                   | `cargo update`                                   | The workspace project                             | No     | None                                                              |
-| `lockfile`                 | Writes a digest of `Cargo.lock` per crate        | The workspace project                             | Yes    | The digests, in `.nx/workspace-data`                              |
+| `lockfile`                 | `cargo update --workspace`, then a digest per crate | The workspace project                          | No     | The digests, in `.nx/workspace-data`                              |
 
 A crate's targets select it with `-p` and its real package name. Every command
 starts in the root folder of the crate's workspace
@@ -50,8 +47,7 @@ editor and Nx compile the same things and reuse each other's work
 The flag comes from an option of the target that is on by default. A crate whose
 benches need a nightly compiler, which stable rejects under `--all-targets`, can
 switch it off in its `[package.metadata.nx.targets.check.options]` and
-`[package.metadata.nx.targets.lint.options]`. The option's name is not settled
-yet.
+`[package.metadata.nx.targets.lint.options]` with `allTargets = false`.
 
 ## Warnings
 
@@ -80,10 +76,10 @@ from 1.97 on; older versions ignore it without a word
 `nx run api:run`. Arguments after `--` go to the binary.
 
 A crate with several binaries needs to say which one `run` starts: set
-`default-run` in its `[package]` table, or pass the binary through an option of
-the `run` target, on the command line or in the crate's metadata. Without
-either, cargo stops and lists the binaries. The option's name is not settled
-yet.
+`default-run` in its `[package]` table, or pass the binary through the `bin`
+option of the `run` target, on the command line as in `nx run api:run
+--bin=migrate` or in the crate's metadata. Without either, cargo stops and
+lists the binaries.
 
 `run` is not a continuous task: a target that depends on it waits until the
 binary exits, which is what a code generator or a migration needs. A crate that
@@ -114,7 +110,10 @@ these targets:
   artifact directory, as one site with one search index. A cache hit restores
   the whole folder. If two workspaces share one artifact directory, for example
   through a `target-dir` set above both, `doc` runs uncached and the plugin says
-  so: restoring one workspace's folder would delete the other's pages.
+  so: restoring one workspace's folder would delete the other's pages. It
+  passes `--no-deps`; with `noDeps = false` in
+  `[workspace.metadata.nx.project.targets.doc.options]` it documents the
+  dependencies too.
 - **`audit`** runs `cargo audit` against the workspace's `Cargo.lock`, with the
   settings in `.cargo/audit.toml` of the workspace root.
 - **`deny`** runs `cargo deny check`. It exists only where `deny.toml`,
@@ -123,10 +122,12 @@ these targets:
 - **`update`** runs `cargo update` and writes `Cargo.lock`. It never passes
   `--locked`, also with the `locked` option or `NX_RUST_LOCKED=true`, because
   changing the lockfile is its purpose.
-- **`lockfile`** reads `Cargo.lock` and writes one digest per crate of the
-  packages the crate reaches. Every cached task of a crate waits for it and
-  reads the crate's digest, so a dependency update reruns only the crates it
-  reaches ([Caching](caching.mara.md#lockfile-changes)). It runs no cargo.
+- **`lockfile`** runs `cargo update --workspace`, which brings `Cargo.lock` up
+  to date as your next `cargo build` would, and writes one digest per crate of
+  the packages the crate reaches. It is not cached and runs in every run. Every
+  cached task of a crate except `fmt-check` waits for it and reads the crate's
+  digest, so a dependency update reruns only the crates it reaches
+  ([Caching](caching.mara.md#lockfile-changes)).
 - The coverage baseline, in a workspace with `affectedTests`
   ([Continuous integration](ci.mara.md#the-coverage-baseline)).
 
@@ -215,7 +216,7 @@ Each crate's Nx targets are derived from Cargo's description of the crate, witho
 :status: accepted
 :satisfies: NEED-EFFICIENT-BUILDS
 
-No inferred target of a Rust crate depends on a target of another Rust crate, with one exception: every cached target of a crate depends on the lockfile task of its workspace ([[DES-LOCKFILE-HASHING]]), which is a target of the root crate's project where the root manifest is a package. A change in a dependency reaches the dependent through cache inputs, not through task ordering. The plugin adds no task dependency to JS projects either. A `^build` that a JS target declares itself reaches the `build` of the crates its project depends on directly, as Nx defines `^build`, and goes no further.
+No inferred target of a Rust crate depends on a target of another Rust crate, with one exception: every cached target of a crate other than `fmt-check` depends on the lockfile task of its workspace ([[DES-LOCKFILE-HASHING]]), which is a target of the root crate's project where the root manifest is a package. A change in a dependency reaches the dependent through cache inputs, not through task ordering. The plugin adds no task dependency to JS projects either. A `^build` that a JS target declares itself reaches the `build` of the crates its project depends on directly, as Nx defines `^build`, and goes no further.
 :::
 
 :::mara requirement REQ-TARGET-DEFAULT-GUARD
@@ -265,16 +266,16 @@ Retired on 13 November 2026: not part of v1. `run` is not continuous by default,
 | `napi-build`, `wasm-build` | none                       | Crates that produce that artifact                              | Yes    | [[DES-ARTIFACT-STEPS]]                         |
 | Release publish            | `publish`                  | Crates without `publish = false`                               | No     | None                                           |
 | `doc`                      | `doc`                      | The workspace project                                          | Yes    | The workspace's doc folder ([[DES-OUTPUTS]])   |
-| `lockfile`                 | none                       | The workspace project                                          | Yes    | The crates' digests ([[DES-LOCKFILE-HASHING]]) |
+| `lockfile`                 | `update --workspace`       | The workspace project                                          | No     | The crates' digests ([[DES-LOCKFILE-HASHING]]) |
 | `audit`                    | cargo-audit's `audit`      | The workspace project                                          | No     | None                                           |
 | `deny`                     | cargo-deny's `check`       | The workspace project, where a cargo-deny configuration exists | No     | None                                           |
 | `update`                   | `update`                   | The workspace project                                          | No     | None                                           |
 
-Only `clippy` is renamed, to `lint`: `lint`, `test` and `build` are the target names that Nx projects share. Formatting keeps Cargo's names, `fmt-check` and `fmt`, because Nx's `format` is a built-in command and not a target, and the targets of the workspace project keep the names of Cargo and the tools ([[ADR-NX-TARGET-NAMES]]); the lockfile task, which runs neither, is called `lockfile`. Every name can be changed through plugin options, the names of the artifact targets and of the workspace project's targets included. `bench` is not cached, because timings differ between runs. The commands are [[DES-TARGET-COMMANDS]] and [[DES-WORKSPACE-TARGETS]].
+Only `clippy` is renamed, to `lint`: `lint`, `test` and `build` are the target names that Nx projects share. Formatting keeps Cargo's names, `fmt-check` and `fmt`, because Nx's `format` is a built-in command and not a target, and the targets of the workspace project keep the names of Cargo and the tools ([[ADR-NX-TARGET-NAMES]]); the lockfile task is called `lockfile`. Every name can be changed through plugin options, the names of the artifact targets and of the workspace project's targets included. `bench` is not cached, because timings differ between runs. The commands are [[DES-TARGET-COMMANDS]] and [[DES-WORKSPACE-TARGETS]].
 
 Targets come from the `cargo metadata` report ([[DES-METADATA-REPORT]]): `run` exists when the crate has a binary target, `bench` when it has a bench target, an [[TERM-ARTIFACT-TARGET]] when the crate produces that artifact ([[DES-ARTIFACT-STEPS]]), and the release targets unless the manifest sets `publish = false`. The last five rows are targets of the [[TERM-WORKSPACE-PROJECT]]; `deny` exists only where a cargo-deny configuration file is in the workspace root. Whether a tool is installed never decides whether a target exists.
 
-No inferred target has a `dependsOn` entry that names another Rust crate's target, except that every cached crate target depends on the lockfile task of its workspace ([[REQ-NO-RUST-TASK-DEPS]]), and none uses `^build` ([[ADR-NO-RUST-BUILD-DEPS]]). Dependencies reach a target through `^` inputs ([[DES-INPUTS]]). The plugin adds no `dependsOn` entry to a JS project. A JS target's own `^build` reaches the `build` of the crates its project depends on directly, which is how Nx defines `^build`, and ends there.
+No inferred target has a `dependsOn` entry that names another Rust crate's target, except that every cached crate target other than `fmt-check` depends on the lockfile task of its workspace ([[REQ-NO-RUST-TASK-DEPS]]), and none uses `^build` ([[ADR-NO-RUST-BUILD-DEPS]]). Dependencies reach a target through `^` inputs ([[DES-INPUTS]]). The plugin adds no `dependsOn` entry to a JS project. A JS target's own `^build` reaches the `build` of the crates its project depends on directly, which is how Nx defines `^build`, and ends there.
 :::
 
 :::mara design DES-TARGET-COMMANDS
@@ -295,7 +296,7 @@ No inferred target has a `dependsOn` entry that names another Rust crate's targe
 
 Each command starts in the root folder of the crate's workspace, names the crate by its real package name and passes `--locked` as the `locked` option says ([[DES-INVOCATION]]), except `fmt` and `fmt-check`: `cargo fmt` resolves no dependencies and rejects the flag ([[EVD-CARGO-TARGET-COMMANDS]]). Batched tasks share cargo calls as [[DES-BATCH]] groups them; `cargo fmt` takes several `-p` as the cargo commands do.
 
-**Flags as options.** A flag beyond the package selection comes from an option of the target, so that a command passes only what its options ask for ([[DES-INVOCATION]]). `--all-targets` on `check` and `lint` is such an option, on by default. A crate switches it off in the options of the target in its `[package.metadata.nx]` table ([[DES-METADATA-TABLES]]), for example when its benches need a nightly compiler, which stable rejects under `--all-targets`. Tasks whose options differ never share a cargo call ([[TERM-GROUP]]). The name of the option belongs to the option reference ([[DES-PLUGIN-OPTIONS]]). `--all-targets` is what rust-analyzer passes by default, so `check` compiles the units the editor compiles and the two reuse each other's work ([[EVD-CARGO-TARGET-COMMANDS]]).
+**Flags as options.** A flag beyond the package selection comes from an option of the target, so that a command passes only what its options ask for ([[DES-INVOCATION]]). `--all-targets` on `check` and `lint` is such an option, on by default. A crate switches it off in the options of the target in its `[package.metadata.nx]` table ([[DES-METADATA-TABLES]]), for example when its benches need a nightly compiler, which stable rejects under `--all-targets`. Tasks whose options differ never share a cargo call ([[TERM-GROUP]]). The option is `allTargets` ([[DES-PLUGIN-OPTIONS]]). `--all-targets` is what rust-analyzer passes by default, so `check` compiles the units the editor compiles and the two reuse each other's work ([[EVD-CARGO-TARGET-COMMANDS]]).
 
 **Warnings.** No target adds a flag that turns warnings into errors. A task fails on warnings where the repository says so through Cargo: lint levels in `[lints]` and `[workspace.lints]`, `build.warnings` in `.cargo/config.toml` or `CARGO_BUILD_WARNINGS`, which Cargo honours from 1.97 on, and `RUSTFLAGS`, all of which are cache inputs ([[DES-INPUTS]]). Passing `-D warnings` to clippy would differ from plain `cargo clippy` and check every selected member again whenever a developer alternates the two ([[EVD-CARGO-TARGET-COMMANDS]]).
 
@@ -303,7 +304,7 @@ Each command starts in the root folder of the crate's workspace, names the crate
 
 **bench.** The target has `parallelism: false`, so that Nx starts no other task while benchmarks run. Nx never puts such a task into a batch, so each `bench` task is a cargo call of its own ([[EVD-NX-24-TARGETS]]).
 
-**run.** One `run` target per crate. When the crate has several binaries, an option of the target passes `--bin`; it is set on the command line or in the crate's metadata, and its name belongs to the option reference ([[DES-PLUGIN-OPTIONS]]). Without it and without `default-run` in the manifest, cargo fails and lists the binaries. Arguments after `--` on the `nx` command line go to the binary. `run` uses an executor that has no batch implementation, because `cargo run` accepts one package only, while Nx hands every task of an executor with a batch implementation and `preferBatch` to one batch, also the tasks of `nx run-many -t run` ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `run` is not a continuous task: a task that depends on it waits until the binary exits. A crate that serves something sets `continuous` and `readyWhen` on its `run` in its metadata ([[DES-METADATA-TABLES]]). `nx run <project>` is Nx's own syntax and needs a target, so the short form is `nx run <project>:run`.
+**run.** One `run` target per crate. When the crate has several binaries, an option of the target, `bin`, passes `--bin`; it is set on the command line or in the crate's metadata ([[DES-PLUGIN-OPTIONS]]). Without it and without `default-run` in the manifest, cargo fails and lists the binaries. Arguments after `--` on the `nx` command line go to the binary. `run` uses an executor that has no batch implementation, because `cargo run` accepts one package only, while Nx hands every task of an executor with a batch implementation and `preferBatch` to one batch, also the tasks of `nx run-many -t run` ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `run` is not a continuous task: a task that depends on it waits until the binary exits. A crate that serves something sets `continuous` and `readyWhen` on its `run` in its metadata ([[DES-METADATA-TABLES]]). `nx run <project>` is Nx's own syntax and needs a target, so the short form is `nx run <project>:run`.
 
 The targets of the workspace project are [[DES-WORKSPACE-TARGETS]].
 :::
@@ -314,7 +315,7 @@ The targets of the workspace project are [[DES-WORKSPACE-TARGETS]].
 :status: accepted
 :satisfies: REQ-WORKSPACE-PROJECT
 
-The [[TERM-WORKSPACE-PROJECT]] hosts the targets that concern a whole Cargo workspace. Each command starts in the workspace root ([[DES-INVOCATION]]); the lockfile task runs none.
+The [[TERM-WORKSPACE-PROJECT]] hosts the targets that concern a whole Cargo workspace. Each command starts in the workspace root ([[DES-INVOCATION]]).
 
 | Target     | Command                                                           | Exists                                                                         | Cached                                | Inputs                                                                                                           |
 | ---------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -322,15 +323,15 @@ The [[TERM-WORKSPACE-PROJECT]] hosts the targets that concern a whole Cargo work
 | `audit`    | `cargo audit`                                                     | Always                                                                         | No                                    | `Cargo.lock`, the root `Cargo.toml` and `.cargo/audit.toml` of the workspace root                                |
 | `deny`     | `cargo deny check`                                                | Where `deny.toml`, `.deny.toml` or `.cargo/deny.toml` is in the workspace root | No                                    | `Cargo.lock`, the root `Cargo.toml`, the cargo-deny configuration file and the manifest of every member          |
 | `update`   | `cargo update`                                                    | Always                                                                         | No                                    | `Cargo.lock` and the root `Cargo.toml`                                                                           |
-| `lockfile` | None: the plugin reads `Cargo.lock` and writes a digest per crate | Always                                                                         | Yes, as [[DES-LOCKFILE-HASHING]] says | The whole `Cargo.lock`, read also when git ignores it                                                            |
+| `lockfile` | `cargo update --workspace`, with `--locked` in locked mode, then a digest per crate | Always | No | `Cargo.lock`, read also when git ignores it, the root `Cargo.toml`, the `Cargo.toml` of every member and of every path package in the repository, and the workspace files of [[DES-INPUTS]] |
 
 The coverage baseline target of [[DES-BASELINE]] is on the same project, in a workspace with `affectedTests` only.
 
-**doc.** The workspace is documented in one call and its documentation is one site. rustdoc writes a folder per documented crate and files that every run merges, such as the search index and the list of crates. The output is therefore the whole `doc` folder of the [[TERM-ARTIFACT-DIR]], and a cache hit restores what a run writes. Outputs per crate could not do that: Nx restores a folder output by replacing it, so overlapping folders would delete each other's pages, and a crate's own folder lacks the shared styles and search index ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `--no-deps` comes from an option of the target that is on by default, as the flags of [[DES-TARGET-COMMANDS]] do; where it is set and its name belong to the option reference ([[DES-PLUGIN-OPTIONS]]).
+**doc.** The workspace is documented in one call and its documentation is one site. rustdoc writes a folder per documented crate and files that every run merges, such as the search index and the list of crates. The output is therefore the whole `doc` folder of the [[TERM-ARTIFACT-DIR]], and a cache hit restores what a run writes. Outputs per crate could not do that: Nx restores a folder output by replacing it, so overlapping folders would delete each other's pages, and a crate's own folder lacks the shared styles and search index ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `--no-deps` comes from an option of the target that is on by default, as the flags of [[DES-TARGET-COMMANDS]] do: `noDeps`, set like the other options of the workspace project's targets ([[DES-PLUGIN-OPTIONS]]).
 
 **Existence.** Whether a tool is installed never decides whether a target exists. Every machine thus computes the same graph, and a missing tool cannot make `nx run-many -t audit` leave a workspace out without a word ([[ADR-CARGO-SOURCE-OF-TRUTH]], [[REQ-DIAGNOSTICS]]). A task whose tool is missing fails with the message of [[DES-DIAGNOSTICS]]. `deny` exists only where cargo-deny is configured, because without a configuration file cargo-deny falls back to defaults that reject every license ([[EVD-CARGO-AUDIT-DENY]]).
 
-**lockfile.** The lockfile task is cached, and every cached target of the workspace's crates depends on it ([[DES-LOCKFILE-HASHING]]).
+**lockfile.** The lockfile task is not cached and runs whenever a task that depends on it runs: every cached target of the workspace's crates other than `fmt-check`, and `doc` ([[DES-LOCKFILE-HASHING]]).
 
 **Caching.** `audit`, `deny` and `update` are not cached. cargo-audit and cargo-deny fetch the RustSec advisory database when they run, and no input covers it, so a cached pass could hide an advisory published since ([[EVD-CARGO-AUDIT-DENY]]). `update` exists to change `Cargo.lock`. Their inputs are declared all the same, so that `nx affected` selects them when a file they read changes.
 

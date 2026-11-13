@@ -17,7 +17,7 @@ Implements `REQ-INPUT-FILES`, `REQ-ENV-ALLOWLIST`, `REQ-TOOLCHAIN-KEY`, `REQ-CAC
 - [ ] The whole crate folder as the crate-file input, and real paths for workspace files, including every `.cargo/config.toml` and `rust-toolchain.toml` that applies
 - [ ] Inputs for path dependencies without a project, with the warning where Nx cannot see them, and for tool configuration files
 - [ ] `^` inputs over normal, build and dev-dependency edges
-- [ ] The environment allowlist and the repository's additions
+- [ ] The environment allowlist and the inputs the repository adds, placed as `DES-INPUTS` says
 - [ ] `externalDependencies: ["@convesoft/nx-rust"]` on every cached target where Nx has a node for the package, and otherwise `[]` with the plugin's version in an option of every inferred target (`DES-INPUTS`); the graph and cache-key harness loads the plugin from source, which is the second case
 - [ ] Under the `cargo` and `workspace-build` strategies, the manifest of every member as an input of every member of the workspace (`DES-INPUTS`)
 - [ ] The toolchain runtime input, run in the workspace root
