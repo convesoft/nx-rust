@@ -1,14 +1,19 @@
 # Setup and compatibility
 
-> **Status:** `nx add` and the `library` and `binary` generators are
-> implemented. So far `init` stops only for the problems that graph creation
-> detects already, which are a missing cargo and a failing `cargo metadata`,
-> and of the tools below it counts only cargo-deny as needed by your settings.
-> The version checks and the errors for missing tools are not implemented yet.
-> Of the warnings, graph creation and `init` print those for a path dependency
-> whose files Nx cannot see and for an artifact directory outside the
-> repository or shared by two workspaces; a task does not print them again yet
-> (nxr-kmdpgj). The package is not published to npm yet.
+> **Status:** `nx add`, the `library` and `binary` generators and the checks of
+> the Nx and Cargo versions are implemented. `init` stops for each problem that
+> graph creation detects so far: an unsupported Nx or Cargo, an installed Nx
+> whose version cannot be read, a missing cargo, a pinned toolchain that is not
+> installed, a failing `cargo metadata`, two crates with one project name and
+> invalid `targetNames`. Of the tools below it counts only cargo-deny as needed
+> by your settings. Graph creation and `init` print the warnings for a newer Nx
+> with `NX_RUST_ALLOW_UNSUPPORTED_NX`, for redirections and path dependencies
+> that reach a crate whose files Nx cannot see or that cargo does not report,
+> and for an artifact directory outside the repository or shared by two
+> workspaces; a task does not print them again yet, which needs the plugin's
+> executor (nxr-kmdpgj). The other warnings are not implemented yet, and neither
+> are the errors of a task for a missing tool. The package is not published to
+> npm yet.
 
 ## What you need
 
@@ -264,7 +269,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 | Nx older than the supported majors ([[REQ-COMPATIBILITY]])                                                                                                                                                    | When the plugin loads; by `init`                   | Error                                                     |
 | Nx newer than the supported majors ([[REQ-COMPATIBILITY]])                                                                                                                                                    | When the plugin loads; by `init`                   | Error; a warning with `NX_RUST_ALLOW_UNSUPPORTED_NX=true` |
 | The installed Nx lacks, or has changed, the internal parts of Nx through which `init` runs the checks of graph creation ([[REQ-COMPATIBILITY]])                                                               | By `init`, before it writes                        | Error                                                     |
-| `cargo` not found, or `cargo metadata` fails for a manifest ([[DES-DISCOVERY]])                                                                                                                               | When the graph is created                          | Error                                                     |
+| `cargo` not found, `cargo metadata` fails for a manifest ([[DES-DISCOVERY]]), or a root manifest or configuration file that cargo reads is no valid TOML ([[DES-METADATA-REPORT]])                            | When the graph is created                          | Error                                                     |
 | Cargo older than 1.91 in a workspace                                                                                                                                                                          | When the graph is created                          | Error                                                     |
 | A toolchain that a workspace pins is not installed                                                                                                                                                            | When the graph is created                          | Error                                                     |
 | Two crates with one project name ([[REQ-PROJECT-NAMES]]); a collision with another plugin's project fails with Nx's own error instead ([[DES-PROJECT-GRAPH]])                                                 | When the graph is created                          | Error                                                     |
@@ -279,6 +284,8 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 | Entries of the plugin that receive manifests of one workspace give different values of `testRunner`, `affectedTests` or `featureUnification`, which the workspace table does not set ([[DES-PLUGIN-OPTIONS]]) | When the graph is created                          | Error                                                     |
 | An `implicitDependencies` entry starting with `!` ([[DES-PLUGIN-OPTIONS]])                                                                                                                                    | When the graph is created                          | Error                                                     |
 | A `fileInputs` pattern that resolves outside the repository or into Cargo's build or artifact directory ([[REQ-FILE-INPUTS-HASHABLE]])                                                                        | When the graph is created                          | Error                                                     |
+| A `[patch]` or `paths` entry from a configuration file outside the repository, which Nx does not watch; once per plugin entry ([[ADR-REDIRECTION-EDGES]])                                                     | When the graph is created                          | Warning                                                   |
+| A file that `include` names that is no valid TOML, or a crate without a project that `[patch]` or `[replace]` redirects to and `cargo metadata` fails for ([[DES-METADATA-REPORT]])                           | When the graph is created                          | Warning                                                   |
 | A path dependency without a project whose files Nx cannot see ([[DES-INPUTS]])                                                                                                                                | When the graph is created                          | Warning                                                   |
 | An artifact directory outside the repository ([[DES-OUTPUTS]])                                                                                                                                                | When the graph is created                          | Warning                                                   |
 | A build or artifact directory inside the repository that Nx does not ignore                                                                                                                                   | When the graph is created                          | Warning                                                   |
@@ -296,7 +303,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 
 **Warnings where they are seen.** While the Nx daemon creates the graph, what the plugin prints goes to the daemon's log file and not to the terminal, and Nx's plugin interface has no channel for warnings ([[EVD-NX-24-SETUP]]). The plugin therefore prints a warning found when the graph is created three times: when the graph is created, again from the executor at the start of each task of the crate or workspace it concerns, and from `init`. Graph creation records the warnings that concern a project in the project's metadata, under `cargo.warnings`, where the executor finds them.
 
-**Nx version.** When it loads, the plugin compares the major version of the installed `nx` with the majors in its peer dependency range, so an unsupported Nx fails graph creation also in a repository without a crate. The error names the major found and the supported majors. For a newer major, `NX_RUST_ALLOW_UNSUPPORTED_NX=true` turns the error into a warning that says the plugin has not been checked on that major, and the plugin continues ([[REQ-COMPATIBILITY]]). The variable has no effect on an older major. The daemon takes over each client's environment and recomputes the graph when a variable changes, so the variable works with the daemon as well ([[EVD-NX-24-SETUP]]).
+**Nx version.** When it loads, the plugin compares the major version of the installed `nx` with the majors in its peer dependency range, so an unsupported Nx fails graph creation also in a repository without a crate. The error names the major found and the supported majors. For a newer major, `NX_RUST_ALLOW_UNSUPPORTED_NX=true` turns the error into a warning that says the plugin has not been checked on that major, and the plugin continues ([[REQ-COMPATIBILITY]]). The variable has no effect on an older major. The installed `nx` is the one that resolves from the repository root, where Nx itself looks for it. The daemon takes over each client's environment and recomputes the graph when a variable changes, but it can keep a loaded plugin, so the plugin compares again each time it creates the graph and prints the warning there; the variable thus works with the daemon as well ([[EVD-NX-24-SETUP]], [[EVD-NX-24-VERSION-CHECK]]). The peer dependency range itself stops no install, because pnpm only warns about an unmet peer.
 
 **Cargo version.** The `cargo metadata` report of a stable Cargo has a `build_directory` field from 1.91 on ([[EVD-CARGO-DIRECTORIES]]). A report without it therefore tells the check that the workspace's Cargo is too old, and while Cargo is supported the check adds no cargo call to the one that the workspace costs ([[REQ-MULTI-WORKSPACE]]). Only the error makes a second call, to name the version found.
 

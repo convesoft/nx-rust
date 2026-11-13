@@ -1,37 +1,69 @@
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoDiscovery } from "./discovery";
-import { filesNxSees } from "./visibility";
+import { realPath } from "./real-path";
+import type { RedirectedUse } from "./redirected-uses";
+import { foldersNxSees } from "./visibility";
 
-/** A crate without an Nx project that a crate with a project reaches by path. */
+/** A crate without an Nx project that a crate with a project reaches. */
 export interface PathDependency {
-  /** Its package name. */
+  /** Its package name, or its folder's name where no report describes it. */
   name: string;
   /** Its folder relative to the repository root, or its absolute path outside it. */
   folder: string;
   /** Whether Nx sees its files: it lies inside the repository and Nx does not ignore it. */
   seen: boolean;
+  /** How the crate reaches it: by a path, or by a `[patch]`, `[replace]` or `paths` entry. */
+  via: "path" | "redirection";
+}
+
+/** The crates whose files a crate's inputs name beyond its edges, by the crate's manifest path. */
+export interface CrateFolders {
+  /**
+   * The crates without a project that the crate reaches, directly or through
+   * other crates without a project: by path, or as a crate that a
+   * redirection of its workspace may put in place of a dependency. Their
+   * folders go into the crate's own named input.
+   */
+  withoutProject: Map<string, PathDependency[]>;
+  /**
+   * The crates with a project that a redirection may put in place of a
+   * dependency of the crate, but whose edge from it `redirectedUses` leaves
+   * out. Their folders go onto the crate's targets.
+   */
+  leftOutEdges: Map<string, string[]>;
 }
 
 /**
- * The path dependencies without a project that each crate with a project
- * reaches, directly or through other crates without a project, by the
- * crate's manifest path (`DES-INPUTS`, "Path dependencies"). A crate
- * without a project is excluded by `exclude` on the plugin's entry, ignored
- * by Nx, or outside the repository. What lies behind a crate with a project
+ * The crates whose files reach a crate's key through its inputs rather than
+ * through an edge (`DES-INPUTS`, "Path dependencies" and "Redirected
+ * crates"), for each crate with a project.
+ *
+ * A crate without a project is excluded by `exclude` on the plugin's entry,
+ * ignored by Nx, or outside the repository. One that a path dependency
+ * reaches counts with the crates without a project behind it, and so does
+ * one that a redirection reaches where a report describes it; without a
+ * report, its folder counts alone. What lies behind a crate with a project
  * reaches the crate through that project's own input.
  *
- * Whether Nx sees a crate's files is whether it sees its manifest.
+ * Whether Nx sees a crate's files is whether it sees its manifest, or any
+ * file of a folder without one.
+ *
+ * @param uses The redirected uses of the members (`redirectedUses`), for the
+ *   projects that this plugin entry creates.
  */
 // @mara implements DES-INPUTS
-export async function findPathDependencies(
+export async function findCrateFolders(
   discovery: CargoDiscovery,
-): Promise<Map<string, PathDependency[]>> {
+  uses: readonly RedirectedUse[],
+): Promise<CrateFolders> {
   const { workspaceRoot } = discovery;
+  const repositoryRoot = realPath(workspaceRoot);
   const withProject = new Set(
     discovery.workspaces.flatMap((workspace) => workspace.members.map((pkg) => pkg.manifest_path)),
   );
   const known = new Map<string, CargoPackage>();
+  const byRealFolder = new Map<string, CargoPackage>();
   for (const report of [
     ...discovery.workspaces.map((workspace) => workspace.report),
     ...discovery.pathDependencyReports.map((entry) => entry.report),
@@ -40,41 +72,96 @@ export async function findPathDependencies(
       if (!known.has(pkg.manifest_path)) {
         known.set(pkg.manifest_path, pkg);
       }
+      const folder = realPath(dirname(pkg.manifest_path));
+      if (!byRealFolder.has(folder)) {
+        byRealFolder.set(folder, pkg);
+      }
     }
   }
-  const reached = new Map<string, CargoPackage[]>();
+
+  type Reached = { name: string; folder: string; via: PathDependency["via"] };
+  const reached = new Map<string, Reached[]>();
+  const leftOutEdges = new Map<string, string[]>();
   for (const workspace of discovery.workspaces) {
     for (const crate of workspace.members) {
-      reached.set(crate.manifest_path, reachedWithoutProject(crate, withProject, known));
+      reached.set(
+        crate.manifest_path,
+        reachedWithoutProject(crate, withProject, known).map((pkg) => ({
+          name: pkg.name,
+          folder: dirname(pkg.manifest_path),
+          via: "path",
+        })),
+      );
     }
   }
-  const manifests = new Set(
-    [...reached.values()]
-      .flat()
-      .map((pkg) => inside(workspaceRoot, pkg.manifest_path))
-      .filter((path): path is string => path !== undefined),
-  );
-  const seen = await filesNxSees(workspaceRoot, [...manifests]);
-  const result = new Map<string, PathDependency[]>();
-  for (const [manifest, packages] of reached) {
-    result.set(
+  for (const use of uses.filter((use) => !use.edge)) {
+    const member = use.member.manifest_path;
+    if (use.projectRoot !== undefined) {
+      leftOutEdges.set(member, [...(leftOutEdges.get(member) ?? []), use.projectRoot]);
+      continue;
+    }
+    const pkg = use.reported ? byRealFolder.get(use.folder) : undefined;
+    const crates: Reached[] = [
+      { name: pkg?.name ?? basename(use.folder), folder: use.folder, via: "redirection" },
+      ...(pkg === undefined ? [] : reachedWithoutProject(pkg, withProject, known)).map(
+        (behind): Reached => ({
+          name: behind.name,
+          folder: dirname(behind.manifest_path),
+          via: "redirection",
+        }),
+      ),
+    ];
+    reached.set(member, [...(reached.get(member) ?? []), ...crates]);
+  }
+
+  // Each folder once per crate, relative to the repository root where it lies inside.
+  const located = new Map<string, (Reached & { inside?: string })[]>();
+  for (const [manifest, crates] of reached) {
+    const seenFolders = new Set<string>();
+    located.set(
       manifest,
-      packages.map((pkg) => {
-        const path = inside(workspaceRoot, pkg.manifest_path);
-        return {
-          name: pkg.name,
-          folder: path === undefined ? dirname(pkg.manifest_path) : dirname(path),
-          seen: path !== undefined && seen.has(path),
-        };
+      crates.flatMap((crate) => {
+        const folder = realPath(crate.folder);
+        if (seenFolders.has(folder)) {
+          return [];
+        }
+        seenFolders.add(folder);
+        return [{ ...crate, folder, inside: inside(repositoryRoot, folder) }];
       }),
     );
   }
-  return result;
+  const seen = await foldersNxSees(
+    workspaceRoot,
+    [
+      ...new Set(
+        [...located.values()]
+          .flat()
+          .map((crate) => crate.inside)
+          .filter((path): path is string => path !== undefined),
+      ),
+    ],
+  );
+  const withoutProject = new Map<string, PathDependency[]>();
+  for (const [manifest, crates] of located) {
+    withoutProject.set(
+      manifest,
+      crates.map((crate) => ({
+        name: crate.name,
+        folder: crate.inside ?? crate.folder,
+        seen: crate.inside !== undefined && seen.has(crate.inside),
+        via: crate.via,
+      })),
+    );
+  }
+  for (const [manifest, folders] of leftOutEdges) {
+    leftOutEdges.set(manifest, [...new Set(folders)].sort());
+  }
+  return { withoutProject, leftOutEdges };
 }
 
 /**
- * The warning for a path dependency without a project whose files Nx does
- * not see (`DES-DIAGNOSTICS`), naming the crate and the dependency.
+ * The warning for a crate without a project whose files Nx does not see
+ * (`DES-DIAGNOSTICS`), naming the crate and the dependency.
  *
  * @param crate The crate with a project that reaches it.
  * @param manifest The crate's manifest, relative to the repository root.
@@ -86,8 +173,12 @@ export function unseenPathDependencyWarning(
   dependency: PathDependency,
 ): string {
   const outside = isAbsolute(dependency.folder);
+  const how =
+    dependency.via === "path"
+      ? "depends by path on"
+      : "may use, through a [patch], [replace] or paths entry of its workspace,";
   return [
-    `nx-rust: the crate "${crate}" (${manifest}) depends by path on "${dependency.name}" in ${dependency.folder}, which has no Nx project and whose files Nx cannot see, because ${outside ? "it lies outside the repository" : ".gitignore or .nxignore leaves it out"}.`,
+    `nx-rust: the crate "${crate}" (${manifest}) ${how} "${dependency.name}" in ${dependency.folder}, which has no Nx project and whose files Nx cannot see, because ${outside ? "it lies outside the repository" : ".gitignore or .nxignore leaves it out"}.`,
     `A change there changes no cache key of "${crate}" or of the crates that depend on it, so Nx can restore results built from the old files.`,
     outside
       ? `Move the crate into the repository, or add a command whose output changes with its files to runtimeInputs in the [package.metadata.nx] table of ${manifest}.`
@@ -128,8 +219,11 @@ function reachedWithoutProject(
 }
 
 // The path relative to the repository root, or `undefined` outside it.
-function inside(workspaceRoot: string, path: string): string | undefined {
-  const relativePath = relative(workspaceRoot, path);
+function inside(repositoryRoot: string, path: string): string | undefined {
+  const relativePath = relative(repositoryRoot, path);
+  if (relativePath === "") {
+    return ".";
+  }
   return relativePath === ".." || relativePath.startsWith("../") || isAbsolute(relativePath)
     ? undefined
     : relativePath;

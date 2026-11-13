@@ -4,4 +4,6 @@ export * from "./environment";
 export * from "./files";
 export * from "./fixtures";
 export * from "./js-lockfiles";
+export * from "./nx-package";
+export * from "./tool-folders";
 export * from "./workspace";

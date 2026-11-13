@@ -29,6 +29,7 @@ each fixture still has the workspaces and members listed there.
 | `mixed-folders`        | A workspace in `libs/rust/` whose folder has a `project.json` without a name. In `crates/addon`, the crate `napi-addon` has a `package.json` named `@mixed/napi-addon` with an empty `project.json` beside it; `crates/engine` has a `project.json` named `rust-engine`; in `crates/unnamed`, the crate `plain` has a `project.json` without a name. `cli` depends on the three. |
 | `nested-folders`       | Workspaces in `services/billing/` and `apps/Billing.API/rust_v2/`, each with one member.                                                                                                                                                                                                                                                                                         |
 | `crate-shapes`         | One crate of each shape in the `rust/` workspace: `core-lib` (folder `core`) is a library with an example, `cli` a binary, `server` a library with the binaries `server` (its `default-run`) and `migrate`, `perf` a library with a bench target, and `internal` a library with `publish = false`. `cli` and `server` depend on `core-lib`.                                      |
+| `patched-workspaces`   | `rust/`'s `[patch.crates-io]` redirects `model` to its member, `types` to the `shared/` workspace's member and `fork` to `third_party/fork`, which `nx.json` excludes. `api` and `viaw` use them through registry dependencies only; `model` depends on `util` and dev-depends on `harness`, which depend on `types`; `plain` has no dependency.                                 |
 
 A fixture has no `nx.json` unless it needs plugin options. The harness writes
 one that registers the plugin, and in a fixture's own `nx.json` it points
@@ -108,6 +109,18 @@ source, and a `node_modules`, which Nx ignores, with a link to this
 repository's Nx and a copy of the cargo wrapper in `.bin`. If creating it
 fails, nothing is left behind. Set `NX_RUST_KEEP_FIXTURES=1` to keep the
 copies for inspection.
+
+**`useNx(version)`** links the copy's `node_modules/nx` to a copy of this
+repository's Nx whose `package.json` gives `version`, written by
+**`fakeNxPackage(directory, version)`**, until `reset`. The plugin reads the
+installed Nx's version there, and so does Nx, which reports that version
+throughout and keeps its daemon. The copy's files are hard links where
+possible, and its `node_modules` links to every package that resolves from the
+real Nx, so that everything else is the real Nx. The end-to-end tests link the
+test project's `node_modules/nx` to such a copy in the same way.
+**`daemonLog()`** returns what the copy's Nx daemon wrote to its log, for
+tests that set `NX_DAEMON=true` and stop the daemon with `nx daemon --stop`
+when they are done.
 
 **`nx(args, env, cwd)`** runs Nx in the subfolder `cwd` of the copy when it is
 given. The copy's `node_modules` also links to the plugin's package folder, so
@@ -191,6 +204,18 @@ end-to-end test project with a fixture, keeping the installed packages, and
 registers the installed plugin. The end-to-end tests then put the wrapper
 into the project's `node_modules/.bin` with `placeIn`. See
 `nx-rust-e2e/src/nx-rust.spec.ts`.
+
+With `NX_RUST_TEST_CARGO_VERSION` set, such as to `1.90.0`, the wrapper
+pretends to be that Cargo, which has to be older than 1.91: `cargo --version`,
+`cargo -V` and `cargo version` print the version without running cargo, and
+the report of `cargo metadata` lacks `build_directory`, as the report of every
+stable Cargo before 1.91 does. Other commands run the real cargo, and every
+call is logged as usual.
+
+**`ToolFolders`** is an empty folder for `PATH` and an empty Cargo home, so
+that none of the tools that `init` reports or a task can need is installed,
+wherever the machine keeps its own; `install(folder, name, output)` puts a
+stand-in executable into one of them.
 
 **`testEnvironment(overrides)`** is the environment for every command the
 helpers run. It drops the `NX_` variables of the outer Nx run and the

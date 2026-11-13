@@ -5,8 +5,8 @@
 
 /// <reference path="registry.d.ts" />
 
-export default () => {
+export default async () => {
   if (global.stopLocalRegistry) {
-    global.stopLocalRegistry();
+    await global.stopLocalRegistry();
   }
 };

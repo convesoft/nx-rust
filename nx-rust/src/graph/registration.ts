@@ -1,4 +1,5 @@
 import type { CreateNodes, NxJsonConfiguration } from "@nx/devkit";
+import { checkNxForGraph } from "../compatibility/nx-version";
 import { cacheContext } from "./caching";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
@@ -46,6 +47,13 @@ export class Registration {
           options,
           context.nxJsonConfiguration,
         );
+        // Nx's plugin interface has no channel for warnings; standard error
+        // reaches the terminal without the daemon and its log file with it.
+        // The warnings of the projects' caching are printed where they are
+        // found (`cacheContext` in `caching.ts`).
+        for (const warning of graph.discovery.warnings) {
+          console.warn(warning);
+        }
         return projectNodes(graph.projects);
       },
     ];
@@ -68,9 +76,10 @@ export class Registration {
    * @param options The entry's plugin options, of which `targetNames` is read.
    * @param nxJson `nx.json`, which says whether Nx analyses the JS lockfile
    *   (`pluginInput` in `plugin-package.ts`).
-   * @throws {Error} When the options are invalid, when discovery fails (see
-   *   {@link discoverWorkspaces}) or when `targetNames` gives two targets of
-   *   one project the same name.
+   * @throws {Error} When the installed Nx is not supported (see
+   *   {@link checkNxForGraph}), when the options are invalid, when discovery
+   *   fails (see {@link discoverWorkspaces}) or when `targetNames` gives two
+   *   targets of one project the same name.
    */
   async discover(
     manifests: readonly string[],
@@ -83,6 +92,7 @@ export class Registration {
     const reports = computationReports();
     let graph: CargoGraph | undefined;
     try {
+      checkNxForGraph(workspaceRoot, reports);
       const targetNames = readTargetNames(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
       const context = await cacheContext(discovery, nxJson);

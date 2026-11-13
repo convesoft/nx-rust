@@ -1,3 +1,4 @@
+import { checkCargoReport } from "../compatibility/cargo-version";
 import { runCargoForGraph } from "./run-cargo";
 
 /**
@@ -25,6 +26,8 @@ export interface CargoPackage {
   /** Cargo's package id, which `workspace_members` refers to. */
   id: string;
   name: string;
+  /** The package's version, such as `0.1.0`. */
+  version: string;
   /** The path of the package's `Cargo.toml`. */
   manifest_path: string;
   /** The dependencies as the manifest declares them, unresolved. */
@@ -51,6 +54,14 @@ export interface CargoDependency {
   name: string;
   /** `null` for a normal dependency. */
   kind: "dev" | "build" | null;
+  /** The version requirement as Cargo writes it, such as `^0.1`; `*` where none is given. */
+  req: string;
+  /**
+   * Where the dependency comes from, such as
+   * `registry+https://github.com/rust-lang/crates.io-index` or
+   * `git+https://example.com/repo.git?branch=main`; `null` for a path dependency.
+   */
+  source: string | null;
   /** The folder of a path dependency; absent for any other dependency. */
   path?: string;
 }
@@ -69,6 +80,7 @@ export function metadataArguments(manifest: string): string[] {
  * @param cwd The folder cargo starts in.
  * @throws {CargoError} When cargo cannot be started or fails.
  * @throws {SyntaxError} When cargo's output is no report.
+ * @throws {UnsupportedCargoError} When the report comes from a Cargo older than 1.91.
  */
 // @mara implements DES-METADATA-REPORT
 export async function requestMetadata(manifest: string, cwd: string): Promise<CargoMetadata> {
@@ -81,5 +93,6 @@ export async function requestMetadata(manifest: string, cwd: string): Promise<Ca
   ) {
     throw new SyntaxError("the output has no workspace_root, packages or workspace_members");
   }
+  await checkCargoReport(report, cwd);
   return report;
 }

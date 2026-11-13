@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CargoCall, CargoWrapper } from "./cargo-wrapper";
 import { testEnvironment } from "./environment";
+import { fakeNxPackage } from "./nx-package";
 import {
   copyFixture,
   FileChanges,
@@ -151,6 +152,27 @@ export class FixtureWorkspace {
     // Nx then loads from their TypeScript source.
     linkPluginPackage(join(modules, ...pluginPackageName.split("/")));
     this.cargo.clear();
+  }
+
+  /**
+   * Makes the workspace's Nx report `version`, as if it had been installed:
+   * `node_modules/nx` then links to a copy of this repository's Nx that
+   * gives that version ({@link fakeNxPackage}). The commands of
+   * {@link FixtureWorkspace.nx} and the graph of {@link FixtureWorkspace.graph}
+   * run that copy. {@link FixtureWorkspace.reset} links the real Nx again.
+   */
+  useNx(version: string): void {
+    const copy = join(this.base, `nx-${version}`);
+    const nx = existsSync(copy) ? join(copy, "node_modules", "nx") : fakeNxPackage(copy, version);
+    const link = join(this.root, "node_modules", "nx");
+    rmSync(link, { force: true });
+    symlinkSync(nx, link, "dir");
+  }
+
+  /** What the Nx daemon of this workspace has written to its log, or "" without one. */
+  daemonLog(): string {
+    const log = join(this.root, ".nx", "workspace-data", "d", "daemon.log");
+    return existsSync(log) ? readFileSync(log, "utf8") : "";
   }
 
   /** The cargo invocations logged so far, relative to the workspace root. */

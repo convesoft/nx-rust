@@ -85,6 +85,22 @@ describeCacheKeyMatrix("keys must differ after", [
     // app reaches both through lib.
     keys: { "lib:test": "must differ", "lib:build": "must differ", "app:test": "must differ" },
   })),
+  ...[
+    ["without a project", "third_party/fork/src/lib.rs", ["api", "viaw", "util", "harness", "model"]],
+    ["whose edge is left out to avoid a cycle", "rust/crates/model/src/lib.rs", ["util"]],
+    ["with a project in another workspace", "shared/crates/types/src/lib.rs", ["api", "util"]],
+  ].map(
+    ([which, path, members]): CacheKeyRow => ({
+      change: `a change in a redirected crate ${which as string}, for every member that may use it`,
+      // rust/Cargo.toml's [patch.crates-io] redirects model, types and fork.
+      fixture: "patched-workspaces",
+      after: { files: { [path as string]: changed } },
+      keys: all(
+        (members as string[]).map((member) => `${member}:test`),
+        "must differ",
+      ),
+    }),
+  ),
   {
     change: "a change in the root Cargo.toml",
     fixture: "subfolder-workspace",
@@ -213,6 +229,18 @@ describeCacheKeyMatrix("keys must not differ after", [
     fixture: "subfolder-workspace",
     after: { files: { "rust/crates/api/src/lib.rs": changed } },
     keys: all(["model:build", "model:test", "testkit:lint", "codegen:check"], "must not differ"),
+  },
+  {
+    change: "a change in a redirected crate, for a member without registry or git dependencies",
+    fixture: "patched-workspaces",
+    after: {
+      files: {
+        "third_party/fork/src/lib.rs": changed,
+        "rust/crates/model/src/lib.rs": changed,
+        "shared/crates/types/src/lib.rs": changed,
+      },
+    },
+    keys: { "plain:test": "must not differ", "plain:build": "must not differ" },
   },
   {
     change: "a change of an environment variable outside the list",

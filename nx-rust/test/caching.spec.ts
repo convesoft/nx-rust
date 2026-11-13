@@ -224,6 +224,50 @@ describe("caching", () => {
     HARNESS_TIMEOUT,
   );
 
+  it(
+    "gives a member the folders of the redirected crates it may use without an edge",
+    async () => {
+      const graph = await loadFixtureGraph("patched-workspaces");
+      const fork = "{workspaceRoot}/third_party/fork/**/*";
+      const model = "{workspaceRoot}/rust/crates/model/**/*";
+
+      // fork has no project: like a path dependency without one, in the named input.
+      for (const member of ["api", "viaw", "util", "harness", "model"]) {
+        expect({ member, named: graph.projects[member].namedInputs.default }).toEqual({
+          member,
+          named: expect.arrayContaining([fork]),
+        });
+      }
+      // util may use model, which reaches util, so util has no edge to it.
+      expect(fileInputs(graph.projects.util.targets.test)).toContain(model);
+      expect(fileInputs(graph.projects.api.targets.test)).not.toContain(model);
+      // plain has no registry or git dependency.
+      expect(graph.projects.plain.namedInputs).toEqual({ default: ["{projectRoot}/**/*"] });
+      expect(fileInputs(graph.projects.plain.targets.test)).not.toContain(model);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "warns about a redirected crate without a project whose files Nx cannot see",
+    async () => {
+      const graph = await loadFixtureGraph("patched-workspaces", {
+        files: { ".gitignore": (text) => `${text}third_party/\n` },
+      });
+
+      expect(graph.projects.api.metadata.cargo.warnings).toEqual([
+        expect.stringMatching(
+          /the crate "api" \(rust\/crates\/api\/Cargo.toml\) may use, through a \[patch\], \[replace\] or paths entry of its workspace, "fork" in third_party\/fork, which has no Nx project and whose files Nx cannot see/,
+        ),
+      ]);
+      expect(graph.projects.api.namedInputs.default).not.toContain(
+        "{workspaceRoot}/third_party/fork/**/*",
+      );
+      expect(graph.projects.plain.metadata.cargo.warnings).toBeUndefined();
+    },
+    HARNESS_TIMEOUT,
+  );
+
   describe("with a path dependency whose files Nx cannot see", () => {
     const ignored: FileChanges = { ".gitignore": (text) => `${text ?? ""}vendor/\n` };
     const outside: FileChanges = {

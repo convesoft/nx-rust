@@ -1,5 +1,5 @@
 import type { NxJsonConfiguration, TargetConfiguration } from "@nx/devkit";
-import { isAbsolute, relative } from "node:path";
+import { dirname, isAbsolute, relative } from "node:path";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import {
   defaultInputSettings,
@@ -10,8 +10,9 @@ import {
   targetInputs,
 } from "./inputs";
 import { ArtifactDirectory, isCached, targetOutputs } from "./outputs";
-import { findPathDependencies, unseenPathDependencyWarning } from "./path-dependencies";
+import { findCrateFolders, unseenPathDependencyWarning } from "./path-dependencies";
 import { pluginInput } from "./plugin-package";
+import { redirectedUses } from "./redirected-uses";
 import type { InferredTargetName } from "./targets";
 
 /** What the caching of every project of one graph computation shares. */
@@ -25,18 +26,26 @@ export interface CacheContext extends InputContext {
 /**
  * Works out what the inputs and outputs of the projects that `discovery`
  * found need beyond each project: how the plugin's version reaches the keys,
- * the path dependencies without a project, and where each workspace's
- * artifact directory lies; and the warnings of `DES-DIAGNOSTICS` that these
- * give, which it also prints.
+ * the crates without a project that path dependencies and redirections
+ * reach, the redirected crates whose edges are left out, and where each
+ * workspace's artifact directory lies; and the warnings of `DES-DIAGNOSTICS`
+ * that these give, which it also prints.
+ *
+ * The redirected uses come from `redirectedUses`, which `createDependencies`
+ * asks again with the projects of every plugin and entry. Here it knows only
+ * the projects of this entry, so a crate that another entry gives a project
+ * counts as one without a project, and its folder joins the inputs beside
+ * the edge that `createDependencies` adds.
  */
 export async function cacheContext(
   discovery: CargoDiscovery,
   nxJson: NxJsonConfiguration | undefined,
 ): Promise<CacheContext> {
   const { workspaceRoot } = discovery;
-  const [plugin, pathDependencies] = await Promise.all([
+  const uses = redirectedUses({ discovery, projects: [] }, projectRoots(discovery));
+  const [plugin, folders] = await Promise.all([
     pluginInput(workspaceRoot, nxJson),
-    findPathDependencies(discovery),
+    findCrateFolders(discovery, uses),
   ]);
   const warnings = new Map<string, string[]>();
   const warn = (key: string, message: string) => {
@@ -45,7 +54,7 @@ export async function cacheContext(
   const pathDependencyFolders = new Map<string, string[]>();
   for (const workspace of discovery.workspaces) {
     for (const crate of workspace.members) {
-      const dependencies = pathDependencies.get(crate.manifest_path) ?? [];
+      const dependencies = folders.withoutProject.get(crate.manifest_path) ?? [];
       pathDependencyFolders.set(
         crate.manifest_path,
         dependencies.filter((dependency) => dependency.seen).map((dependency) => dependency.folder),
@@ -79,6 +88,7 @@ export async function cacheContext(
     plugin,
     hostTriples: hostTriples(),
     pathDependencyFolders,
+    redirectedFolders: folders.leftOutEdges,
     artifactDirectories,
     warnings,
   };
@@ -121,6 +131,21 @@ export function configureCaching(
 export function projectWarnings(subject: CacheSubject, context: CacheContext): string[] {
   const key = subject.pkg?.manifest_path ?? rootManifestPath(subject.workspace);
   return [...new Set(context.warnings.get(key) ?? [])];
+}
+
+// The roots of the projects that this entry creates (`inferProjects` in
+// `projects.ts`): each member's folder, and the folder of each root manifest
+// that Nx hands to the plugin.
+function projectRoots(discovery: CargoDiscovery): string[] {
+  const root = (path: string) => relative(discovery.workspaceRoot, path) || ".";
+  return [
+    ...new Set(
+      discovery.workspaces.flatMap((workspace) => [
+        ...workspace.members.map((pkg) => root(dirname(pkg.manifest_path))),
+        ...(workspace.rootManifestHanded ? [workspace.root] : []),
+      ]),
+    ),
+  ];
 }
 
 // The target triples that a target's options and configurations name.

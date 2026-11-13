@@ -109,6 +109,12 @@ export interface InputContext {
    * and inside it (`findPathDependencies` in `path-dependencies.ts`).
    */
   pathDependencyFolders: ReadonlyMap<string, readonly string[]>;
+  /**
+   * The folders of the redirected crates with a project that each crate may
+   * use but has no edge to, by the crate's manifest path, relative to the
+   * repository root (`findCrateFolders` in `path-dependencies.ts`).
+   */
+  redirectedFolders: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
@@ -225,8 +231,9 @@ export function namedInputs(
 /**
  * The inputs of one of the project's targets, in the order of the table in
  * `DES-INPUTS`: the crate's files and those of its dependencies, the
- * workspace files, the members' manifests, the tool's configuration, the
- * lockfile, the environment, the toolchain and the plugin.
+ * workspace files, the folders of the redirected crates that the crate may
+ * use without an edge, the members' manifests, the tool's configuration,
+ * the lockfile, the environment, the toolchain and the plugin.
  *
  * @param triples The target triples that the target's options and
  *   configurations name, whose `CARGO_TARGET_<TRIPLE>_*` variables count
@@ -253,6 +260,11 @@ export function targetInputs(
     crateInputName,
     `^${crateInputName}`,
     ...workspaceFiles(subject, workspaceRoot),
+    ...(subject.pkg === undefined
+      ? []
+      : (context.redirectedFolders.get(subject.pkg.manifest_path) ?? []).map((folder) =>
+          fromRoot(folder, "**/*"),
+        )),
     ...(settings.featureUnification === "hakari" ? [] : memberManifestInputs(subject, context)),
     ...toolConfigurationInputs(target, subject, workspaceRoot, settings),
     ...(target === "fmt" || target === "fmt-check"
