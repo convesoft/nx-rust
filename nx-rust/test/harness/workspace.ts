@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -157,6 +158,25 @@ export class FixtureWorkspace {
   /** The cargo invocations logged so far, relative to the workspace root. */
   cargoCalls(): CargoCall[] {
     return this.cargo.calls(this.root);
+  }
+
+  /**
+   * Every file of the repository with its content, by path relative to the
+   * root, apart from those in `node_modules` and in Nx's `.nx` folder.
+   */
+  files(folder = ""): Record<string, string> {
+    const files: Record<string, string> = {};
+    for (const entry of readdirSync(join(this.root, folder), { withFileTypes: true })) {
+      const path = folder === "" ? entry.name : `${folder}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (path !== "node_modules" && path !== ".nx") {
+          Object.assign(files, this.files(path));
+        }
+      } else {
+        files[path] = readFileSync(join(this.root, path), "utf8");
+      }
+    }
+    return files;
   }
 
   /**

@@ -72,7 +72,22 @@ from 1.97 on; older versions ignore it without a word
 ## Running binaries
 
 `nx run api` is Nx's own syntax and needs a target, so `run` is started as
-`nx run api:run`. Arguments after `--` go to the binary.
+`nx run api:run`. Arguments after `--` go to the binary, and so does the value
+of the `args` option:
+
+```sh
+nx run api:run -- --port 3000
+nx run api:run --bin server --args="--port 3000"
+```
+
+Use `--args` when you also pass a flag to Nx or to `run`, such as `--bin`: when
+the command has `--`, Nx drops the flags before it that it does not know.
+Use it also when an argument has the name of one of `run`'s options, such as
+`--profile`, which Nx would otherwise check as that option and can reject.
+Write `--args` with `=`, and give it once. Quotes inside its value group words
+as in a shell, and nothing in it is expanded. A value that is only a number
+needs a blank, as in `--args=" 3000"`, or goes after `--`, because Nx would
+otherwise read it as a number and reject it.
 
 A crate with several binaries needs to say which one `run` starts: set
 `default-run` in its `[package]` table, or pass the binary through the `bin`
@@ -168,6 +183,50 @@ see [napi and wasm artifacts](artifacts.mara.md). The plugin adds no `^build`
 to JS projects, and it cannot take yours away. If a JS target declares `^build`
 and its project depends on a crate, Nx also runs that crate's native `build`.
 It stops there, because the crate's `build` depends on nothing.
+
+## Options that cargo does not use
+
+The `options` of a target default reach Rust targets too, and so do flags on
+the command line, which Nx passes to every task of the targets it runs. A Rust
+task runs as if an option it does not know were absent, such as Jest's
+`passWithNoTests` or `--coverage`, and its output says so in one line per option
+([[REQ-UNKNOWN-OPTIONS]]):
+
+```text
+api:test: ignoring option `coverage`, passed on the command line.
+api:test: ignoring option `passWithNoTests`, which the cargo executor does not know. It comes from the workspace's configuration: run `nx show target api:test --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by the plugin's executor.
+```
+
+Such an option fails no task. On `run`, the arguments after `--` go to the
+binary instead: see [Running binaries](#running-binaries).
+
+To keep a target default away from Rust targets, and so silence the warning,
+narrow the entry with a `filter`. This one assumes that your crates carry the
+tag `lang:rust`, for example through `[workspace.metadata.nx]`:
+
+```json
+{
+  "targetDefaults": {
+    "test": [
+      {
+        "filter": { "projects": ["!tag:lang:rust"] },
+        "options": { "passWithNoTests": true }
+      }
+    ]
+  }
+}
+```
+
+Or add an empty entry keyed by the target's executor, the `executor` that
+`nx show project <crate> --json` shows for it. Nx prefers an entry keyed by the
+executor to one keyed by the target name, so then no entry keyed by a target
+name reaches the targets of that executor.
+
+A Rust option with a value of the wrong type, such as a number for `profile`,
+is not ignored: Nx rejects it before the plugin sees it. Rust tasks normally run
+in a batch, and then every task of that batch fails, with a message that does
+not name the option. A single task, such as `run` or any task with
+`--batch=false`, fails alone, and Nx's message names the option.
 
 ## Formatting
 
@@ -295,7 +354,7 @@ Each command starts in the root folder of the crate's workspace, names the crate
 
 **bench.** The target has `parallelism: false`, so that Nx starts no other task while benchmarks run. Nx never puts such a task into a batch, so each `bench` task is a cargo call of its own ([[EVD-NX-24-TARGETS]]).
 
-**run.** One `run` target per crate. When the crate has several binaries, an option of the target, `bin`, passes `--bin`; it is set on the command line or in the crate's metadata ([[DES-PLUGIN-OPTIONS]]). Without it and without `default-run` in the manifest, cargo fails and lists the binaries. Arguments after `--` on the `nx` command line go to the binary. `run` uses an executor that has no batch implementation, because `cargo run` accepts one package only, while Nx hands every task of an executor with a batch implementation and `preferBatch` to one batch, also the tasks of `nx run-many -t run` ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `run` is not a continuous task: a task that depends on it waits until the binary exits. A crate that serves something sets `continuous` and `readyWhen` on its `run` in its metadata ([[DES-METADATA-TABLES]]). `nx run <project>` is Nx's own syntax and needs a target, so the short form is `nx run <project>:run`.
+**run.** One `run` target per crate. When the crate has several binaries, an option of the target, `bin`, passes `--bin`; it is set on the command line or in the crate's metadata ([[DES-PLUGIN-OPTIONS]]). Without it and without `default-run` in the manifest, cargo fails and lists the binaries. The `args` option, a string, gives the binary its arguments. It is split into words at blanks outside quotes. Single quotes, double quotes and backslashes quote and escape as in a POSIX shell, an empty pair of quotes is an empty word, and nothing is expanded or treated as an operator, so `|`, `;` and `>` are ordinary characters. An unterminated quote, or a backslash at the end, fails the task with a message that names the option. Arguments after `--` on the `nx` command line go to the binary too, after those of `args`, within two limits that come from Nx ([[EVD-NX-OPTION-VALIDATION]]). When the command has `--`, Nx drops the flags before it that Nx does not know itself, so `--bin` and `--args` cannot be combined with `--`. Nx also parses what follows `--` as options of the target and checks them against its schema before the executor runs, so an argument with the name of one of `run`'s options can be rejected. `--args` works in both cases. Nx also reads a value of `--args` that looks like a number as a number, so `--args=3000` and `--args="3000"` fail the schema. `--args=" 3000"`, with a blank, stays a string and gives the one word `3000`, and `-- 3000` passes `3000` as well. `run` uses an executor that has no batch implementation, because `cargo run` accepts one package only, while Nx hands every task of an executor with a batch implementation and `preferBatch` to one batch, also the tasks of `nx run-many -t run` ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `run` is not a continuous task: a task that depends on it waits until the binary exits. A crate that serves something sets `continuous` and `readyWhen` on its `run` in its metadata ([[DES-METADATA-TABLES]]). `nx run <project>` is Nx's own syntax and needs a target, so the short form is `nx run <project>:run`.
 
 The targets of the workspace project are [[DES-WORKSPACE-TARGETS]].
 :::

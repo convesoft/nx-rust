@@ -36,4 +36,19 @@ Parts of `VER-SETUP` that wait for other issues:
 - The graph-time warnings that `init` prints: nxr-fy4t4k (step added) and nxr-7vmkx2.
 - `init`'s report of target defaults: nxr-d3087e (step added).
 
-Found and filed: nxr-jf9dtr (`EVD-CARGO-NEW`'s exclude experiment used a glob, which Cargo does not read as one) and nxr-7vmkx2 (no issue owned the warning about Cargo directories that Nx does not ignore).
+Found and filed: nxr-7vmkx2 (no issue owned the warning about Cargo directories that Nx does not ignore).
+
+After review, at the request of the control plane:
+
+- The check no longer assumes Nx's internals. Before using them, it checks that `LoadedNxPlugin` is a constructor and that `retrieveProjectConfigurations` and `isProjectConfigurationsError` are functions. Afterwards, it checks that the result has a `matchingProjectFiles` list of paths. Otherwise `init` stops before writing, with an error that names the installed Nx version and the supported Nx and says what to do. `DES-DIAGNOSTICS` has a row for that error, and `VER-SETUP` a sentence. Four new tests replace `nx/src/devkit-internals` with `jest.doMock` for one run of the generator: a missing constructor, a missing function, a result of another shape, and a positive control.
+- Merged `origin/main` at 9a8b35a (#12, #15, #17, #18). The check reads `graphForDependencies(root)?.discovery`. Since #17, the name-collision check runs in `createDependencies`, which `init`'s check does not run; nxr-q6cxt3 has a step for it.
+- `EVD-CARGO-NEW`'s exclude bullet now records what cargo 1.91.0 and 1.100.0 do: an `exclude` entry is a path, not a glob. `DES-GENERATORS` and `VER-SETUP` say "the entry". nxr-jf9dtr, filed for that, was deleted.
+
+Checks run after review, on the merged branch:
+
+- `pnpm nx format:write`.
+- `pnpm nx run-many -t build lint test`: passed, 158 tests.
+- `pnpm nx format:check --all`: passed.
+- `pnpm nx e2e nx-rust-e2e`: 9 passed, with the pnpm cache that #18 sets up and no private one.
+- `mara schema validate` and `mara project validate`: `valid: true`, evaluation complete, 0 errors, 0 warnings.
+- `zban check`: no problems.

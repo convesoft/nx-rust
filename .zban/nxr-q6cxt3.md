@@ -19,6 +19,8 @@ Implements `REQ-COMPATIBILITY` and `REQ-DIAGNOSTICS` (`nx-rust/docs/setup.mara.m
 - [ ] Task-time errors for a missing tool, naming the tool, the feature that needs it and how to get it
 - [ ] Nothing is installed by the plugin
 - [ ] `init` stops for each of these errors too, and for an unsupported Nx also in a repository without a `Cargo.toml`, with the tests that the third paragraph of `VER-SETUP` lists, the name collision of nxr-1bv0wm included. `init` runs the plugin's `createNodes` through Nx (`nx-rust/src/generators/init/graph-check.ts`), so a check made there reaches it; a check made when the plugin loads has to reach it as well
+- [ ] `init`'s check also covers what graph creation checks in `createDependencies`, which it does not run yet: since nxr-1bv0wm, the collision between two projects of the plugin that hold one name once Nx has merged the projects of all plugins and entries (`DES-PROJECT-GRAPH`, `REQ-PROJECT-NAMES`, the collision row of `DES-DIAGNOSTICS`)
+- [ ] Name the supported Nx majors in `init`'s error for Nx internals it cannot use (`UnsupportedNxError` in `nx-rust/src/generators/init/graph-check.ts`) from the peer dependency range, instead of its constant
 - [ ] Take the tools, how to get them and whether they are installed for the task-time errors from the table that `init` reports (`nx-rust/src/tools/optional-tools.ts`)
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

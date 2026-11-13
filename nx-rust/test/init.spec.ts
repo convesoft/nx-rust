@@ -436,3 +436,135 @@ describe("init's report of tools", () => {
     expect(report(["rust/deny.toml"])).toEqual({ warnings: [], info: [] });
   });
 });
+
+describe("init with an Nx whose internals differ", () => {
+  // The module through which init runs graph creation. Each test replaces it
+  // for one run of the generator, the way a later Nx release could change it.
+  const internalsPath = require.resolve("nx/src/devkit-internals");
+  const nxVersion: string = require("nx/package.json").version;
+  let workspace: FixtureWorkspace;
+
+  beforeEach(() => {
+    workspace = FixtureWorkspace.create("subfolder-workspace", unregistered);
+  });
+
+  afterEach(() => {
+    jest.dontMock(internalsPath);
+    jest.resetModules();
+    workspace.remove();
+  });
+
+  /** Runs init on the fixture with Nx's internals as `change` makes them, and returns its error and changes. */
+  async function initWith(
+    change: (internals: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<{ error: unknown; changed: string[] }> {
+    jest.resetModules();
+    const actual = jest.requireActual(internalsPath);
+    jest.doMock(internalsPath, () => change({ ...actual }));
+    const { initGenerator } = require("../src/generators/init/init");
+    const { FsTree } = require("nx/src/generators/tree");
+    const tree = new FsTree(workspace.root, false);
+    const error = await initGenerator(tree, {}).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    return { error, changed: tree.listChanges().map((change: { path: string }) => change.path) };
+  }
+
+  /** The error for `detail`, as init words it. */
+  function expectUnsupportedNx(error: unknown, detail: string): void {
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(
+      "nx-rust was not added to nx.json: it could not check the project graph.",
+    );
+    expect(message).toContain(
+      `nx-rust cannot check this repository with the installed Nx ${nxVersion}: ${detail}.`,
+    );
+    expect(message).toContain("This version of @convesoft/nx-rust supports Nx 24.");
+    expect(message).toContain(
+      `Use a supported Nx version, or a version of @convesoft/nx-rust that supports the installed Nx ${nxVersion}.`,
+    );
+    expect(message).toContain("nx.json is unchanged.");
+  }
+
+  // The positive control. The real internals cannot run here, because Nx in
+  // this process knows only this repository's files; the nx g tests above
+  // and the end-to-end suite run them. A stand-in that runs each entry's
+  // createNodes on no files and returns a result of the expected shape lets
+  // init register the plugin.
+  it(
+    "registers the plugin when the internals are there and the result has the expected shape",
+    async () => {
+      const { error, changed } = await initWith((internals) => ({
+        ...internals,
+        retrieveProjectConfigurations: async (
+          plugins: { specifiedPlugins: { createNodes: [string, Function] }[] },
+          workspaceRoot: string,
+          nxJson: unknown,
+        ) => {
+          for (const plugin of plugins.specifiedPlugins) {
+            await plugin.createNodes[1]([], { nxJsonConfiguration: nxJson, workspaceRoot });
+          }
+          return { projects: {}, matchingProjectFiles: [] };
+        },
+      }));
+
+      expect(error).toBeUndefined();
+      expect(changed).toEqual(["nx.json"]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "stops before writing when LoadedNxPlugin is missing",
+    async () => {
+      const { error, changed } = await initWith((internals) => ({
+        ...internals,
+        LoadedNxPlugin: undefined,
+      }));
+
+      expectUnsupportedNx(
+        error,
+        "LoadedNxPlugin from nx/src/devkit-internals is not a constructor",
+      );
+      expect(changed).toEqual([]);
+      expect(workspace.cargoCalls()).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "stops before writing when retrieveProjectConfigurations is missing",
+    async () => {
+      const { error, changed } = await initWith((internals) => ({
+        ...internals,
+        retrieveProjectConfigurations: undefined,
+      }));
+
+      expectUnsupportedNx(
+        error,
+        "retrieveProjectConfigurations from nx/src/devkit-internals is not a function",
+      );
+      expect(changed).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "stops before writing when the result has another shape",
+    async () => {
+      const { error, changed } = await initWith((internals) => ({
+        ...internals,
+        retrieveProjectConfigurations: async () => ({ projects: {} }),
+      }));
+
+      expectUnsupportedNx(
+        error,
+        "the result of retrieveProjectConfigurations from nx/src/devkit-internals has no matchingProjectFiles list of file paths",
+      );
+      expect(changed).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+});

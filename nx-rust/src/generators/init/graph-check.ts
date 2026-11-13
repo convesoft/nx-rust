@@ -1,5 +1,4 @@
 import type { NxJsonConfiguration, PluginConfiguration } from "@nx/devkit";
-import type * as NxInternals from "nx/src/devkit-internals";
 import plugin = require("../../index");
 import type { CargoWorkspace } from "../../graph/discovery";
 import { registrationOf } from "../../graph/registration";
@@ -29,6 +28,32 @@ export class GraphCheckError extends Error {
   }
 }
 
+/** The Nx versions that this version of the plugin supports (`REQ-COMPATIBILITY`). */
+export const supportedNx = "Nx 24";
+
+/**
+ * The installed Nx lacks the internal parts of Nx through which the check
+ * runs graph creation, or they work differently from what the check expects.
+ */
+export class UnsupportedNxError extends Error {
+  constructor(
+    /** The version of the installed Nx, if it could be read. */
+    readonly nxVersion: string | undefined,
+    /** What is missing or different. */
+    readonly detail: string,
+  ) {
+    const nx = nxVersion === undefined ? "the installed Nx" : `the installed Nx ${nxVersion}`;
+    super(
+      [
+        `nx-rust cannot check this repository with ${nx}: ${detail}.`,
+        `This version of ${pluginName} supports ${supportedNx}. It runs the checks of graph creation through parts of Nx that are not public API, and ${nx} does not have them in the form it expects.`,
+        `Use a supported Nx version, or a version of ${pluginName} that supports ${nx}.`,
+      ].join("\n"),
+    );
+    this.name = "UnsupportedNxError";
+  }
+}
+
 /** Whether a `plugins` entry of `nx.json` is one of this plugin. */
 export function isPluginEntry(entry: PluginConfiguration): boolean {
   return (typeof entry === "string" ? entry : entry.plugin) === pluginName;
@@ -51,6 +76,8 @@ export function isPluginEntry(entry: PluginConfiguration): boolean {
  * @param nxJson `nx.json` as it would be, with the plugin's entries.
  * @param workspaceRoot The absolute path of the repository root.
  * @throws {GraphCheckError} When graph creation would fail.
+ * @throws {UnsupportedNxError} When the installed Nx lacks those internal
+ *   parts, or they return something the check cannot read.
  */
 // @mara implements DES-GENERATORS
 export async function checkGraphCreation(
@@ -67,17 +94,16 @@ export async function checkGraphCreation(
   const graphCreation = globalThis as { NX_GRAPH_CREATION?: boolean };
   const wasCreating = graphCreation.NX_GRAPH_CREATION;
   graphCreation.NX_GRAPH_CREATION = true;
-  let manifests: string[];
+  let result: unknown;
   try {
-    const result = await nx.retrieveProjectConfigurations(
+    result = await nx.retrieveProjectConfigurations(
       { specifiedPlugins: loaded, defaultPlugins: [] },
       workspaceRoot,
       nxJson,
     );
-    manifests = result.matchingProjectFiles;
   } catch (error) {
     if (nx.isProjectConfigurationsError(error)) {
-      throw new GraphCheckError(error.errors.map((e) => e.message));
+      throw new GraphCheckError(errorMessages(error));
     }
     throw error;
   } finally {
@@ -87,20 +113,98 @@ export async function checkGraphCreation(
       graphCreation.NX_GRAPH_CREATION = wasCreating;
     }
   }
+  const manifests = (result as { matchingProjectFiles?: unknown } | null)?.matchingProjectFiles;
+  if (!Array.isArray(manifests) || !manifests.every((file) => typeof file === "string")) {
+    throw new UnsupportedNxError(
+      nxVersion(workspaceRoot),
+      "the result of retrieveProjectConfigurations from nx/src/devkit-internals has no matchingProjectFiles list of file paths",
+    );
+  }
   const workspaces = new Map<string, CargoWorkspace>();
   for (const { copy } of entries) {
-    const discovery = registrationOf(copy).discoveryForDependencies(workspaceRoot);
+    const discovery = registrationOf(copy).graphForDependencies(workspaceRoot)?.discovery;
     for (const workspace of discovery?.workspaces ?? []) {
       if (!workspaces.has(workspace.root)) {
         workspaces.set(workspace.root, workspace);
       }
     }
   }
-  return { manifests: [...new Set(manifests)].sort(), workspaces: [...workspaces.values()] };
+  return {
+    manifests: [...new Set(manifests as string[])].sort(),
+    workspaces: [...workspaces.values()],
+  };
 }
 
-// Nx's internals from the Nx installed in the repository, which is the Nx
-// that runs the generator.
-function nxInternals(workspaceRoot: string): typeof NxInternals {
-  return require(require.resolve("nx/src/devkit-internals", { paths: [workspaceRoot] }));
+/** The internal parts of Nx that the check uses, as far as it uses them. */
+interface NxInternals {
+  LoadedNxPlugin: new (
+    plugin: object,
+    entry: PluginConfiguration,
+    index: number,
+  ) => { createNodes?: unknown };
+  retrieveProjectConfigurations(
+    plugins: { specifiedPlugins: unknown[]; defaultPlugins: unknown[] },
+    workspaceRoot: string,
+    nxJson: NxJsonConfiguration,
+  ): Promise<unknown>;
+  isProjectConfigurationsError(error: unknown): error is { errors?: unknown; message?: unknown };
+}
+
+/**
+ * Nx's internals from the Nx installed in the repository, which is the Nx
+ * that runs the generator, after checking that each part the check uses is
+ * there and is what the check calls: a constructor or a function.
+ *
+ * @throws {UnsupportedNxError} When a part is missing or of another kind.
+ */
+function nxInternals(workspaceRoot: string): NxInternals {
+  let internals: Record<string, unknown>;
+  try {
+    internals = require(require.resolve("nx/src/devkit-internals", { paths: [workspaceRoot] }));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new UnsupportedNxError(
+      nxVersion(workspaceRoot),
+      `nx/src/devkit-internals could not be loaded (${reason})`,
+    );
+  }
+  const constructor = internals?.LoadedNxPlugin;
+  if (typeof constructor !== "function" || typeof constructor.prototype !== "object") {
+    throw new UnsupportedNxError(
+      nxVersion(workspaceRoot),
+      "LoadedNxPlugin from nx/src/devkit-internals is not a constructor",
+    );
+  }
+  for (const name of ["retrieveProjectConfigurations", "isProjectConfigurationsError"]) {
+    if (typeof internals[name] !== "function") {
+      throw new UnsupportedNxError(
+        nxVersion(workspaceRoot),
+        `${name} from nx/src/devkit-internals is not a function`,
+      );
+    }
+  }
+  return internals as unknown as NxInternals;
+}
+
+// The messages of the errors that Nx collected for graph creation, or the
+// message of the error itself where it holds no list of them.
+function errorMessages(error: { errors?: unknown; message?: unknown }): string[] {
+  const messages = Array.isArray(error.errors)
+    ? error.errors.map((e: { message?: unknown } | null) => e?.message)
+    : [];
+  return messages.length > 0 && messages.every((message) => typeof message === "string")
+    ? messages
+    : [String(error.message ?? error)];
+}
+
+// The version of the Nx installed in the repository, if it can be read.
+function nxVersion(workspaceRoot: string): string | undefined {
+  try {
+    const version: unknown = require(
+      require.resolve("nx/package.json", { paths: [workspaceRoot] }),
+    ).version;
+    return typeof version === "string" ? version : undefined;
+  } catch {
+    return undefined;
+  }
 }

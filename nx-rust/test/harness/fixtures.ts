@@ -25,6 +25,8 @@ export const fixtureNames = [
   "name-collision",
   "dev-dependency-cycle",
   "different-toolchains",
+  "mixed-folders",
+  "nested-folders",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

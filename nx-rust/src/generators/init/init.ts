@@ -7,7 +7,13 @@ import {
   writeJson,
   type NxJsonConfiguration,
 } from "@nx/devkit";
-import { checkGraphCreation, GraphCheckError, isPluginEntry, pluginName } from "./graph-check";
+import {
+  checkGraphCreation,
+  GraphCheckError,
+  isPluginEntry,
+  pluginName,
+  UnsupportedNxError,
+} from "./graph-check";
 import { initReport } from "./report";
 
 /** The options of `init`, which has none of its own. */
@@ -34,12 +40,17 @@ export async function initGenerator(tree: Tree, _options: InitGeneratorSchema): 
   try {
     check = await checkGraphCreation({ ...nxJson, plugins }, tree.root);
   } catch (error) {
-    if (error instanceof GraphCheckError) {
+    if (error instanceof GraphCheckError || error instanceof UnsupportedNxError) {
+      const graph = error instanceof GraphCheckError;
       throw new Error(
         [
           registered
-            ? "Nx cannot create the project graph with nx-rust as nx.json registers it."
-            : "nx-rust was not added to nx.json: Nx could not create the project graph with it.",
+            ? graph
+              ? "Nx cannot create the project graph with nx-rust as nx.json registers it."
+              : "nx-rust cannot check the project graph that nx.json registers it for."
+            : graph
+              ? "nx-rust was not added to nx.json: Nx could not create the project graph with it."
+              : "nx-rust was not added to nx.json: it could not check the project graph.",
           "",
           error.message,
           "",
