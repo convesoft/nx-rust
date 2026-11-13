@@ -140,6 +140,9 @@ changed, then validate with Mara again.
 - CI runs on Linux only for the moment (`ADR-CI-LINUX-ONLY`). Do not add macOS
   jobs to a workflow until the user says the runners are usable again, and do
   not write code that assumes Linux.
+- CI does not run the Mara validation yet, because the Mara version this
+  knowledge base needs is not published (nxr-0x99we). Your local run is the
+  only check of the knowledge base, so never skip it.
 - Before reporting work as done, run `pnpm exec nx run-many -t build lint test`
   and `pnpm format:check`. Run `pnpm exec nx e2e nx-rust-e2e` when behaviour of
   the built plugin changed. Run `mara schema validate`, `mara project validate`
