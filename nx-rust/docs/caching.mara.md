@@ -16,6 +16,7 @@ ambition. Running more than a cache key promises is fine. Running less is not.
 | Crate files           | Every file in the crate's folder, except the files a `napi-build` or `wasm-build` target generates there                                                                                              |
 | Workspace files       | The root `Cargo.toml`, and every `rust-toolchain.toml` and `.cargo/config.toml` between the crate and the repository root                                                                             |
 | Dependency sources    | The same files of every crate this one depends on, including dev- and build-dependencies. A path dependency that is not an Nx project counts with its whole folder.                                   |
+| Declared files        | Files outside the crate's folder that its `Cargo.toml` or its workspace's lists under `fileInputs`, and those that the crates it depends on list ([below](#files-outside-the-crate))                  |
 | External dependencies | The locked versions of the external crates this crate uses. Until per-crate hashing is specified, the whole `Cargo.lock`.                                                                             |
 | Tool configuration    | `clippy.toml` for `lint`, `rustfmt.toml` for `fmt-check`, and `.config/nextest.toml` for tests that nextest runs                                                                                      |
 | Environment           | A fixed list of variables that change Rust builds, such as `RUSTFLAGS`, `RUSTDOCFLAGS`, `RUSTC_WRAPPER`, `CARGO_BUILD_TARGET`, `CC` and `CFLAGS`. [[DES-INPUTS]] has the full list. You can add more. |
@@ -34,9 +35,10 @@ your statement that the target does not read them: if a macro such as
 `include_str!`, a build script or a test still reads an excluded file, Nx
 restores results produced with its old content.
 
-If a build script or test reads something outside this list, add it: an
-environment variable, or a command whose output should be part of the key.
-Typical cases are a system library version or a code generator.
+If a build script or test reads something outside this list, add it: a file
+([below](#files-outside-the-crate)), an environment variable, or a command
+whose output should be part of the key. Typical cases are a system library
+version or a code generator.
 
 ```toml
 # rust/Cargo.toml
@@ -52,9 +54,51 @@ also reaches the keys of the crates that depend on it, because they compile it
 too. An input that you add to one target's `inputs` stays with that target
 ([Configuration](configuration.mara.md#changing-an-inferred-target)).
 
-Files **outside** the crate that a build script names with
-`cargo::rerun-if-changed`, or that a macro such as `include_str!` pulls in, are
-not picked up automatically yet ([[REQ-BUILD-SCRIPT-INPUTS]]).
+## Files outside the crate
+
+A build script can name files outside its crate's folder with
+`cargo::rerun-if-changed`, and a macro such as `include_str!` can pull them in,
+for example protocol definitions that several crates share. The plugin does
+not guess these paths: list them under `fileInputs`, as glob patterns relative
+to the `Cargo.toml` that holds them.
+
+```toml
+# rust/crates/api/Cargo.toml
+[package.metadata.nx]
+fileInputs = ["../../../proto/**/*.proto", "../../../README.md"]
+```
+
+- The files count for every cached target of the crate and of every crate that
+  depends on it, from the first run on, and `nx affected` sees a change to
+  them.
+- In `[workspace.metadata.nx]` the patterns apply to every member. A crate has
+  its workspace's patterns and its own.
+- Files that Git ignores can be listed too, and are hashed. `nx affected` does
+  not see a change to a file that the root `.gitignore` or `.nxignore` ignores,
+  though; `nx run-many` still runs the tasks again, because their keys change.
+- List the file itself, not a symbolic link to it. Nx keeps the hash of a
+  link's destination until the link itself changes or `nx reset` clears its
+  stored hashes, so neither the key nor `nx affected` would see a change to the
+  file.
+- A pattern that leaves the repository, or points into Cargo's build or
+  artifact directory, stops graph creation. Nx cannot hash files outside the
+  repository; cover those with a command under `runtimeInputs`.
+
+Whenever `build` runs cargo, also when nothing needs compiling, the plugin
+reads the dependency files that Cargo writes beside the crate's library and
+binaries, such as `target/debug/libapi.d` and `target/debug/api.d`. If one
+names a file in the repository that none of the task's inputs covers, the task
+fails, lists the files and shows the `fileInputs` line to add. A record that
+the plugin cannot attribute with certainty, for example when Cargo's
+configuration picks the target triple, is not read. The other crates built in the
+same cargo call keep their results. A failed task is never cached as a success;
+with `NX_CACHE_FAILURES=true`, Nx replays the failure until its key changes,
+which adding the line does.
+
+Other targets are not checked this way, because Cargo keeps their records only
+inside its build directory. A file that only tests read is yours to list. So is
+a file that a proc macro opens by itself: Cargo does not track it either, and
+plain `cargo` will not rebuild when it changes.
 
 ## Where cargo runs
 
@@ -185,14 +229,35 @@ A cargo command that the plugin runs uses the same build directory, the same art
 
 :::mara requirement REQ-BUILD-SCRIPT-INPUTS
 :mid: 01M78FHG7FC47G6VCHVQBY6JT2
-:title: Hash files outside the crate that build scripts and macros read
-:status: draft
+:title: Hash the declared files outside a crate that build scripts and macros read
+:status: accepted
 :satisfies: NEED-CORRECT-CACHE
+:satisfies: NEED-AFFECTED
 :mitigates: RISK-UNDECLARED-INPUTS
 
-Files outside a crate's folder that its build script declares with `cargo::rerun-if-changed`, or that its source code includes with macros such as `include_str!`, are part of the cache key of the crate that reads them. Files inside the crate's folder are inputs already ([[REQ-INPUT-FILES]]).
+A repository can declare files outside a crate's folder that the crate's build script, macros or tests read, such as files that a build script names with `cargo::rerun-if-changed` or that `include_str!` pulls in. It declares them in the crate's manifest and, for every member of a workspace, in the workspace's root manifest; the declarations of the two add up. Declared files are part of the cache key of every cached target of the crate and of every crate that depends on it, also when Git ignores them. A change to a declared file makes those tasks affected, except for a file that the repository's root `.gitignore` or `.nxignore` ignores: Nx leaves such files out of the changed files it matches against inputs, so a change to one alone changes the keys and makes no task affected. A declared symbolic link covers the file it points to in neither way: Nx keeps the hash of the link's destination until the link itself changes or `nx reset` clears the hashes Nx keeps, so a change to that file alone changes no key and makes no task affected; the file itself is what has to be declared ([[EVD-NX-24-FILE-INPUTS]]). Declarations come from the manifests, not from earlier builds, so they apply from the first run ([[ADR-DECLARED-FILE-INPUTS]]). Files inside the crate's folder are inputs already ([[REQ-INPUT-FILES]]).
+:::
 
-Open: how the plugin learns these paths without running the build, and what it does on the first run. The design discussion of 12 November 2026 named this area without choosing a mechanism.
+:::mara requirement REQ-FILE-INPUTS-HASHABLE
+:mid: 01M7AE8CZ89406C7ZQ4FS2ST0V
+:title: Reject a declared file pattern that Nx cannot hash
+:status: accepted
+:satisfies: NEED-CORRECT-CACHE
+:satisfies: NEED-CLEAR-FAILURES
+:mitigates: RISK-UNDECLARED-INPUTS
+
+A declaration of files outside a crate ([[REQ-BUILD-SCRIPT-INPUTS]]) that resolves outside the repository, or into Cargo's build or artifact directory, fails graph creation with a message that names the manifest and the declaration. For a declaration outside the repository, the message points to the commands whose output a repository can add to the key instead ([[REQ-ENV-ALLOWLIST]]).
+:::
+
+:::mara requirement REQ-BUILD-INPUT-CHECK
+:mid: 01M7ACMK1QH5F72B0567M3WNP1
+:title: Fail a build that read a repository file outside its inputs
+:status: accepted
+:satisfies: NEED-CORRECT-CACHE
+:satisfies: NEED-CLEAR-FAILURES
+:mitigates: RISK-UNDECLARED-INPUTS
+
+When the cargo call of a `build` task has built the task's crate without error, also when nothing needed compiling, and a record that Cargo exported for the crate's library or one of its binaries names a file inside the repository that none of the task's file inputs covers, the task fails, so that no success is cached for it. The plugin names these records from what it knows without asking cargo, and reads none that it cannot name with certainty. A file reached through a symbolic link counts as covered only when the inputs cover the file the link points to. The failure names each such file and the declaration that would cover it ([[REQ-BUILD-SCRIPT-INPUTS]]). Files outside the repository, files in Cargo's build or artifact directory, and files that Nx ignores inside a directory that Cargo records as one path are not reported. When one cargo call builds several crates, only the tasks of the crates that read such a file fail.
 :::
 
 ## Design
@@ -204,6 +269,8 @@ Open: how the plugin learns these paths without running the build, and what it d
 :satisfies: REQ-INPUT-FILES
 :satisfies: REQ-ENV-ALLOWLIST
 :satisfies: REQ-TOOLCHAIN-KEY
+:satisfies: REQ-BUILD-SCRIPT-INPUTS
+:satisfies: REQ-FILE-INPUTS-HASHABLE
 
 Every cached target declares its inputs as Nx inputs. The plugin has no custom hasher ([[ADR-DECLARED-INPUTS]]).
 
@@ -212,6 +279,7 @@ Every cached target declares its inputs as Nx inputs. The plugin has no custom h
 | Crate files           | One fileset for the crate's project: every file under the crate's folder that belongs to no nested project, without the files an artifact target generates there ([[DES-ARTIFACT-STEPS]]). A list of source folders would miss files that macros and build scripts read, such as a README, templates or migrations ([[ADR-DECLARED-INPUTS]]). A negated pattern in the repository's own `inputs` of a target removes files from it, on the repository's responsibility ([[DES-PLUGIN-OPTIONS]]). |
 | Workspace files       | The real paths of the root `Cargo.toml` of the crate's workspace and of every `rust-toolchain.toml`, `rust-toolchain` and `.cargo/config.toml` between the crate and the repository root. A repository-wide named input cannot point at several lockfiles, so these are per project.                                                                                                                                                                                                             |
 | Dependency sources    | The crate-file inputs of all dependencies, through `^` inputs over the edges in [[DES-PROJECT-GRAPH]].                                                                                                                                                                                                                                                                                                                                                                                           |
+| Declared files        | Each pattern of `fileInputs` in the crate's `[package.metadata.nx]` and its workspace's `[workspace.metadata.nx]`, resolved against the folder of the manifest that holds it, as a fileset with `includeIgnored` in the crate-file input. Every cached target of the crate thereby has it, and its dependents through `^` ([[REQ-BUILD-SCRIPT-INPUTS]]).                                                                                                                                         |
 | Path dependencies     | For a path dependency that is no Nx project, because it is excluded, ignored or outside the repository, a fileset for its folder on every crate that depends on it, directly or through other crates. Where Nx cannot see those files, the plugin warns ([[DES-DIAGNOSTICS]]).                                                                                                                                                                                                                   |
 | External dependencies | [[REQ-EXTERNAL-DEPS]]; the mechanism is [[DES-LOCKFILE-HASHING]]. Until that is specified, the workspace's whole `Cargo.lock` is an input.                                                                                                                                                                                                                                                                                                                                                       |
 | Tool configuration    | On `lint`, every `clippy.toml` and `.clippy.toml` between the crate and the repository root. On `fmt-check`, every `rustfmt.toml` and `.rustfmt.toml` on the same path. On `test` with the nextest runner, the workspace's `.config/nextest.toml`.                                                                                                                                                                                                                                               |
@@ -232,7 +300,42 @@ The environment list:
 
 The variables and commands that the repository adds, with `envInputs` and `runtimeInputs` in the plugin options, in the workspace table or in a crate's table ([[DES-PLUGIN-OPTIONS]]), go into the crate's own named input, the one that its dependents hash through `^` inputs, and not onto single targets. A dependent's key therefore changes with them, also in another workspace, because Nx hashes the `env` and `runtime` entries of a dependency's named input into the dependent's key and those of a dependency's target into no other key ([[EVD-NX-24-OPTION-SEMANTICS]]).
 
-A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate is hashed with the crate's files, although it does not apply to the commands the plugin runs ([[DES-INVOCATION]]). An input the plugin cannot see is the repository's to declare, through the extra environment variables and commands ([[RISK-UNDECLARED-INPUTS]]).
+**Declared files.** Task-based affected matches changed files against filesets, so `nx affected` selects the tasks of the crate and of its dependents when a declared file changes. `includeIgnored` makes Nx hash a declared file that Git ignores. Nx leaves a file that the root `.gitignore` or `.nxignore` ignores out of the changed files before it matches them, also when a fileset with `includeIgnored` names it, so a change to such a file changes the keys and makes no task affected. A pattern that matches a symbolic link hashes the link's destination as Nx first reads it and keeps that hash until the link itself changes or `nx reset` clears the hashes Nx keeps, so a later change to the destination changes no key; Nx also matches changed files by their own paths, so `nx affected` does not select the task either ([[EVD-NX-24-FILE-INPUTS]]). The workspace project receives its members' patterns through its dependency on every member ([[DES-WORKSPACE-TARGETS]]). A pattern that resolves outside the repository fails graph creation with a message that names the manifest and the pattern and points to the runtime commands, because Nx accepts a fileset there without ever hashing it. So does a pattern that resolves into the build or artifact directory of the crate's workspace, whose files are Cargo's outputs ([[REQ-FILE-INPUTS-HASHABLE]], [[ADR-DECLARED-FILE-INPUTS]], [[DES-DIAGNOSTICS]]).
+
+A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate is hashed with the crate's files, although it does not apply to the commands the plugin runs ([[DES-INVOCATION]]). An input the plugin cannot see is the repository's to declare, through `fileInputs` and the extra environment variables and commands. A `build` that read an undeclared file in the repository fails ([[DES-BUILD-INPUT-CHECK]], [[RISK-UNDECLARED-INPUTS]]).
+:::
+
+:::mara design DES-BUILD-INPUT-CHECK
+:mid: 01M7ACMK1QPYW1JQ7G9ETNAZ7H
+:title: Check a build's dependency files against its inputs
+:status: accepted
+:satisfies: REQ-BUILD-INPUT-CHECK
+
+The executor checks a `build` task after every cargo call that builds the task's crate without error, also when cargo compiled nothing because everything was fresh, since a run that skipped the check would cache a success for the same inputs that failed it before. After such a call the records are in place: cargo keeps them, and writes a missing one again without compiling. Whether it also gives them a new time differs between Cargo versions and crates, so the check does not depend on when a record was written ([[EVD-CARGO-DEP-INFO]]). A task is not checked when cargo failed for its crate, nor on an Nx cache hit, which runs nothing.
+
+1. **What it reads.** The records that `cargo build -p <crate>` exports for the call, named by the plugin from what it already knows, without asking cargo. The `build` task selects its crate with `-p` and no target flag ([[DES-TARGETS]]), so cargo builds the crate's library and each binary whose required features are on, and exports one record for each beside its file in the [[TERM-ARTIFACT-DIR]]. From the crate's targets in the `cargo metadata` report, with their kinds and `required-features`, and from the task's feature selection, profile and target triple, the plugin names:
+   - `lib<name>.d` for the library, whatever its crate types, with each `-` in the library's name replaced by `_`;
+   - `<name>.d` for each binary whose required features are all features of the crate that the task's selection turns on, directly or through other features of the crate; a binary that requires a feature of a dependency is not named;
+   - for a proc macro's library, in `<artifact directory>/<profile folder>` whatever the triple, because cargo builds a proc macro for the host;
+   - for every other library and every binary, in `<artifact directory>/<profile folder>`, or in `<artifact directory>/<triple>/<profile folder>` when the call builds for a named triple: the task's triple, or else the value of `CARGO_BUILD_TARGET` in the task's environment.
+
+   The profile folder is `debug` for `dev` and `test`, `release` for `release` and `bench`, and the profile's own name for any other profile, also one that inherits from one of those four. The plugin passes cargo no flag for this ([[DES-INVOCATION]]) and reads nothing in the build directory ([[DES-BUILD-DIRS]]). What Nx caches as outputs plays no part, so a crate that is only an `rlib` is checked like any other.
+
+   A record at a name and folder that the rule derives for this call is this call's own. Cargo writes the record of every target that a call builds from that call: it rewrites a record whose content differs and writes a missing one again, also when nothing compiles, so a feature set that changes back restores the matching list ([[EVD-CARGO-DEP-INFO]]). Records that other builds left at other names or folders are never read, because the rule does not derive them: those of another profile, triple or feature set, of a binary whose required features are off or that was removed or renamed, and of the crate before it changed kind, such as a library built for a named triple that has since become a proc macro. In a batch, each group's records are read right after its call, before a later call can rewrite them. With cargo 1.91.0 and 1.100.0, for libraries of the crate types `rlib`, `cdylib`, `staticlib`, all three together and `proc-macro`, a binary alone, a library with a binary, and a proc macro with a binary, under the profiles `dev`, `release`, `test`, `bench` and a custom profile inheriting from each, without a triple, with the host triple and, with 1.100.0, another installed triple named by `--target`, and with `CARGO_BUILD_TARGET`, the names agreed exactly with the records that cargo reported wherever the build succeeded. Where Cargo's configuration chose the triple, they agreed for proc macros' libraries only, which the next point covers ([[EVD-CARGO-DEP-INFO]]).
+
+2. **Records it cannot name with certainty.** The check reads none of these, so the reads that they record go unchecked:
+   - **A triple from Cargo's configuration.** When the task names no triple and `CARGO_BUILD_TARGET` is unset, `build.target` in Cargo's configuration can still send the call's records to a triple folder, while older records remain in `<artifact directory>/<profile folder>`. A record whose folder depends on the triple, which is every record but a proc macro's library record, is then read there only when no record of the same name lies in any `<artifact directory>/<folder>/<profile folder>`. Because cargo writes a record for every target it builds, the absence of one in a triple folder after the call shows that the call built for no configured triple. Where one exists, from this call or from an earlier build for another triple, that target is not checked. A proc macro's library record is read as named in this case too, since its folder does not depend on the triple, and that absence would prove nothing for it.
+   - **A shared name.** A record name that targets of two crates with the same artifact directory share, such as two binaries called `cli`, is not read: cargo warns of an output filename collision and keeps a single record, that of the crate it built last.
+   - **Features turned on by another crate.** When one call builds several crates, another selected crate can turn on a feature that a binary requires. Cargo then builds that binary and exports its record, but the rule knows only the task's own selection and does not name it, so reads that only the binary's own sources make are not checked.
+3. **What a record holds.** In Makefile syntax, with spaces escaped by a backslash, every path that Cargo would rebuild the target for: the crate's sources, the files that `include_str!` and `include_bytes!` read, the paths that the build script names with `rerun-if-changed`, and the same of the crate's path dependencies, but nothing of a registry crate. A path keeps the spelling it was given, a symbolic link's included, and a directory named with `rerun-if-changed` appears as one path. The paths are absolute, or relative to `build.dep-info-basedir` where that is set.
+4. **Paths.** Each path is resolved to the file it names: against the folder that `build.dep-info-basedir` gives, with `..` removed, symbolic links followed and, on a file system that ignores case, with the case of the names stored on disk. A path whose file lies outside the repository root is left out: Nx cannot hash it, and [[RISK-HOST-ENVIRONMENT]] covers what it stands for. So is a path whose file lies in the build or artifact directory of the crate's workspace, as the `cargo metadata` report names them, such as code that a build script generates in `OUT_DIR`.
+5. **Directories.** A remaining path that is a directory is enumerated, and the enumeration prunes Cargo's build and artifact directories and everything that Nx ignores, that is what `.gitignore` and `.nxignore` exclude and Nx's fixed exclusions such as `node_modules` and `.git`, without entering them. It does not follow a symbolic link to a folder. Only the files that remain take part in the comparison. A directory such as the one that `rerun-if-changed=../..` names can hold the workspace's `target` folder, so the check never compares Cargo's outputs and never walks the build directory.
+6. **Compare.** A file is covered when Nx's own matching of the task's file inputs includes the file's resolved path: the crate's folder, a workspace file, the folder of a crate it depends on or of a path dependency without a project, or a `fileInputs` pattern of the crate, its workspace or a crate it depends on ([[DES-INPUTS]]). The check thereby fails a build only when Nx's key leaves the file out. A file that a negated pattern in the task's own `inputs` leaves out is not covered either, so a `build` that reads such a file fails instead of being cached ([[DES-PLUGIN-OPTIONS]]). A file that the task's inputs reach only through a symbolic link, because only a pattern for the link matches, is not covered: Nx keeps the hash of a link's destination until the link itself changes or `nx reset` clears the hashes Nx keeps, so that key would miss a change to the file ([[EVD-NX-24-FILE-INPUTS]]). How the comparison treats case on a file system that ignores it is reasoned and not run, because no check runs on macOS yet ([[ADR-CI-LINUX-ONLY]]). Each task is compared with its own inputs, so a file that a shared path dependency reads can be covered for one task of a batch and not for another.
+7. **Fail.** If a file is not covered, the task fails. The message names the crate and each such file relative to the repository root, and shows the `fileInputs` line for the crate's `[package.metadata.nx]` that would cover them, with each file relative to the crate's folder; for a file reached through a symbolic link, it names the file the link points to and the link. For files found under a directory that the build script names, it names that directory as well, since a pattern for the directory also covers files added there later ([[DES-DIAGNOSTICS]]). A failed task is never stored as a success, so no success is cached under the incomplete key. By default Nx stores no failure either, and the next run builds and checks again. With `NX_CACHE_FAILURES=true`, Nx stores the failure and replays it while the key stays the same; adding the `fileInputs` line changes a manifest that is an input of the task, and with it the key ([[EVD-NX-24-FILE-INPUTS]]). A warning instead would leave a success in the cache under a key known to miss a file ([[ADR-DECLARED-FILE-INPUTS]]).
+
+**Batches.** The check runs for each task after the cargo call of its group ([[DES-BATCH]]). A failure fails only the tasks whose records name an uncovered file. The other tasks of the group keep their own results and are cached as usual.
+
+**Limits.** Only `cargo build` writes these files. `check`, `lint`, `test` and the workspace's `doc` keep their dependency files in the build directory, whose layout is internal to Cargo, so their reads are not checked: a file that only tests read, through `include_str!` or at run time, relies on its declaration. A file that a proc macro opens without an include macro appears in no dependency file, because Cargo does not track it ([[EVD-CARGO-DEP-INFO]], [[RISK-UNDECLARED-INPUTS]]).
 :::
 
 :::mara design DES-OUTPUTS

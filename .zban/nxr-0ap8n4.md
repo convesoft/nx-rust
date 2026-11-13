@@ -15,6 +15,7 @@ Implements `REQ-ARTIFACT-TARGETS`, `REQ-ARTIFACT-CACHE`, `DES-ARTIFACT-STEPS` an
 - [ ] The compile step for the wasm triple, inside the batch
 - [ ] The `wasm-bindgen` CLI step with the JS flavour flag, outputs outside Cargo's directories
 - [ ] The CLI and crate version check
+- [ ] Run the check of `REQ-BUILD-INPUT-CHECK` and `DES-BUILD-INPUT-CHECK` after the compile step, as `build` does
 - [ ] Tool versions and target triple in the key; generated files as outputs, not inputs
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
