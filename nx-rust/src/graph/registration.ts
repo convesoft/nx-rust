@@ -41,6 +41,11 @@ export class Registration {
       "**/Cargo.toml",
       async (manifests, options, context) => {
         const graph = await this.discover(manifests, context.workspaceRoot, options);
+        // Nx's plugin interface has no channel for warnings; standard error
+        // reaches the terminal without the daemon and its log file with it.
+        for (const warning of graph.discovery.warnings) {
+          console.warn(warning);
+        }
         return projectNodes(graph.projects);
       },
     ];
