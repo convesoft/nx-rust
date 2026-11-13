@@ -11,9 +11,11 @@ invocations. The unit tests in this folder and the end-to-end tests in
 
 Each folder under [`fixtures`](fixtures) is the root of a small repository
 built to show one situation. Every Cargo workspace in it has a current
-`Cargo.lock`, and every crate builds and passes `cargo test --locked`.
+`Cargo.lock`, every crate builds and passes `cargo test --locked`, and its
+sources are formatted as `cargo fmt` leaves them.
 [`fixtures.spec.ts`](fixtures.spec.ts) checks against `cargo metadata` that
-each fixture still has the workspaces and members listed there.
+each fixture still has the workspaces and members listed there, and with
+`rustfmt --check` that its sources are formatted.
 
 | Fixture                | Situation                                                                                                                                                                                                                                                                                                                                                                        |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

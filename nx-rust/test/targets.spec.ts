@@ -16,7 +16,7 @@ import {
 // Checks the parts of VER-TARGETS and VER-CONFIGURATION about which targets
 // the plugin infers, how they are configured and named, and that no task
 // depends on another, with a real cargo and Nx's own graph creation. What the
-// targets run is the executor's (nxr-kmdpgj), and their inputs and outputs
+// targets run is checked in executors.spec.ts, and their inputs and outputs
 // are nxr-fy4t4k's.
 
 const crateTargets = ["build", "check", "lint", "test", "fmt-check", "fmt"];
@@ -187,11 +187,30 @@ describe("inferred targets", () => {
           metadata: {
             description: expect.stringMatching(/\S/),
             technologies: ["cargo"],
-            cargo: { target: name },
+            cargo: { target: name, locked: false },
           },
         });
         expect(configuration.continuous ?? false).toBe(false);
         expect(configuration.dependsOn).toBeUndefined();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "carry the locked option of the plugin's entry in their metadata",
+    async () => {
+      const graph = await loadFixtureGraph("crate-shapes", {
+        files: { "nx.json": pluginOptions({ locked: true }) },
+      });
+
+      for (const project of Object.values(graph.projects)) {
+        for (const [name, target] of Object.entries(project.targets ?? {})) {
+          expect({ name, cargo: target.metadata?.cargo }).toEqual({
+            name,
+            cargo: { target: name, locked: true },
+          });
+        }
       }
     },
     HARNESS_TIMEOUT,
@@ -453,7 +472,10 @@ describe("targetNames", () => {
         rust: prefixed(withDeny),
       });
       // The executor still learns which target it runs.
-      expect(graph.projects.cli.targets["cargo-lint"].metadata.cargo).toEqual({ target: "lint" });
+      expect(graph.projects.cli.targets["cargo-lint"].metadata.cargo).toEqual({
+        target: "lint",
+        locked: false,
+      });
       expect(graph.projects.cli.targets["cargo-run"].executor).toBe(runExecutor);
     },
     HARNESS_TIMEOUT,
@@ -486,8 +508,14 @@ describe("targetNames", () => {
         files: { "nx.json": pluginOptions({ targetNames: { lint: "check", check: "lint" } }) },
       });
 
-      expect(graph.projects.cli.targets.lint.metadata.cargo).toEqual({ target: "check" });
-      expect(graph.projects.cli.targets.check.metadata.cargo).toEqual({ target: "lint" });
+      expect(graph.projects.cli.targets.lint.metadata.cargo).toEqual({
+        target: "check",
+        locked: false,
+      });
+      expect(graph.projects.cli.targets.check.metadata.cargo).toEqual({
+        target: "lint",
+        locked: false,
+      });
     },
     HARNESS_TIMEOUT,
   );

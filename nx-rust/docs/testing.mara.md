@@ -1,7 +1,8 @@
 # Testing
 
-> **Status:** specified, not implemented yet. `cargo test` arrives with
-> milestone 0.1; nextest and affected tests with milestone 0.3.
+> **Status:** `test` runs `cargo test` for its crate. The `testRunner` and
+> `affectedTests` settings are not read yet; nextest and affected tests arrive
+> with milestone 0.3.
 
 Every crate has one `test` target. Which runner it uses, and whether it runs
 the whole suite or only the tests a change can affect, are settings. You never

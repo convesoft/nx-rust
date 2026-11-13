@@ -3,7 +3,7 @@
 > **Status:** the plugin finds the Cargo workspaces and creates a project for
 > each crate and each workspace, with the default names and an edge for each
 > path dependency. The projects have the targets that the status note of
-> [Targets](targets.mara.md) names, which do not run yet. The `name`, `namePrefix` and `project` settings of the
+> [Targets](targets.mara.md) names. The `name`, `namePrefix` and `project` settings of the
 > metadata tables are not read yet, so for now only a `name` in a crate
 > folder's `project.json` or `package.json` resolves a name collision. A crate gets edges to the crates that `[patch]`,
 > `[replace]` and `paths` redirect its workspace's dependencies to, so

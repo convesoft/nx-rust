@@ -17,6 +17,7 @@ The executor of nxr-kmdpgj comes first. The batch implementation of nxr-s12cpg a
 
 - [ ] The schemas, as the first paragraph of `DES-UNKNOWN-OPTIONS` says, and the `args` option of `run` as a string
 - [ ] The comparison and the warning line, as its paragraphs "Source" and "Command line" say
+- [ ] The same line for an option that the schema declares but that the option reference of `DES-PLUGIN-OPTIONS` does not give the task's target, such as `targetTriple` on `test` or `allTargets` on `build`, saying that the target does not take it (`DES-UNKNOWN-OPTIONS`, second paragraph). Since nxr-kmdpgj the command leaves such an option out without a word (`cargoArguments` in `nx-rust/src/executors/command.ts`); the case in `VER-UNKNOWN-OPTIONS` checks the line
 - [ ] The `preTasksExecution` hook and its record, as its paragraph "Record" says
 - [ ] The arguments of `run`, as its paragraph "run" and the "run" paragraph of `DES-TARGET-COMMANDS` say
 - [ ] Tests for the cases of `VER-UNKNOWN-OPTIONS` and the `run` cases of `VER-TARGETS` that one cargo call per task can show
