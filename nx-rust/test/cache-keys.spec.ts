@@ -26,7 +26,8 @@ import {
 
 // The rows of VER-CACHE-KEYS that the inputs and outputs of nxr-fy4t4k
 // decide, checked with Nx's own task hasher on the plugin's inferred targets.
-// The rows that need the lockfile task (nxr-xq9ava), fileInputs (nxr-d371vy),
+// lockfile-keys.spec.ts holds the rows about Cargo.lock, which need the
+// lockfile task and a registry. The rows that need fileInputs (nxr-d371vy),
 // envInputs and runtimeInputs read from Cargo metadata (nxr-xyq7c8), the
 // nextest runner (nxr-jb6g5y), the test modes and the artifact targets are
 // left to those issues.
@@ -262,66 +263,6 @@ describeCacheKeyMatrix("keys must differ after", [
     keys: { "api:build": "must differ" },
   })),
   {
-    change: "a locked version bump of an external crate",
-    fixture: "subfolder-workspace",
-    base: { files: { "rust/Cargo.lock": appended(registryPackage("1.0.0", "a".repeat(64))) } },
-    after: {
-      files: {
-        "rust/Cargo.lock": (lockfile) => lockfile.replace('version = "1.0.0"', 'version = "1.0.1"'),
-      },
-    },
-    keys: all(
-      apiTasks.filter((task) => task !== "api:fmt-check"),
-      "must differ",
-    ),
-  },
-  {
-    change: "a change of only the checksum of an external crate",
-    fixture: "subfolder-workspace",
-    base: { files: { "rust/Cargo.lock": appended(registryPackage("1.0.0", "a".repeat(64))) } },
-    after: {
-      files: { "rust/Cargo.lock": (lockfile) => lockfile.replace("a".repeat(64), "b".repeat(64)) },
-    },
-    keys: { "api:test": "must differ", "model:build": "must differ" },
-  },
-  {
-    change: "a change of only the commit of a git dependency",
-    fixture: "subfolder-workspace",
-    base: { files: { "rust/Cargo.lock": appended(gitPackage("1".repeat(40))) } },
-    after: {
-      files: { "rust/Cargo.lock": (lockfile) => lockfile.replace("1".repeat(40), "2".repeat(40)) },
-    },
-    keys: { "api:test": "must differ", "model:build": "must differ" },
-  },
-  {
-    change: "a locked version bump in a Cargo.lock that Git ignores",
-    fixture: "subfolder-workspace",
-    base: {
-      files: {
-        ".gitignore": appended("Cargo.lock\n"),
-        "rust/Cargo.lock": appended(registryPackage("1.0.0", "a".repeat(64))),
-      },
-    },
-    after: {
-      files: {
-        "rust/Cargo.lock": (lockfile) => lockfile.replace('version = "1.0.0"', 'version = "1.0.1"'),
-      },
-    },
-    keys: { "api:test": "must differ" },
-  },
-  {
-    change:
-      "a locked version bump that a crate reaches only through a path dependency without a project",
-    fixture: "vendored-crate",
-    base: { files: { "rust/Cargo.lock": appended(registryPackage("1.0.0", "a".repeat(64))) } },
-    after: {
-      files: {
-        "rust/Cargo.lock": (lockfile) => lockfile.replace('version = "1.0.0"', 'version = "1.0.1"'),
-      },
-    },
-    keys: { "lib:test": "must differ", "app:test": "must differ" },
-  },
-  {
     change: "a change in the manifest of another member, under the workspace-build strategy",
     fixture: "subfolder-workspace",
     after: { files: { "rust/crates/api/Cargo.toml": appended("\n# changed\n") } },
@@ -357,41 +298,11 @@ describeCacheKeyMatrix("keys must not differ after", [
     keys: { ...all(apiTasks, "must not differ"), "rust:doc": "must not differ" },
   },
   {
-    change: "a change in the lockfile of another workspace",
-    fixture: "cross-workspace-path",
-    after: { files: { "backend/Cargo.lock": appended(registryPackage("1.0.0", "a".repeat(64))) } },
-    // server, in backend, depends on model, in shared.
-    keys: {
-      "model:test": "must not differ",
-      "model:build": "must not differ",
-      "server:test": "must differ",
-    },
-  },
-  {
     change: "a change in the toolchain file of another workspace",
     fixture: "cross-workspace-path",
     base: { files: { "backend/rust-toolchain.toml": '[toolchain]\nchannel = "stable"\n' } },
     after: { files: { "backend/rust-toolchain.toml": appended("# changed\n") } },
     keys: { "model:test": "must not differ", "server:test": "must differ" },
-  },
-  {
-    change:
-      "a change in the lockfile of a crate at the root of another workspace that the crate depends on",
-    // legacy, which the workspace in rust excludes, is a workspace of its own.
-    fixture: "excluded-member",
-    base: {
-      files: {
-        "rust/crates/app/Cargo.toml": appended(
-          '\n[dependencies]\nlegacy = { path = "../legacy" }\n',
-        ),
-      },
-    },
-    after: {
-      files: {
-        "rust/crates/legacy/Cargo.lock": appended(registryPackage("1.0.0", "a".repeat(64))),
-      },
-    },
-    keys: { "app:test": "must not differ", "legacy:test": "must differ" },
   },
   {
     change:
@@ -416,31 +327,6 @@ describeCacheKeyMatrix("keys must not differ after", [
     keys: { ...all(apiTasks, "must not differ"), "rust:doc": "must not differ" },
   },
 ]);
-
-/** A `Cargo.lock` entry for a package from a git repository, locked to `commit`. */
-function gitPackage(commit: string): string {
-  return [
-    "",
-    "[[package]]",
-    'name = "itoa"',
-    'version = "1.0.15"',
-    `source = "git+https://github.com/dtolnay/itoa?branch=master#${commit}"`,
-    "",
-  ].join("\n");
-}
-
-/** A `Cargo.lock` entry for a package from crates.io. */
-function registryPackage(version: string, checksum: string): string {
-  return [
-    "",
-    "[[package]]",
-    'name = "ryu"',
-    `version = "${version}"`,
-    'source = "registry+https://github.com/rust-lang/crates.io-index"',
-    `checksum = "${checksum}"`,
-    "",
-  ].join("\n");
-}
 
 describe("keys with the environment", () => {
   // Cargo's variables for a profile or a triple, of any name; not CARGO_TARGET_DIR.

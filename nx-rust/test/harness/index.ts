@@ -4,6 +4,7 @@ export * from "./environment";
 export * from "./files";
 export * from "./fixtures";
 export * from "./js-lockfiles";
+export * from "./local-registry";
 export * from "./nx-package";
 export * from "./task-runs";
 export * from "./tool-folders";

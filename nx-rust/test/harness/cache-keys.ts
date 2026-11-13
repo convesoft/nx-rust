@@ -13,6 +13,11 @@ export interface WorkspaceState {
   env?: Record<string, string | undefined>;
   /** Options as `nx run project:target --name=value` passes them. */
   overrides?: Record<string, unknown>;
+  /**
+   * What to do once the files are in place, such as running cargo or
+   * publishing to a registry, with the state's environment.
+   */
+  prepare?: (workspace: FixtureWorkspace, env: Record<string, string | undefined>) => unknown;
 }
 
 /** One row of the cache-key matrix: two states of a fixture and a verdict per task. */
@@ -28,6 +33,13 @@ export interface CacheKeyRow {
   after: WorkspaceState;
   /** The verdict for each task, by task id such as `api:test`. */
   keys: Record<string, Verdict>;
+  /**
+   * Whether every lockfile task runs, through `nx run-many -t lockfile`,
+   * before the tasks are hashed in each state, as it runs before them in a
+   * real run. Without it, no digest exists, and a digest input hashes
+   * nothing in either state.
+   */
+  lockfileTask?: boolean;
 }
 
 /** The hashes of one task in both states of a row. */
@@ -52,10 +64,19 @@ export async function compareCacheKeys(row: CacheKeyRow): Promise<CacheKeyOutcom
     overrides: { ...row.base?.overrides, ...part?.overrides },
   });
   const workspace = FixtureWorkspace.create(row.fixture, row.base?.files, row.before?.files);
+  const prepared = async (part: WorkspaceState | undefined) => {
+    const { env } = state(part);
+    await row.base?.prepare?.(workspace, env);
+    await part?.prepare?.(workspace, env);
+    if (row.lockfileTask) {
+      await runLockfileTasks(workspace, env);
+    }
+    return workspace.hashTasks(tasks, state(part));
+  };
   try {
-    const before = await workspace.hashTasks(tasks, state(row.before));
+    const before = await prepared(row.before);
     workspace.reset(row.base?.files, row.after.files);
-    const after = await workspace.hashTasks(tasks, state(row.after));
+    const after = await prepared(row.after);
     return tasks.map((task) => {
       const verdict = row.keys[task];
       const differ = before[task].value !== after[task].value;
@@ -69,6 +90,25 @@ export async function compareCacheKeys(row: CacheKeyRow): Promise<CacheKeyOutcom
     });
   } finally {
     workspace.remove();
+  }
+}
+
+/**
+ * Runs every lockfile task of the workspace, as a run of the tasks that
+ * depend on them would first.
+ *
+ * @throws {Error} When Nx fails, with its output.
+ */
+export async function runLockfileTasks(
+  workspace: FixtureWorkspace,
+  env: Record<string, string | undefined> = {},
+): Promise<void> {
+  const { status, output } = await workspace.nx(
+    ["run-many", "-t", "lockfile", "--output-style=static"],
+    env,
+  );
+  if (status !== 0) {
+    throw new Error(`The lockfile tasks failed in ${workspace.root}:\n${output}`);
   }
 }
 
