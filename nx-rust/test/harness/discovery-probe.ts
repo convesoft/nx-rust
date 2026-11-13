@@ -18,7 +18,7 @@ const probe = {
   },
   createDependencies(this: unknown, options: unknown, context: CreateDependenciesContext) {
     const dependencies = plugin.createDependencies.call(this, options, context);
-    const discovery = registrationOf(this).discoveryForDependencies(context.workspaceRoot);
+    const discovery = registrationOf(this).graphForDependencies(context.workspaceRoot)?.discovery;
     const root = context.workspaceRoot;
     const record: ProbeRecord = {
       workspaces: (discovery?.workspaces ?? []).map((workspace) => [
