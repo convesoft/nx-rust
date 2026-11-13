@@ -15,6 +15,8 @@ Implements `REQ-EXTERNAL-DEPS` through `DES-LOCKFILE-HASHING` (`nx-rust/docs/wor
 
 - [ ] The `lockfile` target on every workspace project, and on the root crate's project where the root manifest is a package: cached, an executor without a batch implementation, no cargo
 - [ ] The digest per member from `Cargo.lock`, walked through path packages; one output folder per workspace under `.nx/workspace-data/nx-rust/lockfile/`, none inside another
+- [ ] The declared dependencies of every member and every other path package, from the graph's `cargo metadata` reports, as an option of the `lockfile` target
+- [ ] The comparison of each lockfile entry with those declarations, and the fallback digest over the whole lockfile and the declarations for every crate of the workspace when anything does not match or cannot be decided
 - [ ] The `Cargo.lock` input of the `lockfile` task as a fileset that includes git-ignored files
 - [ ] Every cached crate target depends on its workspace's `lockfile` task and reads its digest through `dependentTasksOutputFiles`, in place of the whole-lockfile input
 - [ ] The crate at a workspace root, standalone crates included, leaves its workspace's `Cargo.lock` out of its crate files

@@ -18,7 +18,7 @@ Implements `REQ-INPUT-FILES`, `REQ-ENV-ALLOWLIST`, `REQ-TOOLCHAIN-KEY`, `REQ-CAC
 - [ ] Inputs for path dependencies without a project, with the warning where Nx cannot see them, and for tool configuration files
 - [ ] `^` inputs over normal, build and dev-dependency edges
 - [ ] The environment allowlist and the repository's additions
-- [ ] `externalDependencies: ["@convesoft/nx-rust"]` on every cached target (`DES-INPUTS`); the graph and cache-key harness loads the plugin from source, so it needs an npm node for the package
+- [ ] `externalDependencies: ["@convesoft/nx-rust"]` on every cached target where Nx has a node for the package, and otherwise `[]` with the plugin's version in an option of every inferred target (`DES-INPUTS`); the graph and cache-key harness loads the plugin from source, which is the second case
 - [ ] Under the `cargo` and `workspace-build` strategies, the manifest of every member as an input of every member of the workspace (`DES-INPUTS`)
 - [ ] The toolchain runtime input, run in the workspace root
 - [ ] Outputs: executables, `cdylib` and `staticlib` files for `build`, the whole doc folder of the artifact directory for the workspace project's `doc`, none elsewhere; nothing inside the build directory; no caching of `build` and `doc` when the artifact directory is outside the repository, and none of `doc` when two workspaces share one artifact directory

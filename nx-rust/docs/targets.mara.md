@@ -330,7 +330,7 @@ The coverage baseline target of [[DES-BASELINE]] is on the same project, in a wo
 
 **Existence.** Whether a tool is installed never decides whether a target exists. Every machine thus computes the same graph, and a missing tool cannot make `nx run-many -t audit` leave a workspace out without a word ([[ADR-CARGO-SOURCE-OF-TRUTH]], [[REQ-DIAGNOSTICS]]). A task whose tool is missing fails with the message of [[DES-DIAGNOSTICS]]. `deny` exists only where cargo-deny is configured, because without a configuration file cargo-deny falls back to defaults that reject every license ([[EVD-CARGO-AUDIT-DENY]]).
 
-**lockfile.** Besides `doc`, the lockfile task is the only cached target of the workspace project, and every cached target of the workspace's crates depends on it ([[DES-LOCKFILE-HASHING]]).
+**lockfile.** The lockfile task is cached, and every cached target of the workspace's crates depends on it ([[DES-LOCKFILE-HASHING]]).
 
 **Caching.** `audit`, `deny` and `update` are not cached. cargo-audit and cargo-deny fetch the RustSec advisory database when they run, and no input covers it, so a cached pass could hide an advisory published since ([[EVD-CARGO-AUDIT-DENY]]). `update` exists to change `Cargo.lock`. Their inputs are declared all the same, so that `nx affected` selects them when a file they read changes.
 

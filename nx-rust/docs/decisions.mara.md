@@ -85,7 +85,7 @@ A collision between any two of the plugin's projects, crates or workspace projec
 
 Leaving dev-dependencies out of the graph means a change in a crate used only by another crate's tests does not invalidate those cached tests. All three kinds are therefore edges.
 
-Cargo allows cycles through dev-dependencies. Three treatments were considered: drop the edge that closes the cycle and add the crate's files as explicit inputs, fail graph creation, or keep the edge. Nx 24 fails only on a cycle between tasks, not between projects ([[EVD-NX-24-INSPECTION]]), and the plugin's targets declare no dependencies between crates ([[ADR-NO-RUST-BUILD-DEPS]]). The edge is kept, so `nx graph` shows what Cargo sees and no workspace that Cargo accepts is rejected. If a user's own `dependsOn` turns the project cycle into a task cycle, Nx reports it. Nx 24 hashes `^` inputs over a project cycle stably ([[EVD-NX-24-INPUT-SEMANTICS]]).
+Cargo allows cycles through dev-dependencies. Three treatments were considered: drop the edge that closes the cycle and add the crate's files as explicit inputs, fail graph creation, or keep the edge. Nx 24 fails only on a cycle between tasks, not between projects ([[EVD-NX-24-INSPECTION]]), and the plugin's targets declare no dependencies between crates beyond the lockfile task, which depends on nothing ([[ADR-NO-RUST-BUILD-DEPS]]). The edge is kept, so `nx graph` shows what Cargo sees and no workspace that Cargo accepts is rejected. If a user's own `dependsOn` turns the project cycle into a task cycle, Nx reports it. Nx 24 hashes `^` inputs over a project cycle stably ([[EVD-NX-24-INPUT-SEMANTICS]]).
 :::
 
 :::mara decision ADR-EXTERNAL-NODES
@@ -115,7 +115,7 @@ Each workspace therefore has one cached task that reads its `Cargo.lock` and wri
 
 Rejected: external nodes alone, for the reasons above; external nodes for the keys together with a task of constant output for `nx affected`, which works but keeps the invalidation of JS projects and needs node names that tell apart versions and lockfiles; a digest in a target option, which keys correctly but which `nx affected` never selects; and the whole lockfile, which does not meet [[REQ-EXTERNAL-DEPS]].
 
-The costs are one cheap task per workspace in every run that includes a cached crate target, which the crate tasks wait for; a dependency of crate targets on a target of another project, the one exception [[REQ-NO-RUST-TASK-DEPS]] makes; a graph that shows no external crates; and reliance on how Nx 24 selects the tasks that read a producer's output, which a later Nx major could change. The end-to-end checks of [[VER-CACHE-KEYS]] cover that selection, and a later major is supported only once they pass ([[ADR-COMPATIBILITY]]).
+The costs are one cheap task per workspace in every run that includes a cached crate target, which the crate tasks wait for; a dependency of crate targets on a target of another project, the one exception [[REQ-NO-RUST-TASK-DEPS]] makes; a graph that shows no external crates; reliance on how Nx 24 selects the tasks that read a producer's output, which a later Nx major could change; and, while `Cargo.lock` does not describe the manifests, keys over the whole lockfile for every crate of the workspace. The end-to-end checks of [[VER-CACHE-KEYS]] cover that selection, and a later major is supported only once they pass ([[ADR-COMPATIBILITY]]).
 :::
 
 :::mara decision ADR-METADATA-KEY
@@ -153,7 +153,7 @@ Formatting was decided separately. Nx has a convention for it, but it is the bui
 
 Cargo builds a crate's dependencies itself, so a `dependsOn: ["^build"]` between crates adds no ordering that is needed. It only starts one cargo process per dependency, and they queue on the build lock ([[EVD-NXRUST-BUILD-DEPS]]). Invalidation is handled by `^` inputs. JS consumers of an artifact depend on the artifact target.
 
-The first design also made `^build` on edges from JS projects to Rust crates an opt-in. Nx leaves no room for that: a JS target that declares `^build` gets the `build` task of every project it depends on that has such a target, and neither the plugin nor the dependency can decline ([[EVD-NX-24-INSPECTION]]). The plugin therefore adds no dependency to JS projects and removes none. A JS target's own `^build` runs the native `build` of the crates its project depends on directly and stops there, because those targets declare no dependencies. The cost is a native build that a consumer of a wasm package or a Node addon does not need; batching folds such builds into one cargo call ([[DES-BATCH]]). Renaming the native build so that `^build` would miss it was rejected, because `nx affected -t build` would then skip Rust ([[ADR-NX-TARGET-NAMES]]).
+The first design also made `^build` on edges from JS projects to Rust crates an opt-in. Nx leaves no room for that: a JS target that declares `^build` gets the `build` task of every project it depends on that has such a target, and neither the plugin nor the dependency can decline ([[EVD-NX-24-INSPECTION]]). The plugin therefore adds no dependency to JS projects and removes none. A JS target's own `^build` runs the native `build` of the crates its project depends on directly and stops there, because those targets depend only on their workspace's lockfile task ([[DES-LOCKFILE-HASHING]]), which has no `build`. The cost is a native build that a consumer of a wasm package or a Node addon does not need; batching folds such builds into one cargo call ([[DES-BATCH]]). Renaming the native build so that `^build` would miss it was rejected, because `nx affected -t build` would then skip Rust ([[ADR-NX-TARGET-NAMES]]).
 :::
 
 :::mara decision ADR-RESULTS-ONLY-CACHE
@@ -871,10 +871,25 @@ Experiments on 13 November 2026 with `nx` 24.0.6, pnpm 12.18.0, Node 26.12.0 and
 - **The `hash` field.** A changed checksum with the version unchanged changed the keys of exactly the tasks that reached the node. Without `data.hash`, a changed checksum changed no key, while a changed version, which renamed the node, did.
 - **One name twice.** When two `createNodes` results declared one node name with different hashes, the graph kept the last one, without a message.
 - **Affected.** After a commit that changed only `rust/Cargo.lock`, and with it the hash of `cargo:serde@1.0.0`, `nx affected` selected no task that reached that node, whether through a `^` input, `externalDependencies` or `AllExternalDependencies`. Only tasks with the lockfile as a file input were selected. Adding `Cargo.lock` to the plugin's `createNodes` pattern changed nothing. Neither did a per-crate digest that the plugin put into a target option, although the option changed the task's key through the project's configuration. As read in the installed source, Nx works out which external nodes moved only from the JS lockfiles and `package.json` (`dependencyChanges` in `project-graph/affected/affected-tasks.js`, `plugins/js/project-graph/affected/lock-file-changes.js`), and the plugin interface has no hook through which a plugin could report moved nodes (`project-graph/plugins/public-api.d.ts`).
-- **A JS lockfile.** After a commit that changed one integrity entry of `pnpm-lock.yaml`, `nx affected` selected every crate target without an `externalDependencies` input, with the reason `external-dependencies`, and none of those with one.
+- **A JS lockfile.** After a commit that changed one integrity entry of `pnpm-lock.yaml`, with Nx's default `projectsAffectedByDependencyUpdates`, `nx affected` selected every crate target without an `externalDependencies` input, with the reason `external-dependencies`, and none of those with an empty one. A target that names an npm package fares otherwise, and the setting decides how ([[EVD-NX-24-PLUGIN-VERSION]]).
 - **Graph creation.** With the project graph cache on and the daemon off, a change to `Cargo.lock` alone made the next command create the graph again, and the node's hash followed the file.
 
 The daemon was off throughout, the lockfile was written by hand and no cargo ran.
+:::
+
+:::mara evidence EVD-NX-24-PLUGIN-VERSION
+:mid: 01M7AEAST02RW3QQS2PRMN6R21
+:title: How Nx 24.0.6 hashes a plugin's package, its dependencies and a project's configuration
+:status: accepted
+:supports: DES-INPUTS
+:supports: DES-LOCKFILE-HASHING
+
+Experiments on 13 November 2026 with `nx` 24.0.6, pnpm 12.18.0, Node 26.12.0 and git 2.56.0 on Linux x86-64, in a throwaway workspace outside this repository installed with `pnpm install --offline`. An executor package `@exp/executor`, installed with `file:`, depended on `tslib` 2.9.1. A stand-in plugin, listed in `nx.json` by its path and not installed as a package, gave two crate projects `a` and `b` the targets `t` and `u` with that executor, their own files as input, and an `externalDependencies` input naming the plugin's package, the executor's package or nothing, as each case required. Hashes came from `InProcessTaskHasher.hashTask` as in [[EVD-NX-24-EXTERNAL-NODES]], with `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false`, and the selection from `nx affected -t t --base=HEAD~1 --head=HEAD --explain=stdout` after a commit.
+
+- **No node for the plugin.** Naming the path-loaded plugin's own package failed the hash: "The externalDependency '@exp/nxr' for 'a:t' could not be found". The executor's package, which `pnpm-lock.yaml` lists, had a node, but no longer once `pnpm-lock.yaml` was listed in `.gitignore` and taken out of the index, and naming it then failed in the same way. As read in the installed source, Nx creates npm nodes only from a lockfile in its file map, and its lockfile analysis is off without a root `package.json`, with `pluginsConfig["@nx/js"].analyzeLockfile` set to `false`, or with a `lerna.json` and no `nx.json` (`plugins/js/index.js`, `plugins/js/utils/config.js`).
+- **What of a project's configuration Nx hashes.** A changed value in the options of `t` changed the key of `a:t`, and so did one in the options of `u`, in the configurations of `t`, in the project's tags and in `parallelism` of `t`. A change in the `metadata` of `t` or of the project, a named input that no target used, `dependsOn` or `cache` did not. With `externalDependencies: []`, a value standing for the plugin's version in the options of `t` changed the key from one version to the next, and hashing did not fail.
+- **The package's dependencies.** With `externalDependencies: ["@exp/executor"]`, the key held `npm:tslib@2.9.1` as well, and a changed integrity of `tslib` in `pnpm-lock.yaml` changed it. A changed integrity of `@clack/core`, on which the executor's package does not depend, left it unchanged.
+- **nx affected after a JS lockfile change.** Under Nx's default `projectsAffectedByDependencyUpdates`, which is `all` (`plugins/js/utils/config.js`), the commit that changed `@clack/core` selected `a:t` and `b:t` with the reason `moved-ecosystem` for `npm`, although their keys had not changed; with `externalDependencies: []` it selected neither. With `"projectsAffectedByDependencyUpdates": "auto"` in the `@nx/js` section of `pluginsConfig`, that commit selected neither, and a commit that changed `tslib` selected both, with `npm:tslib@2.9.1` as the reason.
 :::
 
 :::mara evidence EVD-NX-24-LOCKFILE-TASK
@@ -899,7 +914,13 @@ The second held a Cargo workspace at `rust/` whose root manifest also is the pac
 - **Root package.** Without `!{projectRoot}/Cargo.lock`, the files of `root` included `rust/Cargo.lock` and no file of a member, and a bump of `ryu`, which only `b` reaches, ran `root` and `c`, which depends on `root`, besides `b`. With it, only `b` ran.
 - **Git-ignored lockfile.** With `Cargo.lock` listed in `rust/.gitignore` and removed from the index, a plain file input did not see a bump: the lockfile task was restored from the cache with the old digests, and every crate task with it. With `{ "fileset": "{projectRoot}/Cargo.lock", "includeIgnored": true }`, the lockfile task ran again, and `a` and `c` after it.
 
-`nx init` writes `.nx/workspace-data` into `.gitignore` (`command-line/init/implementation/utils.js`), and a comment in `daemon/server/restart-checks.js` calls that folder hardcoded-ignored by the daemon's file watcher; both were read, not run. No cargo build ran inside Nx: the executor only logged.
+A third workspace, on the same day, held a Cargo workspace at `rust/` without a root package, with the members `a`, `b`, which depends on `itoa` and by path on `v`, a crate outside the workspace, and `c`, which depends on `a`. A stand-in plugin ran `cargo metadata --no-deps` for the workspace and for `v`, and passed the declared dependencies of every member, and the normal and build dependencies of `v`, to the lockfile task as an option. The task's executor wrote the closure digests as before or, with the comparison of [[DES-LOCKFILE-HASHING]], one fallback digest over the whole lockfile and the declarations for every crate. Two lockfiles locked `itoa` at 1.0.17 and 1.0.19.
+
+- **Stale lockfile.** With `itoa = "1"` added to the manifest of `a`, which neither lockfile records, and with all manifests unchanged, a switch from the one lockfile to the other ran only `b` when the task wrote closure digests: `a` and `c` were restored from the cache, although cargo builds `a` against the `itoa` of the lockfile in place ([[EVD-CARGO-LOCKFILE]]). With the comparison, both states fell back, with different digests, and `a`, `b` and `c` ran in each.
+- **Neighbouring cases.** Called directly on the declarations the plugin passed, the task with the comparison wrote closure digests when manifests and lockfile agreed; when `a` used `itoa` under another name through `package = "itoa"`; and after `cargo update -p cfg-if`, which changed the digest of `b` only. It fell back for every crate when the entry of `a` listed `itoa` that its manifest no longer declared, when a new member `d` had no entry, when `v` declared `ryu` that its entry did not list, when `a` kept the name and declared `package = "ryu"`, and when `a` required `itoa = "0.4"` or `itoa = ">1.0"` against the locked 1.0.19.
+- **Cache states.** After `nx reset`, the first run ran the lockfile task and every crate task, and the second restored them all. After the digest of `a` was overwritten, and after the digest folder was deleted, the next run restored the lockfile task from the cache with correct digests, and every crate task with it. With the daemon on, a run restored every task, and after a bump of `itoa`, which only `b` reaches, `b` ran and nothing else.
+
+`nx init` writes `.nx/workspace-data` into `.gitignore` (`command-line/init/implementation/utils.js`), and a comment in `daemon/server/restart-checks.js` calls that folder hardcoded-ignored by the daemon's file watcher; both were read, not run. No cargo build ran inside Nx: the executors only logged.
 :::
 
 :::mara evidence EVD-CARGO-LOCKFILE
@@ -918,6 +939,29 @@ An experiment on 13 November 2026 with cargo and rustc 1.100.0 on Linux x86-64, 
 - **Features of another member.** `cargo run -p f1` printed `false`. After `cargo build --workspace`, `target/debug/f1` printed `true`: built together with `f2`, `x` had the feature that `f2` enables.
 
 `x` is a path crate. Cargo's resolver unifies the features of a registry crate in the same way, which this experiment did not run.
+
+A second experiment on the same day used a workspace with the members `a`; `b`, which depends on `itoa = "1"` and by path on `v`, a crate outside the workspace with `cfg-if` as a dependency and `ryu` as a dev-dependency; and `c`, which depends on `a`. `cargo update -p itoa --precise` wrote two lockfiles, with `itoa` at 1.0.17 and at 1.0.19.
+
+- **Dev-dependencies of other path packages.** The entry of `v` listed `cfg-if` and not `ryu`, and no `ryu` was locked: a lockfile records the dev-dependencies of workspace members only.
+- **Stale lockfile.** With `itoa = "1"` added to the manifest of `a` and either lockfile in place, the entry of `a` listed nothing. `cargo build -p a` rewrote the lockfile, gave `a` an `itoa` dependency and kept the version that lockfile had locked, 1.0.17 or 1.0.19.
+- **A sibling.** With `itoa = "=1.0.10"` in the manifest of `a` and the lockfile with 1.0.19, whose entry for `b` matched `b`'s manifest, `cargo build -p b` resolved the workspace again, and `cargo tree -p b` then showed `itoa` 1.0.10.
+- **Reports and sources.** `cargo metadata --no-deps` gives each declared dependency's package name, its requirement in normal form, such as `^1`, and its source, `null` for a path dependency. In the workspace of the first experiment, the source of the git dependency equalled the lockfile's source without the `#` and the commit. With `branch = "master"` added to the manifest, the report's source ended in `?branch=master` and no longer matched the lockfile.
+:::
+
+:::mara evidence EVD-NX-PLUGIN-ENTRIES
+:mid: 01M7ABYX5EADNXFRHAA2F17VBK
+:title: How Nx 24.0.6 runs several entries of one plugin
+:status: accepted
+:supports: DES-METADATA-REPORT
+
+A reading of the `nx` 24.0.6 package and an experiment on 13 November 2026 with cargo 1.100.0 and Node 26.12.0 on Linux. The experiment ran through the plugin's own tests (`nx-rust/test/discovery.spec.ts`), which list a stand-in that behaves as the plugin twice in `nx.json`, with `include` filters that split the manifests between the two entries, and build the graph with plugin isolation on and off.
+
+- **Isolation on**, Nx's default: Nx starts one plugin worker per entry, keyed by the plugin, the workspace root and the entry's position in `nx.json` (`project-graph/plugins/isolation/load-isolated-plugin.js`). Two entries of one plugin run in two processes and share nothing.
+- **Isolation off** (`NX_ISOLATE_PLUGINS=false`): Nx loads the plugin module once per process with `require` and gives each entry a shallow copy of its exports (`plugins/load-resolved-plugin.js`), so a module-level variable is shared by all entries. An entry without `options` passes `undefined` to both hooks, so their arguments do not tell entries apart. Nx calls `createDependencies` as a method of the entry's copy and the `createNodes` function as a member of the pair it read from that copy (`plugins/loaded-nx-plugin.js`).
+- **Order.** Nx starts the `createNodes` calls of all entries of one computation one after another in a single synchronous loop, and calls `createDependencies` once all of them have settled, also when one of them failed (`utils/project-configuration-utils.js`, `project-graph.js`).
+- **Measured.** With a workspace's root manifest given to one entry and its members to the other, the workspace was reported twice with isolation on, once in each worker. With isolation off it was reported once, when the second entry reused the report that the first had requested in the same computation. The version of the plugin reviewed on 13 November 2026 kept the result of `createNodes` in one module-level variable: with isolation off, both entries' `createDependencies` then received the discovery of the second entry.
+
+The plugin therefore makes each entry's copy carry a `createNodes` of its own and finds the entry in `createDependencies` through that copy. These are Nx internals, which the tests check in both modes and which have to be checked again for another Nx major.
 :::
 
 ## Sources
