@@ -5,7 +5,7 @@ Mara items:
 ## Checks
 
 - [ ] `pnpm nx run-many -t build lint test`
-- [ ] `pnpm format:check`
+- [ ] `pnpm nx format:check --all`
 - [ ] `pnpm nx e2e nx-rust-e2e`
 - [ ] `mara schema validate && mara project validate`
 - [ ] `zban check`

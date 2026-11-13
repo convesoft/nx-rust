@@ -19,4 +19,4 @@ Implements the `hakari` and `cargo` strategies of `DES-UNIFICATION` (`nx-rust/do
 - [ ] The optional strict per-crate build target
 - [ ] The `cargo` strategy behind an opt-in, marked experimental
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

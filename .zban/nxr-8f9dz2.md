@@ -17,4 +17,4 @@ Implements `REQ-STABLE-FEATURES`, `DES-FEATURE-SETS` and the `workspace-build` s
 - [ ] `workspace-build`: build the whole workspace, filter which tests run
 - [ ] A non-host triple as its own group that builds only the selected crates
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

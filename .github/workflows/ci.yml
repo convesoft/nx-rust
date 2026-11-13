@@ -28,7 +28,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm nx run-many -t build lint test
-      - run: pnpm format:check
+      # Without `--all`, Nx checks only the files changed against the base.
+      - run: pnpm nx format:check --all
       - name: Install zban
         env:
           ZBAN_VERSION: 0.1.0

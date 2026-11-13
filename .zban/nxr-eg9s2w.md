@@ -16,4 +16,4 @@ Implements `REQ-INIT` and `REQ-CRATE-GENERATORS` (`nx-rust/docs/setup.mara.md`).
 - [ ] `library` and `binary` wrap `cargo new` and add the crate to the workspace members once
 - [ ] `generators.json` and the `nx add` entry point in the package
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

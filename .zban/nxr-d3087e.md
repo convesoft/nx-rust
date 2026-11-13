@@ -16,4 +16,4 @@ Implements the draft `REQ-TARGET-DEFAULT-GUARD` (`nx-rust/docs/targets.mara.md`)
 - [ ] Implement the report and name the entry, the target and the fix
 - [ ] Document narrowing a target default in `targets.mara.md`
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

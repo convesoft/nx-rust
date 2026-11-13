@@ -17,4 +17,4 @@ Implements `REQ-EXTERNAL-DEPS` through the accepted form of `DES-LOCKFILE-HASHIN
 - [ ] Replace the whole-lockfile input of crate targets with the per-crate mechanism
 - [ ] Matrix rows: a bump inside a crate's resolved dependencies changes its keys; a bump outside does not
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

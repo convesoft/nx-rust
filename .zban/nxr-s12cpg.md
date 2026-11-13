@@ -18,4 +18,4 @@ Implements `REQ-BATCHING` and `DES-BATCH` (`nx-rust/docs/execution.mara.md`). Ch
 - [ ] One cargo call per group; cargo's output mapped to a result and terminal output per task
 - [ ] `--keep-going` and `--no-fail-fast`; a task fails through its own crate or a crate it depends on, and a failure outside the selection is a warning
 
-Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm format:check` pass.
+Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
