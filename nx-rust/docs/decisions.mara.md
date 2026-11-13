@@ -62,6 +62,20 @@ Repositories that add Rust to an existing monorepo rarely have one Cargo workspa
 The crate name is what a Rust developer types, so it is the Nx project name. With several workspaces two crates can share a name. Deriving unique names automatically, for example from paths, would make names unpredictable and would change them when a second crate appears. A collision is therefore an error naming both paths, and the user fixes it with a per-crate name or a per-workspace prefix in metadata. Because commands always use the real package name and manifest path, the Nx name is free to differ. A crate whose folder also is a JS project is the exception. Nx applies `package.json` and `project.json` after every plugin, so the name set there wins, and neither the crate name nor its `name` override can change it ([[EVD-NX-PROJECT-MERGE]]).
 :::
 
+:::mara decision ADR-WORKSPACE-PROJECT-NAME
+:mid: 01M7A8AKF5KKZ457ED2PX0NX4D
+:title: Name the workspace project after its folder's path
+:status: accepted
+:justifies: REQ-PROJECT-NAMES
+:justifies: REQ-METADATA-OVERRIDES
+:justifies: DES-PROJECT-GRAPH
+:justifies: DES-METADATA-TABLES
+
+Agreed with the maintainer on 13 November 2026, for a [[TERM-WORKSPACE-PROJECT]] whose root manifest defines no crate. Cargo has no name for a workspace ([[EVD-WORKSPACE-PROJECT-NAMES]]), so the plugin derives one: the path of the workspace folder from the root of the Nx workspace, with each `/` replaced by `-`. Such a name is determined by the workspace's folder alone: it needs no configuration and does not depend on which other workspaces or crates exist, so it does not change when one appears, and the objection of [[ADR-PROJECT-NAMES]] to names derived from paths does not apply. Nx also accepts the folder itself where a project name is expected. The root of the Nx workspace has no such path, and its folder name differs between checkouts, so a workspace there is called `cargo-workspace`. Rejected: the folder's last segment, which is Nx's own default for a `project.json` without a name but lets `a/rust` and `b/rust` collide; the path with a `-workspace` suffix, which collides less often but is longer; one fixed name, which every workspace after the first would have to override; `rust` at the root, which a workspace in `rust/` gets too; and the name in the root `package.json`, which would name a Cargo project from a JS file. The names are not unique. `services/billing/` and `services-billing/` both give `services-billing`, the root and a folder `cargo-workspace/` both give `cargo-workspace`, and a folder named like one of its own crates gives that crate's name. Each of these fails like any other collision between two projects of this plugin, and the `name` in `[workspace.metadata.nx.project]` resolves it.
+
+A collision between any two of the plugin's projects, crates or workspace projects, fails with the plugin's error, so that the user learns both manifests and both remedies; one with a JS project stays Nx's error, as for crates. The override is the sub-table `[workspace.metadata.nx.project]`, holding the `name`, `tags` and `targets` of a package table, because [[ADR-METADATA-KEY]] makes the `nx` table hold what a `project.json` holds while the workspace table's own keys are defaults for the members. Rejected: `workspaceProject`, which is long; `root`, which Nx uses for a project's folder; and a flat `name` in the workspace table, which reads as a default for members and leaves the project's own targets without a place. When the root manifest defines a crate, that crate's table already configures the project, so the sub-table is an error instead of a second place for the same settings. The workspace's name prefix stays with the members, whose names it separates; a workspace project's default name comes from its folder, and a collision of that name is resolved with the project's own `name`. Names are neither checked nor rewritten beyond `/` to `-`: Nx accepts any string, and the characters that are awkward on its command line are rare in folder names and fixed with the override. Where the workspace folder already is an Nx project, Nx merges the two and names the result ([[EVD-NX-PROJECT-MERGE]]); the plugin accepts that as it does for a crate, because [[REQ-WORKSPACE-PROJECT]] fixes the project's root.
+:::
+
 :::mara decision ADR-ALL-DEP-KINDS
 :mid: 01M78FHG7F89HNQ2GAMHTHFRC2
 :title: Keep every dependency kind in the graph, including cycles
@@ -107,7 +121,9 @@ Overrides live in `Cargo.toml`, next to what they override, in `[package.metadat
 
 The plugin is written first for mixed JS/TS and Rust repositories, whose pipelines run `nx affected -t lint test build`. With Cargo's names, clippy would be skipped until every pipeline adds `clippy`. Inferred targets therefore use the Nx name where Nx projects conventionally have a target for the same job: clippy runs as `lint`, and `test` and `build` keep their names. Every name can be changed in the plugin options, so Cargo's names are an opt-in. The cost is that target defaults written for JS targets of the same name also reach Rust targets.
 
-Formatting was decided separately. Nx has a convention for it, but it is the built-in commands `nx format:check` and `nx format:write`, not a target. They run prettier or oxfmt over files and cannot be made to run rustfmt in Nx 24 ([[EVD-NX-FORMAT]]). Naming the rustfmt targets `format-check` with `format-write` or `format` was considered. They keep Cargo's names, `fmt-check` and `fmt`, so that nobody takes them for that command: `format` is a reserved command name, and `nx format <project>` would silently run Nx's formatter instead of `cargo fmt`. The remaining targets (`check`, `doc`, `bench`, `run`) have no Nx counterpart and keep Cargo's names.
+Formatting was decided separately. Nx has a convention for it, but it is the built-in commands `nx format:check` and `nx format:write`, not a target. They run prettier or oxfmt over files and cannot be made to run rustfmt in Nx 24 ([[EVD-NX-FORMAT]]). Naming the rustfmt targets `format-check` with `format-write` or `format` was considered. They keep Cargo's names, `fmt-check` and `fmt`, so that nobody takes them for that command: `format` is a reserved command name, and `nx format <project>` would silently run Nx's formatter instead of `cargo fmt`.
+
+`check` has a counterpart: `typecheck`, which the TypeScript plugin of `@nx/js` infers and which the CI workflow that Nx generates runs beside `lint`, `test` and `build` ([[EVD-NX-24-TARGETS]]). It keeps Cargo's name all the same. That pipeline already runs `lint`, and clippy checks everything `cargo check` does, so a Rust `typecheck` would only check every affected crate a second time; clippy does not reuse what `cargo check` compiled for the crate itself ([[EVD-CARGO-TARGET-COMMANDS]]). A repository that wants the name can rename the target. The remaining targets (`doc`, `bench`, `run`) and the targets of the workspace project (`audit`, `deny`, `update`) have no Nx counterpart and keep the names of Cargo and the tools.
 :::
 
 :::mara decision ADR-NO-RUST-BUILD-DEPS
@@ -629,6 +645,31 @@ The throwaway pnpm workspace, outside this repository, had a Cargo workspace at 
 For a crate folder that also is a JS project, no plugin listed in `nx.json` can set the project's name. [[REQ-PROJECT-NAMES]], [[ADR-PROJECT-NAMES]] and [[DES-PROJECT-GRAPH]] therefore name such a project by its `package.json` or `project.json`; until 13 November 2026 they named every project after its crate or its `name` override. For the review of 13 November 2026, the following were re-run in the same workspace, with `outputs` added to the stand-in's `build`: the target merges and replacements, both edge orders, the dropped edges, the `dependsOn` rewrite, the names given by `nx.name` with and without a named `project.json`, and the TypeScript `build`. The other outcomes are from the first run. The stand-in modelled the planned plugin; the plugin itself and other Nx versions were not tested.
 :::
 
+:::mara evidence EVD-WORKSPACE-PROJECT-NAMES
+:mid: 01M7A8AKF5NT40CMP6236AFA2V
+:title: How Cargo 1.100.0 and Nx 24.0.6 treat names for a workspace project
+:status: accepted
+:supports: ADR-WORKSPACE-PROJECT-NAME
+:supports: REQ-PROJECT-NAMES
+:supports: DES-PROJECT-GRAPH
+:supports: DES-METADATA-TABLES
+
+Experiments on 13 November 2026 with cargo 1.100.0, `nx` 24.0.6 and Node 26.12.0 on Linux, in throwaway folders outside this repository, together with a reading of the same `nx` package. The Nx workspaces linked the `node_modules` of this repository, had a root `package.json` and listed one stand-in plugin in `nx.json`. Its `createNodesV2` matched `**/name.txt` and returned a project at that file's folder, named by the file's content, with targets `fmt` and `audit` that echo the folder. Commands ran with `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false NX_NO_CLOUD=true NX_TUI=false`, and runs with `--output-style=static --skip-nx-cache`.
+
+- **Cargo has no workspace name.** In a virtual manifest, `name` under `[workspace.package]` made `cargo check --offline` warn `unused manifest key: workspace.package.name`. `cargo metadata --no-deps --offline --format-version 1` reported `workspace_root` as an absolute path, and `[workspace.metadata.nx]` with its nested `project` table (`name`, `tags`, `targets.sqlx-prepare.command`) unchanged under the report's top-level `metadata`. For a root manifest with both `[package]` and `[workspace]`, the report carried `[package.metadata.nx]` on that package and `[workspace.metadata.nx.project]` at the top level.
+- **Cargo package names.** `cargo metadata` on a one-package manifest rejected the names `a.b`, `a:b`, `a/b`, `a+b`, `a b` and `a~b` ("characters must be Unicode XID characters (numbers, `-`, `_`, or most letters)"), `@a` (not a Unicode XID start character) and `1abc` (starts with a digit), and accepted `abc`, `a_b`, `a-b`, `Rust-WS` and `ü-crate`.
+- **Nx accepts any name.** The stand-in created projects named `rust`, `a.b`, `@ws/rust`, `a:b`, `a b`, `Rust-WS`, `rust+ws`, `ws/rust`, `cargo:ws`, `ü-rust`, `a,b`, `!bang`, `x*y`, `tag:foo`, `a#b`, `rust/` and `.dot`. `nx show projects` listed all of them, and for each one `nx run <name>:fmt`, `nx fmt <name>` and `nx show project <name> --json` reached that project. Nx checks only that a name is present and unique (`validateProject` in `project-graph/utils/project-configuration/target-normalization.js`).
+- **Patterns.** `nx run-many -t fmt -p <name>` ran exactly that project for each name except two: `-p 'a,b'` split into `a` and `b` and ran five projects, and `-p '!bang'` excluded that project and ran every other one. A pattern without glob characters that is not exactly a project name matches the names that contain it as a whole word, ignoring case and counting `-` and `@` as part of a word, and only when no name matches, a project folder: `-p Rust` ran `rust`, `@ws/rust`, `rust+ws`, `ws/rust` and `rust/` (`utils/find-matching-projects.js`). With a `:` in a name, `nx run` tries every split of the string against the graph and warns when more than one fits (`utils/split-target.js`); `nx run a:b:fmt` and `nx run cargo:ws:fmt`, which no other project made ambiguous, ran.
+- **Folders.** A project named `rust-workspace` in `rustdir/` was reached by `nx fmt rustdir`, `nx run rustdir:fmt`, `nx show project rustdir --json`, `-p rustdir` and `-p directory:rustdir`, and one named `services-billing` in `services/billing/` by `nx fmt services/billing` and `nx run services/billing:fmt`; `nx fmt ./rustdir` failed with "Cannot find project". When a name is not found, `nx run`, `nx <target> <project>` and `nx show project` fall back to the same pattern matching and accept a single match (`command-line/run/run-one.js`, `command-line/show/project.js`). Inside `rustdir/`, a bare `nx fmt` ran that project (`config/calculate-default-project-name.js`).
+- **Root.** In a second workspace with the stand-in's project `cargo-workspace` at the root, a project `sub-crate` in `sub/` and a root `package.json` named `exp-root-pkg`, `nx fmt` from the root, `nx fmt .`, `-p .` and `-p directory:.` each ran the root project. `nx show project . --json` named the root project `cargo-workspace` without a root `project.json` and without an `nx` key; `exp-root-pkg` with `"nx": {}` in the `package.json`, and also with a root `project.json` of `{}`; and `repo` with a root `project.json` that sets that name. In each of these cases the project kept `fmt` and `audit`. With a `project.json` of `{}` and a root `package.json` without a name, graph creation failed.
+- **Default names.** For the review, a second stand-in matched `**/ws.txt` and named its project by the agreed rule: the path from the root with each `/` replaced by `-`, `cargo-workspace` at the root, or the file's content when it had any. Projects in `services/billing/` and `services-billing/` both got `services-billing`, and projects at the root and in `cargo-workspace/` both got `cargo-workspace`. In both cases Nx failed with "The following projects are defined in multiple locations", listing the two folders.
+- **When Nx reads a `package.json`.** With that stand-in and the name `billing-override` set for `services/billing/`, the project kept `billing-override` after a `project.json` of `{}` was added to that folder with no `package.json` beside it, and took `@acme/billing` once a `package.json` of that name was added beside the `project.json`. Without the `project.json`, that `package.json` left `billing-override` in place, with or without an `nx` key, until the root `package.json` listed `services/*` under `workspaces`. At the root, `cargo-workspace` gave way to the root `package.json` name when the workspace patterns included `.`, through `"workspaces": ["."]` in that file or `packages: ["."]` in `pnpm-workspace.yaml`, and stayed when `pnpm-workspace.yaml` listed only `packages/*`. Nx therefore reads a `package.json` when the package manager's workspace patterns include it or when a `project.json` sits beside it, and the root `package.json` also when it has an `nx` key; a nested `package.json` with only an `nx` key is not read (`plugins/package-json/create-nodes.js`).
+- **Nx's default.** For a `project.json` without a name, Nx uses the last segment of its folder in lower case, and `.` at the root (`config/to-project-name.js`); read, not run.
+- **Checkouts.** The checkout of this repository in which the work was done is a folder named `t3-978a6461-ca0fb10813ae42be`, not `nx-rust`.
+
+How often a workspace folder has the name of one of its own crates was not measured, and macOS was not tested.
+:::
+
 :::mara evidence EVD-NX-FORMAT
 :mid: 01M78JWQAZK1MDJ6GC4M70ZCXX
 :title: nx format cannot run rustfmt in Nx 24.0.6
@@ -644,6 +685,73 @@ Inspection of the `nx` 24.0.6 package installed in this repository, and two expe
 - **oxfmt.** Given a `.rs` file and a `Cargo.toml`, oxfmt 0.78.0 ignored the `.rs` file and reported the `Cargo.toml` as unformatted. Its configuration schema has no setting for plugins or external formatters. In a workspace that uses oxfmt, `nx format:write` therefore reformats `Cargo.toml` files and leaves Rust sources alone.
 
 The prototype was not run through `nx format` itself; that Nx filters `.rs` out is read from its source, and that the filter excludes plugin languages was tested against prettier directly. Covering Rust in `nx format` would need Nx to pass the configured plugins to its filter, and would still not reach workspaces that use oxfmt.
+:::
+
+:::mara evidence EVD-CARGO-TARGET-COMMANDS
+:mid: 01M7A4FCEFVN0W56WPDHWWW88N
+:title: What cargo, rustfmt and rust-analyzer 1.100 do with the commands of the inferred targets
+:status: accepted
+:supports: DES-TARGET-COMMANDS
+:supports: DES-WORKSPACE-TARGETS
+:supports: ADR-NX-TARGET-NAMES
+:supports: DES-INPUTS
+:supports: DES-INVOCATION
+:supports: DES-BATCH
+
+Experiments on 13 November 2026 with cargo 1.100.0 (3acc79c0c 2026-11-05), rustc 1.100.0, clippy 0.1.100, rustfmt 1.11.0 and rust-analyzer 1.100.0, all from one rustup toolchain, in a throwaway virtual workspace outside this repository. Its members were `a`, a library with a `harness = false` bench and a deliberate unused variable, and `b`, a crate with two binaries, `b` and `second`, that depends on `a`. `a` also depended on `ext`, a path dependency outside the workspace. For one check cargo 1.89.0, 1.91.0, 1.96.0, 1.97.0, 1.97.1 and 1.98.1 were used as well, each with a target directory of its own; 1.91.0, 1.96.0 and 1.97.0 were installed with the minimal profile into a rustup home of their own.
+
+- **check and clippy.** `cargo check --all-targets -p a` checked `ext` and `a`. A following `cargo clippy --all-targets -p a` checked `a` again and reused `ext`. Alternating `cargo clippy --all-targets -p a` with `cargo clippy --all-targets -p a -- -D warnings` checked `a` again on every switch, and the run with `-D warnings` failed on the warning.
+- **build.warnings.** `CARGO_BUILD_WARNINGS=deny cargo clippy --all-targets -p a` failed with "warnings are denied by `build.warnings` configuration", and a plain `cargo clippy --all-targets -p a` afterwards checked nothing again. `CARGO_BUILD_WARNINGS=deny cargo check -p a` failed in the same way with cargo 1.97.0, 1.97.1, 1.98.1 and 1.100.0, and with cargo 1.89.0, 1.91.0 and 1.96.0 it succeeded with the warning and no notice about the setting. Cargo's configuration reference (doc.rust-lang.org/cargo/reference/config.html, read the same day) gives the same boundary for `build.warnings`: "MSRV: Respected as of 1.97". With cargo 1.100.0 and `CARGO_BUILD_WARNINGS=deny`, `cargo run -p b --bin second` and `cargo bench -p a` failed the same way on the warning in `a`, since both compile it.
+- **rust-analyzer.** `rust-analyzer --print-config-schema` gives `cargo.allTargets` the default `true`, `check.allTargets` the default of `cargo.allTargets`, `check.workspace` the default `true` and `check.command` the default `"check"`. The editor's check is therefore `cargo check --workspace --all-targets`.
+- **Nightly benches.** With a bench in `b` that uses `#![feature(test)]`, `cargo check --all-targets -p b` failed on stable with E0554, while `cargo check -p b` passed. So did `cargo check -p a -p b`, while `cargo check --all-targets -p a -p b` failed with E0554: one call cannot check `a` with `--all-targets` and `b` without.
+- **fmt.** `cargo fmt --check --all` reported files of `ext` as well as of the members, and `cargo fmt --all` rewrote `ext`'s source. `cargo fmt --check` without flags, run in the workspace root, reported exactly the members' files, both in this virtual workspace and in a second one whose root manifest is a package with one more member. `cargo fmt --check -p a -p b` checked both crates. A package ID spec after `-p` was rejected as "not a member of the workspace", while `--manifest-path crates/a/Cargo.toml` selected `a`. `cargo fmt --check` exited with 1 when a file needed formatting. `cargo fmt --locked -p a`, `cargo fmt --check --locked -p a` and `cargo fmt -p a --locked` failed with exit code 2 and "unexpected argument '--locked' found"; `cargo fmt --help` lists no `--locked`, `--offline` or `--frozen`.
+- **doc.** `cargo doc --no-deps -p a` and then `cargo doc --no-deps -p b` wrote `doc/a`, `doc/b` and `doc/second`, one folder per documented library or binary, and `doc/src/a`, `doc/src/b` and `doc/src/second`, beside files that both runs shared: `crates.js`, `search.index`, `src-files.js`, `static.files`, `help.html` and `settings.html`. `crates.js` listed `a` after the first run and `a`, `b` and `second` after the second. `doc/a/index.html` loads its styles from `../static.files/`. `cargo doc --no-deps --workspace` documented both members in one run.
+- **run.** `cargo run -p b` failed with "`cargo run` could not determine which binary to run" and listed `b, second`; `cargo run -p b --bin second -- x` ran `second`. `cargo run -p a -p b` failed because `--package` cannot be given more than once.
+- **bench.** `cargo bench -p a` ran on stable: the library's test harness in bench mode and then the `harness = false` bench.
+- **update.** After a new path dependency was added to a manifest, `cargo update --locked` failed with "cannot update the lock file … because --locked was passed to prevent this", and `cargo update` then updated `Cargo.lock`. Without such a change, `cargo update --locked` succeeded.
+
+The workspace was a toy, so nothing here says how long these commands take on a large one.
+:::
+
+:::mara evidence EVD-CARGO-AUDIT-DENY
+:mid: 01M7A4FCEFMBYHR6YR0ZANHNS3
+:title: What cargo-audit 0.23.0 and cargo-deny 0.20.2 read, fetch and write
+:status: accepted
+:supports: DES-WORKSPACE-TARGETS
+:supports: DES-INVOCATION
+
+Experiments on 13 November 2026 with cargo-deny 0.20.2 and cargo-audit 0.23.0, installed with `cargo install --locked` into a throwaway folder, and cargo 1.100.0, with a Cargo home of their own that started empty. The workspace, outside this repository, had one member `x` with `license = "MIT"` that depended on the registry crate `itoa`, whose license is `MIT OR Apache-2.0`. Every command ran in the workspace root.
+
+- **No configuration.** Without a configuration file, `cargo deny check` warned "unable to find a config path, falling back to default config", rejected the licenses of `itoa` and `x`, and exited with code 4; advisories, bans and sources passed. A configuration that allows MIT and Apache-2.0 made the license check pass when it was `deny.toml`, `.deny.toml` or `.cargo/deny.toml` in the workspace root. `cargo deny --help` says the configuration defaults to `deny.toml` in the current folder.
+- **Network.** Both tools fetched the RustSec advisory database into the Cargo home: cargo-audit printed "Fetching advisory database from `https://github.com/RustSec/advisory-db.git`" and loaded 1490 advisories. cargo-audit also updated the crates.io index.
+- **Lockfile.** After a dependency was added to the member's manifest, `cargo deny check` updated `Cargo.lock`. `cargo deny --locked check` failed instead with Cargo's "cannot update the lock file … because --locked was passed to prevent this" and left the file unchanged. `cargo audit` scanned the old `Cargo.lock`, which did not list the new dependency, and left it unchanged. Its options include `--no-fetch` and `--stale`, and none like `--locked`.
+- **cargo-audit configuration.** An invalid `.cargo/audit.toml` in the workspace root made `cargo audit --no-fetch` fail with a TOML parse error. The same file as `audit.toml` in the workspace root, or as `.cargo/audit.toml` in the member's folder, was ignored.
+
+What these tools report thus depends on the advisory database at the time they run, not only on files in the repository.
+:::
+
+:::mara evidence EVD-NX-24-TARGETS
+:mid: 01M7A4FCEFW4N06285629BJCB1
+:title: What Nx 24.0.6 does with continuous, sequential and overlapping targets
+:status: accepted
+:supports: DES-TARGET-COMMANDS
+:supports: DES-WORKSPACE-TARGETS
+:supports: DES-OUTPUTS
+:supports: ADR-NX-TARGET-NAMES
+
+An experiment and a reading of the `nx`, `@nx/js` and `@nx/workspace` 24.0.6 packages installed in this repository, on 13 November 2026, with Node.js 26.12.0. The experiment used a throwaway workspace outside this repository with two projects, `a` and `b`, whose targets ran shell commands through `nx:run-commands`. Nx ran as `node <repository>/node_modules/nx/dist/bin/nx.js` with `NX_DAEMON=false`, `NX_NO_CLOUD=true` and `NX_TUI=false`.
+
+- **Overlapping outputs.** Each project's cached `doc` target wrote a folder of its own under `out/doc` and a shared `out/doc/crates.js`, and declared `{workspaceRoot}/out/doc` as its output. After `nx run a:doc` and `nx run b:doc`, `out/doc` held both folders. A second `nx run a:doc` was a cache hit, after which `out/doc` held only `a`'s folder and `a`'s `crates.js`: the restore replaced the whole folder. The native cache documents `copyFilesFromCache` as replacing each output that exists (`native/index.d.ts`).
+- **Continuous tasks that exit.** A target with `continuous: true` printed a line and exited. Run alone with `nx run a:oneshot`, it succeeded. As the dependency of another target, `nx run a:after` failed with `Task "a:oneshot" is continuous but exited with code 0` and exit code 1 (`tasks-runner/task-orchestrator.js`).
+- **A project without a target.** `nx run a` failed with "Both project and target have to be specified".
+- **Batches.** Without `--batch`, a task joins a batch only if its executor has a batch implementation and sets `preferBatch`, and only if the task's `parallelism` is not `false`. A continuous task stays out of a batch only when another task depends on it or it declares `readyWhen` (`processTaskForBatches` and `canBatchTaskBeScheduled` in `tasks-runner/tasks-schedule.js`).
+- **Parallelism.** While a task with `parallelism: false` runs, no other task starts, and such a task starts only when no other task runs (`canBeScheduled` in `tasks-runner/tasks-schedule.js`).
+- **Readiness.** A target accepts `continuous`, `readyWhen` and `parallelism` (`schemas/project-schema.json`). `readyWhen` waits for a `url`, a `port`, a `command` or `logMatches`, and a dependent waits for it only with `waitFor: "ready"` on its `dependsOn` entry; the default is `started`.
+- **nx watch.** `nx watch` runs its command once for each batch of changes and takes the next batch only after the command has exited, so it cannot restart a command that keeps running (`command-line/watch/watch.js`).
+- **Command names.** `run` and `watch` are Nx commands, so `nx run <project>` never runs a target named `run`. `check`, `doc`, `bench`, `fmt`, `fmt-check`, `audit`, `deny`, `update` and `typecheck` are not command names (the command handlers of `command-line/nx-commands.js` and `isKnownCommand` in `bin/init-local.js`).
+- **typecheck.** `@nx/js` adds its TypeScript plugin with the target name `typecheck` (`src/utils/typescript/add-typescript-plugin.js`), and the CI workflow generator of `@nx/workspace` writes `nx affected -t lint test build typecheck` when a workspace has that target (`src/generators/ci-workflow/ci-workflow.js`).
+
+The targets of the experiment ran no cargo. The points marked with a source file were read, not run.
 :::
 
 :::mara evidence EVD-NX-PLUGIN-ENTRIES
