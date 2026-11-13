@@ -82,28 +82,57 @@ describeCacheKeyMatrix("cache keys", [
 `compareCacheKeys(row)` returns the hashes instead of failing.
 
 **`FixtureWorkspace.create(fixture, files)`** is the copy both helpers use:
-`graph()`, `hashTasks(tasks, { env, overrides })`, `cargoCalls()`,
-`reset(files)` and `remove()`. Besides the fixture, the copy has a
-`tsconfig.base.json` that lets Nx compile the plugin's TypeScript source.
-Set `NX_RUST_KEEP_FIXTURES=1` to keep the copies for inspection.
+`graph()`, `hashTasks(tasks, { env, overrides })`, `nx(args, env)`, which
+runs the Nx command line there and returns its status and output,
+`cargoCalls()`, `reset(files)` and `remove()`. Besides the fixture, the copy
+has a `tsconfig.base.json` that lets Nx compile the plugin's TypeScript
+source, and a `node_modules`, which Nx ignores, with a link to this
+repository's Nx and a copy of the cargo wrapper in `.bin`. If creating it
+fails, nothing is left behind. Set `NX_RUST_KEEP_FIXTURES=1` to keep the
+copies for inspection.
 
 **`CargoWrapper.install(directory)`** writes a `cargo` that appends one JSON
 line per invocation (`cwd`, `args`) to a log and then runs the real cargo in
-the same folder. `environment(env)` puts it first on `PATH`;
-`calls(root)` returns the invocations with folders relative to `root`.
-Every `FixtureWorkspace` has one, which also sees the cargo calls of Nx's
-plugin workers.
+the same folder, with the real cargo's folder first on `PATH`, so that cargo
+runs the `rustc` that belongs to it. `calls(root)` returns the invocations
+with folders relative to `root`. Every `FixtureWorkspace` has one. Cargo is
+looked up on two different `PATH`s, and the wrapper has to come first on
+both:
+
+- Graph creation, executors and batches inherit the `PATH` of the `nx`
+  command. `environment(env)` puts the wrapper first there.
+- `nx:run-commands` rebuilds the `PATH` of its tasks: the `node_modules/.bin`
+  folders from the task's folder up to the file system root come first, then
+  the folder of the Node executable, then the inherited `PATH`. Where Node's
+  folder holds another cargo, as with a system Node and a system Rust, that
+  cargo would win. `placeIn(folder)` writes a copy that logs to the same log
+  into the workspace's `node_modules/.bin`, which comes before Node's folder
+  wherever Node and cargo are installed.
+
+[`cargo-wrapper.spec.ts`](cargo-wrapper.spec.ts) and the end-to-end tests
+check each way: an `nx:run-commands` task, an executor and a batched executor
+all show up in the log, and the `nx:run-commands` task finds the copy in
+`node_modules/.bin`. The executor is a stand-in for the plugin's own:
+`cargoProbeProject(name)` writes a `project.json` with a target of each kind,
+and `installProbeExecutor(root)` installs the stand-in into
+`root/node_modules`. A cargo that is not looked up on `PATH` bypasses the
+wrapper: one started by an absolute path, an `nx:run-commands` task whose
+`cwd` lies outside the workspace or whose `env` replaces `PATH`, and the
+processes that cargo itself starts through the `CARGO` variable it sets.
 
 **`installFixture(projectDirectory, fixture)`** replaces the content of the
 end-to-end test project with a fixture, keeping the installed packages, and
-registers the installed plugin. See `nx-rust-e2e/src/nx-rust.spec.ts`.
+registers the installed plugin. The end-to-end tests then put the wrapper
+into the project's `node_modules/.bin` with `placeIn`. See
+`nx-rust-e2e/src/nx-rust.spec.ts`.
 
 **`testEnvironment(overrides)`** is the environment for every command the
 helpers run. It drops the `NX_` variables of the outer Nx run and the
 variables that choose a toolchain or Cargo's directories, turns the Nx
 daemon off, stops rustup from installing toolchains, and puts rustup's
-folder first on `PATH`: Nx puts the folder of the Node executable first,
-where a system cargo would otherwise shadow rustup.
+folder first on `PATH`: Nx runs this repository's tests through
+`nx:run-commands`, which puts the folder of the Node executable first, where
+a system cargo would otherwise shadow rustup.
 
 Each helper that runs Nx or cargo takes a few seconds at most; give such
 tests the `HARNESS_TIMEOUT`.

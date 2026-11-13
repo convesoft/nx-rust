@@ -12,10 +12,11 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { CargoCall, CargoWrapper } from "./cargo-wrapper";
 import { testEnvironment } from "./environment";
 import { copyFixture, FileChanges, FixtureName, pluginSourceEntry } from "./fixtures";
@@ -59,6 +60,10 @@ export class GraphCreationError extends Error {
 
 const inspectScript = join(__dirname, "inspect-workspace.cjs");
 
+// The Nx package of this repository, which every workspace links to.
+const nxPackage = dirname(require.resolve("nx/package.json"));
+const nxBin: string = JSON.parse(readFileSync(join(nxPackage, "package.json"), "utf8")).bin.nx;
+
 /** What inspect-workspace.cjs writes. */
 interface InspectResult {
   ok: boolean;
@@ -70,7 +75,10 @@ interface InspectResult {
 /**
  * A copy of a fixture in a temporary folder, set up as an Nx workspace that
  * loads the plugin from its TypeScript source, with a {@link CargoWrapper}
- * first on `PATH` for every command the harness runs there.
+ * that sees every cargo invocation of the commands the harness runs there.
+ * Its `node_modules`, which Nx ignores, links to this repository's Nx and
+ * holds a copy of the wrapper in `.bin`, ahead of Node's folder on the `PATH`
+ * that `nx:run-commands` builds for its tasks.
  *
  * Remove it with {@link FixtureWorkspace.remove} when the test is done.
  * Setting `NX_RUST_KEEP_FIXTURES=1` keeps every workspace for inspection.
@@ -99,9 +107,15 @@ export class FixtureWorkspace {
     // The real path, so that it matches what cargo and Nx report on macOS,
     // where the temporary folder is reached through a symbolic link.
     const base = realpathSync(mkdtempSync(join(tmpdir(), `nx-rust-${fixture}-`)));
-    const workspace = new FixtureWorkspace(fixture, base);
-    workspace.reset(...files);
-    return workspace;
+    try {
+      const workspace = new FixtureWorkspace(fixture, base);
+      workspace.reset(...files);
+      return workspace;
+    } catch (error) {
+      // The caller gets no workspace to remove.
+      rmSync(base, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   /**
@@ -121,6 +135,9 @@ export class FixtureWorkspace {
       plugin: pluginSourceEntry,
       files: [tsconfig, ...files],
     });
+    const modules = join(this.root, "node_modules");
+    this.cargo.placeIn(join(modules, ".bin"));
+    symlinkSync(nxPackage, join(modules, "nx"), "dir");
     this.cargo.clear();
   }
 
@@ -173,6 +190,23 @@ export class FixtureWorkspace {
     return result.hashes;
   }
 
+  /**
+   * Runs the Nx command line in the workspace, such as
+   * `nx(["run", "api:test", "--skip-nx-cache"])`, and returns its exit status
+   * and output.
+   *
+   * @param env Environment variables to set; `undefined` removes one.
+   */
+  nx(
+    args: string[],
+    env: Record<string, string | undefined> = {},
+  ): Promise<{ status: number | null; output: string }> {
+    return run(process.execPath, [join(this.root, "node_modules", "nx", nxBin), ...args], {
+      cwd: this.root,
+      env: this.environment({ NX_TUI: "false", ...env }),
+    });
+  }
+
   /** Deletes the workspace and the cargo wrapper, unless `NX_RUST_KEEP_FIXTURES` is set. */
   remove(): void {
     if (process.env.NX_RUST_KEEP_FIXTURES) {
@@ -197,14 +231,7 @@ export class FixtureWorkspace {
     const { status, output } = await run(
       process.execPath,
       [inspectScript, requestFile, resultFile],
-      {
-        cwd: this.root,
-        // The plugin is CommonJS written in TypeScript, which Node's own type
-        // stripping cannot load; Nx then uses swc instead.
-        env: this.cargo.environment(
-          testEnvironment({ NX_PREFER_NODE_STRIP_TYPES: "false", ...env }),
-        ),
-      },
+      { cwd: this.root, env: this.environment(env) },
     );
     if (!existsSync(resultFile)) {
       throw new Error(
@@ -212,6 +239,13 @@ export class FixtureWorkspace {
       );
     }
     return JSON.parse(readFileSync(resultFile, "utf8"));
+  }
+
+  // The environment of every command the harness runs in the workspace.
+  private environment(env: Record<string, string | undefined>): NodeJS.ProcessEnv {
+    // The plugin is CommonJS written in TypeScript, which Node's own type
+    // stripping cannot load; Nx then uses swc instead.
+    return this.cargo.environment(testEnvironment({ NX_PREFER_NODE_STRIP_TYPES: "false", ...env }));
   }
 }
 

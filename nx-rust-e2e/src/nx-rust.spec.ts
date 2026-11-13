@@ -4,8 +4,10 @@ import { join } from "path";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
 import {
   CargoWrapper,
+  cargoProbeProject,
   HARNESS_TIMEOUT,
   installFixture,
+  installProbeExecutor,
   testEnvironment,
 } from "../../nx-rust/test/harness";
 
@@ -56,6 +58,9 @@ describe("@convesoft/nx-rust", () => {
       installFixture(projectDirectory, "subfolder-workspace");
       rmSync(wrapperDirectory, { recursive: true, force: true });
       cargo = CargoWrapper.install(wrapperDirectory);
+      // Ahead of Node's folder on the PATH that nx:run-commands builds.
+      cargo.placeIn(join(projectDirectory, "node_modules", ".bin"));
+      installProbeExecutor(projectDirectory);
     });
 
     beforeEach(() => cargo.clear());
@@ -98,6 +103,68 @@ describe("@convesoft/nx-rust", () => {
       },
       HARNESS_TIMEOUT,
     );
+
+    // Nx starts cargo in two ways: from an nx:run-commands task, which
+    // rebuilds PATH with Node's folder ahead of the inherited one, and from an
+    // executor process, which inherits Nx's PATH, alone or in a batch.
+    describe("when a task runs cargo", () => {
+      beforeAll(() => {
+        installFixture(projectDirectory, "subfolder-workspace", {
+          "rust/crates/api/project.json": cargoProbeProject("api"),
+          "rust/crates/model/project.json": cargoProbeProject("model"),
+        });
+      });
+
+      it(
+        "logs cargo that an nx:run-commands task starts, ahead of Node's folder",
+        () => {
+          const output = nx(projectDirectory, cargo, [
+            "run",
+            "api:probe-command",
+            "--skip-nx-cache",
+            "--output-style=static",
+          ]);
+
+          expect(output).toContain(join(projectDirectory, "node_modules", ".bin", "cargo"));
+          expect(cargo.calls(projectDirectory)).toContainEqual({
+            cwd: "rust/crates/api",
+            args: ["--version"],
+          });
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "logs cargo that an executor starts",
+        () => {
+          nx(projectDirectory, cargo, ["run", "api:probe-executor", "--skip-nx-cache"]);
+
+          expect(cargo.calls(projectDirectory)).toContainEqual({
+            cwd: "rust/crates/api",
+            args: ["--version"],
+          });
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "logs cargo that a batched executor starts",
+        () => {
+          nx(projectDirectory, cargo, [
+            "run-many",
+            "-t",
+            "probe-executor",
+            "--batch",
+            "--skip-nx-cache",
+          ]);
+
+          const calls = cargo.calls(projectDirectory);
+          expect(calls).toContainEqual({ cwd: "rust/crates/api", args: ["-V"] });
+          expect(calls).toContainEqual({ cwd: "rust/crates/model", args: ["-V"] });
+        },
+        HARNESS_TIMEOUT,
+      );
+    });
   });
 });
 
