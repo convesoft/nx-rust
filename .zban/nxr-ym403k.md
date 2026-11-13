@@ -14,6 +14,7 @@ Goal: turn the draft item `REQ-MIXED-PROJECTS` (`nx-rust/docs/artifacts.mara.md`
 
 - [ ] Answer the open questions in the item with the user: which name wins, what happens to targets both plugins infer, how a JS consumer's dependency on the crate enters the project graph, and what the consumer's own `^build` then runs on the crate
 - [ ] Settle with the user how `ADR-NO-RUST-BUILD-DEPS`, `REQ-NO-RUST-TASK-DEPS` and `DES-TARGETS` treat a mixed project whose `build` another plugin replaced. By `EVD-NX-PROJECT-MERGE`, the replacing `build` can be a `package.json` script or a TypeScript build, and the TypeScript `build` keeps its own `dependsOn: ["^build"]`; the three items do not mention this exception yet
+- [ ] Settle with the user how `REQ-INFERRED-TARGETS` (`nx-rust/docs/targets.mara.md`) treats a crate folder that also is a JS project. It derives each crate's targets from Cargo alone, while by `EVD-NX-PROJECT-MERGE` a `package.json` script or `project.json` target of the same name replaces an inferred target or merges over it. nxr-ag3rec stated this exception in `REQ-INFERRED-PROJECTS` and left `REQ-INFERRED-TARGETS` unchanged
 - [ ] Rewrite the items, remove their `Open:` paragraphs and set them `accepted`
 - [ ] Add or extend the verification that the Mara policies then require
 - [ ] Bring the user guidance at the top of the page in line with the items
