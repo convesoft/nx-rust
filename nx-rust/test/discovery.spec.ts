@@ -155,6 +155,9 @@ const expected: Record<FixtureName, Expectation> = {
     ],
     pathDependencies: [["rust", "third_party/fork/Cargo.toml"]],
   },
+  "declared-files": {
+    workspaces: [["rust", ["rust/crates/api", "rust/crates/app", "rust/crates/other"]]],
+  },
 };
 
 // The folders that a fixture's nx.json excludes from the plugin.

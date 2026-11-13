@@ -212,6 +212,21 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
     },
     edges: patchedEdges,
   },
+  // app depends on api, which reads files outside its folder.
+  "declared-files": {
+    projects: {
+      api: "rust/crates/api",
+      app: "rust/crates/app",
+      other: "rust/crates/other",
+      rust: "rust",
+    },
+    edges: [
+      ["app", "api"],
+      ["rust", "api"],
+      ["rust", "app"],
+      ["rust", "other"],
+    ],
+  },
 };
 
 // Without the toolchain that it pins, cargo fails in different-toolchains/pinned.
