@@ -178,8 +178,12 @@ task runs as if an option it does not know were absent, such as Jest's
 `passWithNoTests` or `--coverage`, and its output says so in one line per
 option: which option, which task, and whether it came from a `targetDefaults`
 key, from a `project.json` or `package.json`, or from the command line. Such an
-option fails no task ([[REQ-UNKNOWN-OPTIONS]]). On `run`, the command line's
-arguments go to the binary instead.
+option fails no task ([[REQ-UNKNOWN-OPTIONS]]). If the line cannot name the
+source, `nx show target <project>:<target> --json` shows it under `sourceMap`.
+
+On `run`, the arguments after `--` go to the binary instead. Nx itself drops,
+without a word, the flags before `--` that it does not know, so with `--` a flag
+meant for the target has to go into its options in `Cargo.toml` instead.
 
 To keep a target default away from Rust targets, and so silence the warning,
 narrow the entry with a `filter`. This one assumes that your crates carry the
@@ -204,8 +208,10 @@ executor to one keyed by the target name, so then no entry keyed by a target
 name reaches the targets of that executor.
 
 A Rust option with a value of the wrong type, such as a number for `profile`,
-is not ignored: Nx rejects it before the plugin sees it, and fails the Rust
-tasks that run together with it with a message that does not name the option.
+is not ignored: Nx rejects it before the plugin sees it. Rust tasks normally run
+in a batch, and then every task of that batch fails, with a message that does
+not name the option. A single task, such as `run` or any task with
+`--batch=false`, fails alone, and Nx's message names the option.
 
 ## Formatting
 

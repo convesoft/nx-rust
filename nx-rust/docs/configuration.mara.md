@@ -41,12 +41,12 @@ command = "cargo run -p api --bin migrate" # an extra target
 ```
 
 The keys under `options`, and under each of the target's `configurations`,
-have to be options of the target. A key that the
-plugin does not know, such as a misspelt `feature`, makes graph creation fail
-with an error that names the manifest, the target and the key. The same holds
-for the workspace table. Options that reach a Rust target from `nx.json` or from the
-command line are ignored with a warning instead: see
-[Targets](targets.mara.md#options-that-cargo-does-not-use).
+have to be options of the target. A key that the plugin does not know, such as
+a misspelt `feature`, makes graph creation fail with an error that names the
+manifest, the target and the key. The same holds for the workspace table and
+its `project` table. Options that reach a Rust target from `nx.json`, a
+`project.json` or `package.json`, or the command line are ignored with a
+warning instead: see [Targets](targets.mara.md#options-that-cargo-does-not-use).
 
 ## Per workspace
 
@@ -147,7 +147,7 @@ Inferred targets have, by default, the names that Nx projects conventionally use
 :satisfies: NEED-CLEAR-FAILURES
 :mitigates: RISK-TARGET-DEFAULTS
 
-When a task of a target that runs one of the plugin's executors receives an option that its executor does not know, from a `targetDefaults` entry in `nx.json`, a `project.json`, a `package.json` or the command line, the task runs as it would without that option, and the option fails no task. The task's own output carries one warning line per such option that names the option, the task, and the `targetDefaults` key, the file or the command line it came from. A `run` task passes such options from the command line to its binary instead ([[DES-TARGET-COMMANDS]]).
+When a task of a target that runs one of the plugin's executors receives an option that its executor does not know, from a `targetDefaults` entry in `nx.json`, a `project.json`, a `package.json` or the command line, the task runs as it would without that option, and the option fails no task. The task's own output carries one warning line per such option that names the option, the task, and the `targetDefaults` key, the file or the command line it came from. On a `run` task, the arguments after `--` on the command line go to its binary instead ([[DES-TARGET-COMMANDS]]).
 :::
 
 :::mara requirement REQ-UNKNOWN-METADATA-OPTIONS
@@ -156,7 +156,7 @@ When a task of a target that runs one of the plugin's executors receives an opti
 :status: accepted
 :satisfies: NEED-CLEAR-FAILURES
 
-A key under `options` or under a configuration in `configurations` of a `targets.<name>` table in `[package.metadata.nx]` or `[workspace.metadata.nx]`, where the target runs one of the plugin's executors and that executor has no option of that name, fails graph creation with a message that names the manifest, the target, the configuration if any, and the key.
+A key under `options` or under a configuration in `configurations` of a `targets.<name>` table in `[package.metadata.nx]`, `[workspace.metadata.nx]` or its `project` table, where the target runs one of the plugin's executors and that executor has no option of that name, fails graph creation with a message that names the manifest, the target, the configuration if any, and the key.
 :::
 
 ## Design
@@ -220,15 +220,23 @@ Open: the final names, and which options a single crate may set.
 
 The schema of each of the plugin's executors declares each target option with its type and leaves `additionalProperties` unset, so that Nx passes any other option on to the executor. Nx checks options against the schema before the batch implementation runs, and with `additionalProperties: false` one unknown option fails every task that Nx hands to the batch implementation, in every group, with a message that names neither the option nor a task ([[EVD-NX-OPTION-VALIDATION]], [[ADR-UNKNOWN-OPTIONS]]).
 
-When a task starts, the executor compares the keys of the task's options with the options its schema declares. It leaves every other key out of the cargo command, so that such a key splits no group ([[TERM-GROUP]]), and writes one warning line per such key at the top of the task's own output, so that a cache hit replays it. The batch implementation and the implementation for a single task, which Nx uses with `--batch=false` and which is the only one that the executor of `run` has, both do this. On `run`, keys from the command line go to the binary instead and get no line: Nx passes arguments after `--` as options, as it does flags ([[DES-TARGET-COMMANDS]], [[EVD-NX-OPTION-VALIDATION]]). The line names the option, the task as `<project>:<target>` and the first source that applies, in this order:
+When a task starts, the executor compares the keys of the task's options with the options its schema declares. It leaves every other key out of the cargo command, so that such a key splits no group ([[TERM-GROUP]]), and writes one warning line per such key at the top of the task's own output, so that a cache hit replays it. The batch implementation and the implementation for a single task, which Nx uses with `--batch=false` and which is the only one that the executor of `run` has, both do this.
+
+**run.** The arguments after `--` on the command line go to the binary unchanged; the executor takes none of them as an option and writes no line for them. Nx hands a task the arguments after `--` as options, in the same form as flags given without `--`, and when the command has `--` it hands over only those: the flags before it that Nx does not know itself are dropped without a message ([[EVD-NX-OPTION-VALIDATION]]). The executor therefore learns from the plugin's `preTasksExecution` hook whether the command had `--`. The hook receives the command's arguments with the separator and, on every command, records the arguments after `--`, or that there were none, in an environment variable. Nx carries an assignment to `process.env` in that hook to the `nx` process, whose tasks inherit it, with the daemon and without. When the variable is missing, the executor treats the command as having no `--`. Any other unknown option of a `run` task gets a line, as on every other target.
+
+**Source.** The line names the option, the task as `<project>:<target>` and the source from which Nx took the value. Nx gives the command line precedence over the task's configuration, and the configuration precedence over `options`. It fills `options` and each configuration key by key from the `project.json` in the crate's folder, then the `package.json` there, then the one `targetDefaults` key that it selected for the target ([[EVD-NX-OPTION-VALIDATION]], [[EVD-NX-PROJECT-MERGE]]). The executor names the first source, in the same order, that sets the key:
 
 1. **The command line**, when the key is among the overrides that the task graph in the executor's context gives for the task. The line suggests no fix, because Nx passes a flag to every task of the targets that the command runs.
-2. **A `targetDefaults` key** of the `nx.json` in the executor's context. The executor tries the keys in Nx's order, the executor's name first, then the target name, then glob patterns that match the target name, longest first, and names the first key with an entry that sets the option, in `options` or in a configuration, as `targetDefaults["<key>"]`. The line suggests two fixes: a `filter` on that entry that keeps it away from Rust projects, or an empty entry keyed by the target's executor, which Nx then chooses for that executor's targets instead of entries keyed by a target name ([[EVD-NX-TARGET-DEFAULTS]]).
-3. **The project's own files** otherwise, a `project.json` or `package.json` in the crate's folder. The line names that folder and suggests removing the option there.
+2. **The task's configuration**, the one named on the command line or else the target's `defaultConfiguration`, as the `project.json`, then the `package.json`, then the selected key set it.
+3. **`options`**, as the same three sources set it, in the same order.
 
-The executor does not read Nx's internal record of which array entry set an option. The ignored option stays in the task's cache key, because Nx hashes the project's merged configuration and `nx.json` into every task and the command line into each task of a run, so a run that ignores the option does the same work under its own key.
+A file is named by its path, with the advice to remove the option there. The `package.json` counts only when Nx read it for the project, which Nx records as `metadata.js` on the project. A key is named as `targetDefaults["<key>"]`, with two fixes: a `filter` on the entry that keeps it away from Rust projects, or an empty entry keyed by the target's executor, which Nx then chooses for that executor's targets instead of entries keyed by a target name ([[EVD-NX-TARGET-DEFAULTS]]). The selected key is the one that Nx selects: of the target's executor name, the target name and the glob patterns that match the target name, longest first, the first key with an entry whose `filter` matches the task, even when that entry is empty. An entry without `filter` matches, `filter.executor` is compared with the target's executor, `filter.plugin` with the plugin's exported name, and `filter.projects` with the project, as `--projects` of `nx run-many` matches its patterns. The matching entries of the selected key count together, later over earlier.
 
-Known limitation: Nx checks the types of the declared options in the same place. A target default or `project.json` that gives a declared option a value of the wrong type, such as `profile: 1`, fails every task that Nx hands to the batch implementation with it, in every group, with Nx's own message, an unhandled `SchemaError` that names no option. The types stay in the schema, because Nx converts values from the command line by them.
+The executor names a source only when the value that source gives is the value the task received. Otherwise the line says that the option came from `nx.json` or the project's configuration, and that `nx show target <project>:<target> --json` shows its source under `sourceMap`. The executor does not run that command itself, because without the daemon every `nx` command runs the plugins again.
 
-Options in the plugin's own tables are checked when the graph is created. While reading `[package.metadata.nx]` and `[workspace.metadata.nx]` ([[DES-METADATA-TABLES]]), the plugin compares the keys under `options` and under each configuration of each `targets.<name>` table whose target runs one of its executors with the options that executor declares. An unknown key stops graph creation with a message that names the manifest, the target, the configuration if any, and the key, as [[REQ-DIAGNOSTICS]] prescribes for problems found at that point.
+The ignored option stays in the task's cache key: Nx hashes the options and configurations of every target of the project, and `nx.json`, into each task of the project, and the command line into each task of a run. A run that ignores the option therefore does the same work under its own key.
+
+Known limitation: Nx checks the types of the declared options in the same place. A target default or `project.json` that gives a declared option a value of the wrong type, such as `profile: 1`, fails every task that Nx hands to the batch implementation with it, in every group, with Nx's own message, an unhandled `SchemaError` that names no option. With `--batch=false`, and on `run`, only the tasks that receive the value fail, each with Nx's message `Property '<option>' does not match the schema`. The types stay in the schema, because Nx converts values from the command line by them.
+
+Options in the plugin's own tables are checked when the graph is created. While reading `[package.metadata.nx]`, `[workspace.metadata.nx]` and its `project` table ([[DES-METADATA-TABLES]]), the plugin compares the keys under `options` and under each configuration of each `targets.<name>` table whose target runs one of its executors with the options that executor declares. An unknown key stops graph creation with a message that names the manifest, the target, the configuration if any, and the key, as [[REQ-DIAGNOSTICS]] prescribes for problems found at that point.
 :::
