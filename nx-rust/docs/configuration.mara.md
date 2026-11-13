@@ -59,6 +59,14 @@ with the name of one of the crate's targets replaces that target, together with
 the settings this table gives it, unless Nx merges the two
 ([napi and wasm artifacts](artifacts.mara.md#things-to-know)).
 
+The keys under `options`, and under each of the target's `configurations`,
+have to be options of the target. A key that the plugin does not know, such as
+a misspelt `feature`, makes graph creation fail with an error that names the
+manifest, the target and the key. The same holds for the workspace table and
+its `project` table. Options that reach a Rust target from `nx.json`, a
+`project.json` or `package.json`, or the command line are ignored with a
+warning instead: see [Targets](targets.mara.md#options-that-cargo-does-not-use).
+
 ### Changing an inferred target
 
 A `targets` entry for an inferred target is laid over it the way Nx lays a
@@ -195,6 +203,7 @@ command line:
 | `allTargets`        | `--all-targets`                            | `check`, `lint`                                            | `true`          |
 | `noDeps`            | `--no-deps`                                | `doc`, on the workspace project                            | `true`          |
 | `bin`               | `--bin`                                    | `run`                                                      | Cargo's choice  |
+| `args`              | the binary's arguments, after `--`         | `run`                                                      | none            |
 | `affectedTests`     | none                                       | `test`                                                     | the workspace's |
 
 ```toml
@@ -294,6 +303,25 @@ A crate's tags, Nx project name, options of inferred targets and additional targ
 Inferred targets have, by default, the names that Nx projects conventionally use for the same job, so that `lint`, `test` and `build` cover Rust crates and JS projects alike. The name of every inferred target can be changed through the plugin's options.
 :::
 
+:::mara requirement REQ-UNKNOWN-OPTIONS
+:mid: 01M7A93PSWRTX4KDZVJ0ACW62Y
+:title: Run with a warning when a task gets an option the executor does not know
+:status: accepted
+:satisfies: NEED-CLEAR-FAILURES
+:mitigates: RISK-TARGET-DEFAULTS
+
+When a task of a target that runs one of the plugin's executors receives an option that its executor does not know, from a `targetDefaults` entry in `nx.json`, a `project.json`, a `package.json` or the command line, the task runs as it would without that option, and the option fails no task. The task's own output carries one warning line per such option that names the option and the task and says that the option was passed on the command line, when that is certain, or else that it comes from the workspace's configuration, with the command that shows where. On a `run` task, the arguments after `--` on the command line go to its binary instead ([[DES-TARGET-COMMANDS]]).
+:::
+
+:::mara requirement REQ-UNKNOWN-METADATA-OPTIONS
+:mid: 01M7A93PSWEY0RVZ0WCQM20EFG
+:title: Reject target options in Cargo metadata that the executor does not know
+:status: accepted
+:satisfies: NEED-CLEAR-FAILURES
+
+A key under `options` or under a configuration in `configurations` of a `targets.<name>` table in `[package.metadata.nx]`, `[workspace.metadata.nx]` or its `project` table, where the target runs one of the plugin's executors and that executor has no option of that name, fails graph creation with a message that names the manifest, the target, the configuration if any, and the key.
+:::
+
 ## Design
 
 :::mara design DES-METADATA-TABLES
@@ -355,17 +383,18 @@ The workspace table also holds the `project` sub-table for the [[TERM-WORKSPACE-
 
 Options of inferred targets are set under `targets.<name>.options`, in a configuration of the target, or on the command line. Each comes from a flag of the cargo command, so the command passes only what the options ask for ([[DES-INVOCATION]]):
 
-| Option              | Flag                                                      | Targets                                                                                  | Default                                                  |
-| ------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `features`          | `--features`                                              | `build`, `check`, `lint`, `test`, `bench`, `run` and `doc`                               | none                                                     |
-| `allFeatures`       | `--all-features`                                          | the same; the configuration for all features sets it ([[DES-FEATURE-SETS]])              | `false`                                                  |
-| `noDefaultFeatures` | `--no-default-features`                                   | the same                                                                                 | `false`                                                  |
-| `profile`           | `--profile`, or `--cargo-profile` for `cargo nextest run` | the same                                                                                 | none: Cargo's default profile for the command            |
-| `targetTriple`      | `--target`                                                | the same, apart from `test`, which runs on the host triple only in v1 ([[ADR-V1-SCOPE]]) | none: the triple Cargo builds for without it             |
-| `allTargets`        | `--all-targets`                                           | `check`, `lint` ([[DES-TARGET-COMMANDS]])                                                | `true`                                                   |
-| `noDeps`            | `--no-deps`                                               | `doc` of the workspace project ([[DES-WORKSPACE-TARGETS]])                               | `true`                                                   |
-| `bin`               | `--bin`                                                   | `run` ([[DES-TARGET-COMMANDS]])                                                          | none: `default-run` or the only binary, as Cargo chooses |
-| `affectedTests`     | none                                                      | `test`                                                                                   | the workspace's `affectedTests`                          |
+| Option              | Flag                                                                                          | Targets                                                                                  | Default                                                  |
+| ------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `features`          | `--features`                                                                                  | `build`, `check`, `lint`, `test`, `bench`, `run` and `doc`                               | none                                                     |
+| `allFeatures`       | `--all-features`                                                                              | the same; the configuration for all features sets it ([[DES-FEATURE-SETS]])              | `false`                                                  |
+| `noDefaultFeatures` | `--no-default-features`                                                                       | the same                                                                                 | `false`                                                  |
+| `profile`           | `--profile`, or `--cargo-profile` for `cargo nextest run`                                     | the same                                                                                 | none: Cargo's default profile for the command            |
+| `targetTriple`      | `--target`                                                                                    | the same, apart from `test`, which runs on the host triple only in v1 ([[ADR-V1-SCOPE]]) | none: the triple Cargo builds for without it             |
+| `allTargets`        | `--all-targets`                                                                               | `check`, `lint` ([[DES-TARGET-COMMANDS]])                                                | `true`                                                   |
+| `noDeps`            | `--no-deps`                                                                                   | `doc` of the workspace project ([[DES-WORKSPACE-TARGETS]])                               | `true`                                                   |
+| `bin`               | `--bin`                                                                                       | `run` ([[DES-TARGET-COMMANDS]])                                                          | none: `default-run` or the only binary, as Cargo chooses |
+| `args`              | the binary's arguments, after `--`: a string split into words as [[DES-TARGET-COMMANDS]] says | `run` ([[DES-TARGET-COMMANDS]])                                                          | none                                                     |
+| `affectedTests`     | none                                                                                          | `test`                                                                                   | the workspace's `affectedTests`                          |
 
 `profile` names a Cargo profile. With the nextest runner, `test` passes it to `cargo nextest run` as `--cargo-profile`, because nextest takes `--profile` for a profile of its own configuration, and to the doctest step, `cargo test --doc`, as `--profile` ([[DES-TEST-RUN]], [[EVD-NEXTEST-CARGO-FLAGS]]). nextest takes the other flags of the table as cargo does.
 
@@ -385,5 +414,36 @@ Three environment variables act on a run and are no options: `NX_RUST_TEST_MODE`
 
 **Added inputs.** `envInputs` and `runtimeInputs` of all three levels, and `fileInputs` of the two tables, go into the crate's own named input, which its dependents hash through `^` inputs ([[DES-INPUTS]]). A variable or command added for one crate therefore also reaches the keys of the crates that depend on it, in other workspaces too. The plugin options hold no `fileInputs`, because a pattern is resolved against the folder of the manifest that holds it ([[REQ-BUILD-SCRIPT-INPUTS]]). The names pair with Nx's input kinds `env` and `runtime`: a plain `env` would read as the option of `nx:run-commands` that sets variables for a command, and an extra target with a `command` is such a target ([[EVD-NX-24-OPTION-SEMANTICS]]).
 
-**Unknown keys.** A key at the top level of a package table, of a workspace table or of its `project` sub-table, or in the plugin options, that this reference does not give for that place fails graph creation with a message that names the file, the manifest or `nx.json`, and the key. A setting given only for another place counts as unknown there, such as `namePrefix` in a package table. So do the other keys of an Nx project configuration, such as `root`, `sourceRoot`, `projectType`, `namedInputs` and `metadata`, and `release` until the release flow is specified ([[DES-RELEASE]]).
+**Unknown keys.** A key at the top level of a package table, of a workspace table or of its `project` sub-table, or in the plugin options, that this reference does not give for that place fails graph creation with a message that names the file, the manifest or `nx.json`, and the key. A setting given only for another place counts as unknown there, such as `namePrefix` in a package table. So do the other keys of an Nx project configuration, such as `root`, `sourceRoot`, `projectType`, `namedInputs` and `metadata`, and `release` until the release flow is specified ([[DES-RELEASE]]). A key under a target's `options` or one of its configurations that the target's executor does not know fails graph creation as well ([[REQ-UNKNOWN-METADATA-OPTIONS]]).
+:::
+
+:::mara design DES-UNKNOWN-OPTIONS
+:mid: 01M7A93PSWW34M2MF0BAD1S6PJ
+:title: Options the executor does not know
+:status: accepted
+:satisfies: REQ-UNKNOWN-OPTIONS
+:satisfies: REQ-UNKNOWN-METADATA-OPTIONS
+
+The schema of each of the plugin's executors declares each target option with its type and leaves `additionalProperties` unset, so that Nx passes any other option on to the executor. Because no schema declares `verbose` or sets `additionalProperties: true`, Nx's own `--verbose` adds no option to a task and draws no line ([[EVD-NX-24-OPTION-SEMANTICS]]). Nx checks options against the schema before the batch implementation runs, and with `additionalProperties: false` one unknown option fails every task that Nx hands to the batch implementation, in every group, with a message that names neither the option nor a task ([[EVD-NX-OPTION-VALIDATION]], [[ADR-UNKNOWN-OPTIONS]]).
+
+When a task starts, the executor compares the keys of the task's options with the options its schema declares. It leaves every other key out of the cargo command, so that such a key splits no group ([[TERM-GROUP]]), and writes one warning line per such key at the top of the task's own output. The batch implementation and the implementation for a single task, which Nx uses with `--batch=false` and which is the only one that the executor of `run` has, both do this.
+
+**Source.** Nx assembles a task's options from the plugin's target, `targetDefaults`, `package.json`, `project.json`, configurations, options forwarded from other tasks and the command line, and records which source gave a value only in its own source map ([[EVD-NX-OPTION-VALIDATION]]). The executor therefore does not work out the file or the `targetDefaults` entry, and the line takes one of two forms:
+
+- When the option is among the command's own flags, as the next paragraph defines, the line says so, for example ``api:test: ignoring option `coverage`, passed on the command line.``
+- In every other case, the line says that the option comes from the workspace's configuration and names the command that shows Nx's own record, with the two fixes for a `targetDefaults` entry, for example ``api:test: ignoring option `passWithNoTests`, which the cargo executor does not know. It comes from the workspace's configuration: run `nx show target api:test --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by the plugin's executor.`` The empty entry is keyed by the target's executor, which Nx then chooses for that executor's targets instead of entries keyed by a target name ([[EVD-NX-TARGET-DEFAULTS]]).
+
+**Command line.** An option counts as passed on the command line only when three conditions hold. First, the task that the executor's context gives for the task holds the option among its overrides, under its name and with the value that this invocation received. Second, that task's own `__overrides_unparsed__` lists the option as `--<name>`, `--<name>=<value>`, `--no-<name>` or, for a one-letter name, `-<name>`. A word after a second `--` does not count: Nx keeps it as positional data under `_`, and the option keeps its configured value. Third, the same flag is among the arguments of the `nx` command, which the plugin's `preTasksExecution` hook records. Nx fills `__overrides_unparsed__` with the command's arguments for a task that the command started and for a dependency reached with `params: "forward"`. It leaves the list empty for every other dependency, also one that gets the dependent's options through `options: "forward"`. In every other case, also when the task, the list or the record is missing, the line has the second form.
+
+**Started in code.** Devkit's `runExecutor` lets another executor start the target with options of its own while passing its own context on. The conditions above are then evaluated as they stand, against the task that the caller's task graph holds for the target, if it holds one, and with the options that Nx merged for the invocation. The form of the line, and what `run` forwards, can therefore differ from what the user typed on the command line. The plugin promises no particular result for such an invocation, only that an option its executor does not know is still ignored with a line, and that no task fails because of it ([[EVD-NX-OPTION-VALIDATION]]).
+
+**Record.** The hook receives the command's arguments, `--` included, and records them on every command in an environment variable. Nx carries an assignment to `process.env` in that hook to the `nx` process, whose tasks inherit it, with the daemon and without. The record is in no task's cache key and is the same for every task of a command, so it splits no group. A dependency or continuous task inherits it as well, which is why both uses here also require the task's own `__overrides_unparsed__`.
+
+**run.** The value of the `args` option and the arguments after `--` on the command line go to the binary ([[DES-TARGET-COMMANDS]]). The executor takes none of the arguments after `--` as an option and writes no line for them. Nx hands a task the arguments after `--` as options, in the same form as flags given without `--`, and when the command has `--` it hands over only those ([[EVD-NX-OPTION-VALIDATION]]). The executor therefore passes arguments after `--` to the binary only when three conditions hold. The record has `--`. The task's own `__overrides_unparsed__` equals the arguments after it. The invocation's options hold every option that Nx parsed from those arguments and that is not one of `run`'s own, with the same value. That holds for a task that the command started and for a dependency reached with `params: "forward"`. A dependency or continuous task reached with `params: "ignore"` has an empty list, so its binary gets none of them. For a target started in code, see **Started in code**. When the record is missing, the executor treats the command as having no `--`. Any other unknown option of a `run` task gets a line, as on every other target.
+
+**Cache.** `run` is not cached. For other targets, a cache hit replays the output stored with the result, its lines included. The ignored option stays in the task's cache key: Nx hashes the `options` and `configurations` of every target of the project, and `nx.json`, into each task of the project, and the command line into each task of a run. A run that ignores the option therefore does the same work under its own key.
+
+Known limitation: Nx checks the types of the declared options in the same place. A target default or `project.json` that gives a declared option a value of the wrong type, such as `profile: 1`, fails every task that Nx hands to the batch implementation with it, in every group, with Nx's own message, an unhandled `SchemaError` that names no option. With `--batch=false`, and on `run`, only the tasks that receive the value fail, each with Nx's message `Property '<option>' does not match the schema`. The types stay in the schema, because Nx converts values from the command line by them.
+
+Options in the plugin's own tables are checked when the graph is created. While reading `[package.metadata.nx]`, `[workspace.metadata.nx]` and its `project` table ([[DES-METADATA-TABLES]]), the plugin compares the keys under `options` and under each configuration of each `targets.<name>` table whose target runs one of its executors with the options that executor declares. An unknown key stops graph creation with a message that names the manifest, the target, the configuration if any, and the key, as [[REQ-DIAGNOSTICS]] prescribes for problems found at that point.
 :::
