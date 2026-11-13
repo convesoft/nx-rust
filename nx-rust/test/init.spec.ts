@@ -686,7 +686,7 @@ describe("init", () => {
           "rust/crates/model/Cargo.toml": (manifest) =>
             `${manifest}\n[package.metadata.nx]\nfileInputs = ["../../target/debug/model.d"]\n`,
         },
-        'rust/crates/model/Cargo.toml: the fileInputs pattern "../../target/debug/model.d" resolves into rust/target, Cargo\'s build and artifact directory of the Cargo workspace in rust.',
+        'rust/crates/model/Cargo.toml: the fileInputs pattern "../../target/debug/model.d" resolves into rust/target, Cargo\'s build and artifact directory of the Cargo workspace in rust. Cargo writes the files there; declare the files that they are made from instead.',
       ],
       [
         "a fileInputs pattern that resolves outside the repository",
@@ -702,7 +702,7 @@ describe("init", () => {
           "rust/crates/model/Cargo.toml": (manifest) =>
             `${manifest}\n[package.metadata.nx]\nfileInputs = ["../*/../model/README.md"]\n`,
         },
-        'rust/crates/model/Cargo.toml: the fileInputs pattern "../*/../model/README.md" has a ".." segment after a glob character',
+        'rust/crates/model/Cargo.toml: the fileInputs pattern "../*/../model/README.md" has a ".." segment after a glob character, so that nx-rust cannot tell which folder it reaches, and Nx cannot hash it. Put every ".." before the first glob character, such as "*", "?" or "{".',
       ],
       ...(
         [
