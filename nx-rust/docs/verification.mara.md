@@ -86,21 +86,7 @@ Only flags typed on the command line get the line that says so: `--coverage` als
 
 With `test` configured with `coverage`, `nx run <crate>:test -- -- --coverage` keeps the configured value, and no line names `coverage` as passed on the command line.
 
-For a target started in code, the check promises only what the conditions of `DES-UNKNOWN-OPTIONS` give. In the fixtures, a caller target depends on the started target with `params: "forward"` and starts it through `runExecutor`, passing its own context. Such an invocation gets no forwarded arguments when its merged options lack an option that Nx parsed from the arguments after `--` and that `run` does not declare, or hold it with a different value. For an unknown option that it holds with a value other than the override in the caller's graph task, it gets the line that names the workspace's configuration. The cases:
-
-- `nx run <crate>:<caller> --coverage`, where the caller starts `build` with `coverage: "from-code"`, gives that `build` the line that names the workspace's configuration.
-- The same command, where the caller starts `build` with nothing while `build` is configured with `coverage: "configured"`, gives the same line.
-- `nx run <crate>:<caller> -- --port 3000`, where the caller starts `run` with `args: "--from-code"` and `port: 4000`, gives that binary `--from-code` and not `--port 3000`.
-- The same command, where the caller starts `run` with `args: "--from-code"` alone and no `port` is configured, gives the same result.
-- A caller that does not depend on the started target gives these results too, because its graph holds no task for that target.
-
-The tested limit, which is no guarantee: when the merged options hold the same value, whether the caller passed it or the target's configuration supplied it, the invocation is treated as the scheduled one. These cases show it:
-
-- During `nx run <crate>:<caller> --coverage`, a caller that starts `build` with `coverage: true` gets the line that names `coverage` as passed on the command line.
-- So does a caller that starts `build` with nothing while `build` is configured with `coverage: true`.
-- During `nx run <crate>:<caller> -- --port 3000`, a caller that starts `run` with `args: "--from-code"` alone, while `run` has `port: 3000` in its options, gives the binary `--from-code` and `--port 3000`.
-- So does the same caller when `port: 3000` is in the configuration `ci` and the caller names `ci` or `ci` is `run`'s `defaultConfiguration`.
-- So do arguments after `--` that name only `run`'s own options, such as `-- --bin server`.
+For a target started in code, a caller target starts `build` through `runExecutor` with its own context and `fromCode: true`, an option that the executor of `build` does not know. The started `build` runs, ignores the option, writes a line, and does not fail because of it, and neither does the caller. This holds whether the caller depends on `build` with `params: "forward"`, with `params: "ignore"` or not at all, and whether the caller runs as a single task or in a batch. The check asserts nothing about the form of the line or about what `run` forwards in such an invocation.
 
 Two crates of one group whose `project.json` files give the option different values still share one cargo invocation.
 
