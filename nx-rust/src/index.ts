@@ -1,6 +1,6 @@
 import type { CreateDependenciesContext, CreateNodes, RawProjectGraphDependency } from "@nx/devkit";
 import { checkNxOnLoad } from "./compatibility/nx-version";
-import { preTasksExecution } from "./executors/nx-command";
+import { postTasksExecution, preTasksExecution } from "./executors/nx-command";
 import { failOnNameCollisions } from "./graph/collisions";
 import { projectEdges } from "./graph/edges";
 import { failOnPluginVersionOption } from "./graph/plugin-version";
@@ -59,7 +59,9 @@ function createDependencies(
  * also where Nx calls none of its hooks ({@link checkNxOnLoad}).
  *
  * Before a command runs its tasks, `preTasksExecution` records the command's
- * arguments for them ({@link preTasksExecution}).
+ * arguments for them and gives the command an id ({@link preTasksExecution});
+ * afterwards `postTasksExecution` removes what the command's lockfile tasks
+ * kept under that id ({@link postTasksExecution}).
  */
 const plugin = {
   get createNodes(): CreateNodes {
@@ -68,6 +70,7 @@ const plugin = {
   },
   createDependencies,
   preTasksExecution,
+  postTasksExecution,
 };
 
 export = plugin;
