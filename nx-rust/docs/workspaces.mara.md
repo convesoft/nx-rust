@@ -38,30 +38,16 @@ including the repository root, and there can be any number of them.
   one, with its own `Cargo.lock` and its own build directory. The plugin does
   not hide that, so two standalone crates share no compiled dependencies.
 - A crate that its workspace lists under `exclude` is also a standalone crate.
-- The crates that `cargo vendor` writes are skipped by themselves once the
-  `[source]` tables it prints are in a `.cargo/config.toml` that Cargo reads
-  for the workspace, or in your Cargo home's `config.toml`. Every `Cargo.toml`
-  in a folder that a `[source.<name>]` table names as its `directory` gets no
-  project and no edge, and the plugin runs no Cargo for it, wherever the
-  folder lies:
-
-  ```toml
-  # rust/.cargo/config.toml, as `cargo vendor` prints it
-  [source.crates-io]
-  replace-with = "vendored-sources"
-  
-  [source.vendored-sources]
-  directory = "vendor"
-  ```
-
-  Without those tables, the plugin does not know that the folder is vendored,
-  and neither does Cargo, which then ignores it. In a workspace's folder, the
-  graph fails with Cargo's "current package believes it's in a workspace
-  when it's not" for a vendored crate; outside every workspace's folder, each
-  vendored crate becomes a standalone crate with a project. Commit the tables,
-  or list the folder under `exclude` or in `.nxignore`, which also keeps Nx
-  from reading its files at all.
-
+- The crates that `cargo vendor` writes are skipped by themselves. A crate
+  whose folder holds `.cargo-checksum.json`, which `cargo vendor` writes beside
+  each vendored `Cargo.toml`, gets no project and no edge, and the plugin runs
+  no Cargo for it, wherever the folder lies and whatever your Cargo
+  configuration says. Cargo itself builds from the vendored sources only with
+  the `[source]` tables that `cargo vendor` prints, in a `.cargo/config.toml`.
+  A vendored crate that one of your crates depends on by path is a member of
+  your workspace for Cargo, so it gets a project like any member. To keep Nx
+  from reading the folder at all, list it under `exclude` on the plugin's entry
+  or in `.nxignore`.
 - Crates under paths ignored by `.gitignore` or `.nxignore` are skipped. Use
   `exclude` on the plugin's entry in `nx.json` for generated crates or other
   crates that are checked in ([Configuration](configuration.mara.md)). A crate that depends by
@@ -267,7 +253,7 @@ A crate that a member of another Cargo workspace uses through a path dependency 
 :status: accepted
 :satisfies: NEED-ANY-LAYOUT
 
-Crates under paths ignored by `.gitignore` or `.nxignore`, crates matched by `exclude` on the plugin's entry in `nx.json`, and crates in a folder that Cargo's configuration names as the `directory` of a `[source]` table, such as the one `cargo vendor` writes, do not become Nx projects.
+Crates under paths ignored by `.gitignore` or `.nxignore`, crates matched by `exclude` on the plugin's entry in `nx.json`, and crates whose folder holds cargo's `.cargo-checksum.json`, such as those that `cargo vendor` writes, that no workspace lists among its members, do not become Nx projects.
 :::
 
 :::mara requirement REQ-PROJECT-NAMES
@@ -337,7 +323,7 @@ A member whose manifest was left out or removed gets no project, although the re
 
 For each workspace, discovery also reads the crates that its `[patch]`, `[replace]` and `paths` tables redirect dependencies to, without cargo ([[DES-METADATA-REPORT]], [[ADR-REDIRECTION-EDGES]]).
 
-A manifest in a folder that a `[source.<name>]` table names as its `directory`, in the configuration files that cargo reads for a workspace already found ([[DES-METADATA-REPORT]]), is skipped without a cargo call: its crate is a package of a replaced source, such as one that `cargo vendor` wrote, and gets no project, no edge and no report ([[ADR-SKIP-SOURCE-DIRECTORIES]]). The manifests in a folder that any configuration file in or above the folder of a handed manifest names in this way are taken last, after every other manifest, so that the workspace whose configuration names their folder has been found even where its root lies deeper. Folders are compared through symbolic links. A folder that no configuration file names is not recognised, whatever its name or content.
+A manifest whose folder also holds `.cargo-checksum.json` belongs to a package of a directory source, such as a crate that `cargo vendor` wrote, and discovery never reads it: the crate gets no project, no edge and no cargo call of its own, wherever its folder lies, whichever plugin entry receives the manifest and whatever Cargo's configuration says ([[ADR-SKIP-VENDORED-CRATES]]). A workspace whose report, requested for another manifest, lists such a crate among its members claims it like any member, as cargo enrols one that a member depends on by path, and the crate gets its project.
 
 When cargo cannot be started, or `cargo metadata` fails for a manifest, graph creation fails with an error that names the manifest and carries cargo's message. A toolchain that the folder pins and that is not installed is such a failure, and rustup's message names the toolchain ([[DES-METADATA-REPORT]]). The plugin never leaves a workspace out of the graph to get past such a failure ([[ADR-CARGO-SOURCE-OF-TRUTH]]). A manifest matched by `exclude` gets no project and is not read as a workspace, but a crate that depends on it by path, or whose workspace's `[patch]` or `[replace]` redirects to it, still makes the plugin request one report for it, because its files are inputs of that crate.
 :::
@@ -353,9 +339,9 @@ Nodes, targets and edges of a workspace all come from one `cargo metadata` repor
 
 The report is requested with `--no-deps` ([[ADR-METADATA-NO-DEPS]]). It then holds the members of the workspace with their targets, their declared dependencies and the metadata tables, and Cargo's two directories. It needs no network, downloads nothing and never creates or changes `Cargo.lock` ([[EVD-CARGO-NO-DEPS]]). A dependency on another crate in the repository is recognised by the path its entry carries. Dependencies are not resolved in this report, so the locked versions of external crates come from `Cargo.lock` itself ([[DES-LOCKFILE-HASHING]]). The lockfile task lets cargo bring that file up to date and reads it when it runs; graph creation does not read it.
 
-**Redirections.** The report does not apply `[patch]`, `[replace]` or `paths`, and no report without dependency resolution holds them ([[EVD-CARGO-REDIRECTIONS]]). They are the one exception to reading everything from the report: the plugin parses Cargo's files for them itself ([[ADR-REDIRECTION-EDGES]]). For each workspace it reads the `[patch]` and `[replace]` entries with a `path` from the root manifest, and the `[patch]` entries with a `path` and the `paths` entries from the configuration of the workspace root, of every folder above it and of the Cargo home, following `include`. In each of these folders cargo reads `.cargo/config` where it exists and `.cargo/config.toml` otherwise, and in the Cargo home `config` or `config.toml` in the same way; these are the files that cargo reads for the workspace's tasks ([[DES-INVOCATION]]). From the same files it takes the `directory` of every `[source.<name>]` table, whose crates discovery skips ([[DES-DISCOVERY]]). A path resolves against the root manifest's folder, or in a configuration file against the folder above the one that holds the file. A `[patch]` in a member's manifest is ignored, as cargo ignores it. Reading runs no cargo and leaves `Cargo.lock` untouched. A root manifest or configuration file that cargo reads and the plugin cannot parse fails graph creation with an error that names it. A file that `include` names is skipped with a warning instead, because Cargo 1.91 ignores `include`.
+**Redirections.** The report does not apply `[patch]`, `[replace]` or `paths`, and no report without dependency resolution holds them ([[EVD-CARGO-REDIRECTIONS]]). They are the one exception to reading everything from the report: the plugin parses Cargo's files for them itself ([[ADR-REDIRECTION-EDGES]]). For each workspace it reads the `[patch]` and `[replace]` entries with a `path` from the root manifest, and the `[patch]` entries with a `path` and the `paths` entries from the configuration of the workspace root, of every folder above it and of the Cargo home, following `include`. In each of these folders cargo reads `.cargo/config` where it exists and `.cargo/config.toml` otherwise, and in the Cargo home `config` or `config.toml` in the same way; these are the files that cargo reads for the workspace's tasks ([[DES-INVOCATION]]). A path resolves against the root manifest's folder, or in a configuration file against the folder above the one that holds the file. A `[patch]` in a member's manifest is ignored, as cargo ignores it. Reading runs no cargo and leaves `Cargo.lock` untouched. A root manifest or configuration file that cargo reads and the plugin cannot parse fails graph creation with an error that names it. A file that `include` names is skipped with a warning instead, because Cargo 1.91 ignores `include`.
 
-A path dependency that is no member of the workspace appears only as that path. When such a crate has no project of its own, the plugin requests a report for its manifest as well, to learn the path dependencies behind it ([[DES-INPUTS]]). So it does for a crate without a project that a `[patch]` or `[replace]` entry redirects to, from the root folder of the workspace that redirects, comparing folders through symbolic links; an entry whose folder holds no `Cargo.toml` gets no report. When cargo fails for such a crate, as it does for a crate in a workspace's folder that is not its member, which cargo builds as a patch but does not report, graph creation goes on with a warning that names the manifest and carries cargo's message, and the path dependencies behind that crate are not followed. These calls come on top of the one per workspace.
+A path dependency that is no member of the workspace appears only as that path. When such a crate has no project of its own, the plugin requests a report for its manifest as well, to learn the path dependencies behind it ([[DES-INPUTS]]), unless the crate's folder holds `.cargo-checksum.json` ([[DES-DISCOVERY]]). So it does for a crate without a project that a `[patch]` or `[replace]` entry redirects to, from the root folder of the workspace that redirects, comparing folders through symbolic links; an entry whose folder holds no `Cargo.toml` gets no report. When cargo fails for such a crate, as it does for a crate in a workspace's folder that is not its member, which cargo builds as a patch but does not report, graph creation goes on with a warning that names the manifest and carries cargo's message, and the path dependencies behind that crate are not followed. These calls come on top of the one per workspace.
 
 Every cargo call of graph creation runs with `RUSTUP_AUTO_INSTALL=0`, set for these calls only, so a toolchain that is pinned for the folder the call starts in and that is not installed fails the call and graph creation instead of being installed ([[ADR-GRAPH-NO-TOOLCHAIN-INSTALL]]). rustup and Cargo choose the toolchain file and the configuration files by that folder ([[DES-INVOCATION]]). A workspace's report is requested once, in the folder of the first of its manifests that discovery reads, the shallowest one that Nx hands to the plugin ([[DES-DISCOVERY]]); that is the folder of the root manifest whenever Nx hands the root manifest to the plugin, where the workspace's tasks run as well. When Nx does not, because the root manifest is ignored or excluded while members are not, the report runs in a member's folder and the toolchain file that applies there decides the toolchain, so a toolchain pinned there and not installed fails graph creation with the same error. The report of a path dependency without a project starts in the root folder of the workspace whose member depends on it, directly or through other such crates.
 :::

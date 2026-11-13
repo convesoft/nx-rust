@@ -33,28 +33,9 @@ export interface Redirection {
   key?: string;
 }
 
-/**
- * A folder that a `[source.<name>]` table names as its `directory`, such as
- * the one `cargo vendor` writes: cargo takes the packages of the source that
- * this one replaces from there. Its crates are no crates of the repository.
- */
-export interface SourceDirectory {
-  /** The absolute path of the folder. */
-  folder: string;
-  /** The absolute path of the configuration file that names it. */
-  file: string;
-  /** The name of the source, such as `vendored-sources`. */
-  name: string;
-}
-
 /** What {@link readRedirections} found. */
 export interface WorkspaceRedirections {
   redirections: Redirection[];
-  /**
-   * The folders that `[source.<name>]` tables in the same configuration
-   * files name as their `directory`.
-   */
-  sourceDirectories: SourceDirectory[];
   /** One message for each included file that the plugin skipped. */
   warnings: string[];
 }
@@ -72,9 +53,6 @@ export interface WorkspaceRedirections {
  *   `.cargo/config` where it exists, and `.cargo/config.toml` otherwise; in
  *   the Cargo home, `config` or `config.toml` in the same way. It resolves a
  *   path in such a file against the folder above the one that holds the file.
- *
- * From the same configuration files it also takes the `directory` of every
- * `[source.<name>]` table, resolved in the same way.
  *
  * The plugin's cargo commands start in the workspace root, so cargo reads
  * these configuration files for them. An `include` is followed whatever the
@@ -94,7 +72,7 @@ export async function readRedirections(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<WorkspaceRedirections> {
   const manifest = join(workspaceRoot, "Cargo.toml");
-  const found: WorkspaceRedirections = { redirections: [], sourceDirectories: [], warnings: [] };
+  const found: WorkspaceRedirections = { redirections: [], warnings: [] };
   const table = await readToml(manifest);
   if (table !== undefined) {
     found.redirections.push(...patchEntries(table.patch, dirname(manifest), manifest));
@@ -111,75 +89,35 @@ export async function readRedirections(
     }
   }
   const read = new Set<string>();
-  for (const file of configFiles([workspaceRoot], env)) {
-    await readConfig(file, read, found);
+  for (const [legacy, current] of configFiles(workspaceRoot, env)) {
+    await readConfig(existsSync(legacy) ? legacy : current, read, found);
   }
   return found;
 }
 
-/**
- * The folders that a `[source.<name>]` table names as its `directory` in any
- * configuration file that cargo reads for a command started in one of
- * `folders`, read as {@link readRedirections} reads them. These are
- * candidates: a file in a folder applies only to the workspaces in and below
- * that folder, and only {@link readRedirections} says which files cargo
- * reads for a workspace. A file that cannot be read or parsed is passed
- * over, because cargo may read it for no workspace at all.
- *
- * @param env Where `CARGO_HOME` is read from.
- */
-// @mara implements DES-DISCOVERY
-export async function sourceDirectoryCandidates(
-  folders: Iterable<string>,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<string[]> {
-  const found: WorkspaceRedirections = { redirections: [], sourceDirectories: [], warnings: [] };
-  const read = new Set<string>();
-  for (const file of configFiles(folders, env)) {
-    try {
-      await readConfig(file, read, found);
-    } catch {
-      // Reported by readRedirections where cargo reads the file.
+// The configuration files cargo reads for a command started in `folder`, as
+// pairs of the older and the current name, of which cargo reads the older
+// where it exists: those of the folder and each one above it, then those of
+// the Cargo home.
+function configFiles(folder: string, env: NodeJS.ProcessEnv): [string, string][] {
+  const files: [string, string][] = [];
+  let current = resolve(folder);
+  for (;;) {
+    files.push([join(current, ".cargo", "config"), join(current, ".cargo", "config.toml")]);
+    const parent = dirname(current);
+    if (parent === current) {
+      break;
     }
+    current = parent;
   }
-  return [...new Set(found.sourceDirectories.map(({ folder }) => folder))];
-}
-
-// The configuration files cargo reads for a command started in any of
-// `folders`, each once: those of each folder and of every folder above it,
-// then the Cargo home's, which a relative `CARGO_HOME` places against the
-// folder. In each of these folders cargo reads the older name where it
-// exists, and the current one otherwise.
-function configFiles(folders: Iterable<string>, env: NodeJS.ProcessEnv): string[] {
-  const files: string[] = [];
-  const visited = new Set<string>();
-  const cargoHomes = new Set<string>();
-  for (const folder of folders) {
-    cargoHomes.add(env.CARGO_HOME ? resolve(folder, env.CARGO_HOME) : join(homedir(), ".cargo"));
-    for (let current = resolve(folder); !visited.has(current); current = dirname(current)) {
-      visited.add(current);
-      files.push(configFile(join(current, ".cargo")));
-      if (dirname(current) === current) {
-        break;
-      }
-    }
-  }
-  for (const cargoHome of cargoHomes) {
-    files.push(configFile(cargoHome));
-  }
+  const cargoHome = env.CARGO_HOME ? resolve(folder, env.CARGO_HOME) : join(homedir(), ".cargo");
+  files.push([join(cargoHome, "config"), join(cargoHome, "config.toml")]);
   return files;
 }
 
-// The configuration file that cargo reads in a `.cargo` folder or a Cargo
-// home: `config` where it exists, and `config.toml` otherwise.
-function configFile(folder: string): string {
-  const legacy = join(folder, "config");
-  return existsSync(legacy) ? legacy : join(folder, "config.toml");
-}
-
-// Adds the redirections and source directories of a configuration file and
-// of the files it includes, reading each file once. An included file that
-// cannot be read or parsed adds a warning instead.
+// Adds the redirections of a configuration file and of the files it
+// includes, reading each file once. An included file that cannot be read or
+// parsed adds a warning instead.
 async function readConfig(
   file: string,
   read: Set<string>,
@@ -216,12 +154,6 @@ async function readConfig(
       if (typeof path === "string") {
         found.redirections.push({ table: "paths", folder: resolve(base, path), file });
       }
-    }
-  }
-  for (const [name, source] of Object.entries(asTable(table.source))) {
-    const directory = asTable(source).directory;
-    if (typeof directory === "string") {
-      found.sourceDirectories.push({ folder: resolve(base, directory), file, name });
     }
   }
   const includes = Array.isArray(table.include) ? table.include : [table.include];

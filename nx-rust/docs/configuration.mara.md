@@ -269,9 +269,8 @@ own filter for plugin entries, so it sits beside `options`, not inside:
 }
 ```
 
-The crates that `cargo vendor` writes need no entry here once Cargo's
-configuration names their folder as a `[source]` directory
-([Workspaces](workspaces.mara.md#how-workspaces-are-found)).
+The crates that `cargo vendor` writes need no entry here: the plugin skips
+them by itself ([Workspaces](workspaces.mara.md#how-workspaces-are-found)).
 
 ## All settings
 

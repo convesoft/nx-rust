@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,18 +15,21 @@ import { dirname, join } from "node:path";
 import {
   applyFileChanges,
   CargoCall,
+  FileChanges,
+  FixtureGraph,
   FixtureName,
   FixtureWorkspace,
   GraphCreationError,
   HARNESS_TIMEOUT,
+  pluginSourceEntry,
   testEnvironment,
 } from "./harness";
 
-// Checks the part of VER-GRAPH about the crates that `cargo vendor` writes.
-// Each test vendors for real: a registry outside the repository holds
-// `hello`, which depends on `greet`, a member depends on `hello`, and
-// `cargo vendor` copies both into the fixture's copy. Nothing third-party is
-// committed, and the registry needs no network.
+// Checks the part of VER-GRAPH about the crates that `cargo vendor` writes,
+// which hold `.cargo-checksum.json`. Each test vendors for real: a registry
+// outside the repository holds `hello`, which depends on `greet`, a member
+// depends on `hello`, and `cargo vendor` copies both into the fixture's
+// copy. Nothing third-party is committed, and the registry needs no network.
 
 /** The crates of the local registry, in the order they are published. */
 const registryCrates: { name: string; dependencies: string[]; source: string }[] = [
@@ -40,21 +44,6 @@ const registryCrates: { name: string; dependencies: string[]; source: string }[]
     source: "pub fn hello() -> &'static str {\n    greet::greet()\n}\n",
   },
 ];
-
-/** The projects that the vendored crates would get. */
-const vendoredNames = registryCrates.map((crate) => crate.name);
-
-/** The replacement that `cargo vendor` prints, with the folder it vendored into. */
-function sourceReplacement(directory: string): string {
-  return [
-    "[source.crates-io]",
-    'replace-with = "vendored-sources"',
-    "",
-    "[source.vendored-sources]",
-    `directory = "${directory}"`,
-    "",
-  ].join("\n");
-}
 
 /**
  * A registry in a folder outside the repository holding {@link registryCrates},
@@ -154,17 +143,46 @@ class LocalRegistry {
    * `member` and runs `cargo vendor` in `workspace`, both relative to `root`,
    * into `directory`, relative to the workspace. Cargo updates the
    * workspace's `Cargo.lock`.
+   *
+   * @returns The `[source]` tables that `cargo vendor` prints for the
+   *   workspace's `.cargo/config.toml`.
    */
-  vendor(root: string, workspace: string, member: string, directory: string): void {
+  vendor(root: string, workspace: string, member: string, directory: string): string {
     applyFileChanges(root, {
       [`${member}/Cargo.toml`]: (manifest) => `${manifest}\n[dependencies]\nhello = "0.1"\n`,
     });
-    execFileSync("cargo", ["vendor", "--respect-source-config", "--quiet", directory], {
+    return execFileSync("cargo", ["vendor", "--respect-source-config", directory], {
       cwd: join(root, workspace),
       env: testEnvironment({ CARGO_HOME: this.cargoHome }),
-      stdio: "pipe",
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
     });
   }
+}
+
+/** The `cargo metadata` calls of graph creation, which name the manifests that the plugin read. */
+function metadataCalls(calls: CargoCall[]): CargoCall[] {
+  return calls.filter((call) => call.args[0] === "metadata");
+}
+
+/** The call that reads the workspace whose root manifest is in `root`. */
+function workspaceCall(root: string): CargoCall {
+  return {
+    cwd: root,
+    args: [
+      "metadata",
+      "--format-version",
+      "1",
+      "--no-deps",
+      "--manifest-path",
+      `{workspaceRoot}/${root}/Cargo.toml`,
+    ],
+  };
+}
+
+/** Each edge as source and target. */
+function edges(graph: FixtureGraph): string[] {
+  return graph.dependencies.map((edge) => `${edge.source} -> ${edge.target}`).sort();
 }
 
 describe("crates that cargo vendor writes", () => {
@@ -184,16 +202,65 @@ describe("crates that cargo vendor writes", () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  /** A copy of `fixture` in which `cargo vendor` has written the vendor folder. */
-  function vendoredWorkspace(
-    fixture: FixtureName,
-    workspace: string,
-    member: string,
-    directory: string,
-  ): FixtureWorkspace {
-    const copy = FixtureWorkspace.create(fixture);
+  /** One way of vendoring into a fixture: the fixture, the workspace and its member that uses `hello`, and the vendor folder. */
+  interface Placement {
+    fixture: FixtureName;
+    workspace: string;
+    member: string;
+    /** The member's package name. */
+    pkg: string;
+    /** The vendor folder, relative to the workspace, as `cargo vendor` takes it. */
+    directory: string;
+    /** The vendor folder, relative to the repository root. */
+    vendor: string;
+    /** The projects of the fixture, which vendoring must not change. */
+    projects: string[];
+    /** The workspaces whose reports graph creation requests. */
+    workspaces: string[];
+  }
+
+  const inside: Placement = {
+    fixture: "subfolder-workspace",
+    workspace: "rust",
+    member: "rust/crates/model",
+    pkg: "model",
+    directory: "vendor",
+    vendor: "rust/vendor",
+    projects: ["api", "codegen", "model", "rust", "testkit"],
+    workspaces: ["rust"],
+  };
+
+  // In nested-folders, vendor/greet/Cargo.toml lies higher than the root
+  // manifest of apps/Billing.API/rust_v2, the workspace that uses it.
+  const outside: Placement = {
+    fixture: "nested-folders",
+    workspace: "apps/Billing.API/rust_v2",
+    member: "apps/Billing.API/rust_v2/crates/gateway",
+    pkg: "gateway",
+    directory: "../../../vendor",
+    vendor: "vendor",
+    projects: ["apps-Billing.API-rust_v2", "gateway", "invoice", "services-billing"],
+    workspaces: ["services/billing", "apps/Billing.API/rust_v2"],
+  };
+
+  /**
+   * A copy of the placement's fixture in which `cargo vendor` has written the
+   * vendor folder, with the `[source]` tables it printed in the workspace's
+   * `.cargo/config.toml` unless `configure` is false.
+   */
+  function vendoredWorkspace(placement: Placement, configure = true): FixtureWorkspace {
+    const copy = FixtureWorkspace.create(placement.fixture);
     try {
-      registry.vendor(copy.root, workspace, member, directory);
+      const tables = registry.vendor(
+        copy.root,
+        placement.workspace,
+        placement.member,
+        placement.directory,
+      );
+      if (configure) {
+        applyFileChanges(copy.root, { [`${placement.workspace}/.cargo/config.toml`]: tables });
+      }
+      copy.cargo.clear();
       return copy;
     } catch (error) {
       copy.remove();
@@ -203,21 +270,12 @@ describe("crates that cargo vendor writes", () => {
 
   // Builds the member offline with an empty Cargo home, which only the
   // vendored sources make possible.
-  function buildOffline(copy: FixtureWorkspace, workspace: string, pkg: string, home = emptyHome) {
-    execFileSync("cargo", ["build", "--offline", "--locked", "--quiet", "-p", pkg], {
-      cwd: join(copy.root, workspace),
-      env: testEnvironment({ CARGO_HOME: home, CARGO_TARGET_DIR: join(base, "target") }),
+  function buildOffline(copy: FixtureWorkspace, placement: Placement): void {
+    execFileSync("cargo", ["build", "--offline", "--locked", "--quiet", "-p", placement.pkg], {
+      cwd: join(copy.root, placement.workspace),
+      env: testEnvironment({ CARGO_HOME: emptyHome, CARGO_TARGET_DIR: join(base, "target") }),
       stdio: "pipe",
     });
-  }
-
-  // The cargo calls that read a manifest in the vendor folder or start there.
-  function vendorCalls(calls: CargoCall[], vendor: string): CargoCall[] {
-    return calls.filter(
-      (call) =>
-        call.cwd.startsWith(vendor) ||
-        call.args.some((arg) => arg.includes(`/${vendor}/`) || arg.startsWith(`${vendor}/`)),
-    );
   }
 
   async function projectNames(copy: FixtureWorkspace): Promise<string[]> {
@@ -226,30 +284,23 @@ describe("crates that cargo vendor writes", () => {
     return JSON.parse(shown.output.slice(shown.output.indexOf("["))).sort();
   }
 
-  describe("with the vendor folder inside the workspace folder", () => {
-    const subfolderProjects = ["api", "codegen", "model", "rust", "testkit"];
-
+  describe.each([
+    ["inside the workspace folder", inside],
+    ["outside every workspace folder, higher than the workspace", outside],
+  ])("with the vendor folder %s", (_where, placement) => {
     it(
-      "get no project and no cargo call, and the workspace builds from them offline",
+      "get no project and no cargo call with the [source] tables that cargo vendor prints, and the workspace builds from them offline",
       async () => {
-        const copy = vendoredWorkspace(
-          "subfolder-workspace",
-          "rust",
-          "rust/crates/model",
-          "vendor",
-        );
+        const copy = vendoredWorkspace(placement);
         try {
-          applyFileChanges(copy.root, { "rust/.cargo/config.toml": sourceReplacement("vendor") });
-
           const graph = await copy.graph();
+          const calls = metadataCalls(copy.cargoCalls());
           const shown = await projectNames(copy);
-          buildOffline(copy, "rust", "model");
+          buildOffline(copy, placement);
 
-          expect(Object.keys(graph.projects).sort()).toEqual(subfolderProjects);
-          expect(shown).toEqual(subfolderProjects);
-          expect(vendorCalls(copy.cargoCalls(), "rust/vendor")).toEqual([]);
-          // The positive control: the wrapper logs the plugin's calls.
-          expect(copy.cargoCalls().length).toBeGreaterThan(0);
+          expect(Object.keys(graph.projects).sort()).toEqual(placement.projects);
+          expect(shown).toEqual(placement.projects);
+          expect(calls).toEqual(placement.workspaces.map(workspaceCall));
         } finally {
           copy.remove();
         }
@@ -258,53 +309,14 @@ describe("crates that cargo vendor writes", () => {
     );
 
     it(
-      "get no project when the replacement is in the Cargo home's configuration",
+      "get no project and no cargo call without any configuration",
       async () => {
-        const copy = vendoredWorkspace(
-          "subfolder-workspace",
-          "rust",
-          "rust/crates/model",
-          "vendor",
-        );
-        const home = join(base, "home-with-replacement");
+        const copy = vendoredWorkspace(placement, false);
         try {
-          mkdirSync(home, { recursive: true });
-          writeFileSync(
-            join(home, "config.toml"),
-            sourceReplacement(join(copy.root, "rust", "vendor")),
-          );
+          const graph = await copy.graph();
 
-          const graph = await copy.graph({ CARGO_HOME: home });
-          buildOffline(copy, "rust", "model", home);
-
-          expect(Object.keys(graph.projects).sort()).toEqual(subfolderProjects);
-          expect(vendorCalls(copy.cargoCalls(), "rust/vendor")).toEqual([]);
-        } finally {
-          rmSync(home, { recursive: true, force: true });
-          copy.remove();
-        }
-      },
-      HARNESS_TIMEOUT,
-    );
-
-    it(
-      "fail graph creation with cargo's message when no configuration names the folder",
-      async () => {
-        // The positive control: the vendor folder alone is not recognised.
-        const copy = vendoredWorkspace(
-          "subfolder-workspace",
-          "rust",
-          "rust/crates/model",
-          "vendor",
-        );
-        try {
-          const failure = await copy.graph().catch((error: unknown) => error);
-
-          expect(failure).toBeInstanceOf(GraphCreationError);
-          expect((failure as Error).message).toContain("rust/vendor/greet/Cargo.toml");
-          expect((failure as Error).message).toContain(
-            "current package believes it's in a workspace when it's not",
-          );
+          expect(Object.keys(graph.projects).sort()).toEqual(placement.projects);
+          expect(metadataCalls(copy.cargoCalls())).toEqual(placement.workspaces.map(workspaceCall));
         } finally {
           copy.remove();
         }
@@ -313,50 +325,121 @@ describe("crates that cargo vendor writes", () => {
     );
   });
 
-  describe("with the vendor folder outside every workspace folder", () => {
-    // In nested-folders, vendor/greet/Cargo.toml lies higher than the root
-    // manifest of apps/Billing.API/rust_v2, whose configuration names it, and
-    // services/billing, read first, does not read that configuration.
-    const workspace = "apps/Billing.API/rust_v2";
-    const member = `${workspace}/crates/gateway`;
-    const nestedProjects = ["apps-Billing.API-rust_v2", "gateway", "invoice", "services-billing"];
+  it(
+    "are read like any crate once .cargo-checksum.json is gone, which fails inside the workspace folder",
+    async () => {
+      // The positive control: the marker is what keeps the plugin away.
+      const copy = vendoredWorkspace(inside);
+      try {
+        rmSync(join(copy.root, "rust/vendor/greet/.cargo-checksum.json"));
+
+        const failure = await copy.graph().catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(GraphCreationError);
+        expect((failure as Error).message).toContain("rust/vendor/greet/Cargo.toml");
+        expect((failure as Error).message).toContain(
+          "current package believes it's in a workspace when it's not",
+        );
+      } finally {
+        copy.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "leave a crate without .cargo-checksum.json in the same folder its project",
+    async () => {
+      const copy = vendoredWorkspace(outside);
+      try {
+        applyFileChanges(copy.root, {
+          "vendor/extra/Cargo.toml":
+            '[package]\nname = "extra"\nversion = "0.1.0"\nedition = "2024"\n',
+          "vendor/extra/src/lib.rs": "",
+        });
+
+        const graph = await copy.graph();
+
+        expect(Object.keys(graph.projects).sort()).toEqual([...outside.projects, "extra"].sort());
+        // vendor/extra lies higher than the workspace in apps/, so it comes first.
+        expect(metadataCalls(copy.cargoCalls())).toEqual([
+          workspaceCall("services/billing"),
+          workspaceCall("vendor/extra"),
+          workspaceCall("apps/Billing.API/rust_v2"),
+        ]);
+      } finally {
+        copy.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "get no project from an entry that receives only the vendor folder",
+    async () => {
+      const copy = vendoredWorkspace(inside);
+      try {
+        applyFileChanges(copy.root, {
+          "nx.json": `${JSON.stringify({
+            plugins: [
+              { plugin: pluginSourceEntry, exclude: ["rust/vendor/**"] },
+              { plugin: pluginSourceEntry, include: ["rust/vendor/**"] },
+            ],
+          })}\n`,
+        });
+
+        const graph = await copy.graph();
+
+        expect(Object.keys(graph.projects).sort()).toEqual(inside.projects);
+        expect(metadataCalls(copy.cargoCalls())).toEqual([workspaceCall("rust")]);
+      } finally {
+        copy.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  describe("used by path", () => {
+    const pathDependency: FileChanges = {
+      "rust/crates/model/Cargo.toml": (manifest) =>
+        `${manifest}greet = { path = "../../vendor/greet" }\n`,
+    };
 
     it(
-      "get no project and no cargo call, and the workspace builds from them offline",
+      "get a project with edges where cargo enrols them as members",
       async () => {
-        const copy = vendoredWorkspace("nested-folders", workspace, member, "../../../vendor");
+        const copy = vendoredWorkspace(inside);
+        try {
+          applyFileChanges(copy.root, pathDependency);
+
+          const graph = await copy.graph();
+
+          expect(Object.keys(graph.projects).sort()).toEqual([...inside.projects, "greet"].sort());
+          expect(edges(graph)).toEqual(expect.arrayContaining(["model -> greet", "rust -> greet"]));
+          expect(metadataCalls(copy.cargoCalls())).toEqual([workspaceCall("rust")]);
+        } finally {
+          copy.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "get no project and no cargo call where the workspace excludes them",
+      async () => {
+        const copy = vendoredWorkspace(inside);
         try {
           applyFileChanges(copy.root, {
-            [`${workspace}/.cargo/config.toml`]: sourceReplacement("../../../vendor"),
+            ...pathDependency,
+            "rust/Cargo.toml": (manifest) =>
+              manifest.replace("[workspace]", '[workspace]\nexclude = ["vendor"]'),
           });
 
           const graph = await copy.graph();
-          const shown = await projectNames(copy);
-          buildOffline(copy, workspace, "gateway");
 
-          expect(Object.keys(graph.projects).sort()).toEqual(nestedProjects);
-          expect(shown).toEqual(nestedProjects);
-          expect(vendorCalls(copy.cargoCalls(), "vendor")).toEqual([]);
-        } finally {
-          copy.remove();
-        }
-      },
-      HARNESS_TIMEOUT,
-    );
-
-    it(
-      "become standalone crates when no configuration names the folder",
-      async () => {
-        // The positive control: without the replacement, cargo reports each
-        // vendored crate as a crate of its own.
-        const copy = vendoredWorkspace("nested-folders", workspace, member, "../../../vendor");
-        try {
-          const graph = await copy.graph();
-
-          expect(Object.keys(graph.projects).sort()).toEqual(
-            [...nestedProjects, ...vendoredNames].sort(),
-          );
-          expect(vendorCalls(copy.cargoCalls(), "vendor")).not.toEqual([]);
+          expect(Object.keys(graph.projects).sort()).toEqual(inside.projects);
+          expect(edges(graph).filter((edge) => edge.includes("greet"))).toEqual([]);
+          expect(metadataCalls(copy.cargoCalls())).toEqual([workspaceCall("rust")]);
         } finally {
           copy.remove();
         }
@@ -364,4 +447,75 @@ describe("crates that cargo vendor writes", () => {
       HARNESS_TIMEOUT,
     );
   });
+});
+
+// A [source] table names a folder that cargo takes a replaced source's
+// packages from; it says nothing about the crates of the repository in that
+// folder, which cargo still builds by path. None of these changes the graph.
+describe("a [source] directory that names a folder of crates without .cargo-checksum.json", () => {
+  const source = (directory: string) =>
+    `[source.review]\ndirectory = ${JSON.stringify(directory)}\n`;
+
+  // Every row has its setup, so that jest does not take the fourth parameter
+  // for a done callback.
+  const noSetup = () => ({});
+
+  async function summary(
+    fixture: FixtureName,
+    files: FileChanges,
+    setup: (copy: FixtureWorkspace) => Record<string, string> = noSetup,
+  ) {
+    const copy = FixtureWorkspace.create(fixture, files);
+    try {
+      const env = setup(copy);
+      const graph = await copy.graph(env);
+      return {
+        projects: Object.keys(graph.projects).sort(),
+        edges: edges(graph),
+        calls: metadataCalls(copy.cargoCalls()),
+      };
+    } finally {
+      copy.remove();
+    }
+  }
+
+  it.each<[string, FixtureName, FileChanges, (copy: FixtureWorkspace) => Record<string, string>]>([
+    [
+      "another workspace's folder",
+      "cross-workspace-path",
+      { "backend/.cargo/config.toml": source("../shared") },
+      noSetup,
+    ],
+    [
+      "another workspace's folder through a symbolic link",
+      "cross-workspace-path",
+      { "backend/.cargo/config.toml": source("alias") },
+      (copy) => {
+        symlinkSync("../shared", join(copy.root, "backend/alias"));
+        return {};
+      },
+    ],
+    [
+      "another workspace's folder from the Cargo home's configuration",
+      "cross-workspace-path",
+      {},
+      (copy) => {
+        const home = join(copy.root, "..", "cargo-home");
+        mkdirSync(home, { recursive: true });
+        writeFileSync(join(home, "config.toml"), source(join(copy.root, "shared")));
+        return { CARGO_HOME: home };
+      },
+    ],
+    ["the repository root", "two-workspaces", { ".cargo/config.toml": source(".") }, noSetup],
+  ])(
+    "leaves the graph unchanged when it names %s",
+    async (_case, fixture, files, setup) => {
+      const control = await summary(fixture, {});
+      const changed = await summary(fixture, files, setup);
+
+      expect(changed).toEqual(control);
+      expect(control.projects.length).toBeGreaterThan(2);
+    },
+    HARNESS_TIMEOUT,
+  );
 });
