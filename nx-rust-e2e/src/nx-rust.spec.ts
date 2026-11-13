@@ -59,6 +59,21 @@ describe("@convesoft/nx-rust", () => {
     expect(fileDigests(installed)).toEqual(fileDigests(built));
   });
 
+  // The global setup builds the plugin from this project's folder, not from
+  // the workspace root, and the package has to look the same either way.
+  it("has the README and the licences at the package root", () => {
+    const installed = join(projectDirectory, "node_modules", "@convesoft", "nx-rust");
+    const sources = {
+      "README.md": join(workspaceRoot, "nx-rust", "README.md"),
+      "LICENSE-APACHE": join(workspaceRoot, "LICENSE-APACHE"),
+      "LICENSE-MIT": join(workspaceRoot, "LICENSE-MIT"),
+    };
+
+    for (const [file, source] of Object.entries(sources)) {
+      expect(readFileSync(join(installed, file), "utf8")).toEqual(readFileSync(source, "utf8"));
+    }
+  });
+
   describe("with a fixture", () => {
     // Outside the test project, so that Nx does not see the wrapper.
     const wrapperDirectory = join(process.cwd(), "tmp", "cargo-wrapper");
