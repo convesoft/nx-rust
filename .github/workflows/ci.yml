@@ -60,6 +60,11 @@ jobs:
       # the knowledge base needs a Mara version that is not published
       # (nxr-0x99we). Until then they are run locally.
 
+  # The suite runs twice, against the latest stable Cargo and against 1.91.0,
+  # the oldest Cargo the plugin supports (REQ-COMPATIBILITY, VER-SETUP). Both
+  # runs are steps of this job, so that its name stays the required check. The
+  # harness drops `RUSTUP_TOOLCHAIN` from the commands it runs, so `rustup
+  # default` chooses the toolchain of each run.
   e2e:
     name: End-to-end tests
     runs-on: ubuntu-latest
@@ -71,11 +76,26 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
-      # The `lint`, `fmt` and `fmt-check` targets run clippy and rustfmt.
-      - name: Install the Rust toolchain
+      # The `lint`, `fmt` and `fmt-check` targets run clippy and rustfmt, so
+      # both toolchains need them.
+      - name: Install the Rust toolchains
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup toolchain install 1.91.0 --profile minimal --component clippy,rustfmt
+      - run: pnpm install --frozen-lockfile
+      - name: Run the end-to-end tests with the latest stable Cargo
+        id: e2e-stable
+        run: |
           rustup default stable
           cargo --version
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm nx e2e nx-rust-e2e
+          pnpm nx e2e nx-rust-e2e
+      # Also after a failure on stable, so that one CI run reports both
+      # toolchains. Nx caches the e2e target and the toolchain is not one of
+      # its inputs, so without `--skip-nx-cache` this run would replay the
+      # first one's result.
+      - name: Run the end-to-end tests with Cargo 1.91.0
+        if: ${{ !cancelled() && steps.e2e-stable.outcome != 'skipped' }}
+        run: |
+          rustup default 1.91.0
+          cargo --version
+          pnpm nx e2e nx-rust-e2e --skip-nx-cache
