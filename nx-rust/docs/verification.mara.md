@@ -97,7 +97,7 @@ Only flags typed on the command line get the line that says so: `--coverage` als
 - an option under `nx.targets.test.options` in the `package.json` of a crate's folder that the package manager's workspaces list;
 - the entry `run: { options: { watch: true } }`, for each `run` task.
 
-With `test` configured with `coverage`, `nx run <crate>:test -- -- --coverage` keeps the configured value, and no line names `coverage` as passed on the command line.
+With `test` configured with `coverage`, `nx run <crate>:test -- -- --coverage` keeps the configured value, and no line names `coverage` as passed on the command line. Positional words count as passed on the command line: `nx run <crate>:test -- 3000 serve` gives a line that names `3000` and `serve` as such, and so does `-- -- --coverage` for `--coverage`.
 
 For a target started in code, a caller target starts `build` through `runExecutor` with its own context and `fromCode: true`, an option that the executor of `build` does not know. The started `build` runs, ignores the option, writes a line, and does not fail because of it, and neither does the caller. This holds whether the caller depends on `build` with `params: "forward"`, with `params: "ignore"` or not at all, and whether the caller runs as a single task or in a batch. The check asserts nothing about the form of the line or about what `run` forwards in such an invocation.
 
