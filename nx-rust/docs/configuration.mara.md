@@ -10,11 +10,7 @@
 > 0.2 and 0.3, and `artifacts` until milestone 0.4. Until the plugin detects
 > cargo-hakari configurations (nxr-k64tm5), the check of several entries
 > treats an entry without `featureUnification` as agreeing with one that sets
-> `hakari` or `workspace-build`. A key under a target's `options` or
-> `configurations` in a metadata table that the executor does not know, or
-> that the target does not take, is not rejected yet (nxr-95kg91): its task
-> ignores it with a warning line, as it ignores such an option from any other
-> source.
+> `hakari` or `workspace-build`.
 
 Most repositories need no configuration. When a crate or workspace needs
 something other than the default, you say so in the `Cargo.toml` that already
@@ -341,7 +337,7 @@ When a task of a target that runs one of the plugin's executors receives an opti
 :status: accepted
 :satisfies: NEED-CLEAR-FAILURES
 
-A key under `options` or under a configuration in `configurations` of a `targets.<name>` table in `[package.metadata.nx]`, `[workspace.metadata.nx]` or its `project` table, where the target runs one of the plugin's executors and that executor has no option of that name, fails graph creation with a message that names the manifest, the target, the configuration if any, and the key.
+A key under `options` or under a configuration in `configurations` of a `targets.<name>` table in `[package.metadata.nx]`, `[workspace.metadata.nx]` or its `project` table, where the target runs one of the plugin's executors and that executor has no option of that name, fails graph creation with a message that names the manifest, the target, the configuration if any, and the key. So does, on an inferred target, a key that the executor has but the option reference does not give that target, with a message that says that the target does not take it, and `pluginVersion` on any such target, with a message that says that the plugin sets that option itself, because a value set by hand would replace the plugin's version in the cache key ([[GOAL-TRUSTED-CACHE]]).
 :::
 
 ## Design
@@ -419,7 +415,7 @@ Options of inferred targets are set under `targets.<name>.options`, in a configu
 | `affectedTests`     | none                                                                                          | `test`                                                                                   | the workspace's `affectedTests`                          |
 | `pluginVersion`     | none                                                                                          | every target the plugin infers, where Nx has no node for the plugin's package            | the plugin's version                                     |
 
-`pluginVersion` is set by the plugin and not meant to be set by hand. It is the one target option that the plugin sets itself and that comes from no cargo flag: it carries the plugin's version into each task's key where Nx has no npm node for the plugin ([[DES-INPUTS]]), and each executor's schema declares it ([[DES-UNKNOWN-OPTIONS]]).
+`pluginVersion` is set by the plugin and not meant to be set by hand. It is the one target option that the plugin sets itself and that comes from no cargo flag: it carries the plugin's version into each task's key where Nx has no npm node for the plugin ([[DES-INPUTS]]), and each executor's schema declares it ([[DES-UNKNOWN-OPTIONS]]). A `targets.<name>` table in Cargo metadata that sets it fails graph creation, because a value set by hand would replace the plugin's version in the key ([[REQ-UNKNOWN-METADATA-OPTIONS]], [[GOAL-TRUSTED-CACHE]]).
 
 `profile` names a Cargo profile. With the nextest runner, `test` passes it to `cargo nextest run` as `--cargo-profile`, because nextest takes `--profile` for a profile of its own configuration, and to the doctest step, `cargo test --doc`, as `--profile` ([[DES-TEST-RUN]], [[EVD-NEXTEST-CARGO-FLAGS]]). nextest takes the other flags of the table as cargo does.
 
@@ -470,5 +466,5 @@ When a task starts, the executor compares the keys of the task's options with th
 
 Known limitation: Nx checks the types of the declared options in the same place. A target default or `project.json` that gives a declared option a value of the wrong type, such as `profile: 1`, fails every task that Nx hands to the batch implementation with it, in every group, with Nx's own message, an unhandled `SchemaError` that names no option. With `--batch=false`, and on `run`, only the tasks that receive the value fail, each with Nx's message `Property '<option>' does not match the schema`. The types stay in the schema, because Nx converts values from the command line by them.
 
-Options in the plugin's own tables are checked when the graph is created. While reading `[package.metadata.nx]`, `[workspace.metadata.nx]` and its `project` table ([[DES-METADATA-TABLES]]), the plugin compares the keys under `options` and under each configuration of each `targets.<name>` table whose target runs one of its executors with the options that executor declares. An unknown key stops graph creation with a message that names the manifest, the target, the configuration if any, and the key, as [[REQ-DIAGNOSTICS]] prescribes for problems found at that point.
+Options in the plugin's own tables are checked when the graph is created. While reading `[package.metadata.nx]`, `[workspace.metadata.nx]` and its `project` table ([[DES-METADATA-TABLES]]), the plugin compares the keys under `options` and under each configuration of each `targets.<name>` table whose target runs one of its executors with the options that executor declares. An unknown key stops graph creation with a message that names the manifest, the target, the configuration if any, and the key, as [[REQ-DIAGNOSTICS]] prescribes for problems found at that point. On an inferred target, so does a key that the executor declares but the option reference of [[DES-PLUGIN-OPTIONS]] does not give that target, such as `targetTriple` on `test`, with a message that says that the target does not take it.
 :::

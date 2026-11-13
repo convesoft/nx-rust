@@ -1,9 +1,16 @@
 import type { CreateDependenciesContext, TargetConfiguration } from "@nx/devkit";
+import { pluginVersionOption, targetTakes } from "../executors/command";
+import { declaredExecutorOptions } from "../executors/declared-options";
 import { nxGraphInternals } from "./nx-internals";
 import type { CargoGraph } from "./projects";
 import { ProjectSettings, TargetTable, targetHeader } from "./settings";
 import type { TargetNames } from "./options";
-import { cargoExecutor, inferredTargetNames, targetCargoMetadataKey } from "./targets";
+import {
+  cargoExecutor,
+  type InferredTargetName,
+  inferredTargetNames,
+  targetCargoMetadataKey,
+} from "./targets";
 
 /** What laying the target tables over a project's targets needs to know about the project. */
 export interface TableSubject {
@@ -50,6 +57,11 @@ export function applyTargetTables(
   const problems = new Set<string>();
   const merged = projects.map(({ project, targets }) => {
     const result = { ...targets };
+    const applied: TargetTable[] = [];
+    // For each name, the tables whose fields the merged target still has. As
+    // in Nx's merge, a table that names another executor than the target has
+    // so far replaces the target, and what the tables before it gave is gone.
+    const kept = new Map<string, TargetTable[]>();
     for (const table of project.settings.targets) {
       const inferred = targets[table.name];
       if (
@@ -59,18 +71,34 @@ export function applyTargetTables(
       ) {
         continue;
       }
-      for (const problem of tableProblems(table, inferred, project.settings)) {
-        problems.add(problem);
-      }
+      const before = result[table.name];
+      const replaces =
+        before?.executor !== undefined &&
+        table.target.executor !== undefined &&
+        table.target.executor !== before.executor;
+      kept.set(table.name, [...(replaces ? [] : (kept.get(table.name) ?? [])), table]);
+      applied.push(table);
       // A copy for each project, so that no two projects share an object Nx may change.
       result[table.name] = mergeTargetConfigurations(
         structuredClone(table.target),
-        result[table.name],
+        before,
         undefined,
         undefined,
         undefined,
         false,
       );
+    }
+    // Checked once every table is merged, so that the options of an extra
+    // target meet the executor that another table gives it.
+    for (const table of applied) {
+      const target = result[table.name];
+      const runs =
+        kept.get(table.name)?.includes(table) && target.command === undefined
+          ? target.executor
+          : undefined;
+      for (const problem of tableProblems(table, targets[table.name], runs, project.settings)) {
+        problems.add(problem);
+      }
     }
     return result;
   });
@@ -83,7 +111,7 @@ export function applyTargetTables(
 /**
  * What is wrong with one target table, each problem a message that names
  * the manifest and the table. This is the one place where a table is checked
- * against the target it addresses, before it is merged.
+ * against the target it addresses.
  *
  * On an inferred target, a table may not set `inputs` without `"..."`, a
  * different `executor` or a `command`, and `affectedTests = true` among the
@@ -91,21 +119,22 @@ export function applyTargetTables(
  * the selection of affected tests. A table under a name that the project
  * has no inferred target for defines an extra target, which may run
  * anything; one that names an executor of the plugin fails when its task
- * starts (`DES-TARGETS`).
- *
- * The check of the keys under `options` and `configurations` against the
- * `properties` of the executor's schema (`REQ-UNKNOWN-METADATA-OPTIONS`,
- * nxr-95kg91) belongs here as well.
+ * starts (`DES-TARGETS`). On a target of one of the plugin's executors, the
+ * keys under `options` and `configurations` are checked as well
+ * ({@link optionProblems}).
  *
  * @param inferred The inferred target under the table's name, if the project has one.
+ * @param runs The executor of the target once every table of the project is
+ *   merged, where the table's fields are part of it and it has no `command`.
  */
 function tableProblems(
   table: TargetTable,
   inferred: TargetConfiguration | undefined,
+  runs: string | undefined,
   settings: ProjectSettings,
 ): string[] {
   if (inferred === undefined) {
-    return [];
+    return optionProblems(table, undefined, runs);
   }
   const { target, manifest, name } = table;
   const header = targetHeader(table.table, name);
@@ -143,7 +172,123 @@ function tableProblems(
       );
     }
   }
+  if (
+    target.command === undefined &&
+    (target.executor ?? inferred.executor) === inferred.executor
+  ) {
+    problems.push(...optionProblems(table, inferred, inferred.executor));
+  }
   return problems;
+}
+
+/**
+ * What is wrong with the keys under `options` and under each configuration
+ * of a target table whose target runs one of the plugin's executors
+ * (`REQ-UNKNOWN-METADATA-OPTIONS`), each problem a message that names the
+ * manifest, the table, which names the target and the configuration, and
+ * the key.
+ *
+ * The executors' options are those that their schemas declare
+ * ({@link declaredExecutorOptions}), and on an inferred target only those
+ * that the target takes ({@link targetTakes}), which the cargo command uses
+ * as well. `pluginVersion`, which the plugin sets itself, is no table's to
+ * set, because a value set by hand would replace the plugin's version in the
+ * cache key (`GOAL-TRUSTED-CACHE`). On an extra target that runs one of
+ * the executors once the workspace's and the crate's tables are merged,
+ * whichever of them names it, and which fails when its task starts, a key is
+ * checked against the executor's schema alone, because the option reference
+ * gives options to inferred targets only. An extra target of another
+ * executor, or with a `command`, has Nx's options, which are not the
+ * plugin's to check, and so does an inferred target that the table gives
+ * another executor or a command, which is an error of its own
+ * ({@link tableProblems}).
+ *
+ * @param inferred The inferred target under the table's name, if the
+ *   project has one and the table keeps its executor.
+ * @param executor The executor that the table's keys reach: the inferred
+ *   target's, or the merged extra target's.
+ */
+// @mara implements REQ-UNKNOWN-METADATA-OPTIONS
+// @mara implements DES-UNKNOWN-OPTIONS
+function optionProblems(
+  table: TargetTable,
+  inferred: TargetConfiguration | undefined,
+  executor: string | undefined,
+): string[] {
+  const { target, manifest, name } = table;
+  const declared = executor === undefined ? undefined : declaredExecutorOptions().get(executor);
+  if (executor === undefined || declared === undefined) {
+    return [];
+  }
+  const inferredName: InferredTargetName | undefined =
+    inferred?.metadata?.[targetCargoMetadataKey]?.target;
+  const takes = (option: string) =>
+    option !== pluginVersionOption &&
+    declared.has(option) &&
+    (inferredName === undefined || targetTakes(inferredName, option));
+  const offered = [...declared].filter(takes);
+  const subject =
+    inferredName === undefined
+      ? `the target "${name}"`
+      : inferredName === name
+        ? `the inferred target "${name}"`
+        : `the inferred target "${inferredName}", named "${name}" by targetNames`;
+  // The comma that closes the clause about targetNames before the verb.
+  const pause = inferredName !== undefined && inferredName !== name ? "," : "";
+  const offeredBy = inferredName === undefined ? `${executor} knows` : `"${name}" takes`;
+  const places: [string, Record<string, unknown>][] = [
+    [targetHeader(table.table, name, "options"), target.options ?? {}],
+    ...Object.entries(target.configurations ?? {}).map(
+      ([configuration, options]): [string, Record<string, unknown>] => [
+        targetHeader(table.table, name, "configurations", configuration),
+        options ?? {},
+      ],
+    ),
+  ];
+  const problems: string[] = [];
+  for (const [place, options] of places) {
+    for (const key of Object.keys(options)) {
+      if (takes(key)) {
+        continue;
+      }
+      const option = JSON.stringify(key);
+      if (key === pluginVersionOption && declared.has(key)) {
+        problems.push(
+          `${manifest}: ${place} sets the option ${option}, which only the plugin sets: it carries the plugin's version into the cache key, and a value set by hand would replace it, so that Nx could restore results of another version of the plugin. Remove it.`,
+        );
+        continue;
+      }
+      const similar = offered.find((candidate) => looseName(candidate) === looseName(key));
+      problems.push(
+        [
+          declared.has(key)
+            ? `${manifest}: ${place} sets the option ${option}, which ${subject}${pause} does not take.`
+            : `${manifest}: ${place} sets the option ${option}, which ${executor}, the executor of ${subject}, does not know.`,
+          similar === undefined ? undefined : `Did you mean "${similar}"?`,
+          `The options that ${offeredBy} are ${list(offered.map((candidate) => `"${candidate}"`))}.`,
+          inferredName === undefined
+            ? `${executor} runs only the targets that nx-rust infers; to run another cargo command, define a target with a "command" instead.`
+            : undefined,
+        ]
+          .filter((sentence) => sentence !== undefined)
+          .join(" "),
+      );
+    }
+  }
+  return problems;
+}
+
+// An option's name without case, dashes and underscores, so that
+// `no-default-features` and `no_default_features` find `noDefaultFeatures`.
+function looseName(name: string): string {
+  return name.toLowerCase().replace(/[-_]/g, "");
+}
+
+// `a`, `a and b`, `a, b and c`
+function list(items: readonly string[]): string {
+  return items.length <= 1
+    ? items.join("")
+    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 /**
