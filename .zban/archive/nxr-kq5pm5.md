@@ -33,17 +33,19 @@ The maintainer answered the fifteen questions of the decision brief on 2026-11-1
   - `TERM-WORKSPACE-PROJECT`: documentation instead of formatting.
   - `DES-OUTPUTS`: the whole doc folder, and no caching of `doc` when workspaces share an artifact directory.
   - `DES-INVOCATION`: `update`, `fmt` and `fmt-check` never pass `--locked`.
-  - `TERM-GROUP`, `REQ-BATCHING` and `DES-BATCH`: a group is the tasks whose cargo invocations differ only in the crates they select, so tasks with different target options or environments never share a call.
+  - `TERM-GROUP`, `REQ-BATCHING` and `DES-BATCH`: a group is the tasks whose cargo invocations differ only in the crates they select, so tasks with different target options or environments never share a call. In `DES-BATCH` and the "What forms a group" guidance, the environment part is left to the text that pull request #7 added, which is kept as merged.
 - New accepted evidence: `EVD-CARGO-TARGET-COMMANDS`, `EVD-CARGO-AUDIT-DENY` and `EVD-NX-24-TARGETS`. Cargo honours `build.warnings` from 1.97.0, checked on 1.89.0 to 1.100.0 and in Cargo's configuration reference.
 - Extended verification: `VER-TARGETS`, `VER-CARGO-UNCHANGED`, `VER-CACHE-KEYS`, `VER-CONFIGURATION` and `VER-BATCHING`.
 - Guidance updated in the targets, caching, execution, workspaces, setup, CI, product and index pages.
 - Task lists of nxr-t1ht7j, nxr-kmdpgj, nxr-gdt96k and nxr-fy4t4k brought in line. nxr-g4arav filed for the missing diagnostics row.
 - The review of pull request #8 found three defects, fixed as the maintainer answered: `cargo fmt` rejects `--locked`, a crate's switch for `--all-targets` could not share a call with crates that keep the flag, and `bench` and `run` were missing from the `CARGO_BUILD_WARNINGS` input.
+- `main` was merged after pull requests #6 and #7. `DES-WORKSPACE-TARGETS` keeps no `Open:` paragraph, so #6's rewording of the name clause is dropped. `VER-BATCHING` keeps the new sentences of both sides.
+- nxr-gqad20 filed: `DES-BATCH` and `REQ-BATCHING` speak of one cargo call per group, while `DES-TEST-RUN` runs several commands per group. Found by the second review; it predates this issue.
 
 Checks run:
 - `pnpm nx format:write`
 - `mara schema validate`: valid.
-- `mara project validate`: `valid: true`, evaluation complete, 0 errors, 0 warnings, all 233 policy checks passed.
+- `mara project validate`: `valid: true`, evaluation complete, 0 errors, 0 warnings, all 235 policy checks passed.
 - `zban check`: no findings.
 - `pnpm nx run-many -t build lint test`: succeeded for 2 projects.
 - `pnpm nx format:check --all`: clean.
