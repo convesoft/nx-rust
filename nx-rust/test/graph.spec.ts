@@ -564,14 +564,31 @@ describe.each([
     );
   }
 
-  /** Expects Nx's duplicate-name error naming `roots`, and no message of the plugin. */
-  function expectNxErrorAlone(result: string[] | string, roots: string[]): void {
-    expect(typeof result).toBe("string");
-    expect(result).toContain("The following projects are defined in multiple locations");
-    for (const root of roots) {
-      expect(result).toContain(`  - ${root}\n`);
-    }
-    expect(result).not.toContain("nx-rust would give");
+  /** The folders that Nx's duplicate-name error names, and whether the plugin's message follows. */
+  function duplicateNameError(result: string[] | string): {
+    folders: string[];
+    pluginMessage: boolean;
+  } {
+    const message = typeof result === "string" ? result : "";
+    const lines = message.split("\n");
+    const start = lines.findIndex((line) =>
+      line.includes("The following projects are defined in multiple locations"),
+    );
+    const end = lines.findIndex((line, index) => index > start && line === "");
+    const folders =
+      start < 0
+        ? []
+        : lines
+            .slice(start + 1, end < 0 ? undefined : end)
+            .filter((line) => line.startsWith("  - "))
+            .map((line) => line.slice(4))
+            .sort();
+    return { folders, pluginMessage: message.includes("nx-rust would give") };
+  }
+
+  /** Nx's error alone, naming `folders`. */
+  function nxErrorAlone(...folders: string[]) {
+    return { folders: folders.sort(), pluginMessage: false };
   }
 
   it.each([
@@ -616,7 +633,9 @@ describe.each([
         "web/project.json": '{ "name": "api" }',
       });
       try {
-        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api", "web"]);
+        expect(duplicateNameError(await outcome(workspace))).toEqual(
+          nxErrorAlone("rust/crates/api", "tools/api", "web"),
+        );
 
         // The plugin's message appears once the other project gives up the name.
         applyFileChanges(workspace.root, { "web/project.json": '{ "name": "web" }' });
@@ -637,7 +656,9 @@ describe.each([
         "tools/api/project.json": '{ "name": "shared" }',
       });
       try {
-        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api"]);
+        expect(duplicateNameError(await outcome(workspace))).toEqual(
+          nxErrorAlone("rust/crates/api", "tools/api"),
+        );
       } finally {
         workspace.remove();
       }
@@ -658,7 +679,9 @@ describe.each([
         "other/api/src/lib.rs": "",
       });
       try {
-        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api", "other/api"]);
+        expect(duplicateNameError(await outcome(workspace))).toEqual(
+          nxErrorAlone("rust/crates/api", "tools/api", "other/api"),
+        );
       } finally {
         workspace.remove();
       }
@@ -676,7 +699,9 @@ describe.each([
         "other/api/src/lib.rs": "",
       });
       try {
-        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api", "other/api"]);
+        expect(duplicateNameError(await outcome(workspace))).toEqual(
+          nxErrorAlone("rust/crates/api", "tools/api", "other/api"),
+        );
 
         applyFileChanges(workspace.root, { "other/api/project.json": '{ "name": "other-api" }' });
         const two = await outcome(workspace);
@@ -685,7 +710,9 @@ describe.each([
         expect(two).toContain("- the crate api in tools/api/Cargo.toml");
 
         applyFileChanges(workspace.root, { "other/api/project.json": null });
-        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api", "other/api"]);
+        expect(duplicateNameError(await outcome(workspace))).toEqual(
+          nxErrorAlone("rust/crates/api", "tools/api", "other/api"),
+        );
       } finally {
         workspace.remove();
       }
