@@ -16,8 +16,8 @@ import {
 // Checks the parts of VER-TARGETS and VER-CONFIGURATION about which targets
 // the plugin infers, how they are configured and named, and that no task
 // depends on another, with a real cargo and Nx's own graph creation. What the
-// targets run is checked in executors.spec.ts, and their inputs and outputs
-// are nxr-fy4t4k's.
+// targets run is checked in executors.spec.ts, and caching.spec.ts checks
+// their caching, inputs and outputs.
 
 const crateTargets = ["build", "check", "lint", "test", "fmt-check", "fmt"];
 const workspaceTargets = ["doc", "audit", "update"];
@@ -26,6 +26,12 @@ const withDeny = ["doc", "audit", "deny", "update"];
 const allTargets = [...crateTargets, "bench", "run", ...withDeny];
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 const runExecutor = "@convesoft/nx-rust:run";
+/** The targets that DES-TARGETS caches. */
+const cachedTargets = ["build", "check", "lint", "test", "fmt-check", "doc"];
+/** The option that carries the plugin's version where no npm node does (DES-PLUGIN-OPTIONS). */
+const pluginVersion = {
+  pluginVersion: JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")).version,
+};
 
 /** Each project's target names, in their order. */
 function targetNames(graph: FixtureGraph): Record<string, string[]> {
@@ -180,9 +186,8 @@ describe("inferred targets", () => {
         expect({ target: `${project}:${name}`, ...configuration }).toMatchObject({
           target: `${project}:${name}`,
           ...settings,
-          // Uncached: fmt, bench, run, audit, deny and update by design, the
-          // others until nxr-fy4t4k declares their inputs.
-          cache: false,
+          options: { ...settings.options, ...pluginVersion },
+          cache: cachedTargets.includes(name),
           parallelism: settings.parallelism ?? true,
           metadata: {
             description: expect.stringMatching(/\S/),
@@ -206,9 +211,12 @@ describe("inferred targets", () => {
 
       for (const project of Object.values(graph.projects)) {
         for (const [name, target] of Object.entries(project.targets ?? {})) {
-          expect({ name, cargo: target.metadata?.cargo }).toEqual({
+          // An uncached target also carries why (caching.spec.ts).
+          const { uncached, ...cargo } = target.metadata?.cargo ?? {};
+          expect({ name, cargo }).toEqual({ name, cargo: { target: name, locked: true } });
+          expect({ name, explained: typeof uncached === "string" }).toEqual({
             name,
-            cargo: { target: name, locked: true },
+            explained: target.cache !== true,
           });
         }
       }
@@ -243,9 +251,9 @@ describe("inferred targets", () => {
         "{projectRoot}/Cargo.lock",
         "{projectRoot}/Cargo.toml",
       ]);
-      // The other targets' inputs are nxr-fy4t4k's.
-      for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt"]) {
-        expect(graph.projects.cli.targets[name].inputs).toBeUndefined();
+      // The other targets have those of DES-INPUTS, which caching.spec.ts checks.
+      for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt", "run"]) {
+        expect(graph.projects.cli.targets[name].inputs?.[0]).toBe("default");
       }
     },
     HARNESS_TIMEOUT,
@@ -496,7 +504,10 @@ describe("targetNames", () => {
         "fmt-check",
         "fmt",
       ]);
-      expect(graph.projects["core-lib"].targets.clippy.options).toEqual({ allTargets: true });
+      expect(graph.projects["core-lib"].targets.clippy.options).toEqual({
+        allTargets: true,
+        ...pluginVersion,
+      });
     },
     HARNESS_TIMEOUT,
   );

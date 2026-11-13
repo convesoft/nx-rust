@@ -1,8 +1,10 @@
 import type { CreateNodesResultArray, TargetConfiguration } from "@nx/devkit";
 import { dirname, join, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
+import { CacheContext, projectWarnings } from "./caching";
 import { cargoMetadata, cargoMetadataKey } from "./collisions";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
+import { Input, InputSettings, namedInputs } from "./inputs";
 import { projectName } from "./names";
 import type { GraphSettings, ProjectSettings } from "./settings";
 import { applyTargetTables } from "./target-tables";
@@ -49,6 +51,14 @@ export interface CargoProject {
   targets: Record<string, TargetConfiguration>;
   /** What the plugin options and the metadata tables give the project. */
   settings: ProjectSettings;
+  /** The project's named inputs, which its targets and its dependents hash (`DES-INPUTS`). */
+  namedInputs: Record<string, Input[]>;
+  /**
+   * The warnings found while creating the graph that concern the project,
+   * which the executor prints again at the start of each of its tasks
+   * (`DES-DIAGNOSTICS`).
+   */
+  warnings: string[];
 }
 
 /** What one `createNodes` call of a plugin entry found, kept for its `createDependencies`. */
@@ -72,12 +82,17 @@ export interface CargoGraph {
  * checks it (`failOnNameCollisions` in `collisions.ts`).
  *
  * @param settings The settings of the plugin options and metadata tables (`readSettings` in `settings.ts`).
+ * @param context What the caching of the projects shares (`cacheContext` in `caching.ts`).
  * @throws {Error} When `targetNames` gives two targets of one project the
  *   same name, or a target table breaks a rule of `applyTargetTables`.
  */
 // @mara implements DES-PROJECT-GRAPH
-export function inferProjects(discovery: CargoDiscovery, settings: GraphSettings): CargoProject[] {
-  const projects: Omit<CargoProject, "targets">[] = [];
+export function inferProjects(
+  discovery: CargoDiscovery,
+  settings: GraphSettings,
+  context: CacheContext,
+): CargoProject[] {
+  const projects: Omit<CargoProject, "targets" | "namedInputs" | "warnings">[] = [];
   for (const workspace of discovery.workspaces) {
     const rootManifest = join(workspace.report.workspace_root, "Cargo.toml");
     for (const pkg of workspace.members) {
@@ -114,7 +129,11 @@ export function inferProjects(discovery: CargoDiscovery, settings: GraphSettings
   const named = nameTargets(
     projects.map((project) => ({
       project,
-      targets: inferTargets(project, discovery.workspaceRoot, settings.options.locked),
+      targets: inferTargets(project, context, settings.options.locked, {
+        settings: inputSettings(project.settings),
+        targetTables: (target) =>
+          targetTables(project.settings, settings.options.targetNames[target] ?? target),
+      }),
     })),
     settings.options.targetNames,
   );
@@ -123,14 +142,42 @@ export function inferProjects(discovery: CargoDiscovery, settings: GraphSettings
     discovery.workspaceRoot,
     settings.options.targetNames,
   );
-  return projects.map((project, index) => ({ ...project, targets: targets[index] }));
+  return projects.map((project, index) => ({
+    ...project,
+    targets: targets[index],
+    namedInputs: namedInputs(project, context, inputSettings(project.settings)),
+    warnings: projectWarnings(project, context),
+  }));
+}
+
+/**
+ * The settings that change a project's inputs: the variables and commands
+ * that the plugin options and the metadata tables add (`DES-PLUGIN-OPTIONS`,
+ * "Added inputs") and the workspace's test runner. Every workspace counts
+ * as `workspace-build`, whose inputs include those of the other strategies,
+ * until the strategies exist (nxr-k64tm5). The files of `fileInputs` are
+ * nxr-d371vy's.
+ */
+function inputSettings(settings: ProjectSettings): InputSettings {
+  return {
+    featureUnification: "workspace-build",
+    testRunner: settings.workspace.testRunner,
+    added: { envInputs: settings.envInputs, runtimeInputs: settings.runtimeInputs, fileInputs: [] },
+  };
+}
+
+// The target tables of the project for the target of this final name, in
+// the order in which they are laid over it.
+function targetTables(settings: ProjectSettings, name: string): TargetConfiguration[] {
+  return settings.targets.filter((table) => table.name === name).map((table) => table.target);
 }
 
 /**
  * The result of `createNodes` for the projects: each project under the
  * manifest it comes from, with its name, its tags, its implicit
- * dependencies, its targets and, in its metadata, what another entry of
- * the plugin needs to recognise it ({@link cargoMetadata}).
+ * dependencies, its named inputs, its targets and, in its metadata, what
+ * another entry of the plugin needs to recognise it ({@link cargoMetadata})
+ * and the warnings that concern it.
  */
 export function projectNodes(projects: readonly CargoProject[]): CreateNodesResultArray {
   return projects.map((project) => [
@@ -143,8 +190,14 @@ export function projectNodes(projects: readonly CargoProject[]): CreateNodesResu
           ...(project.settings.implicitDependencies.length > 0
             ? { implicitDependencies: [...project.settings.implicitDependencies] }
             : {}),
+          namedInputs: project.namedInputs,
           targets: project.targets,
-          metadata: { [cargoMetadataKey]: cargoMetadata(project) },
+          metadata: {
+            [cargoMetadataKey]: {
+              ...cargoMetadata(project),
+              ...(project.warnings.length > 0 ? { warnings: project.warnings } : {}),
+            },
+          },
         },
       },
     },
