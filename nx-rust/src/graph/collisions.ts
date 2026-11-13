@@ -28,6 +28,12 @@ export interface ProjectCargoMetadata {
    * name, which `namePrefix` then does not change; absent otherwise.
    */
   nameOverride?: true;
+  /**
+   * The warnings that graph creation found for the project, which the
+   * executor prints again at the start of each of its tasks
+   * (`DES-DIAGNOSTICS`, "Warnings where they are seen"); absent without any.
+   */
+  warnings?: string[];
 }
 
 /** The metadata that {@link ProjectCargoMetadata} describes, for one project. */

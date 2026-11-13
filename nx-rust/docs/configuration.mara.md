@@ -2,10 +2,10 @@
 
 > **Status:** the plugin reads and checks every setting of this page, in the
 > metadata tables and in the plugin options, and `NX_RUST_LOCKED`. Project
-> names, `namePrefix`, tags, `implicitDependencies`, `targetNames`, `locked`
-> and the `targets` tables take effect. The others are read but have no effect
-> yet: `envInputs` and `runtimeInputs` until the cache inputs are declared
-> (nxr-fy4t4k), `fileInputs` until nxr-d371vy, `testRunner` and
+> names, `namePrefix`, tags, `implicitDependencies`, `targetNames`, `locked`,
+> the `targets` tables, `envInputs` and `runtimeInputs` take effect. The others
+> are read but have no effect yet: `fileInputs` until nxr-d371vy, `testRunner`,
+> apart from the nextest configuration as a cache input, and
 > `affectedTests` until milestone 0.3, `featureUnification` until milestones
 > 0.2 and 0.3, and `artifacts` until milestone 0.4. Until the plugin detects
 > cargo-hakari configurations (nxr-k64tm5), the check of several entries

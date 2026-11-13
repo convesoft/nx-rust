@@ -3,6 +3,7 @@ export * from "./cargo-wrapper";
 export * from "./environment";
 export * from "./files";
 export * from "./fixtures";
+export * from "./js-lockfiles";
 export * from "./nx-package";
 export * from "./task-runs";
 export * from "./tool-folders";

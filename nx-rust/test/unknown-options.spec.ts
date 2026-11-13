@@ -7,7 +7,7 @@ import {
   HARNESS_TIMEOUT,
   inFixture,
   linesWith,
-  runNx,
+  runNx as runNxWithCache,
   sortedCalls,
   taskCalls,
   testEnvironment,
@@ -16,9 +16,8 @@ import {
 
 // VER-UNKNOWN-OPTIONS, as far as one cargo call per task can show it: real Nx
 // runs in the crate-shapes fixture, whose tasks run cargo through the logging
-// wrapper of the harness. The targets are not cached yet (nxr-fy4t4k) and not
-// batched yet (milestone 0.2), so the parts about cache hits and groups wait
-// for those.
+// wrapper of the harness. The parts about cache hits are nxr-e2mz9s's, and
+// those about groups wait for the batching of milestone 0.2.
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 
@@ -43,6 +42,14 @@ const linesFor = (output: string, task: string, option: string) =>
   linesWith(output, `${task}: ignoring option \`${option}\``);
 
 const rust = (args: string[]) => ({ cwd: "rust", args });
+
+/**
+ * Runs Nx without its cache: the cached targets would be restored on a
+ * second run of the same command, while these checks need each task to run
+ * its cargo command. The cache hits of `DES-UNKNOWN-OPTIONS` are nxr-e2mz9s's.
+ */
+const runNx = (workspace: FixtureWorkspace, args: string[], env: Env = {}) =>
+  runNxWithCache(workspace, args, { NX_SKIP_NX_CACHE: "true", ...env });
 
 const passWithNoTests = { test: { options: { passWithNoTests: true } } };
 

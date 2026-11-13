@@ -413,7 +413,7 @@ describe("the cargo executor", () => {
     "runs every task again on the next run, uncached",
     () =>
       inFixture("crate-shapes", undefined, async (workspace) => {
-        const tasks = ["build", "fmt", "bench", "run", "update"];
+        const tasks = ["fmt", "bench", "run", "update"];
         for (let run = 0; run < 2; run++) {
           const result = await nx(workspace, [
             "run-many",
@@ -428,15 +428,7 @@ describe("the cargo executor", () => {
         }
 
         const calls = taskCalls(workspace).map((call) => call.args.join(" "));
-        for (const call of [
-          "build -p perf",
-          "build -p cli",
-          "fmt -p perf",
-          "fmt -p cli",
-          "bench -p perf",
-          "run -p cli",
-          "update",
-        ]) {
+        for (const call of ["fmt -p perf", "fmt -p cli", "bench -p perf", "run -p cli", "update"]) {
           expect({ call, count: calls.filter((logged) => logged === call).length }).toEqual({
             call,
             count: 2,
@@ -475,7 +467,7 @@ describe("the cargo executor", () => {
 // target-defaults.spec.ts). The executor's check is the second line, for a
 // configuration that the graph does not blame on a target default, such as a
 // project.json in the crate's folder.
-describe("a target that the configuration caches", () => {
+describe("a target that the plugin leaves uncached and the configuration caches", () => {
   /** A project.json in a crate's folder that turns on caching for one of its targets. */
   function cachedIn(folder: string, target: string): FileChanges {
     return {
@@ -485,13 +477,13 @@ describe("a target that the configuration caches", () => {
     };
   }
 
-  it.each<[string, FileChanges, string]>([
-    ["build", cachedIn("core", "build"), "core-lib:build"],
-    ["check", cachedIn("core", "check"), "core-lib:check"],
-    ["run, of the run executor", cachedIn("cli", "run"), "cli:run"],
+  it.each<[string, FileChanges, string, string]>([
+    ["fmt", cachedIn("core", "fmt"), "core-lib:fmt", "rewrites the crate's files"],
+    ["bench", cachedIn("perf", "bench"), "perf:bench", "benchmark timings differ between runs"],
+    ["run, of the run executor", cachedIn("cli", "run"), "cli:run", "runs a binary"],
   ])(
     "fails without running cargo, so that no result is stored, when a project.json caches %s",
-    (_target, files, task) =>
+    (_target, files, task, reason) =>
       inFixture("crate-shapes", files, async (workspace) => {
         const executor = task === "cli:run" ? "@convesoft/nx-rust:run" : "@convesoft/nx-rust:cargo";
         for (let run = 0; run < 2; run++) {
@@ -499,8 +491,9 @@ describe("a target that the configuration caches", () => {
 
           expect(result.status).toBe(1);
           expect(result.output).toContain(
-            `${task}: the configuration of this target sets "cache": true, but @convesoft/nx-rust does not declare the cache inputs of its targets yet`,
+            `${task}: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves \`${task.split(":")[1]}\` uncached in this project, because`,
           );
+          expect(result.output).toContain(reason);
           expect(result.output).toContain(`run \`nx show target ${task} --json\``);
           expect(result.output).toContain(`add an empty entry keyed by "${executor}"`);
           // Nothing was restored either.
@@ -542,17 +535,17 @@ describe("a target that the configuration caches", () => {
         "crate-shapes",
         {
           "nx.json": targetDefaults({
-            build: { cache: true },
+            fmt: { cache: true },
             "@convesoft/nx-rust:cargo": {},
           }),
         },
         async (workspace) => {
-          expect((await nx(workspace, ["run", "core-lib:build"])).status).toBe(0);
-          expect((await nx(workspace, ["run", "core-lib:build"])).status).toBe(0);
+          expect((await nx(workspace, ["run", "core-lib:fmt"])).status).toBe(0);
+          expect((await nx(workspace, ["run", "core-lib:fmt"])).status).toBe(0);
 
           expect(taskCalls(workspace)).toEqual([
-            rust(["build", "-p", "core-lib"]),
-            rust(["build", "-p", "core-lib"]),
+            rust(["fmt", "-p", "core-lib"]),
+            rust(["fmt", "-p", "core-lib"]),
           ]);
         },
       ),

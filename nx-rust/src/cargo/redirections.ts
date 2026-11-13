@@ -36,6 +36,17 @@ export interface Redirection {
 /** What {@link readRedirections} found. */
 export interface WorkspaceRedirections {
   redirections: Redirection[];
+  /**
+   * The configuration files among those read that set `build.target`, which
+   * makes cargo put a build's artifacts in a triple's folder without any
+   * flag (`DES-OUTPUTS`).
+   */
+  buildTargetFiles: string[];
+  /**
+   * The files that `include` adds to the configuration that cargo reads,
+   * which change a build as the files that include them do.
+   */
+  includedFiles: string[];
   /** One message for each included file that the plugin skipped. */
   warnings: string[];
 }
@@ -72,7 +83,12 @@ export async function readRedirections(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<WorkspaceRedirections> {
   const manifest = join(workspaceRoot, "Cargo.toml");
-  const found: WorkspaceRedirections = { redirections: [], warnings: [] };
+  const found: WorkspaceRedirections = {
+    redirections: [],
+    buildTargetFiles: [],
+    includedFiles: [],
+    warnings: [],
+  };
   const table = await readToml(manifest);
   if (table !== undefined) {
     found.redirections.push(...patchEntries(table.patch, dirname(manifest), manifest));
@@ -147,8 +163,14 @@ async function readConfig(
   if (table === undefined) {
     return;
   }
+  if (includedFrom !== undefined) {
+    found.includedFiles.push(file);
+  }
   const base = dirname(dirname(file));
   found.redirections.push(...patchEntries(table.patch, base, file));
+  if (asTable(table.build).target !== undefined) {
+    found.buildTargetFiles.push(file);
+  }
   if (Array.isArray(table.paths)) {
     for (const path of table.paths) {
       if (typeof path === "string") {

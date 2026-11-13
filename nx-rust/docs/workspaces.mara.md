@@ -6,8 +6,8 @@
 > [Targets](targets.mara.md) names. A crate gets edges to the crates that `[patch]`,
 > `[replace]` and `paths` redirect its workspace's dependencies to, so
 > `nx affected` follows them. Where such an edge is left out to avoid a cycle,
-> and for a redirected crate without a project, the crate's files become
-> inputs only together with the cache inputs (nxr-fy4t4k).
+> and for a redirected crate without a project, the crate's files are inputs
+> of the crate's targets ([Caching](caching.mara.md)).
 
 nx-rust finds every Cargo workspace in the repository and turns each member
 crate into an Nx project. You do not list crates anywhere: the plugin asks
