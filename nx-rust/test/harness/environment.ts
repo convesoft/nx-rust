@@ -32,6 +32,15 @@ export const HARNESS_TIMEOUT = 120_000;
  * a cargo, as with a system Node and a system Rust, that cargo would shadow
  * rustup's proxies and ignore the fixtures' toolchain files.
  *
+ * `DISABLE_V8_COMPILE_CACHE` turns off v8-compile-cache-lib, through which
+ * ts-node loads TypeScript. Nx registers ts-node's ESM loader in each task
+ * process that loads the plugin from source, and the library keeps one cache
+ * file per workspace root in the temporary folder, which every task of a run
+ * reads at start and rewrites in place, without a lock for readers. A task
+ * that reads it while another writes it hands V8 a torn cache, and V8 aborts
+ * the task's process (`Check failed: current == end_slot_index.`). The cache
+ * files of the fixtures' random folders were also never removed.
+ *
  * @param overrides Variables to set; `undefined` removes a variable.
  */
 export function testEnvironment(
@@ -51,6 +60,7 @@ export function testEnvironment(
   }
   env.NX_DAEMON = "false";
   env.RUSTUP_AUTO_INSTALL = "0";
+  env.DISABLE_V8_COMPILE_CACHE = "1";
   for (const [name, value] of Object.entries(overrides)) {
     if (value === undefined) {
       delete env[name];
