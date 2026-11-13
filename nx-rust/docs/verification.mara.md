@@ -23,6 +23,13 @@ come from actual test runs, cited when an issue is closed.
   together with a fixture and run real `nx` commands against a real toolchain,
   counting cargo invocations and reading cache hits from Nx's output.
 
+A check of an Nx or Cargo version that the machine does not have fakes the
+version where the plugin reads it, and runs the real Nx and cargo otherwise: a
+copy of the installed Nx whose `package.json` gives another version, and a
+cargo wrapper that reports an older version and leaves `build_directory` out of
+its `cargo metadata` report, as every stable Cargo before 1.91 does
+([[EVD-CARGO-DIRECTORIES]]). No test installs a toolchain.
+
 Checks that need an optional tool (nextest, cargo-affected, cargo-hakari,
 `wasm-bindgen`, the napi CLI) run only where that tool is installed, and CI
 installs all of them.

@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CargoWorkspace } from "../src/graph/discovery";
@@ -17,11 +18,14 @@ import {
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   repositoryFiles,
+  testEnvironment,
+  ToolFolders,
   withoutColours,
 } from "./harness";
 
-// Checks the parts of VER-SETUP about `init` that work before the checks of
-// nxr-q6cxt3 and the project names of nxr-1bv0wm exist.
+// Checks the parts of VER-SETUP about `init`. An Nx or Cargo release that the
+// machine does not have is faked where the plugin reads its version, as in
+// compatibility.spec.ts.
 
 const pluginName = "@convesoft/nx-rust";
 
@@ -47,38 +51,12 @@ function workspaceCall(root: string): CargoCall {
 }
 
 /**
- * A folder on `PATH` and a Cargo home, both empty, so that none of the tools
- * of init's table is installed, wherever the machine keeps its own.
+ * Runs `init` in a copy of `fixture` without plugin entry, with no tool
+ * installed.
+ *
+ * @param setup `env` adds variables to the run; `prepare` changes the
+ *   workspace before it.
  */
-class ToolFolders {
-  readonly base = mkdtempSync(join(tmpdir(), "nx-rust-tools-"));
-  readonly path = join(this.base, "bin");
-  readonly cargoHome = join(this.base, "cargo-home");
-
-  constructor() {
-    mkdirSync(this.path);
-    mkdirSync(join(this.cargoHome, "bin"), { recursive: true });
-  }
-
-  /** The variables that make Nx look here; the harness puts the cargo wrapper first on PATH. */
-  env(): Record<string, string> {
-    return { PATH: this.path, CARGO_HOME: this.cargoHome };
-  }
-
-  /** Installs an executable that does nothing, or prints `output`. */
-  install(folder: string, name: string, output = ""): void {
-    mkdirSync(folder, { recursive: true });
-    const file = join(folder, name);
-    writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' '${output}'\n`);
-    chmodSync(file, 0o755);
-  }
-
-  remove(): void {
-    rmSync(this.base, { recursive: true, force: true });
-  }
-}
-
-/** Runs `init` in a copy of `fixture` without plugin entry, with no tool installed. */
 async function runInit(
   fixture: FixtureName,
   files: FileChanges = {},
@@ -87,15 +65,20 @@ async function runInit(
     result: { status: number | null; output: string; changed: string[] },
   ) => void | Promise<void>,
   args: string[] = [],
+  setup: {
+    env?: Record<string, string>;
+    prepare?: (workspace: FixtureWorkspace) => void;
+  } = {},
 ): Promise<void> {
   const workspace = FixtureWorkspace.create(fixture, unregistered, files);
   const tools = new ToolFolders();
   try {
+    setup.prepare?.(workspace);
     const before = repositoryFiles(workspace.root);
-    const { status, output } = await workspace.nx(
-      ["g", `${pluginName}:init`, ...args],
-      tools.env(),
-    );
+    const { status, output } = await workspace.nx(["g", `${pluginName}:init`, ...args], {
+      ...tools.env(),
+      ...setup.env,
+    });
     const changed = changedFiles(before, repositoryFiles(workspace.root));
     await test(workspace, { status, output: withoutColours(output), changed });
   } finally {
@@ -280,6 +263,39 @@ describe("init", () => {
     HARNESS_TIMEOUT,
   );
 
+  it.each([
+    ["with a Cargo workspace", {}],
+    ["without a Cargo.toml", { rust: null }],
+  ])(
+    "registers the plugin and warns once with a newer Nx major and NX_RUST_ALLOW_UNSUPPORTED_NX=true, %s",
+    (_case, files: FileChanges) => {
+      const installedMajor = Number(require("nx/package.json").version.split(".")[0]);
+      const newerNx = `${installedMajor + 1}.0.0`;
+      return runInit(
+        "subfolder-workspace",
+        files,
+        (workspace, { status, output, changed }) => {
+          expect(status).toBe(0);
+          expect(changed).toEqual(["nx.json"]);
+          expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual({
+            plugins: [pluginName],
+          });
+          const warning = `nx-rust has not been checked with Nx ${newerNx}, which is installed in this repository: this version of ${pluginName} supports Nx ${installedMajor}.`;
+          expect(output.split(warning)).toHaveLength(2);
+          expect(output).toContain(
+            `It continues because NX_RUST_ALLOW_UNSUPPORTED_NX is true, but nobody has checked its cache keys and batching on Nx ${installedMajor + 1}.`,
+          );
+        },
+        [],
+        {
+          prepare: (workspace) => workspace.useNx(newerNx),
+          env: { NX_RUST_ALLOW_UNSUPPORTED_NX: "true" },
+        },
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
   describe("when graph creation would fail", () => {
     it(
       "stops with graph creation's message and changes nothing when cargo cannot be found",
@@ -314,6 +330,212 @@ describe("init", () => {
           workspace.remove();
         }
       },
+      HARNESS_TIMEOUT,
+    );
+
+    /** Checks that init stopped with `message` and wrote nothing. */
+    function expectStopped(
+      result: { status: number | null; output: string; changed: string[] },
+      ...messages: string[]
+    ): void {
+      expect(result.status).toBe(1);
+      expect(result.output).toContain(
+        "nx-rust was not added to nx.json: Nx could not create the project graph with it.",
+      );
+      for (const message of messages) {
+        expect(result.output).toContain(message);
+      }
+      expect(result.output).toContain(
+        `nx.json is unchanged. Fix the problem above and run \`nx add ${pluginName}\` again.`,
+      );
+      expect(result.changed).toEqual([]);
+    }
+
+    const installedMajor = Number(require("nx/package.json").version.split(".")[0]);
+    const newerNx = `${installedMajor + 1}.0.0`;
+    const olderNx = `${installedMajor - 1}.4.2`;
+    const untested = `nx-rust has not been checked with Nx ${newerNx}, which is installed in this repository: this version of ${pluginName} supports Nx ${installedMajor}.`;
+
+    it.each([
+      ["with a Cargo workspace", {}],
+      ["without a Cargo.toml", { rust: null }],
+    ])(
+      "stops with an Nx major newer than the supported ones, %s",
+      (_case, files: FileChanges) =>
+        runInit(
+          "subfolder-workspace",
+          files,
+          (workspace, result) => {
+            expectStopped(
+              result,
+              untested,
+              `set NX_RUST_ALLOW_UNSUPPORTED_NX=true to try this one with Nx ${installedMajor + 1}`,
+            );
+            expect(workspace.cargoCalls()).toEqual([]);
+          },
+          [],
+          { prepare: (workspace) => workspace.useNx(newerNx) },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it.each([
+      ["with a Cargo workspace", {}],
+      ["without a Cargo.toml", { rust: null }],
+    ])(
+      "stops with an Nx major older than the supported ones, %s, whatever NX_RUST_ALLOW_UNSUPPORTED_NX says",
+      (_case, files: FileChanges) =>
+        runInit(
+          "subfolder-workspace",
+          files,
+          (workspace, result) => {
+            expectStopped(
+              result,
+              `nx-rust does not support Nx ${olderNx}, which is installed in this repository: this version of ${pluginName} supports Nx ${installedMajor}.`,
+              "NX_RUST_ALLOW_UNSUPPORTED_NX applies only to Nx majors newer than the supported ones.",
+            );
+            expect(workspace.cargoCalls()).toEqual([]);
+          },
+          [],
+          {
+            prepare: (workspace) => workspace.useNx(olderNx),
+            env: { NX_RUST_ALLOW_UNSUPPORTED_NX: "true" },
+          },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "stops when the version of the installed Nx cannot be read",
+      () =>
+        runInit(
+          "subfolder-workspace",
+          {},
+          (workspace, result) => {
+            expectStopped(
+              result,
+              '/nx-not-a-version/node_modules/nx/package.json gives the version "not-a-version".',
+              `This version of ${pluginName} supports Nx ${installedMajor}. Reinstall nx, or install a supported version of it, then run the command again.`,
+            );
+            expect(workspace.cargoCalls()).toEqual([]);
+          },
+          [],
+          { prepare: (workspace) => workspace.useNx("not-a-version") },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "stops with the version found and the version required when Cargo is older than 1.91",
+      () =>
+        runInit(
+          "subfolder-workspace",
+          {},
+          (workspace, result) => {
+            expectStopped(
+              result,
+              "nx-rust needs Cargo 1.91 or later, but the cargo that reads the Cargo workspace of rust/Cargo.toml is cargo 1.90.0 (0000000 2025-01-01).",
+            );
+            expect(workspace.cargoCalls()).toEqual([
+              workspaceCall("rust"),
+              { cwd: "rust", args: ["--version"] },
+            ]);
+          },
+          [],
+          { env: { NX_RUST_TEST_CARGO_VERSION: "1.90.0" } },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "stops when a workspace pins a toolchain that is not installed, and installs none",
+      async () => {
+        // A custom toolchain name, which rustup cannot download in any case.
+        const toolchain = "nx-rust-missing-toolchain";
+        const toolchains = () =>
+          spawnSync("rustup", ["toolchain", "list"], { env: testEnvironment(), encoding: "utf8" })
+            .stdout;
+        const before = toolchains();
+        await runInit(
+          "subfolder-workspace",
+          { "rust/rust-toolchain.toml": `[toolchain]\nchannel = "${toolchain}"\n` },
+          (_workspace, result) =>
+            expectStopped(
+              result,
+              "`cargo metadata` failed for the Cargo workspace of rust/Cargo.toml",
+              `toolchain '${toolchain}'`,
+              "is not installed",
+            ),
+        );
+        expect(toolchains()).toBe(before);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "stops with the messages of Nx and of the plugin when two crates get one project name",
+      () =>
+        runInit("name-collision", {}, (workspace, result) => {
+          expectStopped(
+            result,
+            // Nx's own error, from merging the projects.
+            "The following projects are defined in multiple locations:",
+            // The plugin's, from createDependencies, as graph creation gives it.
+            `The "${pluginName}" plugin threw an error while creating dependencies: nx-rust would give 2 projects the name "api", and Nx needs every project name to be unique:`,
+            "- the crate api in rust/crates/api/Cargo.toml: set `name` under [package.metadata.nx] in that manifest",
+            "- the crate api in tools/api/Cargo.toml: set `name` under [package.metadata.nx] in that manifest",
+          );
+          // One report per workspace, as graph creation reads them.
+          expect(workspace.cargoCalls()).toEqual([
+            workspaceCall("rust"),
+            workspaceCall("tools/api"),
+          ]);
+        }),
+      HARNESS_TIMEOUT,
+    );
+
+    // The positive control: with the projects of Nx's own plugins merged in,
+    // as graph creation merges them, the name that a project.json gives one
+    // of the crates ends the collision.
+    it(
+      "registers the plugin when a project.json gives one of two such crates another name",
+      () =>
+        runInit(
+          "name-collision",
+          { "tools/api/project.json": '{ "name": "toolbox" }\n' },
+          (_workspace, { status, output, changed }) => {
+            expect(status).toBe(0);
+            expect(output).not.toContain("nx-rust would give");
+            expect(changed).toEqual(["nx.json"]);
+          },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "stops when targetNames in the registered entry gives two targets of a project one name",
+      () =>
+        runInit(
+          "subfolder-workspace",
+          {
+            "nx.json": `${JSON.stringify({
+              plugins: [{ plugin: pluginName, options: { targetNames: { test: "build" } } }],
+            })}\n`,
+          },
+          (_workspace, { status, output, changed }) => {
+            expect(status).toBe(1);
+            expect(output).toContain(
+              "Nx cannot create the project graph with nx-rust as nx.json registers it.",
+            );
+            expect(output).toContain(
+              `"targetNames" in the options of the ${pluginName} entry in nx.json gives two inferred targets of one project the same name`,
+            );
+            expect(output).toContain("nx.json is unchanged.");
+            expect(changed).toEqual([]);
+          },
+          // As above: the harness cannot load the registered plugin by name.
+          ["--skipProjectGraph"],
+        ),
       HARNESS_TIMEOUT,
     );
 
@@ -438,9 +660,12 @@ describe("init's report of tools", () => {
 });
 
 describe("init with an Nx whose internals differ", () => {
-  // The module through which init runs graph creation. Each test replaces it
-  // for one run of the generator, the way a later Nx release could change it.
+  // The modules through which init runs graph creation. Each test replaces
+  // them for one run of the generator, the way a later Nx release could
+  // change them.
   const internalsPath = require.resolve("nx/src/devkit-internals");
+  const pluginsPath = require.resolve("nx/src/project-graph/plugins/get-plugins");
+  const filesPath = require.resolve("nx/src/project-graph/utils/retrieve-workspace-files");
   const nxVersion: string = require("nx/package.json").version;
   let workspace: FixtureWorkspace;
 
@@ -449,18 +674,65 @@ describe("init with an Nx whose internals differ", () => {
   });
 
   afterEach(() => {
-    jest.dontMock(internalsPath);
+    for (const path of [internalsPath, pluginsPath, filesPath]) {
+      jest.dontMock(path);
+    }
     jest.resetModules();
     workspace.remove();
   });
 
-  /** Runs init on the fixture with Nx's internals as `change` makes them, and returns its error and changes. */
+  type Change = (module: Record<string, unknown>) => Record<string, unknown>;
+
+  // The real internals cannot run here, because Nx in this process knows
+  // only this repository's files; the nx g tests above and the end-to-end
+  // suite run them. Stand-ins of the expected shape run each entry's
+  // createNodes on no files, load no other plugin and find no files, which
+  // lets init register the plugin.
+  const working: Required<Record<"internals" | "plugins" | "files", Change>> = {
+    internals: (internals) => ({
+      ...internals,
+      retrieveProjectConfigurations: async (
+        plugins: { specifiedPlugins: { createNodes: [string, Function] }[] },
+        workspaceRoot: string,
+        nxJson: unknown,
+      ) => {
+        for (const plugin of plugins.specifiedPlugins) {
+          await plugin.createNodes[1]([], { nxJsonConfiguration: nxJson, workspaceRoot });
+        }
+        return { projects: {}, projectRootMap: {}, matchingProjectFiles: [] };
+      },
+    }),
+    plugins: (plugins) => ({
+      ...plugins,
+      getPluginsSeparated: async () => ({ specifiedPlugins: [], defaultPlugins: [] }),
+    }),
+    files: (files) => ({
+      ...files,
+      retrieveWorkspaceFiles: async () => ({
+        fileMap: { projectFileMap: {}, nonProjectFiles: [] },
+        rustReferences: {},
+      }),
+    }),
+  };
+
+  /**
+   * Runs init on the fixture with Nx's internals as `changes` make them, on
+   * top of the working stand-ins, and returns its error and changes.
+   */
   async function initWith(
-    change: (internals: Record<string, unknown>) => Record<string, unknown>,
+    changes: Partial<Record<"internals" | "plugins" | "files", Change>> = {},
   ): Promise<{ error: unknown; changed: string[] }> {
     jest.resetModules();
-    const actual = jest.requireActual(internalsPath);
-    jest.doMock(internalsPath, () => change({ ...actual }));
+    for (const [key, path] of [
+      ["internals", internalsPath],
+      ["plugins", pluginsPath],
+      ["files", filesPath],
+    ] as const) {
+      const actual = jest.requireActual(path);
+      jest.doMock(path, () =>
+        (changes[key] ?? ((m: Record<string, unknown>) => m))(working[key]({ ...actual })),
+      );
+    }
     const { initGenerator } = require("../src/generators/init/init");
     const { FsTree } = require("nx/src/generators/tree");
     const tree = new FsTree(workspace.root, false);
@@ -481,6 +753,7 @@ describe("init with an Nx whose internals differ", () => {
     expect(message).toContain(
       `nx-rust cannot check this repository with the installed Nx ${nxVersion}: ${detail}.`,
     );
+    // From the peer dependency range on nx in the package.
     expect(message).toContain("This version of @convesoft/nx-rust supports Nx 24.");
     expect(message).toContain(
       `Use a supported Nx version, or a version of @convesoft/nx-rust that supports the installed Nx ${nxVersion}.`,
@@ -488,27 +761,11 @@ describe("init with an Nx whose internals differ", () => {
     expect(message).toContain("nx.json is unchanged.");
   }
 
-  // The positive control. The real internals cannot run here, because Nx in
-  // this process knows only this repository's files; the nx g tests above
-  // and the end-to-end suite run them. A stand-in that runs each entry's
-  // createNodes on no files and returns a result of the expected shape lets
-  // init register the plugin.
+  // The positive control.
   it(
-    "registers the plugin when the internals are there and the result has the expected shape",
+    "registers the plugin when the internals are there and their results have the expected shape",
     async () => {
-      const { error, changed } = await initWith((internals) => ({
-        ...internals,
-        retrieveProjectConfigurations: async (
-          plugins: { specifiedPlugins: { createNodes: [string, Function] }[] },
-          workspaceRoot: string,
-          nxJson: unknown,
-        ) => {
-          for (const plugin of plugins.specifiedPlugins) {
-            await plugin.createNodes[1]([], { nxJsonConfiguration: nxJson, workspaceRoot });
-          }
-          return { projects: {}, matchingProjectFiles: [] };
-        },
-      }));
+      const { error, changed } = await initWith();
 
       expect(error).toBeUndefined();
       expect(changed).toEqual(["nx.json"]);
@@ -519,10 +776,9 @@ describe("init with an Nx whose internals differ", () => {
   it(
     "stops before writing when LoadedNxPlugin is missing",
     async () => {
-      const { error, changed } = await initWith((internals) => ({
-        ...internals,
-        LoadedNxPlugin: undefined,
-      }));
+      const { error, changed } = await initWith({
+        internals: (internals) => ({ ...internals, LoadedNxPlugin: undefined }),
+      });
 
       expectUnsupportedNx(
         error,
@@ -537,10 +793,9 @@ describe("init with an Nx whose internals differ", () => {
   it(
     "stops before writing when retrieveProjectConfigurations is missing",
     async () => {
-      const { error, changed } = await initWith((internals) => ({
-        ...internals,
-        retrieveProjectConfigurations: undefined,
-      }));
+      const { error, changed } = await initWith({
+        internals: (internals) => ({ ...internals, retrieveProjectConfigurations: undefined }),
+      });
 
       expectUnsupportedNx(
         error,
@@ -552,16 +807,101 @@ describe("init with an Nx whose internals differ", () => {
   );
 
   it(
-    "stops before writing when the result has another shape",
+    "stops before writing when the project configurations have another shape",
     async () => {
-      const { error, changed } = await initWith((internals) => ({
-        ...internals,
-        retrieveProjectConfigurations: async () => ({ projects: {} }),
-      }));
+      const { error, changed } = await initWith({
+        internals: (internals) => ({
+          ...internals,
+          retrieveProjectConfigurations: async () => ({ projects: {} }),
+        }),
+      });
 
       expectUnsupportedNx(
         error,
         "the result of retrieveProjectConfigurations from nx/src/devkit-internals has no matchingProjectFiles list of file paths",
+      );
+      expect(changed).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "stops before writing when the project configurations have no projectRootMap",
+    async () => {
+      const { error, changed } = await initWith({
+        internals: (internals) => ({
+          ...internals,
+          retrieveProjectConfigurations: async () => ({ projects: {}, matchingProjectFiles: [] }),
+        }),
+      });
+
+      expectUnsupportedNx(
+        error,
+        "the result of retrieveProjectConfigurations from nx/src/devkit-internals has no projects and projectRootMap by project root",
+      );
+      expect(changed).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "stops before writing when Nx's plugin loader is missing",
+    async () => {
+      const { error, changed } = await initWith({
+        plugins: (plugins) => ({ ...plugins, getPluginsSeparated: undefined }),
+      });
+
+      expectUnsupportedNx(
+        error,
+        "getPluginsSeparated from nx/src/project-graph/plugins/get-plugins is not a function",
+      );
+      expect(changed).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "stops before writing when Nx's plugin loader returns another shape",
+    async () => {
+      const { error, changed } = await initWith({
+        plugins: (plugins) => ({ ...plugins, getPluginsSeparated: async () => [] }),
+      });
+
+      expectUnsupportedNx(
+        error,
+        "the result of getPluginsSeparated from nx/src/project-graph/plugins/get-plugins is not one specified plugin per entry and a list of default plugins",
+      );
+      expect(changed).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "stops before writing when the files of the repository cannot be read",
+    async () => {
+      const { error, changed } = await initWith({
+        files: (files) => ({ ...files, retrieveWorkspaceFiles: undefined }),
+      });
+
+      expectUnsupportedNx(
+        error,
+        "retrieveWorkspaceFiles from nx/src/project-graph/utils/retrieve-workspace-files is not a function",
+      );
+      expect(changed).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "stops before writing when the files of the repository come in another shape",
+    async () => {
+      const { error, changed } = await initWith({
+        files: (files) => ({ ...files, retrieveWorkspaceFiles: async () => ({ fileMap: {} }) }),
+      });
+
+      expectUnsupportedNx(
+        error,
+        "the result of retrieveWorkspaceFiles from nx/src/project-graph/utils/retrieve-workspace-files has no fileMap with projectFileMap and nonProjectFiles",
       );
       expect(changed).toEqual([]);
     },

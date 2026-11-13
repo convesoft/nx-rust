@@ -2,6 +2,7 @@ import { isAbsolute, relative } from "node:path";
 import type { CargoWorkspace } from "../../graph/discovery";
 import {
   describeFolder,
+  missingToolMessage,
   OptionalTool,
   optionalTools,
   ToolContext,
@@ -50,9 +51,7 @@ export function initReport(
     if (neededBy.length === 0) {
       notNeeded.push(tool.name);
     } else {
-      report.warnings.push(
-        `${sentenceStart(tool.name)} is not installed, but ${list(neededBy)} ${neededBy.length === 1 ? "needs" : "need"} it. ${tool.install}`,
-      );
+      report.warnings.push(missingToolMessage(tool, neededBy));
     }
   }
   if (notNeeded.length > 0) {
@@ -101,15 +100,4 @@ function buildDirectoryInside(
   }
   const path = relative(workspaceRoot, directory);
   return path === ".." || path.startsWith("../") || isAbsolute(path) ? undefined : path || ".";
-}
-
-// "The" at the start of a sentence; a tool's own name keeps its case.
-function sentenceStart(name: string): string {
-  return name.startsWith("the ") ? `The ${name.slice(4)}` : name;
-}
-
-function list(items: string[]): string {
-  return items.length <= 1
-    ? items.join("")
-    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }

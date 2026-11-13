@@ -1,4 +1,5 @@
 import type { CreateNodes } from "@nx/devkit";
+import { checkNxForGraph } from "../compatibility/nx-version";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
 import { readLocked, readTargetNames } from "./options";
@@ -61,9 +62,10 @@ export class Registration {
    *
    * @param options The entry's plugin options, of which `targetNames` and
    *   `locked` are read.
-   * @throws {Error} When the options are invalid, when discovery fails (see
-   *   {@link discoverWorkspaces}) or when `targetNames` gives two targets of
-   *   one project the same name.
+   * @throws {Error} When the installed Nx is not supported (see
+   *   {@link checkNxForGraph}), when the options are invalid, when discovery
+   *   fails (see {@link discoverWorkspaces}) or when `targetNames` gives two
+   *   targets of one project the same name.
    */
   async discover(
     manifests: readonly string[],
@@ -75,6 +77,7 @@ export class Registration {
     const reports = computationReports();
     let graph: CargoGraph | undefined;
     try {
+      checkNxForGraph(workspaceRoot, reports);
       const targetNames = readTargetNames(options);
       const locked = readLocked(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
