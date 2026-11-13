@@ -24,6 +24,7 @@ interface Outcome {
  * own `createNodes` discovered, whether Nx runs the entries in one process or
  * each in a worker of its own.
  */
+// @mara implements DES-DISCOVERY
 // @mara implements DES-METADATA-REPORT
 export class Registration {
   /** The `createNodes` hook of this entry. */
