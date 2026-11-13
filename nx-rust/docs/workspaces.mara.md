@@ -73,11 +73,13 @@ same name make Nx fail with its own error, which names both folders.
 
 ## Workspace-level tasks
 
-Some tasks belong to a workspace, not to one crate: formatting, `cargo audit`,
+Some tasks belong to a workspace, not to one crate: documentation, `cargo audit`,
 `cargo deny`, lockfile updates and coverage collection. Each workspace has one
 project for them, rooted at the workspace folder and depending on every member.
 If the root `Cargo.toml` also defines a crate, that crate's project hosts these
-targets and no extra project appears.
+targets and no extra project appears. Formatting is per crate: every crate has
+its own `fmt` and `fmt-check`. The targets are listed under
+[Targets](targets.mara.md#workspace-level-targets).
 
 The workspace project is named after its folder's path from the root of the Nx
 workspace, with each `/` replaced by `-`: a workspace in `rust/` gives `rust`,
