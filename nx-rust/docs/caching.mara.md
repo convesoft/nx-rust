@@ -59,17 +59,18 @@ are those at the workspace root and above it.
   rustup are all respected.
 - Cargo may create or update `Cargo.lock` during a task, as it does for plain
   `cargo`. With the `locked` option, or `NX_RUST_LOCKED=true` for one run,
-  every cargo command of a task passes `--locked` and fails instead. Building
-  the project graph never touches `Cargo.lock`.
+  every cargo command of a task passes `--locked` and fails instead. The
+  `update` target is the exception: it exists to change the lockfile and never
+  passes `--locked`. Building the project graph never touches `Cargo.lock`.
 
 ## What is stored
 
-| Target                                 | Cached | Stored                                                            |
-| -------------------------------------- | ------ | ----------------------------------------------------------------- |
-| `check`, `lint`, `fmt-check`, `test`   | Yes    | Nothing but the result and the terminal output                    |
-| `build`                                | Yes    | Final artifacts only: executables, `cdylib` and `staticlib` files |
-| `doc`                                  | Yes    | The doc output folder                                             |
-| `fmt`, `bench`, `run`, release publish | No     | Nothing                                                           |
+| Target                                                            | Cached | Stored                                                            |
+| ----------------------------------------------------------------- | ------ | ----------------------------------------------------------------- |
+| `check`, `lint`, `fmt-check`, `test`                              | Yes    | Nothing but the result and the terminal output                    |
+| `build`                                                           | Yes    | Final artifacts only: executables, `cdylib` and `staticlib` files |
+| `doc`, on the workspace project                                   | Yes    | The workspace's whole doc folder                                  |
+| `fmt`, `bench`, `run`, `audit`, `deny`, `update`, release publish | No     | Nothing                                                           |
 
 A cache hit on `test` means "these tests passed for exactly these inputs", and
 nothing is copied. A cache hit on `build` restores the binary. It does not
@@ -78,7 +79,9 @@ the next real compile uses whatever is in the build directory.
 
 Nx can store only files inside the repository. If Cargo's artifact directory
 lies outside it, for example through `CARGO_TARGET_DIR`, `build` and `doc` run
-uncached, and the plugin says so.
+uncached, and the plugin says so. `doc` also runs uncached, with the same
+notice, when two workspaces share one artifact directory: restoring one
+workspace's doc folder would delete the other's pages.
 
 ## Cargo's two directories
 
@@ -207,6 +210,7 @@ The environment list:
 - `CC`, `CXX`, `AR`, `CFLAGS`, `CXXFLAGS`, `PKG_CONFIG_PATH` and `MACOSX_DEPLOYMENT_TARGET`.
 - `OPENSSL_DIR`, `OPENSSL_LIB_DIR`, `OPENSSL_INCLUDE_DIR`, `OPENSSL_STATIC` and `OPENSSL_NO_VENDOR`.
 - `CLIPPY_CONF_DIR`, on `lint` only.
+- `CARGO_BUILD_WARNINGS`, on the targets that compile: `build`, `check`, `lint`, `test`, `doc` and the artifact targets. Cargo's `build.warnings` setting turns warnings into failures, so a result that passed with warnings allowed must not be restored where they are denied ([[EVD-CARGO-TARGET-COMMANDS]]).
 
 A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate is hashed with the crate's files, although it does not apply to the commands the plugin runs ([[DES-INVOCATION]]). An input the plugin cannot see is the repository's to declare, through the extra environment variables and commands ([[RISK-UNDECLARED-INPUTS]]).
 :::
@@ -217,16 +221,18 @@ A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate is hashed 
 :status: accepted
 :satisfies: REQ-CACHE-OUTPUTS
 
-| Target                                 | Cached | Outputs                                                                                                                                  |
-| -------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `check`, `lint`, `fmt-check`, `test`   | Yes    | None; the result only                                                                                                                    |
-| `build`                                | Yes    | Final artifacts only, in the [[TERM-ARTIFACT-DIR]]: the executables of `bin` targets and the `cdylib` and `staticlib` files of a library |
-| `doc`                                  | Yes    | The doc output folder                                                                                                                    |
-| `fmt`, `bench`, `run`, release publish | No     | None                                                                                                                                     |
+| Target                                                            | Cached | Outputs                                                                                                                                  |
+| ----------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `check`, `lint`, `fmt-check`, `test`                              | Yes    | None; the result only                                                                                                                    |
+| `build`                                                           | Yes    | Final artifacts only, in the [[TERM-ARTIFACT-DIR]]: the executables of `bin` targets and the `cdylib` and `staticlib` files of a library |
+| `doc`, on the workspace project                                   | Yes    | The whole `doc` folder of the workspace's [[TERM-ARTIFACT-DIR]] ([[DES-WORKSPACE-TARGETS]])                                              |
+| `fmt`, `bench`, `run`, `audit`, `deny`, `update`, release publish | No     | None                                                                                                                                     |
 
 `build` does not list `rlib` or `dylib` files or other files that only Cargo consumes, so a cache hit never puts such files back ([[ADR-RESULTS-ONLY-CACHE]]).
 
 Nx can store only files inside the repository. The `cargo metadata` report names the artifact directory of each workspace. When it lies outside the repository, the `build` and `doc` targets of that workspace are not cached, and the plugin says so when the graph is created ([[DES-DIAGNOSTICS]]). Targets that store only a result stay cached, and so do the artifact targets, whose outputs lie outside Cargo's directories ([[DES-ARTIFACT-STEPS]]).
+
+When the reports of two or more workspaces name the same artifact directory, the `doc` targets of those workspaces are not cached either, and the plugin says so in the same way. Nx restores a folder output by replacing it, so restoring one workspace's `doc` folder would delete the pages of the others ([[EVD-NX-24-TARGETS]]).
 :::
 
 :::mara design DES-BUILD-DIRS
@@ -257,5 +263,5 @@ Every cargo command of a task starts in the root folder of the crate's workspace
 
 The plugin adds no flag that changes what Cargo builds or where. It sets no build or artifact directory ([[DES-BUILD-DIRS]]) and passes only what the target's options ask for.
 
-By default the plugin does not pass `--locked`. Cargo may then create or update `Cargo.lock` during a task, exactly as it does for the same plain cargo command. That is Cargo's write, not the plugin's. With the `locked` option on, every cargo command of a task passes `--locked` and fails instead of changing the lockfile. Creating the graph never touches `Cargo.lock`, with or without the option, because its report is requested with `--no-deps` ([[DES-METADATA-REPORT]]). The environment variable `NX_RUST_LOCKED`, set to `true` or `false`, replaces the option for one run, which is how a pipeline switches it on without changing what developers get.
+By default the plugin does not pass `--locked`. Cargo may then create or update `Cargo.lock` during a task, exactly as it does for the same plain cargo command. That is Cargo's write, not the plugin's. With the `locked` option on, every cargo command of a task passes `--locked` and fails instead of changing the lockfile. The one exception is `update`, whose purpose is to change the lockfile and which `--locked` fails whenever the lockfile would change; it never passes the flag. cargo-deny takes `--locked` like a cargo command, and cargo-audit only reads the lockfile ([[DES-WORKSPACE-TARGETS]]). Creating the graph never touches `Cargo.lock`, with or without the option, because its report is requested with `--no-deps` ([[DES-METADATA-REPORT]]). The environment variable `NX_RUST_LOCKED`, set to `true` or `false`, replaces the option for one run, which is how a pipeline switches it on without changing what developers get.
 :::

@@ -30,7 +30,13 @@ because Nx asks Cargo for the crates when it builds the project graph
 
 Set `NX_RUST_LOCKED=true` in pipelines. Every cargo command then passes
 `--locked` and fails if `Cargo.lock` is out of date, instead of updating it as
-plain cargo would.
+plain cargo would. The `update` target is the exception, because changing the
+lockfile is its job.
+
+To fail a pipeline on compiler and clippy warnings without changing what
+developers get, set `CARGO_BUILD_WARNINGS=deny` in it. The variable is part of
+the cache key, so a result that passed elsewhere with warnings allowed is not
+reused ([Targets](targets.mara.md#warnings)).
 
 ## The coverage baseline
 
