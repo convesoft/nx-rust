@@ -1,6 +1,6 @@
 ---
 title: Read overrides from the nx metadata tables
-status: todo
+status: in-progress
 type: feature
 parent: nxr-w9qa5f
 blocked_by:

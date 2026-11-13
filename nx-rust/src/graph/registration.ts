@@ -1,9 +1,10 @@
-import type { CreateNodes } from "@nx/devkit";
+import type { CreateNodes, NxJsonConfiguration } from "@nx/devkit";
 import { checkNxForGraph } from "../compatibility/nx-version";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
-import { readTargetNames } from "./options";
+import { checkEntries } from "./entries";
 import { CargoGraph, inferProjects, projectNodes } from "./projects";
+import { readPluginOptions, readSettings } from "./settings";
 
 /** What the `createNodes` call that started last found. */
 interface Outcome {
@@ -40,7 +41,12 @@ export class Registration {
     this.createNodes = [
       "**/Cargo.toml",
       async (manifests, options, context) => {
-        const graph = await this.discover(manifests, context.workspaceRoot, options);
+        const graph = await this.discover(
+          manifests,
+          context.workspaceRoot,
+          options,
+          context.nxJsonConfiguration,
+        );
         return projectNodes(graph.projects);
       },
     ];
@@ -60,16 +66,21 @@ export class Registration {
    * all its manifests in one call, so each call is taken as a computation of
    * its own.
    *
-   * @param options The entry's plugin options, of which `targetNames` is read.
+   * @param options The entry's plugin options.
+   * @param nxJson `nx.json`, whose `plugins` name the entries of the plugin
+   *   that have to agree on the settings of a workspace (`checkEntries` in `entries.ts`).
    * @throws {Error} When the installed Nx is not supported (see
    *   {@link checkNxForGraph}), when the options are invalid, when discovery
-   *   fails (see {@link discoverWorkspaces}) or when `targetNames` gives two
-   *   targets of one project the same name.
+   *   fails (see {@link discoverWorkspaces}), when a metadata table is
+   *   invalid (see {@link readSettings}), when entries disagree on the
+   *   settings of a workspace, or when the targets cannot be given their
+   *   names and tables (see {@link inferProjects}).
    */
   async discover(
     manifests: readonly string[],
     workspaceRoot: string,
     options?: unknown,
+    nxJson?: NxJsonConfiguration,
   ): Promise<CargoGraph> {
     const sequence = ++this.started;
     // Before the first await: it decides which computation this call joins.
@@ -77,9 +88,11 @@ export class Registration {
     let graph: CargoGraph | undefined;
     try {
       checkNxForGraph(workspaceRoot, reports);
-      const targetNames = readTargetNames(options);
+      const pluginOptions = readPluginOptions(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
-      graph = { discovery, projects: inferProjects(discovery, targetNames) };
+      const settings = readSettings(discovery, pluginOptions);
+      await checkEntries(discovery, settings, nxJson);
+      graph = { discovery, projects: inferProjects(discovery, settings) };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {

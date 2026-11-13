@@ -539,6 +539,62 @@ describe("init", () => {
       HARNESS_TIMEOUT,
     );
 
+    it.each<[string, FileChanges, string]>([
+      [
+        "an unknown key in a metadata table",
+        {
+          "rust/Cargo.toml": (manifest) =>
+            `${manifest}\n[workspace.metadata.nx]\ntestrunner = "nextest"\n`,
+        },
+        'rust/Cargo.toml: nx-rust does not know the key "testrunner" in [workspace.metadata.nx]. Did you mean "testRunner"?',
+      ],
+      [
+        'inputs without "..." on an inferred target',
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx.targets.test]\ninputs = ["default"]\n`,
+        },
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test] sets "inputs" without "..." on the inferred target "test".',
+      ],
+    ])(
+      "stops with graph creation's message for %s",
+      (_case, files, message) =>
+        runInit("subfolder-workspace", files, (_workspace, result) => {
+          expectStopped(result, message);
+          expect(result.output).toContain(
+            "nx-rust was not added to nx.json: Nx could not create the project graph with it.",
+          );
+        }),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "stops when the registered entry has an option that nx-rust does not know",
+      () =>
+        runInit(
+          "subfolder-workspace",
+          {
+            "nx.json": `${JSON.stringify({
+              plugins: [{ plugin: pluginName, options: { namePrefix: "rust-" } }],
+            })}\n`,
+          },
+          (_workspace, { status, output, changed }) => {
+            expect(status).toBe(1);
+            expect(output).toContain(
+              "Nx cannot create the project graph with nx-rust as nx.json registers it.",
+            );
+            expect(output).toContain(
+              `nx.json: nx-rust does not know the key "namePrefix" in the options of the ${pluginName} entry.`,
+            );
+            expect(output).toContain("nx.json is unchanged.");
+            expect(changed).toEqual([]);
+          },
+          // As above: the harness cannot load the registered plugin by name.
+          ["--skipProjectGraph"],
+        ),
+      HARNESS_TIMEOUT,
+    );
+
     it(
       "stops with cargo's message and changes nothing when cargo metadata fails",
       () =>
