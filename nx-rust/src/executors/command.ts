@@ -51,9 +51,11 @@ const tripleTargets = compilingTargets.filter((target) => target !== "test");
  * The targets that take each option, by their default names, as the option
  * reference of `DES-PLUGIN-OPTIONS` gives them. A task of another target
  * ignores the option, also where its executor's schema declares it, because
- * one schema serves every target of the cargo executor
+ * one schema serves every target of the cargo executor, and a target table
+ * in Cargo metadata that sets it fails graph creation
  * (`DES-UNKNOWN-OPTIONS`).
  */
+// @mara implements DES-PLUGIN-OPTIONS
 export const optionTargets: Readonly<Record<TargetOptionName, ReadonlySet<InferredTargetName>>> = {
   features: new Set(compilingTargets),
   allFeatures: new Set(compilingTargets),
@@ -67,6 +69,13 @@ export const optionTargets: Readonly<Record<TargetOptionName, ReadonlySet<Inferr
   affectedTests: new Set(["test"]),
   pluginVersion: new Set(inferredTargetNames),
 };
+
+/**
+ * The option that the plugin sets itself, to carry its version into the
+ * cache key where Nx has no node for its package (`DES-PLUGIN-OPTIONS`). A
+ * target table in Cargo metadata may not set it.
+ */
+export const pluginVersionOption = "pluginVersion" satisfies TargetOptionName;
 
 /** Whether the target with this default name takes the option `name`. */
 export function targetTakes(target: InferredTargetName, name: string): boolean {
