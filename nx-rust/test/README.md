@@ -103,7 +103,9 @@ copies for inspection.
 line per invocation (`cwd`, `args`) to a log and then runs the real cargo in
 the same folder, with the real cargo's folder first on `PATH`, so that cargo
 runs the `rustc` that belongs to it. `calls(root)` returns the invocations
-with folders relative to `root`. Every `FixtureWorkspace` has one. Cargo is
+with folders relative to `root`, and `callsWithEnv(root)` adds the value of
+`RUSTUP_AUTO_INSTALL` that each one ran with, `null` where it was unset.
+Every `FixtureWorkspace` has one. Cargo is
 looked up on two different `PATH`s, and the wrapper has to come first on
 both:
 
