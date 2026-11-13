@@ -1,6 +1,6 @@
 ---
 title: Detect a shared artifact directory that cargo reports through ..
-status: todo
+status: in-progress
 type: bug
 parent: nxr-w9qa5f
 discovered_from: nxr-7vmkx2
