@@ -70,7 +70,9 @@ package name and manifest path.
 
 A crate whose folder is also a JS project takes that project's name, from its
 `package.json` or its `project.json`, because Nx applies those files after
-every plugin. The crate's `name` override has no effect there. To choose
+every plugin. Where Nx takes the name from one of those files, the crate's
+`name` override has no effect; a `project.json` without a name and without a
+`package.json` beside it keeps the name the plugin gives the crate. To choose
 another name, set `name` in the folder's `project.json` if it has one, and
 otherwise `nx.name` in its `package.json`. A crate and a JS project with the
 same name make Nx fail with its own error, which names both folders.
@@ -170,7 +172,7 @@ root of the Nx workspace, `nx audit .` works too.
 :satisfies: NEED-ZERO-CONFIG
 :satisfies: NEED-CARGO-UNCHANGED
 
-Every member of every discovered Cargo workspace is an Nx project whose name, root, targets and dependencies are derived from Cargo's own description of the workspace. The plugin neither requires nor creates a `project.json` or any other file inside a crate.
+Every member of every discovered Cargo workspace is an Nx project rooted at the crate's folder. The name, targets and dependencies that the plugin gives it are derived from Cargo's own description of the workspace. Where the crate's folder also is a JS project, Nx applies its `package.json` and `project.json` after every plugin, so the name Nx takes from them and their scripts and targets named like the plugin's take precedence ([[EVD-NX-PROJECT-MERGE]]). The plugin neither requires nor creates a `project.json` or any other file inside a crate.
 :::
 
 :::mara requirement REQ-MULTI-WORKSPACE
