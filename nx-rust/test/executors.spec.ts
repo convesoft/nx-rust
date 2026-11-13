@@ -748,7 +748,7 @@ describe("locked mode", () => {
 
   // Only the real cargo-deny reads Cargo.lock through cargo, and the tests
   // install none, so this runs only where cargo-deny is installed.
-  if (cargoSubcommandInstalled("deny", testEnvironment())) {
+  if (cargoSubcommandInstalled("deny", testEnvironment(), process.cwd())) {
     it.each<[string, object, Env]>([
       ["the locked option", { locked: true }, {}],
       ["NX_RUST_LOCKED=true", {}, { NX_RUST_LOCKED: "true" }],
