@@ -1,6 +1,6 @@
 // The module object itself, which the harness calls through.
 import fs from "node:fs";
-import { FixtureWorkspace } from "./harness";
+import { FixtureWorkspace, testRunSocketFolder } from "./harness";
 
 describe("fixture workspace", () => {
   let folders: string[] = [];
@@ -14,8 +14,9 @@ describe("fixture workspace", () => {
     folders = [];
   });
 
-  it("removes its temporary folder when it cannot be created", () => {
-    // Records the folder that `create` makes, and still makes it.
+  it("removes its temporary folders when it cannot be created", () => {
+    // Records the folders that `create` makes, and still makes them: the
+    // copy's, and where the test run has a socket folder, one for its sockets.
     const mkdtemp = jest.spyOn(fs, "mkdtempSync");
 
     expect(() =>
@@ -27,7 +28,7 @@ describe("fixture workspace", () => {
     ).toThrow("a broken change");
 
     folders = mkdtemp.mock.results.map((result) => result.value as string);
-    expect(folders).toHaveLength(1);
-    expect(fs.existsSync(folders[0])).toBe(false);
+    expect(folders).toHaveLength(testRunSocketFolder() === undefined ? 1 : 2);
+    expect(folders.filter((folder) => fs.existsSync(folder))).toEqual([]);
   });
 });

@@ -6,5 +6,6 @@ export * from "./fixtures";
 export * from "./js-lockfiles";
 export * from "./nx-package";
 export * from "./task-runs";
+export * from "./test-run";
 export * from "./tool-folders";
 export * from "./workspace";

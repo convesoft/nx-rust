@@ -1,5 +1,6 @@
 /**
- * This script starts a local registry for e2e testing purposes.
+ * This script starts a local registry for e2e testing purposes, and then the
+ * test run whose folder the commands of the tests share.
  * It is meant to be called in jest's globalSetup.
  */
 
@@ -9,6 +10,7 @@ import { workspaceRoot } from "@nx/devkit";
 import { rmSync } from "fs";
 import { join } from "path";
 import { releasePublish, releaseVersion } from "nx/release";
+import { startTestRun } from "../../nx-rust/test/harness/test-run";
 import { startLocalRegistry } from "./local-registry";
 
 export default async () => {
@@ -50,4 +52,6 @@ export default async () => {
     await stopLocalRegistry();
     throw error;
   }
+  // Last, so that a failed setup leaves no folder behind.
+  startTestRun();
 };
