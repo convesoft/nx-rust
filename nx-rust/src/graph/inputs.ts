@@ -332,7 +332,7 @@ export function targetInputs(
       : externalDependencyInputs(target, subject, workspaceRoot, readsDigest)),
     ...environmentInputs(target),
     { runtime: toolchainCommand(workspaceRoot) },
-    pluginInput(context.plugin),
+    pluginVersionInput(context.plugin),
   ];
 }
 
@@ -457,11 +457,11 @@ export function externalDependencyInputs(
  * decide what `nx affected` selects, since the task is not cached: the
  * workspace's `Cargo.lock`, read also where Git ignores it, its root
  * manifest, the manifests of its members and of the path packages they
- * reach inside the repository, and the workspace files that apply in the
- * workspace root, where the task's cargo runs. All are named from the
- * repository root, because a pattern under the workspace project's root
- * misses the files of the crate projects nested in it
- * (`EVD-NX-24-LOCKFILE-UPDATE`).
+ * reach inside the repository, the workspace files that apply in the
+ * workspace root, where the task's cargo runs, and the plugin's input
+ * ({@link pluginVersionInput}). The files are named from the repository
+ * root, because a pattern under the workspace project's root misses the
+ * files of the crate projects nested in it (`EVD-NX-24-LOCKFILE-UPDATE`).
  */
 // @mara implements DES-WORKSPACE-TARGETS
 // @mara implements DES-LOCKFILE-HASHING
@@ -477,6 +477,7 @@ export function lockfileInputs(subject: InputSubject, context: InputContext): In
     fromRoot(workspaceRoot, "Cargo.toml"),
     ...[...manifests].sort(),
     ...workspaceFiles({ ...subject, root: workspaceRoot }, context.repositoryRoot, true),
+    pluginVersionInput(context.plugin),
   ];
 }
 
@@ -532,8 +533,16 @@ export function toolchainCommand(workspaceRoot: string): string {
   ].join("; ");
 }
 
-/** The input that carries the plugin's own version into the key. */
-function pluginInput(plugin: PluginInput): InputDefinition {
+/**
+ * The input that carries the plugin's own version into the key
+ * (`DES-INPUTS`, "Plugin"): the plugin's package, where Nx has an npm node
+ * for it, and no external node otherwise. Every inferred target has it. On
+ * an uncached target it only decides what `nx affected` selects: an upgrade
+ * of the plugin selects the target, and a change to the JS lockfile outside
+ * the plugin's package does not, as it would without an
+ * `externalDependencies` input (`EVD-NX-24-EXTERNAL-NODES`).
+ */
+export function pluginVersionInput(plugin: PluginInput): InputDefinition {
   return { externalDependencies: plugin.kind === "node" ? [plugin.packageName] : [] };
 }
 
