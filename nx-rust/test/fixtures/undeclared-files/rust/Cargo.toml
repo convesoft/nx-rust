@@ -1,0 +1,9 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[profile.ctest]
+inherits = "test"
+
+[profile.cbench]
+inherits = "bench"

@@ -1,6 +1,6 @@
 ---
 title: Fail a build that read a repository file outside its inputs
-status: todo
+status: in-progress
 type: feature
 parent: nxr-w9qa5f
 blocked_by:

@@ -5,9 +5,8 @@
 > inferred targets declare the inputs and outputs of this page, those that it
 > caches are cached, and the `lockfile` task keys each crate on the packages
 > it reaches in `Cargo.lock`. `envInputs`, `runtimeInputs` and `fileInputs`
-> work; every workspace counts as using the `workspace-build` strategy
-> (nxr-k64tm5), and the check of a build's dependency files is not
-> implemented (nxr-agyqmz).
+> work, and `build` checks its dependency files against its inputs. Every
+> workspace counts as using the `workspace-build` strategy (nxr-k64tm5).
 
 Nx caches the **result** of a Rust task and, for a few targets, its **final
 artifacts**. It never stores or restores Cargo's intermediate files: Cargo owns

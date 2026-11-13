@@ -34,6 +34,12 @@ export interface CargoPackage {
   dependencies: CargoDependency[];
   /** The package's Cargo targets: its library, binaries, examples, tests, benches and build script. */
   targets: CargoTarget[];
+  /**
+   * The package's features, each with what it turns on: other features of
+   * the package, `dep:<name>` and `<dependency>/<feature>` entries. Cargo
+   * lists the implicit feature of an optional dependency too.
+   */
+  features?: Record<string, string[]>;
   /** `[package.metadata]`, or `null`. */
   metadata: unknown;
 }
@@ -46,6 +52,8 @@ export interface CargoTarget {
    * or the crate types of a library, such as `lib`, `rlib` or `cdylib`.
    */
   kind: string[];
+  /** The features that cargo needs on to build the target, from its `required-features`. */
+  "required-features"?: string[];
 }
 
 /** A declared dependency of a {@link CargoPackage}. */
