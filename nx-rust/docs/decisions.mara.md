@@ -43,6 +43,19 @@ It also means that every machine that computes the graph needs cargo, including 
 The plugin therefore asks with `--no-deps`. That report still names the members, their targets, their declared dependencies with paths and features, the metadata tables and Cargo's directories, which is all that projects, targets and edges need, apart from the crates that `[patch]`, `[replace]` and `paths` redirect to ([[EVD-CARGO-NO-DEPS]]). What it lacks is the resolved versions of external crates. Only per-crate lockfile hashing needs those, and `Cargo.lock` holds them. The cost is that the plugin reads `Cargo.lock` itself for that purpose, that a path dependency outside the workspace needs a report of its own, and that the plugin reads the redirection tables from Cargo's manifests and configuration files itself ([[ADR-REDIRECTION-EDGES]]).
 :::
 
+:::mara decision ADR-NO-METADATA-CACHE
+:mid: 01M7AY77VPMGWNN9SVRD56JAPH
+:title: Request the cargo metadata report afresh in every graph computation
+:status: accepted
+:justifies: DES-METADATA-REPORT
+
+Agreed with the maintainer on 13 November 2026. [[REQ-METADATA-DISK-CACHE]] planned to keep a workspace's `cargo metadata` report between Nx processes. With `--no-deps` ([[ADR-METADATA-NO-DEPS]]) the report is cheap: 180 ms for the 598 members of polkadot-sdk, the largest workspace measured, 79 ms for 262 members and 13 ms for 55, against about 15 to 30 ms to read a stored report back and check it ([[EVD-METADATA-TIMING]]). The runs that would gain most are those without the Nx daemon, as in CI, where the first command of a job finds nothing stored.
+
+A stored report could be reused only under a key that covers everything the report depends on: which target files and READMEs exist, gitignored ones included, which Nx's file map leaves out; the manifests of path dependencies outside the workspace; Cargo's configuration above the repository and in the Cargo home; environment variables; and the toolchain that rustup picks. A key that missed one would give a stale set of targets, for example a `build` whose outputs lack a new binary, which [[GOAL-TRUSTED-CACHE]] does not allow. The plugin therefore requests each report afresh in every graph computation and keeps none between computations, in the Nx daemon either.
+
+Rejected: a report stored in Nx's workspace data folder, or kept in the daemon's memory, under such a key. It would save at most about 0.15 s per computation on the largest workspace measured, it needs helpers that Nx exports only as internals ([[RISK-UPSTREAM-CHANGES]]), and every gap in the key would be a wrong graph.
+:::
+
 :::mara decision ADR-MULTI-WORKSPACE
 :mid: 01M78FHG7FZZT4VV8SYT01Z2B2
 :title: Support several Cargo workspaces through a workspace context
@@ -788,7 +801,28 @@ An experiment with cargo 1.99.1 on 12 November 2026. The workspace had two membe
 - The crate outside the workspace was not among the packages. It appeared only as the path in its dependent's entry.
 - Run in a crate that lies inside the workspace folder without being a member, the command failed with Cargo's message "current package believes it's in a workspace when it's not", which names both manifests and the remedies.
 
-The workspace was a toy, so this says nothing about how long the call takes on a large one.
+The workspace was a toy, so this says nothing about how long the call takes on a large one; [[EVD-METADATA-TIMING]] measures that.
+:::
+
+:::mara evidence EVD-METADATA-TIMING
+:mid: 01M7AY6TM7M03TJ2XKFHTP6R4A
+:title: How long cargo metadata --no-deps takes on large workspaces, and what its report depends on
+:status: accepted
+:supports: ADR-NO-METADATA-CACHE
+
+Measurements on 13 November 2026 on Linux x86-64 (AMD Ryzen 9 9950X3D, NVMe SSD with btrfs) with rustup 1.29.3, Node 26.12.0 and the `nx` 24.0.6 package of this repository, in throwaway folders outside it. A time is the wall-clock time of `cargo metadata --format-version 1 --no-deps` started in the workspace root through rustup's proxy, process start included: the median of 20 runs with a warm page cache (10 for cargo 1.98.1), and of 3 to 5 runs after the page cache of the workspace, `~/.cargo/bin` and `~/.rustup/toolchains` was dropped with `posix_fadvise`, which leaves the kernel's directory caches warm. The first call in zed and ruff installed the toolchain each pins; the timed runs came after. No CI runner was measured.
+
+| Workspace (shallow clone) | Cargo   | Members | Report | Warm   | Cold page cache |
+| ------------------------- | ------- | ------- | ------ | ------ | --------------- |
+| polkadot-sdk `78ad8d1`    | 1.100.0 | 598     | 3.6 MB | 180 ms | 198 ms          |
+| polkadot-sdk `78ad8d1`    | 1.98.1  | 598     | 3.6 MB | 233 ms |                 |
+| zed `48741fd`             | 1.98.1  | 262     | 1.5 MB | 79 ms  | 97 ms           |
+| ruff `bfd67d0`            | 1.99.0  | 55      | 0.3 MB | 13 ms  | 27 ms           |
+| a fixture                 | 1.100.0 | 2       |        | 7 ms   |                 |
+
+- **A stored report.** For polkadot-sdk, reading the report back and parsing it took 10 ms, listing its 9,894 files and hashing its 603 manifests 18 ms, Nx's `hashWithWorkspaceContext` over its manifests 1 ms once Nx had hashed the files, and `cargo -V` through the proxy 4 ms.
+- **What the report depends on**, with cargo 1.100.0 in the fixture. It changed with a member's or the root manifest; with a member added through a glob; with whether `src/main.rs`, `build.rs`, `tests/*.rs`, `examples/*.rs` or `README.md` exist, also for a gitignored file, which Nx's file map leaves out; with `build.target-dir` in a `.cargo/config.toml` or `.cargo/config` above the workspace root or in the Cargo home's `config.toml`; with `CARGO_TARGET_DIR` and `CARGO_BUILD_BUILD_DIR`; with the Cargo version, as 1.89 reports no `build_directory`; and with the checkout's folder, as every path in it is absolute. A broken manifest of a path dependency outside the workspace failed the call, while a change of its version or dependencies left the report as it was. `Cargo.lock`, the contents of a source file and of `README.md`, a member's own `.cargo/config.toml` and `RUSTFLAGS` changed nothing. No `rustc` was started and nothing was written to the Cargo home.
+- **Nx.** Nx turns the daemon off in CI and in Docker unless `NX_DAEMON=true` (`daemon/client/client.js`), and without it every command calls each plugin's `createNodes` (`project-graph/project-graph.js`). The helpers that Nx's own plugins use to keep results on disk, `PluginCache` and `workspaceDataDirectory`, come from `@nx/devkit/internal`, not from the public `@nx/devkit`.
 :::
 
 :::mara evidence EVD-NX-PROJECT-MERGE
