@@ -304,7 +304,7 @@ The directory where Cargo puts final artifacts such as binaries, set by `build.t
 :aliases: group
 :aliases: build flavour
 
-The set of tasks that one cargo invocation can serve: tasks of the same kind in the same Cargo workspace with the same feature set, profile and target triple.
+The set of tasks that one cargo invocation can serve: tasks of the same kind in the same Cargo workspace whose invocations would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment.
 :::
 
 :::mara term TERM-FEATURE-UNIFICATION

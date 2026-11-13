@@ -59,9 +59,10 @@ are those at the workspace root and above it.
   rustup are all respected.
 - Cargo may create or update `Cargo.lock` during a task, as it does for plain
   `cargo`. With the `locked` option, or `NX_RUST_LOCKED=true` for one run,
-  every cargo command of a task passes `--locked` and fails instead. The
-  `update` target is the exception: it exists to change the lockfile and never
-  passes `--locked`. Building the project graph never touches `Cargo.lock`.
+  every cargo command of a task passes `--locked` and fails instead. Three
+  targets never pass it: `update`, which exists to change the lockfile, and
+  `fmt` and `fmt-check`, because `cargo fmt` reads no lockfile and rejects the
+  flag. Building the project graph never touches `Cargo.lock`.
 
 ## What is stored
 
@@ -210,7 +211,7 @@ The environment list:
 - `CC`, `CXX`, `AR`, `CFLAGS`, `CXXFLAGS`, `PKG_CONFIG_PATH` and `MACOSX_DEPLOYMENT_TARGET`.
 - `OPENSSL_DIR`, `OPENSSL_LIB_DIR`, `OPENSSL_INCLUDE_DIR`, `OPENSSL_STATIC` and `OPENSSL_NO_VENDOR`.
 - `CLIPPY_CONF_DIR`, on `lint` only.
-- `CARGO_BUILD_WARNINGS`, on the targets that compile: `build`, `check`, `lint`, `test`, `doc` and the artifact targets. Cargo's `build.warnings` setting turns warnings into failures, so a result that passed with warnings allowed must not be restored where they are denied ([[EVD-CARGO-TARGET-COMMANDS]]).
+- `CARGO_BUILD_WARNINGS`, on every target that compiles: `build`, `check`, `lint`, `test`, `bench`, `run`, `doc` and the artifact targets, the uncached `bench` and `run` included. Cargo's `build.warnings` setting turns warnings into failures, so a result that passed with warnings allowed must not be restored where they are denied ([[EVD-CARGO-TARGET-COMMANDS]]).
 
 A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate is hashed with the crate's files, although it does not apply to the commands the plugin runs ([[DES-INVOCATION]]). An input the plugin cannot see is the repository's to declare, through the extra environment variables and commands ([[RISK-UNDECLARED-INPUTS]]).
 :::
@@ -263,5 +264,5 @@ Every cargo command of a task starts in the root folder of the crate's workspace
 
 The plugin adds no flag that changes what Cargo builds or where. It sets no build or artifact directory ([[DES-BUILD-DIRS]]) and passes only what the target's options ask for.
 
-By default the plugin does not pass `--locked`. Cargo may then create or update `Cargo.lock` during a task, exactly as it does for the same plain cargo command. That is Cargo's write, not the plugin's. With the `locked` option on, every cargo command of a task passes `--locked` and fails instead of changing the lockfile. The one exception is `update`, whose purpose is to change the lockfile and which `--locked` fails whenever the lockfile would change; it never passes the flag. cargo-deny takes `--locked` like a cargo command, and cargo-audit only reads the lockfile ([[DES-WORKSPACE-TARGETS]]). Creating the graph never touches `Cargo.lock`, with or without the option, because its report is requested with `--no-deps` ([[DES-METADATA-REPORT]]). The environment variable `NX_RUST_LOCKED`, set to `true` or `false`, replaces the option for one run, which is how a pipeline switches it on without changing what developers get.
+By default the plugin does not pass `--locked`. Cargo may then create or update `Cargo.lock` during a task, exactly as it does for the same plain cargo command. That is Cargo's write, not the plugin's. With the `locked` option on, every cargo command of a task passes `--locked` and fails instead of changing the lockfile. Two kinds of command never pass the flag: `update`, whose purpose is to change the lockfile and which `--locked` fails whenever the lockfile would change, and the `cargo fmt` of `fmt` and `fmt-check`, which resolves no dependencies and rejects `--locked`. cargo-deny takes `--locked` like a cargo command, and cargo-audit only reads the lockfile ([[DES-WORKSPACE-TARGETS]]). Creating the graph never touches `Cargo.lock`, with or without the option, because its report is requested with `--no-deps` ([[DES-METADATA-REPORT]]). The environment variable `NX_RUST_LOCKED`, set to `true` or `false`, replaces the option for one run, which is how a pipeline switches it on without changing what developers get.
 :::
