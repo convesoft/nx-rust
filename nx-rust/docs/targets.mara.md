@@ -1,26 +1,37 @@
 # Targets
 
-> **Status:** specified, not implemented yet.
+> **Status:** the plugin infers the targets of this page, apart from the
+> artifact and release targets and `lockfile`, and `targetNames` renames them.
+> The `lockfile` target and the crate targets' dependency on it are not
+> implemented yet and arrive with nxr-xq9ava; until then `targetNames` rejects
+> the key `lockfile`. The targets do not run yet, because the plugin's
+> executors are still missing (nxr-kmdpgj), and none of them is cached until
+> its inputs are declared (nxr-fy4t4k). A
+> `targetDefaults` entry in `nx.json` that sets `cache: true`, keyed by a
+> target's name or by its executor, overrides that: once the executors exist
+> and until the inputs are declared, such a target would be cached with Nx's
+> default inputs, which miss `Cargo.lock`, the toolchain and the environment.
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.
 
-| Target                     | Runs                                             | Exists on                                         | Cached | Outputs                                                           |
-| -------------------------- | ------------------------------------------------ | ------------------------------------------------- | ------ | ----------------------------------------------------------------- |
-| `build`                    | `cargo build`                                    | Every crate                                       | Yes    | Final artifacts only: executables, `cdylib` and `staticlib` files |
-| `check`                    | `cargo check --all-targets`                      | Every crate                                       | Yes    | None; the result only                                             |
-| `lint`                     | `cargo clippy --all-targets`                     | Every crate                                       | Yes    | None; the result only                                             |
-| `test`                     | `cargo test` or nextest                          | Every crate                                       | Yes    | None; the result only                                             |
-| `fmt-check`                | `cargo fmt --check`                              | Every crate                                       | Yes    | None; the result only                                             |
-| `fmt`                      | `cargo fmt`                                      | Every crate                                       | No     | None                                                              |
-| `bench`                    | `cargo bench`                                    | Crates with a bench target                        | No     | None                                                              |
-| `run`                      | `cargo run`                                      | Crates with a binary target                       | No     | None                                                              |
-| `napi-build`, `wasm-build` | See [napi and wasm artifacts](artifacts.mara.md) | Crates that produce that artifact                 | Yes    | The package files                                                 |
-| Release publish            | `cargo publish`                                  | Crates without `publish = false`                  | No     | None                                                              |
-| `doc`                      | `cargo doc --no-deps --workspace`                | The workspace project                             | Yes    | The workspace's whole doc folder                                  |
-| `audit`                    | `cargo audit`                                    | The workspace project                             | No     | None                                                              |
-| `deny`                     | `cargo deny check`                               | The workspace project, where cargo-deny is set up | No     | None                                                              |
-| `update`                   | `cargo update`                                   | The workspace project                             | No     | None                                                              |
+| Target                     | Runs                                                | Exists on                                         | Cached | Outputs                                                           |
+| -------------------------- | --------------------------------------------------- | ------------------------------------------------- | ------ | ----------------------------------------------------------------- |
+| `build`                    | `cargo build`                                       | Every crate                                       | Yes    | Final artifacts only: executables, `cdylib` and `staticlib` files |
+| `check`                    | `cargo check --all-targets`                         | Every crate                                       | Yes    | None; the result only                                             |
+| `lint`                     | `cargo clippy --all-targets`                        | Every crate                                       | Yes    | None; the result only                                             |
+| `test`                     | `cargo test` or nextest                             | Every crate                                       | Yes    | None; the result only                                             |
+| `fmt-check`                | `cargo fmt --check`                                 | Every crate                                       | Yes    | None; the result only                                             |
+| `fmt`                      | `cargo fmt`                                         | Every crate                                       | No     | None                                                              |
+| `bench`                    | `cargo bench`                                       | Crates with a bench target                        | No     | None                                                              |
+| `run`                      | `cargo run`                                         | Crates with a binary target                       | No     | None                                                              |
+| `napi-build`, `wasm-build` | See [napi and wasm artifacts](artifacts.mara.md)    | Crates that produce that artifact                 | Yes    | The package files                                                 |
+| Release publish            | `cargo publish`                                     | Crates without `publish = false`                  | No     | None                                                              |
+| `doc`                      | `cargo doc --no-deps --workspace`                   | The workspace project                             | Yes    | The workspace's whole doc folder                                  |
+| `audit`                    | `cargo audit`                                       | The workspace project                             | No     | None                                                              |
+| `deny`                     | `cargo deny check`                                  | The workspace project, where cargo-deny is set up | No     | None                                                              |
+| `update`                   | `cargo update`                                      | The workspace project                             | No     | None                                                              |
+| `lockfile`                 | `cargo update --workspace`, then a digest per crate | The workspace project                             | No     | The digests, in `.nx/workspace-data`                              |
 
 A crate's targets select it with `-p` and its real package name. Every command
 starts in the root folder of the crate's workspace
@@ -136,6 +147,12 @@ these targets:
 - **`update`** runs `cargo update` and writes `Cargo.lock`. It never passes
   `--locked`, also with the `locked` option or `NX_RUST_LOCKED=true`, because
   changing the lockfile is its purpose.
+- **`lockfile`** runs `cargo update --workspace`, which brings `Cargo.lock` up
+  to date as your next `cargo build` would, and writes one digest per crate of
+  the packages the crate reaches. It is not cached and runs in every run. Every
+  cached task of a crate except `fmt-check` waits for it and reads the crate's
+  digest, so a dependency update reruns only the crates it reaches
+  ([Caching](caching.mara.md#lockfile-changes)).
 - The coverage baseline, in a workspace with `affectedTests`
   ([Continuous integration](ci.mara.md#the-coverage-baseline)).
 
@@ -182,7 +199,8 @@ A JS project that consumes a Rust crate depends on the crate's artifact target:
 see [napi and wasm artifacts](artifacts.mara.md). The plugin adds no `^build`
 to JS projects, and it cannot take yours away. If a JS target declares `^build`
 and its project depends on a crate, Nx also runs that crate's native `build`.
-It stops there, because the crate's `build` depends on nothing.
+It stops there, because the crate's `build` depends only on the `lockfile`
+task of its workspace.
 
 ## Options that cargo does not use
 
@@ -218,9 +236,10 @@ tag `lang:rust`, for example through `[workspace.metadata.nx]`:
 ```
 
 Or add an empty entry keyed by the target's executor, the `executor` that
-`nx show project <crate> --json` shows for it. Nx prefers an entry keyed by the
-executor to one keyed by the target name, so then no entry keyed by a target
-name reaches the targets of that executor.
+`nx show project <crate> --json` shows for it: `@convesoft/nx-rust:cargo`, or
+`@convesoft/nx-rust:run` for `run`. Nx prefers an entry keyed by the executor
+to one keyed by the target name, so then no entry keyed by a target name
+reaches the targets of that executor.
 
 A Rust option with a value of the wrong type, such as a number for `profile`,
 is not ignored: Nx rejects it before the plugin sees it. Rust tasks normally run
@@ -267,7 +286,7 @@ Each crate's Nx targets are derived from Cargo's description of the crate, witho
 :status: accepted
 :satisfies: NEED-EFFICIENT-BUILDS
 
-No inferred target of a Rust crate depends on a target of another Rust crate. A change in a dependency reaches the dependent through cache inputs, not through task ordering. The plugin adds no task dependency to JS projects either. A `^build` that a JS target declares itself reaches the `build` of the crates its project depends on directly, as Nx defines `^build`, and goes no further.
+No inferred target of a Rust crate depends on a target of another Rust crate, with one exception: every cached target of a crate other than `fmt-check` depends on the lockfile task of its workspace ([[DES-LOCKFILE-HASHING]]), which is a target of the root crate's project where the root manifest is a package. A change in a dependency reaches the dependent through cache inputs, not through task ordering. The plugin adds no task dependency to JS projects either. A `^build` that a JS target declares itself reaches the `build` of the crates its project depends on directly, as Nx defines `^build`, and goes no further.
 :::
 
 :::mara requirement REQ-TARGET-DEFAULT-GUARD
@@ -304,28 +323,31 @@ Retired on 13 November 2026: not part of v1. `run` is not continuous by default,
 :satisfies: REQ-TARGET-NAMES
 :satisfies: REQ-NO-RUST-TASK-DEPS
 
-| Default name               | Cargo's or the tool's name | Exists on                                                      | Cached | Nx outputs                                   |
-| -------------------------- | -------------------------- | -------------------------------------------------------------- | ------ | -------------------------------------------- |
-| `build`                    | `build`                    | Every crate                                                    | Yes    | Final artifacts only ([[DES-OUTPUTS]])       |
-| `check`                    | `check`                    | Every crate                                                    | Yes    | None                                         |
-| `lint`                     | `clippy`                   | Every crate                                                    | Yes    | None                                         |
-| `test`                     | `test`                     | Every crate                                                    | Yes    | None                                         |
-| `fmt-check`                | `fmt --check`              | Every crate                                                    | Yes    | None                                         |
-| `fmt`                      | `fmt`                      | Every crate                                                    | No     | None                                         |
-| `bench`                    | `bench`                    | Crates with a bench target                                     | No     | None                                         |
-| `run`                      | `run`                      | Crates with a binary target                                    | No     | None                                         |
-| `napi-build`, `wasm-build` | none                       | Crates that produce that artifact                              | Yes    | [[DES-ARTIFACT-STEPS]]                       |
-| Release publish            | `publish`                  | Crates without `publish = false`                               | No     | None                                         |
-| `doc`                      | `doc`                      | The workspace project                                          | Yes    | The workspace's doc folder ([[DES-OUTPUTS]]) |
-| `audit`                    | cargo-audit's `audit`      | The workspace project                                          | No     | None                                         |
-| `deny`                     | cargo-deny's `check`       | The workspace project, where a cargo-deny configuration exists | No     | None                                         |
-| `update`                   | `update`                   | The workspace project                                          | No     | None                                         |
+| Default name               | Cargo's or the tool's name | Exists on                                                      | Cached | Nx outputs                                     |
+| -------------------------- | -------------------------- | -------------------------------------------------------------- | ------ | ---------------------------------------------- |
+| `build`                    | `build`                    | Every crate                                                    | Yes    | Final artifacts only ([[DES-OUTPUTS]])         |
+| `check`                    | `check`                    | Every crate                                                    | Yes    | None                                           |
+| `lint`                     | `clippy`                   | Every crate                                                    | Yes    | None                                           |
+| `test`                     | `test`                     | Every crate                                                    | Yes    | None                                           |
+| `fmt-check`                | `fmt --check`              | Every crate                                                    | Yes    | None                                           |
+| `fmt`                      | `fmt`                      | Every crate                                                    | No     | None                                           |
+| `bench`                    | `bench`                    | Crates with a bench target                                     | No     | None                                           |
+| `run`                      | `run`                      | Crates with a binary target                                    | No     | None                                           |
+| `napi-build`, `wasm-build` | none                       | Crates that produce that artifact                              | Yes    | [[DES-ARTIFACT-STEPS]]                         |
+| Release publish            | `publish`                  | Crates without `publish = false`                               | No     | None                                           |
+| `doc`                      | `doc`                      | The workspace project                                          | Yes    | The workspace's doc folder ([[DES-OUTPUTS]])   |
+| `lockfile`                 | `update --workspace`       | The workspace project                                          | No     | The crates' digests ([[DES-LOCKFILE-HASHING]]) |
+| `audit`                    | cargo-audit's `audit`      | The workspace project                                          | No     | None                                           |
+| `deny`                     | cargo-deny's `check`       | The workspace project, where a cargo-deny configuration exists | No     | None                                           |
+| `update`                   | `update`                   | The workspace project                                          | No     | None                                           |
 
-Only `clippy` is renamed, to `lint`: `lint`, `test` and `build` are the target names that Nx projects share. Formatting keeps Cargo's names, `fmt-check` and `fmt`, because Nx's `format` is a built-in command and not a target, and the targets of the workspace project keep the names of Cargo and the tools ([[ADR-NX-TARGET-NAMES]]). Every name can be changed through plugin options, the names of the artifact targets and of the workspace project's targets included. `bench` is not cached, because timings differ between runs. The commands are [[DES-TARGET-COMMANDS]] and [[DES-WORKSPACE-TARGETS]].
+Only `clippy` is renamed, to `lint`: `lint`, `test` and `build` are the target names that Nx projects share. Formatting keeps Cargo's names, `fmt-check` and `fmt`, because Nx's `format` is a built-in command and not a target, and the targets of the workspace project keep the names of Cargo and the tools ([[ADR-NX-TARGET-NAMES]]); the lockfile task is called `lockfile`. Every name can be changed through plugin options, the names of the artifact targets and of the workspace project's targets included. `bench` is not cached, because timings differ between runs. The commands are [[DES-TARGET-COMMANDS]] and [[DES-WORKSPACE-TARGETS]].
 
-Targets come from the `cargo metadata` report ([[DES-METADATA-REPORT]]): `run` exists when the crate has a binary target, `bench` when it has a bench target, an [[TERM-ARTIFACT-TARGET]] when the crate produces that artifact ([[DES-ARTIFACT-STEPS]]), and the release targets unless the manifest sets `publish = false`. The last four rows are targets of the [[TERM-WORKSPACE-PROJECT]]; `deny` exists only where a cargo-deny configuration file is in the workspace root. Whether a tool is installed never decides whether a target exists.
+Targets come from the `cargo metadata` report ([[DES-METADATA-REPORT]]): `run` exists when the crate has a binary target, `bench` when it has a bench target, an [[TERM-ARTIFACT-TARGET]] when the crate produces that artifact ([[DES-ARTIFACT-STEPS]]), and the release targets unless the manifest sets `publish = false`. The last five rows are targets of the [[TERM-WORKSPACE-PROJECT]]; `deny` exists only where a cargo-deny configuration file is in the workspace root. Whether a tool is installed never decides whether a target exists.
 
-No inferred target has a `dependsOn` entry that names another Rust crate's target, and none uses `^build` ([[ADR-NO-RUST-BUILD-DEPS]]). Dependencies reach a target through `^` inputs ([[DES-INPUTS]]). The plugin adds no `dependsOn` entry to a JS project. A JS target's own `^build` reaches the `build` of the crates its project depends on directly, which is how Nx defines `^build`, and ends there.
+**Executors.** Every inferred target runs the plugin's cargo executor, `@convesoft/nx-rust:cargo`, which has the batch implementation of [[DES-BATCH]], apart from `run`, which runs `@convesoft/nx-rust:run`, an executor without one ([[DES-TARGET-COMMANDS]]). Each target carries its default name from the table in its metadata, as `metadata.cargo.target`, so that the executor runs the same command whatever name `targetNames` gives the target.
+
+No inferred target has a `dependsOn` entry that names another Rust crate's target, except that every cached crate target other than `fmt-check` depends on the lockfile task of its workspace ([[REQ-NO-RUST-TASK-DEPS]]), and none uses `^build` ([[ADR-NO-RUST-BUILD-DEPS]]). Dependencies reach a target through `^` inputs ([[DES-INPUTS]]). The plugin adds no `dependsOn` entry to a JS project. A JS target's own `^build` reaches the `build` of the crates its project depends on directly, which is how Nx defines `^build`, and ends there.
 :::
 
 :::mara design DES-TARGET-COMMANDS
@@ -367,18 +389,21 @@ The targets of the workspace project are [[DES-WORKSPACE-TARGETS]].
 
 The [[TERM-WORKSPACE-PROJECT]] hosts the targets that concern a whole Cargo workspace. Each command starts in the workspace root ([[DES-INVOCATION]]).
 
-| Target   | Command                           | Exists                                                                         | Cached                       | Inputs                                                                                                           |
-| -------- | --------------------------------- | ------------------------------------------------------------------------------ | ---------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `doc`    | `cargo doc --no-deps --workspace` | Always                                                                         | Yes, as [[DES-OUTPUTS]] says | Those of every cached target ([[DES-INPUTS]]), with the files of every member through the project's dependencies |
-| `audit`  | `cargo audit`                     | Always                                                                         | No                           | `Cargo.lock`, the root `Cargo.toml` and `.cargo/audit.toml` of the workspace root                                |
-| `deny`   | `cargo deny check`                | Where `deny.toml`, `.deny.toml` or `.cargo/deny.toml` is in the workspace root | No                           | `Cargo.lock`, the root `Cargo.toml`, the cargo-deny configuration file and the manifest of every member          |
-| `update` | `cargo update`                    | Always                                                                         | No                           | `Cargo.lock` and the root `Cargo.toml`                                                                           |
+| Target     | Command                                                                             | Exists                                                                         | Cached                       | Inputs                                                                                                                                                                                      |
+| ---------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `doc`      | `cargo doc --no-deps --workspace`                                                   | Always                                                                         | Yes, as [[DES-OUTPUTS]] says | Those of every cached target ([[DES-INPUTS]]), with the files of every member through the project's dependencies                                                                            |
+| `audit`    | `cargo audit`                                                                       | Always                                                                         | No                           | `Cargo.lock`, the root `Cargo.toml` and `.cargo/audit.toml` of the workspace root                                                                                                           |
+| `deny`     | `cargo deny check`                                                                  | Where `deny.toml`, `.deny.toml` or `.cargo/deny.toml` is in the workspace root | No                           | `Cargo.lock`, the root `Cargo.toml`, the cargo-deny configuration file and the manifest of every member                                                                                     |
+| `update`   | `cargo update`                                                                      | Always                                                                         | No                           | `Cargo.lock` and the root `Cargo.toml`                                                                                                                                                      |
+| `lockfile` | `cargo update --workspace`, with `--locked` in locked mode, then a digest per crate | Always                                                                         | No                           | `Cargo.lock`, read also when git ignores it, the root `Cargo.toml`, the `Cargo.toml` of every member and of every path package in the repository, and the workspace files of [[DES-INPUTS]] |
 
 The coverage baseline target of [[DES-BASELINE]] is on the same project, in a workspace with `affectedTests` only.
 
 **doc.** The workspace is documented in one call and its documentation is one site. rustdoc writes a folder per documented crate and files that every run merges, such as the search index and the list of crates. The output is therefore the whole `doc` folder of the [[TERM-ARTIFACT-DIR]], and a cache hit restores what a run writes. Outputs per crate could not do that: Nx restores a folder output by replacing it, so overlapping folders would delete each other's pages, and a crate's own folder lacks the shared styles and search index ([[EVD-CARGO-TARGET-COMMANDS]], [[EVD-NX-24-TARGETS]]). `--no-deps` comes from an option of the target that is on by default, as the flags of [[DES-TARGET-COMMANDS]] do: `noDeps`, set like the other options of the workspace project's targets ([[DES-PLUGIN-OPTIONS]]).
 
 **Existence.** Whether a tool is installed never decides whether a target exists. Every machine thus computes the same graph, and a missing tool cannot make `nx run-many -t audit` leave a workspace out without a word ([[ADR-CARGO-SOURCE-OF-TRUTH]], [[REQ-DIAGNOSTICS]]). A task whose tool is missing fails with the message of [[DES-DIAGNOSTICS]]. `deny` exists only where cargo-deny is configured, because without a configuration file cargo-deny falls back to defaults that reject every license ([[EVD-CARGO-AUDIT-DENY]]).
+
+**lockfile.** The lockfile task is not cached and runs whenever a task that depends on it runs: every cached target of the workspace's crates other than `fmt-check`, and `doc` ([[DES-LOCKFILE-HASHING]]).
 
 **Caching.** `audit`, `deny` and `update` are not cached. cargo-audit and cargo-deny fetch the RustSec advisory database when they run, and no input covers it, so a cached pass could hide an advisory published since ([[EVD-CARGO-AUDIT-DENY]]). `update` exists to change `Cargo.lock`. Their inputs are declared all the same, so that `nx affected` selects them when a file they read changes.
 

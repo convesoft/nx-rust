@@ -236,6 +236,32 @@ describe("@convesoft/nx-rust", () => {
     );
 
     it(
+      "infers the targets through the installed plugin, with no task dependencies",
+      () => {
+        const show = (project: string) =>
+          JSON.parse(nx(projectDirectory, cargo, ["show", "project", project, "--json"])).targets;
+        const api = show("api");
+        const rust = show("rust");
+
+        expect(Object.keys(api)).toEqual(["build", "check", "lint", "test", "fmt-check", "fmt"]);
+        expect(Object.keys(rust)).toEqual(["doc", "audit", "update"]);
+        for (const target of [...Object.values(api), ...Object.values(rust)]) {
+          expect(target).toMatchObject({ executor: "@convesoft/nx-rust:cargo", cache: false });
+          expect(target).not.toHaveProperty("dependsOn");
+        }
+
+        // Nx builds the task graph without running a task, which needs no
+        // executor yet (nxr-kmdpgj).
+        const file = join(wrapperDirectory, "tasks.json");
+        nx(projectDirectory, cargo, ["run-many", "-t", "build", "test", "lint", `--graph=${file}`]);
+        const { tasks } = JSON.parse(readFileSync(file, "utf8"));
+        expect(Object.keys(tasks.tasks)).toHaveLength(12);
+        expect(Object.values(tasks.dependencies).flat()).toEqual([]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
       "logs the cargo invocations in the fixture",
       () => {
         const metadata = JSON.parse(

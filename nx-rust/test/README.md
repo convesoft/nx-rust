@@ -28,6 +28,7 @@ each fixture still has the workspaces and members listed there.
 | `different-toolchains` | The `pinned/` workspace names toolchain `1.91.0` in its `rust-toolchain.toml`, and `stable/` names `stable`. The tests never install a toolchain: without `1.91.0`, cargo fails in `pinned/`, and the tests skip it outside of CI (`pinnedToolchainAvailable()`).                                                                                                                |
 | `mixed-folders`        | A workspace in `libs/rust/` whose folder has a `project.json` without a name. In `crates/addon`, the crate `napi-addon` has a `package.json` named `@mixed/napi-addon` with an empty `project.json` beside it; `crates/engine` has a `project.json` named `rust-engine`; in `crates/unnamed`, the crate `plain` has a `project.json` without a name. `cli` depends on the three. |
 | `nested-folders`       | Workspaces in `services/billing/` and `apps/Billing.API/rust_v2/`, each with one member.                                                                                                                                                                                                                                                                                         |
+| `crate-shapes`         | One crate of each shape in the `rust/` workspace: `core-lib` (folder `core`) is a library with an example, `cli` a binary, `server` a library with the binaries `server` (its `default-run`) and `migrate`, `perf` a library with a bench target, and `internal` a library with `publish = false`. `cli` and `server` depend on `core-lib`.                                      |
 
 A fixture has no `nx.json` unless it needs plugin options. The harness writes
 one that registers the plugin, and in a fixture's own `nx.json` it points
@@ -84,8 +85,8 @@ describeCacheKeyMatrix("cache keys", [
 ]);
 ```
 
-This row shows the intended use: it needs the `test` target, which the plugin
-does not infer yet (nxr-t1ht7j). `compareCacheKeys(row)` returns the hashes
+This row shows the intended use: it needs the inputs of the `test` target,
+which the plugin does not declare yet (nxr-fy4t4k). `compareCacheKeys(row)` returns the hashes
 instead of failing.
 
 **`FixtureWorkspace.create(fixture, files)`** is the copy both helpers use:
@@ -131,7 +132,9 @@ tests, so that a test can compare the text.
 line per invocation (`cwd`, `args`) to a log and then runs the real cargo in
 the same folder, with the real cargo's folder first on `PATH`, so that cargo
 runs the `rustc` that belongs to it. `calls(root)` returns the invocations
-with folders relative to `root`. Every `FixtureWorkspace` has one. Cargo is
+with folders relative to `root`, and `callsWithEnv(root)` adds the value of
+`RUSTUP_AUTO_INSTALL` that each one ran with, `null` where it was unset.
+Every `FixtureWorkspace` has one. Cargo is
 looked up on two different `PATH`s, and the wrapper has to come first on
 both:
 

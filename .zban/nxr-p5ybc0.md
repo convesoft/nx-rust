@@ -17,6 +17,7 @@ Goal: a crate whose registry dependency a `[patch]` (or `[replace]`) table redir
 - [ ] Decide with the user how the plugin learns the patched paths without dependency resolution, and record it in Mara (an evidence item for the experiment above, and the designs it changes)
 - [ ] Implement it, with a fixture or test case for a patched path dependency inside the workspace and across workspaces
 - [ ] Extend `VER-GRAPH` (and `VER-CACHE-KEYS` where it concerns inputs) for the case
+- [ ] Cover what `DES-LOCKFILE-HASHING` leaves to this issue: a `paths` override in Cargo's configuration, which cargo compiles while it calls the lockfile current, and the contents of a path package that a crate reaches only through `[patch]` or `[replace]`, which the lockfile digest names but no file input covers (`EVD-CARGO-LOCK-CHECK`); edges and inputs read from the `[patch]`, `[replace]` and `paths` tables
 
 Done when: the parts of the cited verification that cover this pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
 

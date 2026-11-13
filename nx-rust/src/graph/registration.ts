@@ -2,6 +2,7 @@ import type { CreateNodes } from "@nx/devkit";
 import { checkNxForGraph } from "../compatibility/nx-version";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
+import { readTargetNames } from "./options";
 import { CargoGraph, inferProjects, projectNodes } from "./projects";
 
 /** What the `createNodes` call that started last found. */
@@ -38,8 +39,8 @@ export class Registration {
   constructor() {
     this.createNodes = [
       "**/Cargo.toml",
-      async (manifests, _options, context) => {
-        const graph = await this.discover(manifests, context.workspaceRoot);
+      async (manifests, options, context) => {
+        const graph = await this.discover(manifests, context.workspaceRoot, options);
         return projectNodes(graph.projects);
       },
     ];
@@ -48,9 +49,9 @@ export class Registration {
 
   /**
    * Discovers the Cargo workspaces for this entry's `createNodes`, infers
-   * their projects and keeps both for its `createDependencies`. Every call
-   * requests the reports afresh, sharing them only with the other entries of
-   * the same graph computation.
+   * their projects and targets and keeps both for its `createDependencies`.
+   * Every call requests the reports afresh, sharing them only with the other
+   * entries of the same graph computation.
    *
    * Nx calls `createDependencies` after `createNodes` in the same process. A
    * daemon can start a computation while an earlier one is still running and
@@ -59,18 +60,26 @@ export class Registration {
    * all its manifests in one call, so each call is taken as a computation of
    * its own.
    *
-   * @throws {Error} When the installed Nx is not supported ({@link checkNxForGraph}) or
-   *   discovery fails ({@link discoverWorkspaces}).
+   * @param options The entry's plugin options, of which `targetNames` is read.
+   * @throws {Error} When the installed Nx is not supported (see
+   *   {@link checkNxForGraph}), when the options are invalid, when discovery
+   *   fails (see {@link discoverWorkspaces}) or when `targetNames` gives two
+   *   targets of one project the same name.
    */
-  async discover(manifests: readonly string[], workspaceRoot: string): Promise<CargoGraph> {
+  async discover(
+    manifests: readonly string[],
+    workspaceRoot: string,
+    options?: unknown,
+  ): Promise<CargoGraph> {
     const sequence = ++this.started;
     // Before the first await: it decides which computation this call joins.
     const reports = computationReports();
     let graph: CargoGraph | undefined;
     try {
       checkNxForGraph(workspaceRoot, reports);
+      const targetNames = readTargetNames(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
-      graph = { discovery, projects: inferProjects(discovery) };
+      graph = { discovery, projects: inferProjects(discovery, targetNames) };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {

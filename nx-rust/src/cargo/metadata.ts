@@ -30,8 +30,20 @@ export interface CargoPackage {
   manifest_path: string;
   /** The dependencies as the manifest declares them, unresolved. */
   dependencies: CargoDependency[];
+  /** The package's Cargo targets: its library, binaries, examples, tests, benches and build script. */
+  targets: CargoTarget[];
   /** `[package.metadata]`, or `null`. */
   metadata: unknown;
+}
+
+/** A Cargo target of a {@link CargoPackage}. */
+export interface CargoTarget {
+  name: string;
+  /**
+   * What the target is: `bin`, `example`, `test`, `bench` or `custom-build`,
+   * or the crate types of a library, such as `lib`, `rlib` or `cdylib`.
+   */
+  kind: string[];
 }
 
 /** A declared dependency of a {@link CargoPackage}. */

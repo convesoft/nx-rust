@@ -4,9 +4,9 @@
 //
 //   node log-cargo.cjs <real cargo> <log file> [cargo arguments...]
 //
-// It appends one JSON line with the folder and the arguments of this call to
-// the log, then runs the real cargo with the same arguments, folder, standard
-// streams and environment, and exits as cargo did.
+// It appends one JSON line with the folder, the arguments and the recorded
+// variables of this call to the log, then runs the real cargo with the same
+// arguments, folder, standard streams and environment, and exits as cargo did.
 //
 // One change to the environment: the real cargo's folder comes first on PATH.
 // Cargo runs the `rustc` it finds on PATH, and Nx's run-commands puts Node's
@@ -25,8 +25,15 @@ const { spawn } = require("node:child_process");
 const { appendFileSync } = require("node:fs");
 const { delimiter, dirname } = require("node:path");
 
+// The variables of this call's environment that the log records, each null
+// where it is unset. cargo-wrapper.ts names the same ones.
+const recordedVariables = ["RUSTUP_AUTO_INSTALL"];
+
 const [realCargo, logFile, ...args] = process.argv.slice(2);
-appendFileSync(logFile, `${JSON.stringify({ cwd: process.cwd(), args })}\n`);
+const recorded = Object.fromEntries(
+  recordedVariables.map((name) => [name, process.env[name] ?? null]),
+);
+appendFileSync(logFile, `${JSON.stringify({ cwd: process.cwd(), args, env: recorded })}\n`);
 
 const env = {
   ...process.env,
