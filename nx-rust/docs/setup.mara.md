@@ -1,7 +1,11 @@
 # Setup and compatibility
 
-> **Status:** specified, not implemented yet. The package is not published to
-> npm yet.
+> **Status:** `nx add` and the `library` and `binary` generators are
+> implemented. So far `init` stops only for the problems that graph creation
+> detects already, which are a missing cargo and a failing `cargo metadata`,
+> and of the tools below it counts only cargo-deny as needed by your settings.
+> The version checks, the warnings and the errors for missing tools are not
+> implemented yet. The package is not published to npm yet.
 
 ## What you need
 
@@ -234,7 +238,7 @@ The plugin does not write `Cargo.toml`, `Cargo.lock` or `.cargo/config.toml`. Th
 | `name`      | No                            | The package name, passed as `--name`. Without it, cargo uses the folder's name.                                                                            |
 | `edition`   | No                            | The edition, passed as `--edition`. Without it, cargo chooses: the edition that `[workspace.package]` sets, otherwise cargo's default ([[EVD-CARGO-NEW]]). |
 
-- **Exclusion.** The generator first finds the workspace that will enclose the crate, as cargo does: the nearest manifest above the folder that has a `[workspace]` table. When that workspace's `exclude` matches the folder, the generator fails with a message that names the manifest and the pattern, and runs no cargo. Cargo itself would add the folder to `members`, and an explicit member overrides `exclude` ([[EVD-CARGO-NEW]]).
+- **Exclusion.** The generator first finds the workspace that will enclose the crate, as cargo does: the nearest manifest above the folder that has a `[workspace]` table. When that workspace's `exclude` matches the folder, the generator fails with a message that names the manifest and the entry, and runs no cargo. Cargo itself would add the folder to `members`, and an explicit member overrides `exclude` ([[EVD-CARGO-NEW]]).
 - **Creation.** The generator writes nothing through Nx's file tree. The callback it returns runs `cargo new --vcs none` in place, with the options given. Cargo writes the crate, takes over what `[workspace.package]` and `[workspace.lints]` provide, and adds the folder to `members` of the enclosing workspace unless an entry already matches it, creating the list when there is none. The generator does not edit the workspace manifest itself. `--vcs none` is always passed, because cargo creates a git repository inside the new crate, even inside a git repository, when a folder on the way to it does not exist yet ([[EVD-CARGO-NEW]]).
 - **Dry run.** With `--dry-run`, Nx does not run the callback ([[EVD-NX-24-SETUP]]). The generator prints the cargo command it would run and changes nothing.
 - **Outside a workspace.** With no enclosing workspace, the crate is a [[TERM-STANDALONE-CRATE]], as with plain `cargo new`, and the generator says that it has its own `Cargo.lock` and build directory.
@@ -256,6 +260,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------- |
 | Nx older than the supported majors ([[REQ-COMPATIBILITY]])                                                                                                                                                    | When the plugin loads; by `init`                   | Error                                                     |
 | Nx newer than the supported majors ([[REQ-COMPATIBILITY]])                                                                                                                                                    | When the plugin loads; by `init`                   | Error; a warning with `NX_RUST_ALLOW_UNSUPPORTED_NX=true` |
+| The installed Nx lacks, or has changed, the internal parts of Nx through which `init` runs the checks of graph creation ([[REQ-COMPATIBILITY]])                                                               | By `init`, before it writes                        | Error                                                     |
 | `cargo` not found, or `cargo metadata` fails for a manifest ([[DES-DISCOVERY]])                                                                                                                               | When the graph is created                          | Error                                                     |
 | Cargo older than 1.91 in a workspace                                                                                                                                                                          | When the graph is created                          | Error                                                     |
 | A toolchain that a workspace pins is not installed                                                                                                                                                            | When the graph is created                          | Error                                                     |

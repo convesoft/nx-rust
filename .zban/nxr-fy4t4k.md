@@ -18,6 +18,7 @@ Implements `REQ-INPUT-FILES`, `REQ-ENV-ALLOWLIST`, `REQ-TOOLCHAIN-KEY`, `REQ-CAC
 
 - [ ] The whole crate folder as the crate-file input, and real paths for workspace files, including every `.cargo/config.toml` and `rust-toolchain.toml` that applies
 - [ ] Inputs for path dependencies without a project, with the warning where Nx cannot see them, and for tool configuration files
+- [ ] A test that `init` prints the warning for a path dependency that Nx cannot see (`VER-SETUP`); `init` runs `createNodes` through Nx (`nx-rust/src/generators/init/graph-check.ts`), so a warning printed there reaches it
 - [ ] `^` inputs over normal, build and dev-dependency edges
 - [ ] The environment allowlist and the inputs the repository adds, placed as `DES-INPUTS` says
 - [ ] The toolchain runtime input, run in the workspace root
