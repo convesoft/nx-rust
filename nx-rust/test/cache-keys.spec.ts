@@ -761,6 +761,65 @@ describeCacheKeyMatrix("keys with declared files", [
   },
 ]);
 
+// The files that a crate declares travel with its folder where another
+// crate's inputs name the folder beside an edge.
+describeCacheKeyMatrix("keys with the declared files of a crate without an edge", [
+  {
+    change:
+      "a change in a file that a crate without a project declares, which the crate reaches through another crate without a project",
+    fixture: "declared-files",
+    base: {
+      files: {
+        "rust/crates/api/Cargo.toml": appended(
+          '\n[dependencies]\nlexer = { path = "../../../vendor/lexer" }\n',
+        ),
+        "vendor/lexer/Cargo.toml": `${crate("lexer")}\n[workspace]\n\n[dependencies]\ntoken = { path = "../token" }\n`,
+        "vendor/lexer/src/lib.rs": "",
+        "vendor/token/Cargo.toml": `${crate("token")}\n[workspace]\n\n[package.metadata.nx]\nfileInputs = ["../../shared/token.txt"]\n`,
+        "vendor/token/src/lib.rs": "",
+        "shared/token.txt": "token\n",
+        "nx.json": excludedFromPlugin("vendor/**"),
+      },
+    },
+    after: { files: { "shared/token.txt": appended("changed\n") } },
+    keys: { "api:test": "must differ", "app:test": "must differ", "other:test": "must not differ" },
+  },
+  {
+    change:
+      "a change in a file that a redirected crate without a project declares, for every member that may use it",
+    fixture: "patched-workspaces",
+    base: {
+      files: {
+        "third_party/fork/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nfileInputs = ["../../schema/fork.sql"]\n',
+        ),
+        "schema/fork.sql": "create table fork ();\n",
+      },
+    },
+    after: { files: { "schema/fork.sql": appended("-- changed\n") } },
+    keys: {
+      "api:test": "must differ",
+      "viaw:test": "must differ",
+      "plain:test": "must not differ",
+    },
+  },
+  {
+    change:
+      "a change in a file that a redirected crate declares whose edge is left out to avoid a cycle",
+    fixture: "patched-workspaces",
+    base: {
+      files: {
+        "rust/crates/model/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nfileInputs = ["../../../schema/model.sql"]\n',
+        ),
+        "schema/model.sql": "create table model ();\n",
+      },
+    },
+    after: { files: { "schema/model.sql": appended("-- changed\n") } },
+    keys: { "util:test": "must differ", "plain:test": "must not differ" },
+  },
+]);
+
 describeCacheKeyMatrix("keys without declared files", [
   {
     change: "a change in a file outside the crate's folder that a dependent declares",

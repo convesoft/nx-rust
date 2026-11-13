@@ -1,4 +1,5 @@
-import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { lstatSync, readlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { CargoWorkspace, describeWorkspaces } from "./discovery";
 import type { InputDefinition } from "./inputs";
 import { physicalPath } from "./real-path";
@@ -29,17 +30,20 @@ const parentAfterGlob = /(^|[/{,])\.\.($|[/},])/;
  *
  * Nx fails the hash of every task whose `includeIgnored` fileset has a `.`
  * or `..` segment, so the pattern's fixed part, its segments before the
- * first one with a glob character, is resolved here, and the symbolic links
- * in it as well: Nx keeps the hash of a link to a file until the link
- * itself changes, and matches changed files by their real paths, so a
- * fileset that names a link would miss a change to what it points to
- * (`EVD-NX-24-FILE-INPUTS`). A link that only the glob part reaches stays
- * as it is.
+ * first one with a glob character, is resolved here as the system resolves
+ * it, the symbolic links in it included. Nx keeps the hash of a link to a
+ * file until the link itself changes, and matches changed files by their
+ * own paths (`EVD-NX-24-FILE-INPUTS`). The pattern therefore gives a
+ * fileset for each link that its fixed part passes, at the path where the
+ * link itself lies, so that a change to the link is seen, and one for the
+ * real path with the rest of the pattern, so that a change to what the
+ * links lead to is seen. A link that only the glob part reaches stays as it
+ * is.
  *
  * Each of these is a problem that names the manifest and the pattern
  * (`REQ-FILE-INPUTS-HASHABLE`): a `..` after a glob character, which could
- * lead anywhere and fails Nx's hash; a fixed part that resolves outside the
- * repository, also through a symbolic link; and one that resolves into the
+ * lead anywhere and fails Nx's hash; a real path outside the repository, or
+ * a link outside it that the fixed part passes; and a real path in the
  * build or artifact directory of the crate's workspace. Nx hashes no file
  * that a fileset names by a path that leaves the repository, and
  * `nx affected` sees no change to a file outside it, so the message for
@@ -55,23 +59,33 @@ const parentAfterGlob = /(^|[/{,])\.\.($|[/},])/;
 // @mara implements DES-DIAGNOSTICS
 export function declaredFiles(
   fileInputs: readonly FileInput[],
-  workspace: CargoWorkspace,
+  workspace: Pick<CargoWorkspace, "root" | "report">,
   repositoryRoot: string,
 ): DeclaredFiles {
-  const filesets: InputDefinition[] = [];
+  const filesets = new Map<string, InputDefinition>();
   const problems: string[] = [];
   const realRoot = physicalPath(repositoryRoot);
   const directories = cargoDirectories(workspace);
+  const declare = (path: string) => {
+    const fileset = path === "" ? "{workspaceRoot}/**/*" : `{workspaceRoot}/${path}`;
+    filesets.set(fileset, { fileset, includeIgnored: true });
+  };
   for (const input of fileInputs) {
-    const { fixed, glob } = splitPattern(input, repositoryRoot);
+    const { start, fixed, glob } = splitPattern(input, repositoryRoot);
     if (parentAfterGlob.test(glob)) {
       problems.push(parentAfterGlobProblem(input));
       continue;
     }
-    const real = physicalPath(fixed);
+    const { real, links } = resolveFixed(start, fixed);
     const path = within(realRoot, real);
     if (path === undefined) {
-      problems.push(outsideProblem(input, [real, glob].filter((part) => part !== "").join("/")));
+      const resolved = [real, glob].filter((part) => part !== "").join("/");
+      problems.push(outsideProblem(input, `resolves to ${resolved}`));
+      continue;
+    }
+    const outsideLink = links.find((link) => within(realRoot, link) === undefined);
+    if (outsideLink !== undefined) {
+      problems.push(outsideProblem(input, `runs through the symbolic link ${outsideLink}`));
       continue;
     }
     const directory = directories.find(
@@ -81,35 +95,94 @@ export function declaredFiles(
       problems.push(cargoDirectoryProblem(input, directory, workspace, repositoryRoot));
       continue;
     }
-    const rest = [path, glob].filter((part) => part !== "").join("/");
-    filesets.push({
-      fileset: rest === "" ? "{workspaceRoot}/**/*" : `{workspaceRoot}/${rest}`,
-      includeIgnored: true,
-    });
+    for (const link of links) {
+      declare(within(realRoot, link) ?? "");
+    }
+    declare([path, glob].filter((part) => part !== "").join("/"));
   }
-  return { filesets, problems };
+  return { filesets: [...filesets.values()], problems };
 }
 
 /**
- * The pattern against its manifest's folder: the absolute path of its
- * segments before the first one with a glob character, as written, for
- * {@link physicalPath} to resolve `..` and symbolic links in it as the
- * system does; and the rest of the pattern, without `.` segments and empty
- * ones.
+ * The pattern against its manifest's folder: where it starts, as a real
+ * path, the segments before the first one with a glob character, as
+ * written, and the rest of the pattern, without `.` segments and empty
+ * ones. A relative pattern starts at its manifest's folder. An absolute one
+ * starts at the repository root where it begins with the root's path, so
+ * that the links in the spelling of the root itself, such as `/tmp` on
+ * macOS, are not counted as links that the pattern passes; elsewhere at the
+ * file system's root.
  */
-function splitPattern(input: FileInput, repositoryRoot: string): { fixed: string; glob: string } {
+function splitPattern(
+  input: FileInput,
+  repositoryRoot: string,
+): { start: string; fixed: string[]; glob: string } {
+  let pattern = input.pattern;
+  let start = physicalPath(join(repositoryRoot, posix.dirname(input.manifest)));
+  if (posix.isAbsolute(pattern)) {
+    const root = repositoryRoot.endsWith(sep) ? repositoryRoot : `${repositoryRoot}${sep}`;
+    start = pattern.startsWith(root) ? physicalPath(repositoryRoot) : sep;
+    pattern = pattern.startsWith(root) ? pattern.slice(root.length) : pattern;
+  }
   const fixed: string[] = [];
   const glob: string[] = [];
-  for (const segment of input.pattern.split("/")) {
+  for (const segment of pattern.split("/")) {
     if (segment === "" || segment === ".") {
       continue;
     }
     (glob.length > 0 || globCharacters.test(segment) ? glob : fixed).push(segment);
   }
-  const start = posix.isAbsolute(input.pattern)
-    ? ""
-    : join(repositoryRoot, posix.dirname(input.manifest));
-  return { fixed: [start, ...fixed].join(sep) || sep, glob: glob.join("/") };
+  return { start, fixed, glob: glob.join("/") };
+}
+
+/** Linux's MAXSYMLINKS. */
+const maximumLinks = 40;
+
+/**
+ * The real path that `segments` reach from the real folder `start`, as the
+ * system resolves it: a `..` leaves the folder that a link before it leads
+ * to, a link whose target does not exist yet is followed too, and segments
+ * that do not exist are added as written. With it, the absolute path of
+ * every link passed on the way, its folder resolved and itself not, in the
+ * order they are passed, also those that a link's target passes.
+ */
+function resolveFixed(
+  start: string,
+  segments: readonly string[],
+): { real: string; links: string[] } {
+  const links: string[] = [];
+  const visit = (folder: string, parts: readonly string[]): string => {
+    let current = folder;
+    for (const part of parts) {
+      if (part === "" || part === ".") {
+        continue;
+      }
+      if (part === "..") {
+        current = dirname(current);
+        continue;
+      }
+      const next = join(current, part);
+      const target = links.length < maximumLinks ? linkTarget(next) : undefined;
+      if (target === undefined) {
+        current = next;
+        continue;
+      }
+      links.push(next);
+      current = visit(isAbsolute(target) ? sep : current, target.split(sep));
+    }
+    return current;
+  };
+  return { real: visit(start, segments), links };
+}
+
+/** What the symbolic link at `path` points to, or `undefined` where no link lies there. */
+function linkTarget(path: string): string | undefined {
+  try {
+    return lstatSync(path).isSymbolicLink() ? readlinkSync(path) : undefined;
+  } catch {
+    // Missing, or below a file.
+    return undefined;
+  }
 }
 
 /** `path` relative to `folder` where it lies in it, `""` for the folder itself; else `undefined`. */
@@ -129,7 +202,7 @@ interface CargoDirectory {
 }
 
 /** The workspace's build and artifact directories, once each, also before Cargo creates them. */
-function cargoDirectories(workspace: CargoWorkspace): CargoDirectory[] {
+function cargoDirectories(workspace: Pick<CargoWorkspace, "report">): CargoDirectory[] {
   const { build_directory: build, target_directory: artifact } = workspace.report;
   const directory = (role: string, path: string): CargoDirectory => ({
     role,
@@ -150,9 +223,10 @@ function parentAfterGlobProblem(input: FileInput): string {
   ].join(" ");
 }
 
-function outsideProblem(input: FileInput, resolved: string): string {
+/** @param where Where the pattern leaves the repository, such as `resolves to /x`. */
+function outsideProblem(input: FileInput, where: string): string {
   return [
-    `${input.manifest}: the fileInputs pattern ${JSON.stringify(input.pattern)} resolves to ${resolved}, outside the repository, whose files Nx does not track.`,
+    `${input.manifest}: the fileInputs pattern ${JSON.stringify(input.pattern)} ${where}, outside the repository, whose files Nx does not track.`,
     "To key the crate's tasks on such files, add a command to runtimeInputs that prints them or a hash of them; nx affected does not see a change to its output.",
   ].join(" ");
 }
@@ -160,7 +234,7 @@ function outsideProblem(input: FileInput, resolved: string): string {
 function cargoDirectoryProblem(
   input: FileInput,
   directory: CargoDirectory,
-  workspace: CargoWorkspace,
+  workspace: Pick<CargoWorkspace, "root">,
   repositoryRoot: string,
 ): string {
   const shown = within(repositoryRoot, directory.path) || directory.path;

@@ -24,6 +24,12 @@ export interface CacheContext extends InputContext {
   artifactDirectories: ReadonlyMap<string, ArtifactDirectory>;
   /** The warnings for each project, by the manifest path of its crate or of its workspace. */
   warnings: ReadonlyMap<string, readonly string[]>;
+  /**
+   * The problems of the files that the crates without an edge declare, each
+   * once, which stop graph creation together with the projects' own
+   * (`inferProjects` in `projects.ts`).
+   */
+  declaredFileProblems: readonly string[];
 }
 
 /**
@@ -74,10 +80,10 @@ export async function cacheContext(
         }
       }
       pathDependencyInputs.set(crate.manifest_path, [
-        ...new Set(dependencies.flatMap(crateInputs)),
+        ...uniqueInputs(dependencies.flatMap(crateInputs)),
       ]);
       redirectedInputs.set(crate.manifest_path, [
-        ...new Set((folders.leftOutEdges.get(crate.manifest_path) ?? []).flatMap(crateInputs)),
+        ...uniqueInputs((folders.leftOutEdges.get(crate.manifest_path) ?? []).flatMap(crateInputs)),
       ]);
       for (const dependency of dependencies.filter((dependency) => !dependency.seen)) {
         warn(
@@ -118,9 +124,24 @@ export async function cacheContext(
     repositoryDefault: repositoryDefaultInputs(nxJson?.namedInputs),
     pathDependencyInputs,
     redirectedInputs,
+    declaredFileProblems: folders.problems,
     artifactDirectories,
     warnings,
   };
+}
+
+// The inputs once each, in order: a declared fileset of a workspace's table
+// comes with every crate of the workspace that the crate reaches.
+function uniqueInputs(inputs: readonly Input[]): Input[] {
+  const seen = new Set<string>();
+  return inputs.filter((input) => {
+    const key = JSON.stringify(input);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 /** What caching needs to know about a project. */

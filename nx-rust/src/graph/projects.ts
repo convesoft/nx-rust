@@ -84,9 +84,9 @@ export interface CargoGraph {
  *
  * @param settings The settings of the plugin options and metadata tables (`readSettings` in `settings.ts`).
  * @param context What the caching of the projects shares (`cacheContext` in `caching.ts`).
- * @throws {Error} Naming every `fileInputs` pattern that resolves outside the
- *   repository or into a Cargo directory (`declaredFiles` in
- *   `declared-files.ts`); when `targetNames` gives two targets of one
+ * @throws {Error} Naming every `fileInputs` pattern that Nx cannot hash, of
+ *   the projects and of the crates whose folders their inputs name
+ *   (`declaredFiles` in `declared-files.ts`); when `targetNames` gives two targets of one
  *   project the same name, or a target table breaks a rule of
  *   `applyTargetTables`.
  */
@@ -136,7 +136,10 @@ export function inferProjects(
       declaredFiles(project.settings.fileInputs, project.workspace, discovery.workspaceRoot),
     ]),
   );
-  const problems = new Set([...declared.values()].flatMap((files) => files.problems));
+  const problems = new Set([
+    ...context.declaredFileProblems,
+    ...[...declared.values()].flatMap((files) => files.problems),
+  ]);
   if (problems.size > 0) {
     throw new Error([...problems].join("\n"));
   }

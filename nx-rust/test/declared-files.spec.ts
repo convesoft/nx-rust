@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { lutimesSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { lutimesSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   applyFileChanges,
@@ -221,7 +221,7 @@ describe("declared files", () => {
   );
 
   it(
-    "resolve an absolute pattern, links to a file or a folder inside the repository and a path below a file to their real paths",
+    "resolve an absolute pattern, links to a file or a folder inside the repository and a path below a file to the links they pass and their real paths",
     () =>
       inFixture("declared-files", { "shared/real/schema.sql": "" }, async (workspace) => {
         symlinkSync("real", join(workspace.root, "shared", "linked"));
@@ -243,17 +243,26 @@ describe("declared files", () => {
         );
         const graph = await workspace.graph();
 
-        expect(graph.projects.api.namedInputs.default).toEqual(
-          expect.arrayContaining([
-            { fileset: "{workspaceRoot}/shared/real/schema.sql", includeIgnored: true },
-            { fileset: "{workspaceRoot}/shared/real/*.sql", includeIgnored: true },
-            { fileset: "{workspaceRoot}/shared/real/schema.sql", includeIgnored: true },
-            { fileset: "{workspaceRoot}/docs/banner.txt", includeIgnored: true },
-            { fileset: "{workspaceRoot}/nested/b.txt", includeIgnored: true },
-            { fileset: "{workspaceRoot}/docs/banner.txt/part", includeIgnored: true },
-          ]),
-        );
-        expect(JSON.stringify(graph.projects.api.namedInputs)).not.toMatch(/linked|alias|deep/);
+        const declared = (path: string) => ({
+          fileset: `{workspaceRoot}/${path}`,
+          includeIgnored: true,
+        });
+
+        // Each link that a pattern passes, where it lies, then the real
+        // path; each fileset once.
+        expect(graph.projects.api.namedInputs.default).toEqual([
+          "{projectRoot}/**/*",
+          "{workspaceRoot}/rust/Cargo.toml",
+          declared("proto/**/*.proto"),
+          declared("shared/real/schema.sql"),
+          declared("shared/linked"),
+          declared("shared/real/*.sql"),
+          declared("docs/alias.txt"),
+          declared("docs/banner.txt"),
+          declared("shared/deep"),
+          declared("nested/b.txt"),
+          declared("docs/banner.txt/part"),
+        ]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -413,6 +422,174 @@ describe("declared files", () => {
           withFiles: apiAndDependents,
         });
       },
+      HARNESS_TIMEOUT,
+    );
+  });
+
+  describe("through a symbolic link that is replaced", () => {
+    /**
+     * Commits the fixture with `files` and the link `link` to `first`,
+     * hashes the cached tasks of api and the workspace's doc, replaces the
+     * link by one to `second`, commits only that, and hashes and asks
+     * `nx affected` again; then commits a change to `changed`, a file that
+     * the new link leads to, and does the same.
+     */
+    async function replaceLink(
+      files: FileChanges,
+      link: string,
+      [first, second]: [string, string],
+      changed: string,
+    ) {
+      const tasks = ["api:build", "api:check", "api:lint", "api:test", "rust:doc"];
+      const workspace = FixtureWorkspace.create("declared-files", files);
+      const differ = (before: Record<string, { value: string }>, after: typeof before) =>
+        Object.fromEntries(tasks.map((task) => [task, before[task].value !== after[task].value]));
+      try {
+        symlinkSync(first, join(workspace.root, link));
+        const minuteAgo = Date.now() / 1000 - 60;
+        lutimesSync(join(workspace.root, link), minuteAgo, minuteAgo);
+        commitWorkspace(workspace);
+        const before = await workspace.hashTasks(tasks);
+        rmSync(join(workspace.root, link));
+        symlinkSync(second, join(workspace.root, link));
+        git(workspace, "add", link);
+        git(workspace, "commit", "-q", "-m", "replace the link");
+        const replaced = await workspace.hashTasks(tasks);
+        const linkChange = {
+          keysDiffer: differ(before, replaced),
+          afterCommit: await affectedTasks(workspace, ["--base=HEAD~1", "--head=HEAD"]),
+          withFiles: await affectedTasks(workspace, [`--files=${link}`]),
+        };
+        commitChanges(workspace, { [changed]: (current) => `${current ?? ""}changed\n` });
+        const after = await workspace.hashTasks(tasks);
+        const targetChange = {
+          keysDiffer: differ(replaced, after),
+          afterCommit: await affectedTasks(workspace, ["--base=HEAD~1", "--head=HEAD"]),
+        };
+        return { linkChange, targetChange };
+      } finally {
+        workspace.remove();
+      }
+    }
+
+    const everyKeyDiffers = Object.fromEntries(
+      ["api:build", "api:check", "api:lint", "api:test", "rust:doc"].map((task) => [task, true]),
+    );
+
+    it(
+      "change the keys and select the tasks when a declared link to a file is replaced, and again when its new target changes",
+      async () => {
+        const outcome = await replaceLink(
+          { "docs/alternate.txt": "Other\n", ...apiDeclares("../../../docs/alias.txt") },
+          "docs/alias.txt",
+          ["banner.txt", "alternate.txt"],
+          "docs/alternate.txt",
+        );
+
+        expect(outcome).toEqual({
+          linkChange: {
+            keysDiffer: everyKeyDiffers,
+            afterCommit: apiAndDependents,
+            withFiles: apiAndDependents,
+          },
+          targetChange: { keysDiffer: everyKeyDiffers, afterCommit: apiAndDependents },
+        });
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "change the keys and select the tasks when a link to a folder that a pattern runs through is replaced, and again when a file of its new target changes",
+      async () => {
+        const outcome = await replaceLink(
+          {
+            "shared/real/schema.sql": "create table api ();\n",
+            "shared/other/schema.sql": "create table other ();\n",
+            ...apiDeclares("../../../shared/linked/*.sql"),
+          },
+          "shared/linked",
+          ["real", "other"],
+          "shared/other/schema.sql",
+        );
+
+        expect(outcome).toEqual({
+          linkChange: {
+            keysDiffer: everyKeyDiffers,
+            afterCommit: apiAndDependents,
+            withFiles: apiAndDependents,
+          },
+          targetChange: { keysDiffer: everyKeyDiffers, afterCommit: apiAndDependents },
+        });
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
+  describe("of a crate without a project", () => {
+    // vendor/lexer is excluded from the plugin and has a workspace of its
+    // own; api depends on it by path and app on api.
+    const withLexer = (lexerManifest: string): FileChanges => ({
+      "rust/crates/api/Cargo.toml": (manifest) =>
+        `${manifest}\n[dependencies]\nlexer = { path = "../../../vendor/lexer" }\n`,
+      "vendor/lexer/Cargo.toml": lexerManifest,
+      "vendor/lexer/src/lib.rs":
+        'pub const TEXT: &str = include_str!("../../../shared/input.txt");\n',
+      "shared/input.txt": "good",
+      "nx.json": (text) =>
+        JSON.stringify({
+          ...JSON.parse(text),
+          plugins: JSON.parse(text).plugins.map((plugin: string) => ({
+            plugin,
+            exclude: ["vendor/**"],
+          })),
+        }),
+    });
+    const lexer = '[package]\nname = "lexer"\nversion = "0.1.0"\nedition = "2024"\n\n[workspace]\n';
+
+    it.each([
+      [
+        "its own table",
+        `${lexer}\n[package.metadata.nx]\nfileInputs = ["../../shared/input.txt"]\n`,
+      ],
+      [
+        "its workspace's table",
+        `${lexer}\n[workspace.metadata.nx]\nfileInputs = ["../../shared/input.txt"]\n`,
+      ],
+    ])(
+      "change the keys of the crates that depend on it and select their tasks for a file that %s declares",
+      async (_table, manifest) => {
+        const outcome = await changeDeclaredFile({
+          files: withLexer(manifest),
+          changed: "shared/input.txt",
+        });
+
+        expect(outcome).toEqual({
+          keysDiffer: bothDiffer,
+          afterCommit: apiAndDependents,
+          withFiles: apiAndDependents,
+        });
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "fail graph creation for a pattern that Nx cannot hash, naming its manifest",
+      () =>
+        inFixture(
+          "declared-files",
+          withLexer(`${lexer}\n[package.metadata.nx]\nfileInputs = ["../../../outside.txt"]\n`),
+          async (workspace) => {
+            const error = await workspace.graph().then(
+              () => undefined,
+              (error: unknown) => error,
+            );
+
+            expect(error).toBeInstanceOf(GraphCreationError);
+            expect((error as Error).message).toContain(
+              `vendor/lexer/Cargo.toml: the fileInputs pattern "../../../outside.txt" resolves to ${dirname(workspace.root)}/outside.txt, outside the repository, whose files Nx does not track.`,
+            );
+          },
+        ),
       HARNESS_TIMEOUT,
     );
   });
