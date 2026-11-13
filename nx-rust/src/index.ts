@@ -1,4 +1,5 @@
 import type { CreateDependenciesContext, CreateNodes, RawProjectGraphDependency } from "@nx/devkit";
+import { failOnCollisionsAcrossEntries } from "./graph/collisions";
 import { projectEdges } from "./graph/edges";
 import { Registration, registrationOf } from "./graph/registration";
 
@@ -6,6 +7,10 @@ import { Registration, registrationOf } from "./graph/registration";
  * The edges between the projects that this entry's `createNodes` created in
  * the same graph computation, from the reports it requested there; none when
  * that call failed, whose error already fails graph creation.
+ *
+ * It fails first when one of those projects has the name of a project that
+ * another entry of the plugin created, which only the merged projects that
+ * Nx passes here can show.
  *
  * Nx calls it as a method of its copy of the plugin for the entry, which is
  * `this`.
@@ -16,7 +21,11 @@ function createDependencies(
   context: CreateDependenciesContext,
 ): RawProjectGraphDependency[] {
   const graph = registrationOf(this).graphForDependencies(context.workspaceRoot);
-  return graph === undefined ? [] : projectEdges(graph, context.projects);
+  if (graph === undefined) {
+    return [];
+  }
+  failOnCollisionsAcrossEntries(graph, context.projects);
+  return projectEdges(graph, context.projects);
 }
 
 /**

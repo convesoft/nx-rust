@@ -9,11 +9,12 @@ import type { CargoGraph } from "./projects";
 // Nx's `DependencyType.implicit`, written out because the plugin does not
 // load @nx/devkit at run time.
 //
-// An edge of another type names a source file, and Nx caches such edges by
-// that file: while the file is unchanged, it keeps the edges it found the
-// last time instead of the ones returned now. A crate's edges also depend on
-// files other than its manifest, such as the `[workspace.dependencies]` of
-// its workspace and the ignore files that decide which crates are projects.
+// An edge of another type names a source file, and Nx records it under that
+// file. For a file whose hash is unchanged, Nx puts back the records it
+// cached in an earlier computation in place of the new ones, while a crate's
+// edges also depend on other files, such as the `[workspace.dependencies]` of
+// its workspace and the ignore files that decide which crates are projects
+// (EVD-NX-EDGE-CACHE). Implicit edges are taken as returned every time.
 const implicit = "implicit" as DependencyType.implicit;
 
 /**

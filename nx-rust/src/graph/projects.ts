@@ -1,6 +1,7 @@
 import type { CreateNodesResultArray } from "@nx/devkit";
 import { dirname, join, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
+import { cargoMetadata, cargoMetadataKey, failOnCollisions } from "./collisions";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import { projectName } from "./names";
 
@@ -86,51 +87,21 @@ export function inferProjects(discovery: CargoDiscovery): CargoProject[] {
   return projects;
 }
 
-/** The result of `createNodes` for the projects: each project under the manifest it comes from. */
+/**
+ * The result of `createNodes` for the projects: each project under the
+ * manifest it comes from, with its name and, in its metadata, what another
+ * entry of the plugin needs to recognise it ({@link cargoMetadata}).
+ */
 export function projectNodes(projects: readonly CargoProject[]): CreateNodesResultArray {
   return projects.map((project) => [
     project.manifest,
-    { projects: { [project.root]: { name: project.name } } },
+    {
+      projects: {
+        [project.root]: {
+          name: project.name,
+          metadata: { [cargoMetadataKey]: cargoMetadata(project) },
+        },
+      },
+    },
   ]);
-}
-
-// Fails with one message that covers every name that more than one project
-// would get, naming each project's manifest and how to rename it.
-function failOnCollisions(projects: readonly CargoProject[]): void {
-  const byName = new Map<string, CargoProject[]>();
-  for (const project of projects) {
-    byName.set(project.name, [...(byName.get(project.name) ?? []), project]);
-  }
-  const collisions = [...byName].filter(([, named]) => named.length > 1);
-  if (collisions.length === 0) {
-    return;
-  }
-  throw new Error(
-    collisions
-      .map(([name, named]) =>
-        [
-          `nx-rust would give ${named.length} projects the name "${name}", and Nx needs every project name to be unique:`,
-          ...named.map((project) => `- ${describeProject(project)}: ${remedy(project)}`),
-          "nx-rust never renames a project on its own. Rename all of them but one.",
-        ].join("\n"),
-      )
-      .join("\n\n"),
-  );
-}
-
-function describeProject(project: CargoProject): string {
-  return project.pkg === undefined
-    ? `the workspace project of the Cargo workspace in ${project.manifest}`
-    : `the crate ${project.pkg.name} in ${project.manifest}`;
-}
-
-function remedy(project: CargoProject): string {
-  if (project.pkg === undefined) {
-    return "set `name` under [workspace.metadata.nx.project] in that manifest.";
-  }
-  const own = "set `name` under [package.metadata.nx] in that manifest";
-  // A prefix renames every member, which only helps in a workspace of several.
-  return project.workspace.report.workspace_members.length > 1
-    ? `${own}, or \`namePrefix\` under [workspace.metadata.nx] in ${project.workspace.rootManifest} for every member of its workspace.`
-    : `${own}.`;
 }

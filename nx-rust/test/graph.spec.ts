@@ -212,6 +212,26 @@ describe("projects and edges of each fixture", () => {
   );
 
   it(
+    "gives each project its manifest, workspace, package name and the plugin's name in its metadata",
+    async () => {
+      const graph = await loadFixtureGraph("mixed-folders");
+
+      expect(graph.projects["rust-engine"].metadata.cargo).toEqual({
+        projectName: "engine",
+        manifest: "libs/rust/crates/engine/Cargo.toml",
+        workspaceManifest: "libs/rust/Cargo.toml",
+        packageName: "engine",
+      });
+      expect(graph.projects["libs-rust"].metadata.cargo).toEqual({
+        projectName: "libs-rust",
+        manifest: "libs/rust/Cargo.toml",
+        workspaceManifest: "libs/rust/Cargo.toml",
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "adds an edge when a crate gets a project and no manifest changes",
     async () => {
       // Nx reuses what it found for a file that did not change. testkit is
@@ -363,33 +383,14 @@ describe("name collisions", () => {
         'nx-rust would give 2 projects the name "api", and Nx needs every project name to be unique',
       );
       expect(message).toContain(
-        "- the crate api in rust/crates/api/Cargo.toml: set `name` under [package.metadata.nx] in that manifest.",
-      );
-      expect(message).toContain(
-        "- the crate api in tools/api/Cargo.toml: set `name` under [package.metadata.nx] in that manifest.",
-      );
-      expect(message).toContain("nx-rust never renames a project on its own.");
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "offer the workspace's prefix for a crate in a workspace of several members",
-    async () => {
-      // rust/ gets a second member, unlike tools/api, a standalone crate.
-      const loading = loadFixtureGraph("name-collision", {
-        files: {
-          "rust/crates/extra/Cargo.toml": crateManifest("extra"),
-          "rust/crates/extra/src/lib.rs": "",
-        },
-      });
-
-      await expect(loading).rejects.toThrow(
         "- the crate api in rust/crates/api/Cargo.toml: set `name` under [package.metadata.nx] in that manifest, or `namePrefix` under [workspace.metadata.nx] in rust/Cargo.toml for every member of its workspace.",
       );
-      await expect(loading).rejects.toThrow(
-        "- the crate api in tools/api/Cargo.toml: set `name` under [package.metadata.nx] in that manifest.",
+      // A prefix renames a standalone crate too.
+      expect(message).toContain(
+        "- the crate api in tools/api/Cargo.toml: set `name` under [package.metadata.nx] in that manifest, or `namePrefix` under [workspace.metadata.nx] in tools/api/Cargo.toml for every member of its workspace.",
       );
+      expect(message).toContain("nx-rust never renames a project on its own.");
+      expect(message).not.toContain("two entries");
     },
     HARNESS_TIMEOUT,
   );
@@ -463,6 +464,78 @@ describe("name collisions", () => {
       await expect(loading).rejects.toThrow(GraphCreationError);
       await expect(loading).rejects.toThrow(/defined in multiple locations/);
       await expect(loading).rejects.not.toThrow(/nx-rust would give/);
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe.each([
+  ["in plugin workers", "true"],
+  ["in one process", "false"],
+])("name collisions across two plugin entries %s", (_mode, isolation) => {
+  const env = { NX_ISOLATE_PLUGINS: isolation };
+  // Each entry receives one of the two crates called api.
+  const splitEntries = pluginEntries({ include: ["rust/**"] }, { include: ["tools/**"] });
+
+  it(
+    "fail graph creation with Nx's error, followed by the plugin's with both manifests",
+    async () => {
+      const loading = loadFixtureGraph("name-collision", {
+        files: { "nx.json": splitEntries },
+        env,
+      });
+
+      await expect(loading).rejects.toThrow(GraphCreationError);
+      const message = await loading.then(
+        () => "",
+        (error: Error) => error.message,
+      );
+      const nxError = message.indexOf("The following projects are defined in multiple locations");
+      const pluginError = message.indexOf(
+        'nx-rust would give 2 projects the name "api", and Nx needs every project name to be unique',
+      );
+      expect(nxError).toBeGreaterThanOrEqual(0);
+      expect(pluginError).toBeGreaterThan(nxError);
+      expect(message).toContain("- the crate api in rust/crates/api/Cargo.toml: set `name`");
+      expect(message).toContain("- the crate api in tools/api/Cargo.toml: set `name`");
+      expect(message).toContain(
+        "The projects come from two entries of @convesoft/nx-rust in nx.json.",
+      );
+      // Reported by one of the entries only.
+      expect(message.match(/threw an error while creating dependencies/g)).toHaveLength(1);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "leave a name that a project.json gave another entry's crate to Nx's error",
+    async () => {
+      const loading = loadFixtureGraph("name-collision", {
+        files: {
+          "nx.json": splitEntries,
+          "tools/api/Cargo.toml": (manifest) =>
+            manifest.replace('name = "api"', 'name = "toolbox"'),
+          "tools/api/project.json": JSON.stringify({ name: "api" }),
+        },
+        env,
+      });
+
+      await expect(loading).rejects.toThrow(/defined in multiple locations/);
+      await expect(loading).rejects.not.toThrow(/nx-rust would give/);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "find none between two entries that receive the same manifests",
+    async () => {
+      const graph = await loadFixtureGraph("subfolder-workspace", {
+        files: { "nx.json": pluginEntries({}, {}) },
+        env,
+      });
+
+      expect(roots(graph)).toEqual(expected["subfolder-workspace"].projects);
+      expect(edges(graph)).toEqual(expected["subfolder-workspace"].edges);
     },
     HARNESS_TIMEOUT,
   );
