@@ -177,6 +177,28 @@ describe("init", () => {
   );
 
   it(
+    "prints graph creation's warning about a Cargo directory inside the repository that Nx does not ignore",
+    () =>
+      // Without .gitignore, nothing leaves rust/target out (cargo-directories.spec.ts).
+      runInit(
+        "subfolder-workspace",
+        { ".gitignore": null },
+        (_workspace, { status, output, changed }) => {
+          const warning =
+            "nx-rust: rust/target, Cargo's build and artifact directory of the Cargo workspace in rust, lies inside the repository, and no .gitignore or .nxignore leaves it out of the files that Nx reads.";
+
+          expect(status).toBe(0);
+          expect(changed).toEqual(["nx.json"]);
+          expect(output.split(warning)).toHaveLength(2);
+          expect(output).toContain(
+            "Add the line /rust/target/ to the .gitignore at the repository root.",
+          );
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "warns about cargo-deny where a workspace root has a cargo-deny configuration file",
     () =>
       runInit("subfolder-workspace", { "rust/deny.toml": "" }, (_workspace, { status, output }) => {
