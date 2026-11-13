@@ -11,6 +11,7 @@ import {
   holdCargo,
   LocalRegistry,
   lockfileCalls,
+  pnpmLockfile,
   runNx,
   taskCalls,
   testEnvironment,
@@ -108,6 +109,37 @@ function subfolder(): Promise<FixtureWorkspace> {
     },
     ["rust"],
   );
+}
+
+/** Runs git in the workspace with an identity of its own and no signing, and expects it to pass. */
+function git(workspace: FixtureWorkspace, ...args: string[]): void {
+  const result = spawnSync(
+    "git",
+    [
+      "-c",
+      "user.name=nx-rust",
+      "-c",
+      "user.email=test@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      ...args,
+    ],
+    { cwd: workspace.root, encoding: "utf8" },
+  );
+  expect({ args, status: result.status, stderr: result.stderr }).toEqual({
+    args,
+    status: 0,
+    stderr: expect.any(String),
+  });
+}
+
+/** Commits every file that Git does not ignore, in a repository that the first call creates. */
+function commitAll(workspace: FixtureWorkspace, message: string): void {
+  if (!existsSync(join(workspace.root, ".git"))) {
+    git(workspace, "init", "--quiet");
+  }
+  git(workspace, "add", "--all");
+  git(workspace, "commit", "--quiet", "--message", message);
 }
 
 const digestFolder = (workspace: FixtureWorkspace) =>
@@ -320,27 +352,11 @@ describe("nx affected after a change to Cargo.lock", () => {
         },
         [".", "tools"],
       );
-      const git = (...args: string[]) =>
-        spawnSync(
-          "git",
-          [
-            "-c",
-            "user.name=nx-rust",
-            "-c",
-            "user.email=test@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            ...args,
-          ],
-          { cwd: workspace.root, encoding: "utf8" },
-        );
       try {
-        expect(git("init", "--quiet").status).toBe(0);
-        expect(git("add", "--all").status).toBe(0);
-        expect(git("commit", "--quiet", "--message", "The fixture").status).toBe(0);
+        commitAll(workspace, "The fixture");
         expect((await nx(workspace, ["run-many", "-t", "test"], daemon)).status).toBe(0);
         cargo(workspace, ".", "update", "-p", "zzlib", "--precise", "1.0.1");
-        expect(git("commit", "--quiet", "--all", "--message", "Bump zzlib").status).toBe(0);
+        commitAll(workspace, "Bump zzlib");
 
         const run = await nx(
           workspace,
@@ -362,6 +378,140 @@ describe("nx affected after a change to Cargo.lock", () => {
         if (daemon.NX_DAEMON === "true") {
           await workspace.nx(["daemon", "--stop"], { ...env, ...daemon });
         }
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("nx affected after a change to the JS lockfile", () => {
+  // The cached targets of the crates in both workspaces of two-workspaces, and
+  // the lockfile tasks of those workspaces, on which they depend.
+  const crateTests = ["app:test", "scaffold:test", "tools:test", "util:test"];
+  const lockfileTasks = ["cargo-workspace:lockfile", "tools:lockfile"];
+
+  /**
+   * A root package.json and a pnpm lockfile, as in a repository that installs
+   * JS packages: with the plugin's package at `version`, for which Nx then
+   * has a node, or without it for `null`. `leftPad` is the integrity of
+   * left-pad, which the plugin does not depend on.
+   */
+  function jsPackages(version: string | null, leftPad?: string): FileChanges {
+    return {
+      "package.json": JSON.stringify({
+        name: "repo",
+        private: true,
+        devDependencies: {
+          ...(version === null ? {} : { "@convesoft/nx-rust": version }),
+          "left-pad": "1.3.0",
+        },
+      }),
+      "pnpm-lock.yaml": pnpmLockfile(version, { leftPad }),
+      "node_modules/.modules.yaml": "{}\n",
+    };
+  }
+
+  /** Sets projectsAffectedByDependencyUpdates of Nx's JS plugin to auto in nx.json. */
+  const auto: FileChanges = {
+    "nx.json": (text) =>
+      JSON.stringify({
+        ...JSON.parse(text ?? "{}"),
+        pluginsConfig: { "@nx/js": { projectsAffectedByDependencyUpdates: "auto" } },
+      }),
+  };
+
+  /** The tasks that a run with static output started or restored, sorted. */
+  function tasksIn(output: string): string[] {
+    return [...output.matchAll(/^> nx run (\S+)/gm)].map((match) => match[1]).sort();
+  }
+
+  /**
+   * A copy of two-workspaces with the JS packages, committed, then a commit
+   * that changes only the integrity of left-pad in pnpm-lock.yaml. `before`
+   * runs between the two commits.
+   */
+  async function afterLeftPadUpdate(
+    version: string | null,
+    setting: "auto" | undefined,
+    before: (workspace: FixtureWorkspace) => Promise<void> = async () => undefined,
+  ): Promise<FixtureWorkspace> {
+    const files = [
+      { ".gitignore": "node_modules/\n.nx/\ntarget/\n" },
+      setting === "auto" ? auto : {},
+    ];
+    const workspace = FixtureWorkspace.create("two-workspaces", ...files, jsPackages(version));
+    try {
+      // The premise: whether the Rust targets name the plugin's package.
+      const { projects } = await workspace.graph();
+      for (const project of ["app", "tools"]) {
+        expect({ project, inputs: projects[project].targets?.test.inputs }).toEqual({
+          project,
+          inputs: expect.arrayContaining([
+            { externalDependencies: version === null ? [] : ["@convesoft/nx-rust"] },
+          ]),
+        });
+      }
+      commitAll(workspace, "The fixture");
+      await before(workspace);
+      applyFileChanges(workspace.root, jsPackages(version, `sha512-${"9".repeat(86)}==`));
+      commitAll(workspace, "Update left-pad");
+      return workspace;
+    } catch (error) {
+      workspace.remove();
+      throw error;
+    }
+  }
+
+  const affected = (workspace: FixtureWorkspace) =>
+    nx(workspace, ["affected", "-t", "test", "--base=HEAD~1", "--head=HEAD"]);
+
+  it(
+    "selects every Rust task where the Rust targets name the plugin's package, under Nx's default projectsAffectedByDependencyUpdates of all, and restores each crate task from the cache",
+    async () => {
+      const workspace = await afterLeftPadUpdate("0.0.1", undefined, async (copy) => {
+        const first = await nx(copy, ["run-many", "-t", "test"]);
+        expect(first.status).toBe(0);
+        expect(tasksIn(first.output)).toEqual([...crateTests, ...lockfileTasks].sort());
+      });
+      try {
+        const run = await affected(workspace);
+
+        expect(run.status).toBe(0);
+        expect(tasksIn(run.output)).toEqual([...crateTests, ...lockfileTasks].sort());
+        for (const task of crateTests) {
+          expect({ task, restored: restored(run.output, task) }).toEqual({ task, restored: true });
+        }
+        expect(ran(workspace)).toEqual([]);
+        // The lockfile tasks are not cached and run, with a current lockfile.
+        expect(
+          lockfileCalls(workspace)
+            .map((call) => call.cwd)
+            .sort(),
+        ).toEqual([".", "tools"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each<[string, string | null, "auto" | undefined]>([
+    ["declare externalDependencies: [], under Nx's default of all", null, undefined],
+    ["declare externalDependencies: [], with auto", null, "auto"],
+    ["name the plugin's package, with auto", "0.0.1", "auto"],
+  ])(
+    "selects no task where the Rust targets %s",
+    async (_case, version, setting) => {
+      const workspace = await afterLeftPadUpdate(version, setting);
+      try {
+        const run = await affected(workspace);
+
+        expect(run.status).toBe(0);
+        expect(tasksIn(run.output)).toEqual([]);
+        expect(run.output).toContain("No tasks were run");
+        expect(workspace.cargoCalls().filter((call) => call.args[0] !== "metadata")).toEqual([]);
+      } finally {
         workspace.remove();
       }
     },

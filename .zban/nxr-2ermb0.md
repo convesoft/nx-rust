@@ -1,8 +1,11 @@
 ---
 title: Check nx affected after a change to the JS lockfile end to end
-status: todo
+status: in-progress
 type: task
 parent: nxr-w9qa5f
+blocked_by:
+  - nxr-f5en6g
+  - nxr-5afbsq
 discovered_from: nxr-fy4t4k
 created_at: 2026-11-13T16:03:21Z
 ---
@@ -14,3 +17,5 @@ nxr-fy4t4k declared the plugin's input (`externalDependencies` naming the plugin
 - [ ] In a fixture with two workspaces, after a commit that changes only the JS lockfile, outside the plugin's package and what it depends on: `nx affected -t test` selects no Rust task where the Rust targets declare `externalDependencies: []`; where they name the plugin's package, it selects every Rust task under Nx's default `projectsAffectedByDependencyUpdates` of `all`, each restored from the cache, and none with `auto`
 
 Done when: this check passes, and `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all` and `pnpm nx e2e nx-rust-e2e` pass.
+
+Notes: the cases are in `nx-rust/test/lockfile-runs.spec.ts`, "nx affected after a change to the JS lockfile", in `two-workspaces` with a root `package.json` and `pnpm-lock.yaml`. The case with the plugin's package named under the default `all` passes: both lockfile tasks run, and every crate `test` task is selected and restored. The three cases that expect no selection fail: Nx selects both lockfile tasks, and every crate `test` task through them, because of nxr-f5en6g and, for the workspace at the repository root, nxr-5afbsq.
