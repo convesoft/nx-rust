@@ -10,7 +10,7 @@ const executor: PluginExecutor = {
   name: cargoExecutor,
   shortName: "cargo",
   declared: declaredOptionsOf(cargoExecutor),
-  serves: (target) => target !== "run",
+  serves: (target) => target !== "run" && target !== "lockfile",
 };
 
 /**

@@ -36,6 +36,8 @@ export const uncachedByDesign: Partial<Record<InferredTargetName, string>> = {
     "cargo-audit fetches the advisory database each time it runs, and no input covers it, so a cached pass could hide a newer advisory",
   deny: "cargo-deny fetches the advisory database each time it runs, and no input covers it, so a cached pass could hide a newer advisory",
   update: "it exists to change Cargo.lock",
+  lockfile:
+    "whether cargo changes Cargo.lock also depends on files outside the repository, such as a [patch] in the Cargo home's configuration, which Nx cannot hash",
 };
 
 /** What decides, beyond the target, whether the plugin can cache it in a workspace. */

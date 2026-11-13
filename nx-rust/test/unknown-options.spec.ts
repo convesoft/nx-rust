@@ -257,7 +257,8 @@ describe("an option passed on the command line", () => {
   // test depends on build, as each case's dependsOn entry says.
   const dependsOnBuild = (entry: object) => ({
     "rust/crates/core/project.json": JSON.stringify({
-      targets: { test: { dependsOn: [{ target: "build", ...entry }] } },
+      // "..." keeps the dependency on the lockfile task.
+      targets: { test: { dependsOn: ["...", { target: "build", ...entry }] } },
     }),
   });
 

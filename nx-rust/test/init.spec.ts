@@ -36,7 +36,11 @@ const allTools = optionalTools.map((tool) => tool.name);
 const unregistered: FileChanges = { "nx.json": "{}\n" };
 
 /** The empty `targetDefaults` entries that init adds for the plugin's executors. */
-const executorEntries = { "@convesoft/nx-rust:cargo": {}, "@convesoft/nx-rust:run": {} };
+const executorEntries = {
+  "@convesoft/nx-rust:cargo": {},
+  "@convesoft/nx-rust:run": {},
+  "@convesoft/nx-rust:lockfile": {},
+};
 
 /** `nx.json` after init in a repository that did not know the plugin. */
 const registeredNxJson = { plugins: [pluginName], targetDefaults: executorEntries };
@@ -124,7 +128,7 @@ describe("init", () => {
           registeredNxJson,
         );
         expect(output).toContain(
-          'Added "@convesoft/nx-rust:cargo": {} and "@convesoft/nx-rust:run": {} to targetDefaults in nx.json',
+          'Added "@convesoft/nx-rust:cargo": {}, "@convesoft/nx-rust:run": {} and "@convesoft/nx-rust:lockfile": {} to targetDefaults in nx.json',
         );
         // Its check read the workspace as graph creation does.
         expect(workspace.cargoCalls()).toEqual([workspaceCall("rust")]);
@@ -255,7 +259,11 @@ describe("init", () => {
     "adds only the missing executors' target defaults where the plugin is registered already",
     async () => {
       const plugins = [{ plugin: pluginName, options: { targetNames: { test: "unit-test" } } }];
-      const targetDefaults = { build: { cache: true }, "@convesoft/nx-rust:run": {} };
+      const targetDefaults = {
+        build: { cache: true },
+        "@convesoft/nx-rust:run": {},
+        "@convesoft/nx-rust:lockfile": {},
+      };
       await runInit(
         "subfolder-workspace",
         { "nx.json": `${JSON.stringify({ plugins, targetDefaults }, null, 2)}\n` },

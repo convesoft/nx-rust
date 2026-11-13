@@ -93,7 +93,19 @@ describeCacheKeyMatrix("cache keys", [
 
 [`cache-keys.spec.ts`](cache-keys.spec.ts) holds the rows of
 `VER-CACHE-KEYS` that the plugin's inputs decide. `compareCacheKeys(row)`
-returns the hashes instead of failing.
+returns the hashes instead of failing. A state's `prepare(workspace, env)` runs
+once its files are in place, after the base's own, for steps such as a cargo
+command; with `lockfileTask: true` on the row, **`runLockfileTasks(workspace,
+env)`** then runs every lockfile task before the tasks are hashed, as a real run
+does, so that the digest inputs have digests to read.
+[`lockfile-keys.spec.ts`](lockfile-keys.spec.ts) holds the rows about
+`Cargo.lock`.
+
+**`LocalRegistry.create(crates)`** publishes crate versions, packaged by the
+real `cargo package`, to a registry in a temporary folder, with a Cargo home
+whose configuration puts it in place of crates.io: give commands
+`CARGO_HOME: registry.cargoHome`. `publish(crate)` adds another version, and
+`remove()` deletes it all. No network is needed.
 
 **`pnpmLockfile(version, integrity)`** writes a `pnpm-lock.yaml` that lists
 the plugin's package at `version`, with `tslib` behind it, and `left-pad`
@@ -145,7 +157,9 @@ tests, so that a test can compare the text.
 **`runNx(workspace, args, env)`** runs Nx with static output, put before
 `args` so that it stays Nx's own option when `args` holds `--`, and returns
 the output without colours. **`taskCalls(workspace)`** returns the logged
-cargo calls of tasks, without graph creation's `cargo metadata`, and
+cargo calls of tasks, without graph creation's `cargo metadata` and without
+the lockfile task's `cargo update --workspace`, which
+**`lockfileCalls(workspace)`** returns, and
 **`sortedCalls(calls)`** puts them in a stable order. **`inFixture(fixture,
 files, test)`** hands a new copy to `test` and removes it afterwards,
 **`withTargetDefaults(defaults)`** is a change to `nx.json` for `files`, and
@@ -195,6 +209,13 @@ wrapper. These do not, and run without being logged:
 
 An `env` option that sets `PATH` on an `nx:run-commands` target does not
 bypass it: Nx 24 replaces that `PATH` with the one it computes.
+
+**`holdCargo(subcommand)`** makes the wrapper pause before the real cargo of
+a call whose first argument is `subcommand`, in the commands that get its
+`env` (`NX_RUST_TEST_HOLD_CARGO`): after Nx has computed the task's key and
+before cargo reads `Cargo.lock`. `held()` resolves once a call waits there,
+`release()` lets it go on, and `remove()` deletes the hold's folder. A test
+can change the repository or run another command meanwhile.
 
 Two consequences for tests. A test that expects no cargo call needs a
 positive control, a call in the same setting that does show up in the log,

@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
-import { FixtureWorkspace, HARNESS_TIMEOUT, testEnvironment, withoutColours } from "./harness";
+import {
+  FixtureWorkspace,
+  HARNESS_TIMEOUT,
+  taskCalls as harnessTaskCalls,
+  testEnvironment,
+  withoutColours,
+} from "./harness";
 
 // Checks with real Nx runs of the plugin's executor what the caching of
 // nxr-fy4t4k stores and restores: the parts of VER-CARGO-UNCHANGED about
@@ -21,11 +27,9 @@ async function nx(
   return { status, output: withoutColours(output) };
 }
 
-/** The cargo calls of tasks, as `<args>`: every logged call but graph creation's. */
+/** The cargo calls of tasks other than the lockfile task, as `<args>`, sorted. */
 function taskCalls(workspace: FixtureWorkspace): string[] {
-  return workspace
-    .cargoCalls()
-    .filter((call) => call.args[0] !== "metadata")
+  return harnessTaskCalls(workspace)
     .map((call) => call.args.join(" "))
     .sort();
 }

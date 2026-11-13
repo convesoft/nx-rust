@@ -21,7 +21,7 @@ jobs:
   check:
     name: Build, lint, test and format
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       # Installs the pnpm version that `packageManager` in package.json names.
