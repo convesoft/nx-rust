@@ -10,7 +10,8 @@ come from actual test runs, cited when an issue is closed.
   built to show one situation: a workspace in a subfolder, two workspaces, a
   standalone crate, an excluded member, a path dependency across workspaces, a
   vendored crate that is excluded and used by path, a name collision, a
-  dev-dependency cycle, workspaces with different toolchains.
+  dev-dependency cycle, workspaces with different toolchains, crate folders
+  that also are JS projects, workspaces in nested folders.
 - **Graph tests** load a fixture through the plugin and compare projects,
   targets, inputs and edges with the expected graph. They need `cargo` but
   compile nothing.

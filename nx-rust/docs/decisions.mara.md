@@ -853,6 +853,22 @@ A reading of the `nx` 24.0.6 package and an experiment on 13 November 2026 with 
 The plugin therefore makes each entry's copy carry a `createNodes` of its own and finds the entry in `createDependencies` through that copy. These are Nx internals, which the tests check in both modes and which have to be checked again for another Nx major.
 :::
 
+:::mara evidence EVD-NX-EDGE-CACHE
+:mid: 01M7AE241Y0VGGYCNWWR01WR7T
+:title: How Nx 24.0.6 keeps a plugin's edges from one graph to the next
+:status: accepted
+:supports: DES-PROJECT-GRAPH
+
+A reading of the `nx` 24.0.6 package and an experiment on 13 November 2026 with cargo 1.100.0 and Node 26.12.0 on Linux, through the plugin's own tests (`nx-rust/test/graph.spec.ts`).
+
+- **Edges with a source file.** Nx records an edge of the types `static` and `dynamic`, which must name a file of the source project, in the data of that file, and builds those edges of a project from its files' data. An edge of the type `implicit` names no file and is kept in the graph only (`project-graph/project-graph-builder.js`).
+- **Reuse.** After the plugins' `createDependencies`, Nx replaces the edges recorded for each file whose hash has not changed since the previous graph with the edges it cached for that file then (`project-graph/build-project-graph.js`). It drops this cache only when a project of the previous graph is gone, the plugin entries in `nx.json` changed, or one of a few other settings changed; a new project does not drop it (`shouldRecomputeWholeGraph` in `project-graph/nx-deps-cache.js`).
+- **Measured.** In the fixture `subfolder-workspace`, the graph was created with `rust/crates/testkit` listed in `.nxignore`, and then again in the same folder after `.nxignore` was deleted, without the Nx daemon and without changing a manifest. With the plugin's edges returned as `static`, each naming the manifest of its source project, the second graph had no edge from `api` or `rust` to `testkit`, although `createDependencies` returned both. Returned as `implicit`, both edges were in the graph.
+- **Other readers of the type.** Nx's task graph, `affected` and the task hasher follow edges of every type. In the rest of the `nx` package, leaving out the graph viewer and the JS plugin, which were not read, only Nx release tells the types apart: the default `readDependencies` of its `VersionActions` leaves out `implicit` edges, and an implementation can override it (`command-line/release/version/version-actions.js`).
+
+A crate's edges depend on more than its manifest: on the `[workspace.dependencies]` of its workspace's root manifest, and on the ignore files and options that decide which crates are projects. The plugin therefore returns its edges as `implicit`. These are Nx internals, to be checked again for another Nx major.
+:::
+
 ## Sources
 
 Pages and repositories read for the design discussion, on 12 November 2026.

@@ -100,6 +100,25 @@ const expected: Record<FixtureName, Expectation> = {
       ["stable", ["stable/crates/stable-lib"]],
     ],
   },
+  "mixed-folders": {
+    workspaces: [
+      [
+        "libs/rust",
+        [
+          "libs/rust/crates/addon",
+          "libs/rust/crates/cli",
+          "libs/rust/crates/engine",
+          "libs/rust/crates/unnamed",
+        ],
+      ],
+    ],
+  },
+  "nested-folders": {
+    workspaces: [
+      ["services/billing", ["services/billing/crates/invoice"]],
+      ["apps/Billing.API/rust_v2", ["apps/Billing.API/rust_v2/crates/gateway"]],
+    ],
+  },
 };
 
 function expectedCalls({ workspaces, pathDependencies = [] }: Expectation): CargoCall[] {
@@ -118,9 +137,19 @@ describe("workspace discovery through Nx", () => {
   it.each(fixtures)(
     "reads each workspace of %s with one cargo call",
     async (fixture) => {
-      const graph = await loadFixtureGraph(fixture);
+      const calls = await loadFixtureGraph(fixture).then(
+        (graph) => graph.cargoCalls,
+        (error: unknown) => {
+          // Its two crates called api fail graph creation once both
+          // workspaces are read (graph.spec.ts).
+          if (fixture === "name-collision" && error instanceof GraphCreationError) {
+            return error.cargoCalls;
+          }
+          throw error;
+        },
+      );
 
-      expect(graph.cargoCalls).toEqual(expectedCalls(expected[fixture]));
+      expect(calls).toEqual(expectedCalls(expected[fixture]));
     },
     HARNESS_TIMEOUT,
   );
@@ -226,12 +255,12 @@ describe("workspace discovery through Nx", () => {
         const cargoHome = join(dirname(workspace.root), "cargo-home");
         mkdirSync(cargoHome);
         const env = { CARGO_HOME: cargoHome, CARGO_NET_OFFLINE: "true" };
-        const files = repositoryFiles(workspace.root);
+        const files = workspace.files();
 
         await workspace.graph(env);
 
         expect(workspace.cargoCalls()).toEqual([workspaceCall("rust")]);
-        expect(repositoryFiles(workspace.root)).toEqual(files);
+        expect(workspace.files()).toEqual(files);
         expect(readdirSync(cargoHome)).toEqual([]);
         // The positive control: a report with dependency resolution fails in
         // the same setting.
@@ -418,9 +447,9 @@ describe("discovery in the plugin", () => {
       const entry = loadEntry();
 
       await entry.createNodes[1](manifests, undefined, nodesContext(root));
-      const first = registrationOf(entry).discoveryForDependencies(root);
+      const first = registrationOf(entry).graphForDependencies(root).discovery;
       await entry.createNodes[1](manifests, undefined, nodesContext(root));
-      const second = registrationOf(entry).discoveryForDependencies(root);
+      const second = registrationOf(entry).graphForDependencies(root).discovery;
 
       expect(first.workspaces.map((found) => found.root)).toEqual([".", "tools"]);
       expect(second).not.toBe(first);
@@ -441,10 +470,27 @@ describe("discovery in the plugin", () => {
       const entry = loadEntry();
 
       const nodes = await entry.createNodes[1](manifestsIn(root), undefined, nodesContext(root));
-      const dependencies = await entry.createDependencies(undefined, dependenciesContext(root));
+      const projects = Object.fromEntries(
+        nodes.flatMap(([, result]) =>
+          Object.entries(result.projects).map(([projectRoot, project]) => [
+            project.name,
+            { ...project, root: projectRoot },
+          ]),
+        ),
+      );
+      const dependencies = await entry.createDependencies(
+        undefined,
+        dependenciesContext(root, projects),
+      );
 
-      expect(nodes).toEqual([]);
-      expect(dependencies).toEqual([]);
+      expect(Object.keys(projects).sort()).toEqual([
+        "app",
+        "cargo-workspace",
+        "scaffold",
+        "tools",
+        "util",
+      ]);
+      expect(dependencies).toContainEqual({ source: "app", target: "util", type: "implicit" });
       expect(workspace.cargoCalls()).toEqual([workspaceCall("."), workspaceCall("tools")]);
     },
     HARNESS_TIMEOUT,
@@ -489,7 +535,7 @@ describe("discovery in the plugin", () => {
         entry.createNodes[1](manifestsIn(root), undefined, nodesContext(root)),
       ).rejects.toThrow(/rust\/Cargo\.toml/);
 
-      expect(registrationOf(entry).discoveryForDependencies(root)).toBeUndefined();
+      expect(registrationOf(entry).graphForDependencies(root)).toBeUndefined();
       expect(await entry.createDependencies(undefined, dependenciesContext(root))).toEqual([]);
     },
     HARNESS_TIMEOUT,
@@ -610,8 +656,8 @@ function loadEntry(): typeof plugin {
 /** What an entry's createDependencies sees: the workspace roots with the folders of their members. */
 function seenBy(entry: typeof plugin, root: string): [string, string[]][] {
   return registrationOf(entry)
-    .discoveryForDependencies(root)
-    .workspaces.map((found) => [
+    .graphForDependencies(root)
+    .discovery.workspaces.map((found) => [
       found.root,
       found.members.map((member) => relative(root, dirname(member.manifest_path))),
     ]);
@@ -660,32 +706,19 @@ function pluginEntry(settings: { exclude?: string[] }): (nxJson: string) => stri
   };
 }
 
-/** Every file of a fixture copy with its content, outside `node_modules` and Nx's `.nx`. */
-function repositoryFiles(root: string, folder = ""): Record<string, string> {
-  const files: Record<string, string> = {};
-  for (const entry of readdirSync(join(root, folder), { withFileTypes: true })) {
-    const path = folder === "" ? entry.name : `${folder}/${entry.name}`;
-    if (entry.isDirectory()) {
-      if (path !== "node_modules" && path !== ".nx") {
-        Object.assign(files, repositoryFiles(root, path));
-      }
-    } else {
-      files[path] = readFileSync(join(root, path), "utf8");
-    }
-  }
-  return files;
-}
-
 function nodesContext(workspaceRoot: string): CreateNodesContext {
   return { workspaceRoot, nxJsonConfiguration: {} };
 }
 
-function dependenciesContext(workspaceRoot: string): CreateDependenciesContext {
+function dependenciesContext(
+  workspaceRoot: string,
+  projects: CreateDependenciesContext["projects"] = {},
+): CreateDependenciesContext {
   const fileMap = { projectFileMap: {}, nonProjectFiles: [] };
   return {
     workspaceRoot,
     nxJsonConfiguration: {},
-    projects: {},
+    projects,
     externalNodes: {},
     fileMap,
     filesToProcess: fileMap,
