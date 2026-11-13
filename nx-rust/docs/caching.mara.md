@@ -165,8 +165,13 @@ are restored from the cache, so they cost a lookup, not a build.
   its `dependsOn`, fails before cargo runs: its key would hold no digest. Keep
   the dependency with `"..."`, as in `"dependsOn": ["...", "^codegen"]`.
 - A cached task fails when `Cargo.lock` changes while it runs, for example
-  because you edited a manifest during the run, so that its key no longer
-  describes what cargo built. Nx stores nothing for it; run it again.
+  because you edited a manifest during the run, or because another `nx`
+  command that ran at the same time updated the lockfile, so that its key no
+  longer describes what cargo built. Nx stores nothing for it; run it again.
+- A workspace whose root `Cargo.toml` Nx hands to no entry of the plugin, for
+  example because an `exclude` of the plugin's entry in `nx.json` names it,
+  has no `lockfile` task. Its crates' `build`, `check`, `lint` and `test` then
+  run uncached, and graph creation warns.
 - If the workspace folder also is a JS project with a script or target called
   `lockfile`, that one replaces the plugin's task, as it would any target of
   that name. Rename the plugin's task through `targetNames`
@@ -416,7 +421,7 @@ The environment list:
 
 **Redirected uses.** Nx asks for a plugin's targets before it merges the projects of every plugin and entry, so the plugin works out the redirected uses for the inputs with the projects of its own entry. A redirected crate that another entry gives a project counts there as one without a project, and its folder joins the member's inputs beside the edge that the dependencies of the merged graph add.
 
-**Uncached targets.** `fmt`, `bench` and `run` are not cached, but declare the inputs of `fmt-check`, `build` and `build`, so that `nx affected` selects them when what they read changes. They do not depend on the lockfile task, so `bench` and `run`, and `build` and `doc` where the plugin leaves them uncached ([[DES-OUTPUTS]]), name the workspace's `Cargo.lock`, read also where Git ignores it, in place of the digest and of `NX_RUST_RUN_ID`, as `audit` and `update` do ([[DES-WORKSPACE-TARGETS]]).
+**Uncached targets.** `fmt`, `bench` and `run` are not cached, but declare the inputs of `fmt-check`, `build` and `build`, so that `nx affected` selects them when what they read changes. They do not depend on the lockfile task, so `bench` and `run`, `build` and `doc` where the plugin leaves them uncached ([[DES-OUTPUTS]]), and the targets of the crates of a workspace without a lockfile task ([[DES-LOCKFILE-HASHING]]) name the workspace's `Cargo.lock`, read also where Git ignores it, in place of the digest and of `NX_RUST_RUN_ID`, as `audit` and `update` do ([[DES-WORKSPACE-TARGETS]]).
 
 The variables and commands that the repository adds, with `envInputs` and `runtimeInputs` in the plugin options, in the workspace table or in a crate's table ([[DES-PLUGIN-OPTIONS]]), go into the crate's own named input, the one that its dependents hash through `^` inputs, and not onto single targets. A dependent's key therefore changes with them, also in another workspace, because Nx hashes the `env` and `runtime` entries of a dependency's named input into the dependent's key and those of a dependency's target into no other key ([[EVD-NX-24-OPTION-SEMANTICS]]).
 

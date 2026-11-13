@@ -208,6 +208,13 @@ wrapper. These do not, and run without being logged:
 An `env` option that sets `PATH` on an `nx:run-commands` target does not
 bypass it: Nx 24 replaces that `PATH` with the one it computes.
 
+**`holdCargo(subcommand)`** makes the wrapper pause before the real cargo of
+a call whose first argument is `subcommand`, in the commands that get its
+`env` (`NX_RUST_TEST_HOLD_CARGO`): after Nx has computed the task's key and
+before cargo reads `Cargo.lock`. `held()` resolves once a call waits there,
+`release()` lets it go on, and `remove()` deletes the hold's folder. A test
+can change the repository or run another command meanwhile.
+
 Two consequences for tests. A test that expects no cargo call needs a
 positive control, a call in the same setting that does show up in the log,
 or it cannot tell "not run" from "not logged". And a nested cargo, run by a
