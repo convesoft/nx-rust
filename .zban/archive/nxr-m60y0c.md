@@ -30,4 +30,6 @@ The control plane decided the second step, not the maintainer. It followed from 
 
 Filed nxr-thq2v8: the other workspace-level failures that cargo builds but does not report (another member missing, `package.workspace` naming a non-root or a missing folder) still fail graph creation, because one of their messages also comes for a rejected manifest; the maintainer decides.
 
-Checks run, on `main` at 47f92e8 merged in: `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache`, `mara schema validate`, `mara project validate` (valid, complete evaluation, 0 errors, 0 warnings) and `zban check`. CI on the pull request covers the remaining runs.
+Filed nxr-taaks5: CI failed on the test of the review's case, which read `nx show projects --affected` without `--json`. Nx 24.0.6 turns `--json` on for `nx show` by itself where it detects an AI agent, as in the session that wrote the test, and not in CI. The test now passes `--json`, as the other tests do; the issue keeps that detection out of the harness's environment.
+
+Checks run, on `main` at a6a73cc merged in: `pnpm nx run-many -t build lint` and `pnpm nx test nx-rust --maxWorkers=6`, the redirections spec also with `CI=true` and without the agent variables, `pnpm nx format:check --all`; `pnpm nx e2e nx-rust-e2e --skip-nx-cache` on `main` at 47f92e8 merged in, `mara schema validate`, `mara project validate` (valid, complete evaluation, 0 errors, 0 warnings) and `zban check`. CI on the pull request covers the remaining runs.
