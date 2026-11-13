@@ -225,6 +225,7 @@ describe("caching", () => {
               (file) => `{workspaceRoot}/${folder === "" ? "" : `${folder}/`}${file}`,
             ),
           ),
+          { externalDependencies: [] },
         ],
         outputs: ["{workspaceRoot}/.nx/workspace-data/nx-rust/lockfile/backend"],
         metadata: {
@@ -945,11 +946,8 @@ describe("caching", () => {
             version: undefined,
           });
         }
-        // lockfile, audit and update keep the inputs of DES-WORKSPACE-TARGETS.
-        const withInputs = everyTarget(graph).filter(
-          ([task]) => !["rust:lockfile", "rust:audit", "rust:update"].includes(task),
-        );
-        for (const [task, target] of withInputs) {
+        // The uncached lockfile, audit and update too, for nx affected.
+        for (const [task, target] of everyTarget(graph)) {
           expect({ task, plugin: inputsOf(target, "externalDependencies") }).toEqual({
             task,
             plugin: [{ externalDependencies: ["@convesoft/nx-rust"] }],
@@ -986,9 +984,12 @@ describe("caching", () => {
         const graph = await loadFixtureGraph("subfolder-workspace", { files });
 
         expect(graph.projects.api.targets.test.options.pluginVersion).toBe(pluginVersion);
-        expect(inputsOf(graph.projects.api.targets.test, "externalDependencies")).toEqual([
-          { externalDependencies: [] },
-        ]);
+        for (const [task, target] of everyTarget(graph)) {
+          expect({ task, plugin: inputsOf(target, "externalDependencies") }).toEqual({
+            task,
+            plugin: [{ externalDependencies: [] }],
+          });
+        }
       },
       HARNESS_TIMEOUT,
     );
