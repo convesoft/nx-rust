@@ -259,7 +259,7 @@ When a tool is missing, a version is unsupported or a setting cannot work, the d
 :title: Workspace context
 :status: accepted
 
-Everything that Cargo scopes to one Cargo workspace and that the plugin therefore handles per workspace: the lockfile, the build directory, the toolchain, the batches and the coverage baseline. A repository has one workspace context per Cargo workspace, including each [[TERM-STANDALONE-CRATE]].
+Everything that Cargo scopes to one Cargo workspace and that the plugin therefore handles per workspace: the lockfile, the build directory, the toolchain file, the batches and the coverage baseline. A repository has one workspace context per Cargo workspace, including each [[TERM-STANDALONE-CRATE]].
 :::
 
 :::mara term TERM-STANDALONE-CRATE
