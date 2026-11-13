@@ -1,11 +1,15 @@
 # Setup and compatibility
 
-> **Status:** `nx add` and the `library` and `binary` generators are
-> implemented. So far `init` stops only for the problems that graph creation
-> detects already, which are a missing cargo and a failing `cargo metadata`,
-> and of the tools below it counts only cargo-deny as needed by your settings.
-> The version checks, the warnings and the errors for missing tools are not
-> implemented yet. The package is not published to npm yet.
+> **Status:** `nx add`, the `library` and `binary` generators and the checks of
+> the Nx and Cargo versions are implemented. `init` stops for each problem that
+> graph creation detects so far: an unsupported Nx or Cargo, an installed Nx
+> whose version cannot be read, a missing cargo, a pinned toolchain that is not
+> installed, a failing `cargo metadata`, two crates with one project name and
+> invalid `targetNames`. Of the tools below it counts only cargo-deny as needed
+> by your settings. Apart from the one for a newer Nx with
+> `NX_RUST_ALLOW_UNSUPPORTED_NX`, the warnings are not implemented yet, and
+> neither are the errors of a task for a missing tool, which need the plugin's
+> executor. The package is not published to npm yet.
 
 ## What you need
 
@@ -295,7 +299,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 
 **Warnings where they are seen.** While the Nx daemon creates the graph, what the plugin prints goes to the daemon's log file and not to the terminal, and Nx's plugin interface has no channel for warnings ([[EVD-NX-24-SETUP]]). The plugin therefore prints a warning found when the graph is created three times: when the graph is created, again from the executor at the start of each task of the crate or workspace it concerns, and from `init`.
 
-**Nx version.** When it loads, the plugin compares the major version of the installed `nx` with the majors in its peer dependency range, so an unsupported Nx fails graph creation also in a repository without a crate. The error names the major found and the supported majors. For a newer major, `NX_RUST_ALLOW_UNSUPPORTED_NX=true` turns the error into a warning that says the plugin has not been checked on that major, and the plugin continues ([[REQ-COMPATIBILITY]]). The variable has no effect on an older major. The daemon takes over each client's environment and recomputes the graph when a variable changes, so the variable works with the daemon as well ([[EVD-NX-24-SETUP]]).
+**Nx version.** When it loads, the plugin compares the major version of the installed `nx` with the majors in its peer dependency range, so an unsupported Nx fails graph creation also in a repository without a crate. The error names the major found and the supported majors. For a newer major, `NX_RUST_ALLOW_UNSUPPORTED_NX=true` turns the error into a warning that says the plugin has not been checked on that major, and the plugin continues ([[REQ-COMPATIBILITY]]). The variable has no effect on an older major. The installed `nx` is the one that resolves from the repository root, where Nx itself looks for it. The daemon takes over each client's environment and recomputes the graph when a variable changes, but it can keep a loaded plugin, so the plugin compares again each time it creates the graph and prints the warning there; the variable thus works with the daemon as well ([[EVD-NX-24-SETUP]], [[EVD-NX-24-VERSION-CHECK]]). The peer dependency range itself stops no install, because pnpm only warns about an unmet peer.
 
 **Cargo version.** The `cargo metadata` report of a stable Cargo has a `build_directory` field from 1.91 on ([[EVD-CARGO-DIRECTORIES]]). A report without it therefore tells the check that the workspace's Cargo is too old, and while Cargo is supported the check adds no cargo call to the one that the workspace costs ([[REQ-MULTI-WORKSPACE]]). Only the error makes a second call, to name the version found.
 

@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { CargoMetadata, CargoPackage } from "../cargo/metadata";
 import { readRedirections, Redirection } from "../cargo/redirections";
 import { CargoError } from "../cargo/run-cargo";
+import { UnsupportedCargoError } from "../compatibility/cargo-version";
 import { ComputationReports } from "./computation-reports";
 import { realPath } from "./real-path";
 
@@ -340,6 +341,9 @@ async function readPathDependency(
 
 // A message that names what failed, for what, and what to do.
 function failureMessage(error: unknown, subject: string, fixes: string[]): string {
+  if (error instanceof UnsupportedCargoError) {
+    return error.messageFor(subject);
+  }
   if (error instanceof CargoError && error.notStarted) {
     return [
       `nx-rust could not read ${subject}: ${error.message}.`,
