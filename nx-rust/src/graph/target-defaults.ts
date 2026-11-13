@@ -70,6 +70,13 @@ interface RootMapProject {
   targets?: Record<string, TargetConfiguration>;
 }
 
+/** A project node that one of Nx's default plugins made of a file in the project's folder. */
+interface DefaultNode {
+  /** The `package.json` or `project.json`, relative to the repository root. */
+  file: string;
+  project: RootMapProject;
+}
+
 /** Nx's source maps: by project root, the file and plugin behind each key. */
 type SourceMaps = Record<string, Record<string, [string | null, string]>>;
 
@@ -112,9 +119,10 @@ export interface TargetDefaultsInternals {
   ): void;
   /**
    * The project nodes that Nx's default plugins make of the `package.json`
-   * and `project.json` files given, in the order in which Nx merges them.
+   * and `project.json` files given, each with its file, in the order in
+   * which Nx merges them.
    */
-  defaultNodes(files: string[], nxJson: object, workspaceRoot: string): Promise<RootMapProject[]>;
+  defaultNodes(files: string[], nxJson: object, workspaceRoot: string): Promise<DefaultNode[]>;
   /** Whether a `targetDefaults` key can reach a target of this name and executor at all. */
   keyMayApply(key: string, targetName: string, executor: string | undefined): boolean;
   /** A `dependsOn` entry as the task graph normalises it. */
@@ -331,7 +339,7 @@ interface Layers {
   /** What Nx's synthesis of target defaults lays over them, result by result. */
   targetDefaults: ReturnType<TargetDefaultsInternals["createTargetDefaultsResults"]>;
   /** What Nx's default plugins make of the folders' files, node by node. */
-  defaults: RootMapProject[];
+  defaults: DefaultNode[];
 }
 
 // The three layers of the projects at `roots`, built with Nx's own code.
@@ -363,8 +371,8 @@ async function rebuildLayers(
   );
   // The default layer as Nx stages it for the synthesis.
   const staged: Record<string, RootMapProject> = {};
-  for (const node of defaults) {
-    nx.mergeProject(staged, structuredClone(node), undefined, undefined, true);
+  for (const { project } of defaults) {
+    nx.mergeProject(staged, structuredClone(project), undefined, undefined, true);
   }
   return {
     specified,
@@ -398,9 +406,9 @@ function rebuild(
       merge(result.projects?.[root]);
     }
   }
-  for (const node of layers.defaults) {
-    if (node.root === root) {
-      merge(node);
+  for (const { project } of layers.defaults) {
+    if (project.root === root) {
+      merge(project);
     }
   }
   return rootMap[root] ?? { root };
@@ -460,8 +468,7 @@ export async function failOnTargetDefaults(
   context: TargetDefaultsContext,
   plugin: unknown,
 ): Promise<void> {
-  const name = isRecord(plugin) && typeof plugin.name === "string" ? plugin.name : undefined;
-  const report = await checkTargetDefaults(graph, context, name, () =>
+  const report = await checkTargetDefaults(graph, context, pluginEntryName(plugin), () =>
     loadTargetDefaultsInternals(context.workspaceRoot),
   );
   for (const warning of report.warnings) {
@@ -470,6 +477,82 @@ export async function failOnTargetDefaults(
   if (report.error !== undefined) {
     throw new Error(report.error);
   }
+}
+
+/**
+ * The name under which Nx knows a plugin entry, from Nx's copy of the plugin
+ * for the entry, which `createDependencies` receives as `this`.
+ */
+export function pluginEntryName(plugin: unknown): string | undefined {
+  return isRecord(plugin) && typeof plugin.name === "string" ? plugin.name : undefined;
+}
+
+/** A value in the options or a configuration of one of the plugin's targets. */
+export interface OptionPlace {
+  project: CargoProject;
+  /** The target's name, as `targetNames` gives it. */
+  target: string;
+  /** The configuration that holds the value; absent for the target's `options`. */
+  configuration?: string;
+  option: string;
+}
+
+/** Where Nx took a value of a target from: a file in the project's folder or a `targetDefaults` entry. */
+export type OptionOrigin = { file: string } | AppliedEntry;
+
+/**
+ * Where Nx took each value from, as far as the layers that
+ * {@link findTargetDefaultChanges} rebuilds with Nx's own code show it: the
+ * `project.json` or `package.json` in the project's folder whose node sets
+ * the option at that place, which Nx merges after `targetDefaults`, the
+ * later file winning; otherwise the element of `targetDefaults` that Nx
+ * lays over the target and that sets it, the later element winning; and
+ * `undefined` where none does, as where another plugin sets it.
+ *
+ * @param plugin The name under which Nx knows this plugin entry.
+ * @param internals Nx's internal parts ({@link loadTargetDefaultsInternals}).
+ */
+// @mara implements DES-PLUGIN-OPTIONS
+export async function optionOrigins(
+  places: readonly OptionPlace[],
+  context: TargetDefaultsContext,
+  plugin: string | undefined,
+  internals: TargetDefaultsInternals,
+): Promise<(OptionOrigin | undefined)[]> {
+  if (places.length === 0) {
+    return [];
+  }
+  const projects = [...new Set(places.map(({ project }) => project))];
+  const layers = await rebuildLayers(
+    internals,
+    projects,
+    plugin,
+    context,
+    projects.map(({ root }) => root),
+  );
+  const targetDefaults = context.nxJsonConfiguration?.targetDefaults;
+  return places.map((place) => {
+    const sets = (project: RootMapProject | undefined) => {
+      const target = project?.targets?.[place.target];
+      const values: unknown =
+        place.configuration === undefined
+          ? target?.options
+          : target?.configurations?.[place.configuration];
+      return isRecord(values) && Object.prototype.hasOwnProperty.call(values, place.option);
+    };
+    const node = [...layers.defaults]
+      .reverse()
+      .find(({ project }) => project.root === place.project.root && sets(project));
+    if (node !== undefined) {
+      return { file: node.file };
+    }
+    const element = [...layers.targetDefaults]
+      .reverse()
+      .find(([, , result]) => sets(result.projects?.[place.project.root]));
+    return element === undefined
+      ? undefined
+      : appliedEntry(element[1], isRecord(targetDefaults) ? targetDefaults : {});
+  });
 }
 
 /**
@@ -569,7 +652,7 @@ export function loadTargetDefaultsInternals(
     },
     async defaultNodes(files, nxJson, root) {
       const context = { nxJsonConfiguration: nxJson, workspaceRoot: root };
-      const nodes: RootMapProject[] = [];
+      const nodes: DefaultNode[] = [];
       // In the order in which Nx runs its default plugins.
       for (const [createNodes, given] of [
         [packageJson, files],
@@ -578,9 +661,9 @@ export function loadTargetDefaultsInternals(
         if (given.length === 0) {
           continue;
         }
-        for (const [, result] of await createNodes(given, undefined, context)) {
+        for (const [file, result] of await createNodes(given, undefined, context)) {
           for (const [projectRoot, project] of Object.entries(result?.projects ?? {})) {
-            nodes.push({ ...project, root: projectRoot });
+            nodes.push({ file, project: { ...project, root: projectRoot } });
           }
         }
       }
@@ -641,10 +724,15 @@ function declarationFiles(
 }
 
 /** The elements of one `targetDefaults` key that Nx laid over one target. */
-interface AppliedEntry {
+export interface AppliedEntry {
   key: string;
   /** Their positions in the key's list, where its value is a list. */
   indices?: number[];
+}
+
+/** An entry as messages name it, such as `the targetDefaults entry "build" in nx.json (its element 1)`. */
+export function entryName({ key, indices }: AppliedEntry): string {
+  return `the targetDefaults entry "${key}" in nx.json${elements(indices)}`;
 }
 
 // The key and elements of Nx's synthesis, by root and target. Each result's
@@ -654,18 +742,13 @@ function appliedElements(
   results: ReturnType<TargetDefaultsInternals["createTargetDefaultsResults"]>,
   targetDefaults: Record<string, unknown>,
 ): Map<string, Map<string, AppliedEntry>> {
-  const prefix = "nx.json#targetDefaults.";
   const applied = new Map<string, Map<string, AppliedEntry>>();
   for (const [, file, result] of results) {
-    if (!file.startsWith(prefix)) {
+    const element = appliedEntry(file, targetDefaults);
+    if (element === undefined) {
       continue;
     }
-    const location = file.slice(prefix.length);
-    const indexed = /^(.*)\[(\d+)\]$/.exec(location);
-    const [key, index] =
-      indexed !== null && Array.isArray(targetDefaults[indexed[1]])
-        ? [indexed[1], Number(indexed[2])]
-        : [location, undefined];
+    const { key, indices: [index] = [] } = element;
     for (const [root, project] of Object.entries(result.projects ?? {})) {
       const byTarget = applied.get(root) ?? new Map<string, AppliedEntry>();
       applied.set(root, byTarget);
@@ -679,6 +762,23 @@ function appliedElements(
     }
   }
   return applied;
+}
+
+// The key, and the element where the key's value is a list, that the file
+// of one result of Nx's synthesis names; undefined for another file.
+function appliedEntry(
+  file: string,
+  targetDefaults: Record<string, unknown>,
+): AppliedEntry | undefined {
+  const prefix = "nx.json#targetDefaults.";
+  if (!file.startsWith(prefix)) {
+    return undefined;
+  }
+  const location = file.slice(prefix.length);
+  const indexed = /^(.*)\[(\d+)\]$/.exec(location);
+  return indexed !== null && Array.isArray(targetDefaults[indexed[1]])
+    ? { key: indexed[1], indices: [Number(indexed[2])] }
+    : { key: location };
 }
 
 /**
