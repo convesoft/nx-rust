@@ -289,6 +289,44 @@ describe("the cargo executor", () => {
   );
 
   it(
+    "lets a task that depends on run start only after the binary has exited",
+    () =>
+      inFixture(
+        "crate-shapes",
+        {
+          // The binary waits, then leaves a file in the folder cargo runs it
+          // in, the workspace root, just before it exits.
+          "rust/crates/cli/src/main.rs": [
+            "fn main() {",
+            "    std::thread::sleep(std::time::Duration::from_millis(1500));",
+            '    std::fs::write("cli-exited", "").unwrap();',
+            '    println!("{}", core_lib::answer());',
+            "}",
+            "",
+          ].join("\n"),
+          "web/project.json": JSON.stringify({
+            name: "web",
+            targets: {
+              after: {
+                command: "test -f rust/cli-exited && echo the binary had exited",
+                dependsOn: [{ projects: ["cli"], target: "run" }],
+              },
+            },
+          }),
+        },
+        async (workspace) => {
+          const result = await nx(workspace, ["run", "web:after"]);
+
+          expect(result.status).toBe(0);
+          expect(result.output).toMatch(/^42$/m);
+          expect(result.output).toContain("the binary had exited");
+          expect(taskCalls(workspace)).toEqual([rust(["run", "-p", "cli"])]);
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "starts cargo in the workspace root, where a toolchain file in a member does not apply",
     () =>
       inFixture(
