@@ -1,5 +1,5 @@
 import type { TargetConfiguration } from "@nx/devkit";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { environmentVariables, toolchainCommand } from "../src/graph/inputs";
 import { listsPackage } from "../src/graph/plugin-package";
@@ -506,30 +506,80 @@ describe("caching", () => {
       HARNESS_TIMEOUT,
     );
 
-    it(
-      "leave doc uncached, and say so, when two workspaces share one artifact directory",
-      async () => {
-        const workspace = FixtureWorkspace.create("two-workspaces", {
-          ".cargo/config.toml": '[build]\ntarget-dir = "target"\n',
-        });
+    // Cargo reports the directory as each workspace spells it: here
+    // `<repo>/target` or `<repo>/deep/target` for the root workspace, and for
+    // `tools` `<repo>/tools/../target`, the link `<repo>/tools/target`, which
+    // leads to a folder that no build has created yet, or
+    // `<repo>/tools/link/../target`, where `link` leads to `deep/child`, so
+    // that the system reaches `deep/target`, not `tools/target`.
+    const throughLink = {
+      ".cargo/config.toml": '[build]\ntarget-dir = "deep/target"\n',
+      "tools/.cargo/config.toml": '[build]\ntarget-dir = "link/../target"\n',
+    };
+    it.each<[string, FileChanges, { links?: Record<string, string>; folders?: string[] }, string]>([
+      [
+        "a configuration at the repository root sets",
+        { ".cargo/config.toml": '[build]\ntarget-dir = "target"\n' },
+        {},
+        "target",
+      ],
+      [
+        "one workspace's configuration reaches through ..",
+        { "tools/.cargo/config.toml": '[build]\ntarget-dir = "../target"\n' },
+        {},
+        "target",
+      ],
+      [
+        "one workspace reaches through a symbolic link",
+        {},
+        { links: { "tools/target": "../target" } },
+        "target",
+      ],
+      [
+        "one workspace reaches through .. after a symbolic link",
+        throughLink,
+        { links: { "tools/link": "../deep/child" }, folders: ["deep/child", "deep/target"] },
+        "deep/target",
+      ],
+      [
+        "one workspace reaches through .. after a symbolic link, before the directory exists",
+        throughLink,
+        { links: { "tools/link": "../deep/child" }, folders: ["deep/child"] },
+        "deep/target",
+      ],
+    ])(
+      "leave doc uncached, and say so, when two workspaces share one artifact directory that %s",
+      async (_case, files, { links = {}, folders = [] }, rootDirectory) => {
+        const workspace = FixtureWorkspace.create("two-workspaces", files);
         try {
+          for (const folder of folders) {
+            mkdirSync(join(workspace.root, folder), { recursive: true });
+          }
+          for (const [link, target] of Object.entries(links)) {
+            symlinkSync(target, join(workspace.root, link));
+          }
           const graph = await workspace.graph();
 
-          for (const project of ["cargo-workspace", "tools"]) {
+          const others = {
+            "cargo-workspace": "the Cargo workspace in tools",
+            tools: "the Cargo workspace at the repository root",
+          };
+          for (const [project, other] of Object.entries(others)) {
             expect(graph.projects[project].targets.doc).toMatchObject({
               cache: false,
               outputs: [],
             });
             expect(graph.projects[project].metadata.cargo.warnings).toEqual([
-              expect.stringMatching(/shares Cargo's artifact directory target with/),
+              expect.stringContaining(`shares Cargo's artifact directory `),
             ]);
+            expect(graph.projects[project].metadata.cargo.warnings[0]).toContain(` with ${other}.`);
           }
           expect(graph.projects.scaffold.targets.build).toMatchObject({
             cache: true,
             outputs: [],
           });
           expect(graph.projects.app.targets.build.outputs).toEqual([
-            "{workspaceRoot}/target/{options.targetTriple ?? .}/{options.profile ?? debug}/app",
+            `{workspaceRoot}/${rootDirectory}/{options.targetTriple ?? .}/{options.profile ?? debug}/app`,
           ]);
           expect(graph.projects.app.targets.test.cache).toBe(true);
         } finally {
