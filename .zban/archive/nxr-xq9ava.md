@@ -51,3 +51,18 @@ Done when: the parts of the cited verification that cover this work pass, and `p
 Checks run: `pnpm nx run-many -t build lint` and `pnpm nx test nx-rust --maxWorkers=6` (786 tests, after merging main with #41 and #42, in place of `run-many -t build lint test`, as the machine requires), `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache` with Cargo 1.100.0 and with 1.91.0 (29 tests each), the lockfile specs with Cargo 1.91.0 too, `mara schema validate`, `mara project validate` (valid, evaluation complete, no diagnostics), `zban check`. CI on the pull request covers the rest.
 
 Rejected: naming the workspace project by its name in `dependsOn` (a `project.json` or `package.json` can rename it); a folder per workspace named by its path (nested workspaces' folders would contain each other); writing digests for every path package (members alone are what targets read).
+
+## Review round (PR #47)
+
+- Two `nx` commands at once could store a result under another lockfile's key: the post-check reread the shared digest file, which another command's lockfile task could have rewritten after Nx hashed it. The fix:
+  - `preTasksExecution` gives each command `NX_RUST_COMMAND_ID`, which is no cache input: Nx's hook `id` followed by a random UUID.
+  - The lockfile task also writes its digests to `commands/<id>` in the digest folder.
+  - A cached task passes only when its command's private digest, the shared file and the digest recomputed from `Cargo.lock` are equal; a missing private copy fails it.
+  - `postTasksExecution` removes the command's copies, and the lockfile task removes copies older than a day.
+  - The remaining window is stated in `DES-LOCKFILE-HASHING`.
+  - Tests: the reviewer's race with a paused cargo wrapper (`holdCargo`), and two concurrent commands on an unchanged lockfile.
+- A workspace whose root manifest Nx hands to no entry of the plugin (checked across entries with Nx's `findMatchingConfigFiles`) now leaves its crates' `build`, `check`, `lint` and `test` uncached, with `Cargo.lock` as an input and a graph-time warning; this is a new `DES-DIAGNOSTICS` row. The failure before cargo stays for a `project.json` that replaces `dependsOn`.
+- Merged `main` with #45, #46 and #48. The lockfile target carries `pluginVersion` like every inferred target, and both `pluginVersion` checks cover it (graph and run cases added). The executor's checks of what reaches a key run before the cargo command is built.
+- CI time: the job's `timeout-minutes` is now 25. With 3 workers on this machine, the unit run takes 187 s of Jest wall time on main against 244 to 265 s on the branch (560 s summed against 731 to 792 s). The new lockfile specs were trimmed by one merged row and offline `--precise` updates.
+
+Checks run: `pnpm nx run-many -t build lint`, `pnpm nx test nx-rust --maxWorkers=3` (808 tests), `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache` (29 tests), `mara schema validate`, `mara project validate` (valid, evaluation complete), `zban check`; the reviewer's race script on the new code (first command fails, and the restored-lockfile run is not restored from the cache).
