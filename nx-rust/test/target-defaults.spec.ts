@@ -998,6 +998,7 @@ describe("init", () => {
       expect(output).toContain(
         `  - It turns on caching for "fmt", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ${allCrates}.`,
       );
+      expect(output).toContain(`To narrow the entry (${targetDefaultsGuide}), do one of these:`);
       // The entry keyed by the executor wins over the one keyed "build".
       expect(output).not.toContain('The targetDefaults entry "build"');
       expect(output).toContain("nx.json is unchanged.");
@@ -1029,6 +1030,7 @@ describe("init", () => {
       expect(output).toContain(
         `  - It adds "^build" to the dependsOn of "build", "check", "fmt", "fmt-check", "lint" and "test", so that the task waits for tasks of other projects.`,
       );
+      expect(output).toContain(`To narrow the entry (${targetDefaultsGuide}), do one of these:`);
     },
     HARNESS_TIMEOUT,
   );
