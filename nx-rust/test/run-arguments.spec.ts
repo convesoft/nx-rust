@@ -78,6 +78,12 @@ describe("the binary of a run task", () => {
               ["--port", "3000"],
             ],
             [
+              ["run", "cli:run", "--args=SHOULD_NOT_REACH_BINARY", "--", "--port", "3000"],
+              run("cli", "--", "--port", "3000"),
+              "cli",
+              ["--port", "3000"],
+            ],
+            [
               ["run", "cli:run", "--args=--profile"],
               run("cli", "--", "--profile"),
               "cli",
@@ -285,6 +291,71 @@ describe("the binary of a run task", () => {
         expect(result.output).toContain("Property 'args' does not match the schema");
         expect(taskCalls(workspace)).toEqual([]);
       }),
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("settings from a crate's own targets tables", () => {
+  it(
+    "give run its args and make it continuous, and an option that a target does not take gets a line",
+    () =>
+      inFixture(
+        "crate-shapes",
+        {
+          ...binaries,
+          // server serves until Nx stops it, once cli is done.
+          "rust/crates/server/src/main.rs": [
+            "fn main() {",
+            "    let args: Vec<String> = std::env::args().skip(1).collect();",
+            '    println!("server got {:?}", args);',
+            "    std::thread::sleep(std::time::Duration::from_secs(60));",
+            "}",
+            "",
+          ].join("\n"),
+          "rust/crates/server/Cargo.toml": (manifest) =>
+            `${manifest}
+[package.metadata.nx.targets.run]
+continuous = true
+`,
+          "rust/crates/cli/Cargo.toml": (manifest) =>
+            `${manifest}
+[package.metadata.nx.targets.run]
+dependsOn = [{ projects = ["server"], target = "run" }]
+
+[package.metadata.nx.targets.run.options]
+args = "--name 'a b'"
+
+[package.metadata.nx.targets.build.options]
+allTargets = true
+`,
+        },
+        async (workspace) => {
+          const graph = await workspace.graph();
+          expect(graph.projects.server.targets.run.continuous).toBe(true);
+          expect(graph.projects.cli.targets.run.options).toEqual(
+            expect.objectContaining({ args: "--name 'a b'" }),
+          );
+
+          const ran = await runNx(workspace, ["run", "cli:run", "--", "--verbose"]);
+          expect(ran.status).toBe(0);
+          expect(received(ran.output, "cli")).toEqual(["--name", "a b", "--verbose"]);
+          expect(sortedCalls(taskCalls(workspace))).toEqual([
+            run("cli", "--", "--name", "a b", "--verbose"),
+            run("server"),
+          ]);
+          expect(linesWith(ran.output, "ignoring")).toEqual([]);
+
+          // Graph creation accepts the option until nxr-95kg91 rejects it
+          // there; the task leaves it out and says where it came from.
+          workspace.cargo.clear();
+          const built = await runNx(workspace, ["run", "cli:build"]);
+          expect(built.status).toBe(0);
+          expect(taskCalls(workspace)).toEqual([{ cwd: "rust", args: ["build", "-p", "cli"] }]);
+          expect(linesWith(built.output, "ignoring")).toEqual([
+            'cli:build: ignoring option `allTargets`, which this target does not take. It comes from the workspace\'s configuration: run `nx show target cli:build --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by "@convesoft/nx-rust:cargo".',
+          ]);
+        },
+      ),
     HARNESS_TIMEOUT,
   );
 });
