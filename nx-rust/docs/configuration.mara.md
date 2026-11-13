@@ -14,8 +14,9 @@ describes it. Repository-wide choices go into the plugin's entry in `nx.json`.
 | The plugin's entry in `nx.json`                              | The repository                 | Target names and locked mode in `options`, excluded paths in `exclude` |
 
 A value for a crate wins over the workspace default, which wins over the
-plugin options. Tags, `implicitDependencies`, `envInputs` and `runtimeInputs`
-are the exceptions: they add up, so a crate has its workspace's and its own. Which
+plugin options. Tags, `implicitDependencies`, `fileInputs`, `envInputs` and
+`runtimeInputs` are the exceptions: they add up, so a crate has its workspace's
+and its own. Which
 setting goes where is listed under [All settings](#all-settings).
 
 Nx applies some files after the plugin, and they win over all of these:
@@ -38,6 +39,7 @@ name = "api"
 [package.metadata.nx]
 name = "backend-api" # Nx project name; Cargo still sees "api"
 tags = ["scope:backend"]
+fileInputs = ["../../../proto/**/*.proto"] # files outside the crate that it reads
 
 [package.metadata.nx.targets.test.options]
 features = ["integration"] # option of the inferred "test" target
@@ -45,6 +47,9 @@ features = ["integration"] # option of the inferred "test" target
 [package.metadata.nx.targets.migrate]
 command = "cargo run -p api --bin migrate" # an extra target
 ```
+
+`fileInputs` patterns are relative to the `Cargo.toml` that holds them;
+[Caching](caching.mara.md#files-outside-the-crate) says when you need them.
 
 In a crate folder that also is a JS project, Nx applies its `package.json`
 and `project.json` after this table. Where Nx takes the project's name from
@@ -82,7 +87,13 @@ Leaving files out, as `docs` above, is your statement that the target does not
 read them. Nx then ignores changes to them, so if a macro such as
 `include_str!`, a build script or a test still reads an excluded file, Nx
 restores a result produced with the file's old content, a pass where plain
-`cargo` would fail or the reverse.
+`cargo` would fail or the reverse. The check after a build catches this only
+for an exclusion on `build`, and only for a read that Cargo records through an
+include macro or a build script's `rerun-if-changed` in the crate's library or
+binaries, by failing the task instead of caching it
+([Caching](caching.mara.md#files-outside-the-crate)); an exclusion on `check`,
+`lint`, `test` or an artifact target, and a file that a proc macro opens
+itself, stay unprotected.
 
 An input on one target stays with that target. If a build script reads the
 variable, so that crates which depend on this one compile differently too, add
@@ -271,7 +282,7 @@ supports ([Setup](setup.mara.md)).
 :status: accepted
 :satisfies: NEED-CONFIG-IN-CARGO
 
-A crate's tags, Nx project name, options of inferred targets and additional targets can be set in `[package.metadata.nx]` of its manifest. Defaults for all members of a workspace can be set in `[workspace.metadata.nx]` of the workspace root manifest. When that manifest defines no crate, the name, tags, settings of inferred targets and additional targets of the workspace's own [[TERM-WORKSPACE-PROJECT]] can be set there as well, apart from the defaults for members. A value set for a crate takes precedence over the workspace default, except that a crate's tags, implicit dependencies and added cache inputs are added to those of its workspace. No file other than a Cargo manifest is needed to override what the plugin infers for a crate. Where a project's folder also is a JS project, its `package.json` and `project.json` take precedence over these settings, because Nx applies them after every plugin ([[EVD-NX-PROJECT-MERGE]]). The name Nx takes from them applies instead of the one set here ([[REQ-PROJECT-NAMES]]), and a script or target there with the name of one of the project's targets replaces that target, settings made here included, unless Nx merges the two. Tags from both are kept.
+A crate's tags, Nx project name, options of inferred targets and additional targets can be set in `[package.metadata.nx]` of its manifest. Defaults for all members of a workspace can be set in `[workspace.metadata.nx]` of the workspace root manifest. When that manifest defines no crate, the name, tags, settings of inferred targets and additional targets of the workspace's own [[TERM-WORKSPACE-PROJECT]] can be set there as well, apart from the defaults for members. A value set for a crate takes precedence over the workspace default, except that a crate's tags, implicit dependencies and added cache inputs, `fileInputs`, `envInputs` and `runtimeInputs`, are added to those of its workspace. No file other than a Cargo manifest is needed to override what the plugin infers for a crate. Where a project's folder also is a JS project, its `package.json` and `project.json` take precedence over these settings, because Nx applies them after every plugin ([[EVD-NX-PROJECT-MERGE]]). The name Nx takes from them applies instead of the one set here ([[REQ-PROJECT-NAMES]]), and a script or target there with the name of one of the project's targets replaces that target, settings made here included, unless Nx merges the two. Tags from both are kept.
 :::
 
 :::mara requirement REQ-TARGET-NAMES
@@ -304,11 +315,12 @@ Overrides are read from the `metadata` values in the `cargo metadata` report ([[
 | `artifacts`                   | package            | The kinds of artifact the crate produces, in place of the inference of [[DES-ARTIFACT-STEPS]].                                                                  |
 | `implicitDependencies`        | package, workspace | Projects the crate depends on beyond its Cargo dependencies, as Nx's key of that name. Additions only; they add up.                                             |
 | `envInputs`, `runtimeInputs`  | package, workspace | Environment variables and commands added to the crate's cache key ([[DES-INPUTS]]). They add up.                                                                |
+| `fileInputs`                  | package, workspace | Glob patterns of files outside the crate that it reads, relative to the manifest's folder. They add up ([[REQ-BUILD-SCRIPT-INPUTS]]).                           |
 | `project`                     | workspace          | The [[TERM-WORKSPACE-PROJECT]] itself: its own `name`, `tags` and `targets.<name>`, as in a package table. An error in a root manifest that defines a crate.    |
 
 In the `project` table, `name` replaces the default name ([[DES-PROJECT-GRAPH]]), `tags` are added to the workspace's tags, and `targets.<name>` overrides a target of the workspace project or adds one. The workspace table's own `targets.<name>` do not reach the workspace project.
 
-For a setting that both tables can hold, the crate's value wins over the workspace default; only tags, `implicitDependencies`, `envInputs` and `runtimeInputs` add up. Key names use the spelling of the matching Nx option, so one name works in `Cargo.toml`, in `nx.json` and on the command line. Where each setting can be set, the plugin options, the merge rules and the handling of unknown keys are in [[DES-PLUGIN-OPTIONS]].
+For a setting that both tables can hold, the crate's value wins over the workspace default; only tags, `implicitDependencies`, `fileInputs`, `envInputs` and `runtimeInputs` add up. Key names use the spelling of the matching Nx option, so one name works in `Cargo.toml`, in `nx.json` and on the command line. Where each setting can be set, the plugin options, the merge rules and the handling of unknown keys are in [[DES-PLUGIN-OPTIONS]].
 
 The plugin puts these values on the project it returns. Where the project's folder also is a JS project, Nx applies `package.json` and `project.json` after them, with the effects [[REQ-METADATA-OVERRIDES]] states ([[EVD-NX-PROJECT-MERGE]]).
 :::
@@ -337,6 +349,7 @@ The settings of milestone 0.1, where each can be set, and its default. The plugi
 | `implicitDependencies` | no             | yes             | yes           | none                                                                                       | Projects the crate depends on in addition to its Cargo dependencies.                                                                                                                                                                                                                                                      |
 | `envInputs`            | yes            | yes             | yes           | none                                                                                       | Environment variables added to the cache key of the crate's cached targets ([[DES-INPUTS]]).                                                                                                                                                                                                                              |
 | `runtimeInputs`        | yes            | yes             | yes           | none                                                                                       | Commands whose output is added to that cache key ([[DES-INPUTS]]).                                                                                                                                                                                                                                                        |
+| `fileInputs`           | no             | yes             | yes           | none                                                                                       | Glob patterns of files outside the crate's folder that it reads, resolved against the folder of the manifest that holds them and added to its cache key ([[REQ-BUILD-SCRIPT-INPUTS]], [[DES-INPUTS]]).                                                                                                                    |
 
 The workspace table also holds the `project` sub-table for the [[TERM-WORKSPACE-PROJECT]] ([[DES-METADATA-TABLES]]). `exclude`, beside `options` on the plugin's entry, is Nx's own filter for plugin entries, not an option of the plugin ([[DES-DISCOVERY]]). A standalone crate takes the workspace settings from a `[workspace.metadata.nx]` table in its own manifest, which Cargo reports for a workspace of one ([[EVD-CARGO-NX-TABLES]]).
 
@@ -360,7 +373,7 @@ Options of inferred targets are set under `targets.<name>.options`, in a configu
 
 Three environment variables act on a run and are no options: `NX_RUST_TEST_MODE` ([[DES-TEST-MODE]]), `NX_RUST_LOCKED`, which replaces `locked` for one run ([[DES-INVOCATION]]), and `NX_RUST_ALLOW_UNSUPPORTED_NX` ([[DES-DIAGNOSTICS]]).
 
-**Precedence.** A setting takes its default, then the value in the plugin options, then the one in the workspace table, then the one in the package table, each replacing the one before. `tags`, `implicitDependencies`, `envInputs` and `runtimeInputs` add up instead: a crate has the values of every level, and no level removes what another set. This order is the plugin's own, applied to the projects it returns. Nx then applies `targetDefaults` from `nx.json`, and after them the `project.json` and `package.json` in the project's folder, so a value that either sets for a target, an option such as `features` included, replaces the one that the plugin gave it ([[EVD-NX-TARGET-DEFAULTS]], [[EVD-NX-PROJECT-MERGE]]).
+**Precedence.** A setting takes its default, then the value in the plugin options, then the one in the workspace table, then the one in the package table, each replacing the one before. `tags`, `implicitDependencies`, `fileInputs`, `envInputs` and `runtimeInputs` add up instead: a crate has the values of every level, and no level removes what another set. This order is the plugin's own, applied to the projects it returns. Nx then applies `targetDefaults` from `nx.json`, and after them the `project.json` and `package.json` in the project's folder, so a value that either sets for a target, an option such as `features` included, replaces the one that the plugin gave it ([[EVD-NX-TARGET-DEFAULTS]], [[EVD-NX-PROJECT-MERGE]]).
 
 **Target names.** When `targetNames` gives two inferred targets of one project the same name, graph creation fails with an error that names the project, the two inferred targets and the resulting name, and says to change `targetNames`. Neither target replaces the other, because [[DES-TARGETS]] gives the project both. The rule for a `targets.<name>` table in Cargo metadata stands: under the name of an inferred target, which is its name after `targetNames`, it overrides that target, and under any other name it defines an extra target ([[DES-METADATA-TABLES]]).
 
@@ -370,7 +383,7 @@ Three environment variables act on a run and are no options: `NX_RUST_TEST_MODE`
 
 **Implicit dependencies.** Each entry of `implicitDependencies` adds an edge from the crate to the project it names, which may be a project of another plugin. The key only adds, so an entry starting with `!` fails graph creation, whatever it names.
 
-**Added inputs.** `envInputs` and `runtimeInputs` of all three levels go into the crate's own named input, which its dependents hash through `^` inputs ([[DES-INPUTS]]). A variable or command added for one crate therefore also reaches the keys of the crates that depend on it, in other workspaces too. The names pair with Nx's input kinds `env` and `runtime`: a plain `env` would read as the option of `nx:run-commands` that sets variables for a command, and an extra target with a `command` is such a target ([[EVD-NX-24-OPTION-SEMANTICS]]).
+**Added inputs.** `envInputs` and `runtimeInputs` of all three levels, and `fileInputs` of the two tables, go into the crate's own named input, which its dependents hash through `^` inputs ([[DES-INPUTS]]). A variable or command added for one crate therefore also reaches the keys of the crates that depend on it, in other workspaces too. The plugin options hold no `fileInputs`, because a pattern is resolved against the folder of the manifest that holds it ([[REQ-BUILD-SCRIPT-INPUTS]]). The names pair with Nx's input kinds `env` and `runtime`: a plain `env` would read as the option of `nx:run-commands` that sets variables for a command, and an extra target with a `command` is such a target ([[EVD-NX-24-OPTION-SEMANTICS]]).
 
 **Unknown keys.** A key at the top level of a package table, of a workspace table or of its `project` sub-table, or in the plugin options, that this reference does not give for that place fails graph creation with a message that names the file, the manifest or `nx.json`, and the key. A setting given only for another place counts as unknown there, such as `namePrefix` in a package table. So do the other keys of an Nx project configuration, such as `root`, `sourceRoot`, `projectType`, `namedInputs` and `metadata`, and `release` until the release flow is specified ([[DES-RELEASE]]).
 :::
