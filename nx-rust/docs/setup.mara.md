@@ -31,6 +31,8 @@ you use the feature that needs them:
 | [cargo-nextest](https://nexte.st)                                   | `testRunner = "nextest"`                  |
 | [cargo-affected](https://github.com/max-sixty/cargo-affected)       | `affectedTests = true`                    |
 | [cargo-hakari](https://docs.rs/cargo-hakari)                        | The `hakari` feature-unification strategy |
+| [cargo-audit](https://crates.io/crates/cargo-audit)                 | The `audit` target                        |
+| [cargo-deny](https://crates.io/crates/cargo-deny)                   | The `deny` target                         |
 | The `wasm-bindgen` CLI and the wasm target                          | `wasm-build`                              |
 | The napi CLI                                                        | `napi-build`                              |
 

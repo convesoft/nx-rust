@@ -19,7 +19,7 @@ Implements `REQ-INPUT-FILES`, `REQ-ENV-ALLOWLIST`, `REQ-TOOLCHAIN-KEY`, `REQ-CAC
 - [ ] `^` inputs over normal, build and dev-dependency edges
 - [ ] The environment allowlist and the repository's additions
 - [ ] The toolchain runtime input, run in the workspace root
-- [ ] Outputs: executables, `cdylib` and `staticlib` files for `build`, the doc folder for `doc`, none elsewhere; nothing inside the build directory; no caching of `build` and `doc` when the artifact directory is outside the repository
+- [ ] Outputs: executables, `cdylib` and `staticlib` files for `build`, the whole doc folder of the artifact directory for the workspace project's `doc`, none elsewhere; nothing inside the build directory; no caching of `build` and `doc` when the artifact directory is outside the repository, and none of `doc` when two workspaces share one artifact directory
 - [ ] The cache-key matrix rows for all of the above
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

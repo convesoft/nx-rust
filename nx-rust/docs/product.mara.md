@@ -47,8 +47,9 @@ Rust-only repositories work too, but they do not drive priorities.
   [Workspaces and projects](workspaces.mara.md).
 - Overrides in `Cargo.toml` and a few plugin options:
   [Configuration](configuration.mara.md).
-- Inferred `build`, `check`, `lint`, `test`, `fmt-check`, `fmt`, `doc`, `bench`
-  and `run` targets: [Targets](targets.mara.md).
+- Inferred `build`, `check`, `lint`, `test`, `fmt-check`, `fmt`, `bench` and
+  `run` targets for each crate, and `doc`, `audit`, `deny` and `update` for each
+  Cargo workspace: [Targets](targets.mara.md).
 - Cache keys and outputs that keep Cargo's build directory out of the Nx cache:
   [Caching](caching.mara.md).
 - One cargo call per group of tasks, with features resolved the same way on
@@ -276,7 +277,7 @@ A crate that is not a member of any Cargo workspace, either because no enclosing
 :status: accepted
 :aliases: synthetic project
 
-The Nx project that hosts the tasks of a whole Cargo workspace, such as formatting, auditing and coverage collection. It is rooted at the workspace folder and depends on every member. When the root manifest also defines a crate, that crate's project takes this role. See [[REQ-WORKSPACE-PROJECT]].
+The Nx project that hosts the tasks of a whole Cargo workspace, such as documentation, auditing and coverage collection. It is rooted at the workspace folder and depends on every member. When the root manifest also defines a crate, that crate's project takes this role. See [[REQ-WORKSPACE-PROJECT]].
 :::
 
 :::mara term TERM-BUILD-DIR
@@ -303,7 +304,7 @@ The directory where Cargo puts final artifacts such as binaries, set by `build.t
 :aliases: group
 :aliases: build flavour
 
-The set of tasks that one cargo invocation can serve: tasks of the same kind in the same Cargo workspace with the same feature set, profile and target triple.
+The set of tasks that one cargo invocation can serve: tasks of the same kind in the same Cargo workspace whose invocations would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment.
 :::
 
 :::mara term TERM-FEATURE-UNIFICATION
