@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
-import { readRedirections } from "../src/cargo/redirections";
+import { readRedirections, sourceDirectoryCandidates } from "../src/cargo/redirections";
 import {
   applyFileChanges,
   FileChanges,
@@ -154,6 +154,64 @@ describe("reading redirections", () => {
     write("ws/.cargo/config.toml", "paths = [\n");
 
     await expect(read("ws")).rejects.toThrow(join(root, "ws/.cargo/config.toml"));
+  });
+
+  it("takes the directory of every [source] table from the same configuration files, but not from manifests", async () => {
+    write(
+      "ws/Cargo.toml",
+      '[workspace]\n[source.ignored]\ndirectory = "ignored"\n[source.crates-io]\nreplace-with = "v"\n',
+    );
+    write(
+      "ws/.cargo/config.toml",
+      [
+        'include = ["more.toml"]',
+        "[source.crates-io]",
+        'replace-with = "vendored-sources"',
+        "[source.vendored-sources]",
+        'directory = "vendor"',
+        "[source.mirror]",
+        'local-registry = "registry"',
+      ].join("\n"),
+    );
+    write("ws/.cargo/more.toml", '[source.git-sources]\ndirectory = "../git-vendor"\n');
+    write(".cargo/config.toml", '[source.outer]\ndirectory = "third_party/vendor"\n');
+    write("ws/crates/api/.cargo/config.toml", '[source.member]\ndirectory = "x"\n');
+    write("cargo-home/config.toml", '[source.home]\ndirectory = "/abs/vendor"\n');
+
+    const found = await readRedirections(join(root, "ws"), {
+      CARGO_HOME: join(root, "cargo-home"),
+    });
+
+    expect(
+      found.sourceDirectories.map(({ name, folder, file }) => [
+        name,
+        relative(root, folder),
+        relative(root, file),
+      ]),
+    ).toEqual([
+      ["vendored-sources", "ws/vendor", "ws/.cargo/config.toml"],
+      ["git-sources", "git-vendor", "ws/.cargo/more.toml"],
+      ["outer", "third_party/vendor", ".cargo/config.toml"],
+      ["home", relative(root, "/abs/vendor"), "cargo-home/config.toml"],
+    ]);
+    expect(found.redirections).toEqual([]);
+  });
+
+  it("offers as candidates the [source] directories of the files above any of several folders, passing over a file that is no valid TOML", async () => {
+    write("a/.cargo/config.toml", '[source.v]\ndirectory = "vendor"\n');
+    write("b/c/.cargo/config", '[source.v]\ndirectory = "../../shared/vendor"\n');
+    write("b/c/.cargo/config.toml", '[source.unread]\ndirectory = "unread"\n');
+    write("b/.cargo/config.toml", "not toml [\n");
+    write("cargo-home/config.toml", '[source.v]\ndirectory = "a/vendor"\n');
+
+    const candidates = await sourceDirectoryCandidates([join(root, "a/x"), join(root, "b/c/d")], {
+      CARGO_HOME: join(root, "cargo-home"),
+    });
+
+    expect(candidates.map((folder) => relative(root, folder))).toEqual([
+      "a/vendor",
+      "shared/vendor",
+    ]);
   });
 });
 

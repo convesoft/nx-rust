@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { CargoMetadata, CargoPackage } from "../cargo/metadata";
-import { readRedirections, Redirection } from "../cargo/redirections";
+import { readRedirections, Redirection, sourceDirectoryCandidates } from "../cargo/redirections";
 import { CargoError } from "../cargo/run-cargo";
 import { UnsupportedCargoError } from "../compatibility/cargo-version";
 import { ComputationReports } from "./computation-reports";
@@ -68,11 +68,21 @@ export interface CargoDiscovery {
  * members. A crate outside every workspace, or excluded by the workspace
  * around it, is still unclaimed after that workspace's step and becomes a
  * workspace of one. Each workspace's redirections are read from its root
- * manifest and the configuration files that apply to it. Afterwards, every
- * path dependency without a project, and every crate without a project that
- * `[patch]` or `[replace]` redirects to, whose crate no report covers yet
- * gets a report of its own, so that the path dependencies behind it are
- * known.
+ * manifest and the configuration files that apply to it.
+ *
+ * An unclaimed manifest in a folder that a `[source.<name>]` table names as
+ * its `directory`, in the configuration files that cargo reads for a
+ * workspace found so far, is skipped without running cargo: its crate is a
+ * package of a replaced source, such as one that `cargo vendor` wrote, and
+ * gets no project. So that those workspaces are known first, the manifests
+ * in a folder that any configuration file in or above a manifest's folder
+ * names in this way come after all others, shallowest first among
+ * themselves. Folders are compared through symbolic links.
+ *
+ * Afterwards, every path dependency without a project, and every crate
+ * without a project that `[patch]` or `[replace]` redirects to, whose crate
+ * no report covers yet gets a report of its own, so that the path
+ * dependencies behind it are known.
  *
  * @param manifests The `Cargo.toml` files, relative to `workspaceRoot`.
  * @param workspaceRoot The absolute path of the repository root.
@@ -91,8 +101,15 @@ export async function discoverWorkspaces(
   const claimed = new Set<string>();
   const workspaces: CargoWorkspace[] = [];
   const warnings: string[] = [];
-  for (const manifest of [...manifests].sort(shallowestFirst)) {
-    if (claimed.has(manifest)) {
+  // The folders that the workspaces found so far take replaced sources from.
+  const sourceFolders: string[] = [];
+  const realManifests = new Map(
+    manifests.map((manifest) => [manifest, realPath(join(workspaceRoot, manifest))]),
+  );
+  const inSourceFolder = (manifest: string, folders: string[]) =>
+    folders.some((folder) => isWithin(folder, realManifests.get(manifest)));
+  for (const manifest of await readingOrder(manifests, workspaceRoot, inSourceFolder)) {
+    if (claimed.has(manifest) || inSourceFolder(manifest, sourceFolders)) {
       continue;
     }
     const report = await readWorkspace(manifest, workspaceRoot, reports);
@@ -106,6 +123,7 @@ export async function discoverWorkspaces(
     }
     const found = await readRedirections(report.workspace_root);
     warnings.push(...found.warnings);
+    sourceFolders.push(...found.sourceDirectories.map(({ folder }) => realPath(folder)));
     workspaces.push({
       root: repositoryPath(workspaceRoot, report.workspace_root) || ".",
       rootManifest,
@@ -125,6 +143,26 @@ export async function discoverWorkspaces(
   );
   warnings.push(...outsideRedirectionWarnings(workspaces, workspaceRoot));
   return { workspaceRoot, workspaces, pathDependencyReports, warnings: [...new Set(warnings)] };
+}
+
+/**
+ * The manifests in the order discovery reads them: shallowest first, except
+ * that those in a folder that a configuration file applying to any of them
+ * names as a `[source.<name>]` directory come last, once the workspaces whose
+ * configuration may name their folder are known.
+ */
+async function readingOrder(
+  manifests: readonly string[],
+  workspaceRoot: string,
+  inSourceFolder: (manifest: string, folders: string[]) => boolean,
+): Promise<string[]> {
+  const folders = new Set(manifests.map((manifest) => dirname(join(workspaceRoot, manifest))));
+  const candidates = (await sourceDirectoryCandidates(folders)).map(realPath);
+  const ordered = [...manifests].sort(shallowestFirst);
+  return [
+    ...ordered.filter((manifest) => !inSourceFolder(manifest, candidates)),
+    ...ordered.filter((manifest) => inSourceFolder(manifest, candidates)),
+  ];
 }
 
 /**
@@ -376,6 +414,12 @@ function repositoryPath(workspaceRoot: string, path: string): string {
 // inside, absolute otherwise.
 function displayPath(workspaceRoot: string, path: string): string {
   return isOutside(workspaceRoot, path) ? path : repositoryPath(workspaceRoot, path);
+}
+
+// Whether `path` is `folder` or lies below it.
+function isWithin(folder: string, path: string): boolean {
+  const inside = relative(folder, path);
+  return inside === "" || (inside !== ".." && !inside.startsWith("../") && !isAbsolute(inside));
 }
 
 // Whether the path lies outside the repository.

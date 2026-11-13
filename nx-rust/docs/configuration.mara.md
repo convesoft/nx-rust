@@ -242,7 +242,7 @@ The triple is `targetTriple`, not `target`, because `nx run-many -t` and
 
 ## Excluding crates
 
-To keep crates that are checked in from becoming projects, such as vendored
+To keep crates that are checked in from becoming projects, such as generated
 ones, list their manifests under `exclude` on the plugin's entry. This is Nx's
 own filter for plugin entries, so it sits beside `options`, not inside:
 
@@ -251,11 +251,15 @@ own filter for plugin entries, so it sits beside `options`, not inside:
   "plugins": [
     {
       "plugin": "@convesoft/nx-rust",
-      "exclude": ["vendor/**/*"]
+      "exclude": ["generated/**/*"]
     }
   ]
 }
 ```
+
+The crates that `cargo vendor` writes need no entry here once Cargo's
+configuration names their folder as a `[source]` directory
+([Workspaces](workspaces.mara.md#how-workspaces-are-found)).
 
 ## All settings
 
