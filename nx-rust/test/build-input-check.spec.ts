@@ -181,17 +181,15 @@ describe("the check of a build's dependency files", () => {
       });
       expect(records("colb")).toMatchObject({ binaries: [{ name: "cli" }], shared: ["cli.d"] });
       expect(records("colb")).not.toHaveProperty("library");
-      for (const [name, project] of Object.entries(graph.projects)) {
-        for (const [target, configuration] of Object.entries(project.targets ?? {})) {
-          if (target !== "build") {
-            expect({ name, target, records: configuration.metadata?.cargo?.records }).toEqual({
-              name,
-              target,
-              records: undefined,
-            });
-          }
-        }
-      }
+      const others = Object.entries(graph.projects).flatMap(([name, project]) =>
+        Object.entries(project.targets ?? {})
+          .filter(
+            ([target, configuration]) =>
+              target !== "build" && configuration.metadata?.cargo?.records !== undefined,
+          )
+          .map(([target]) => `${name}:${target}`),
+      );
+      expect(others).toEqual([]);
     },
     HARNESS_TIMEOUT,
   );
