@@ -1,8 +1,15 @@
 # Workspaces and projects
 
-> **Status:** discovery is implemented: the plugin finds the Cargo workspaces
-> and reads each with `cargo metadata`. Projects, names and edges are not
-> implemented yet, so no crate appears in the graph so far.
+> **Status:** the plugin finds the Cargo workspaces and creates a project for
+> each crate and each workspace, with the default names and an edge for each
+> path dependency. The projects have no targets yet, and the `name`,
+> `namePrefix` and `project` settings of the metadata tables are not read yet,
+> so for now only a `name` in a crate folder's `project.json` or `package.json`
+> resolves a name collision. A crate that depends on
+> another crate of the repository through a registry dependency that
+> `[patch]` redirects to that crate's path gets no edge to it, without a
+> message, so `affected` and the cache keys of that crate miss changes in the
+> other one until nxr-p5ybc0.
 
 nx-rust finds every Cargo workspace in the repository and turns each member
 crate into an Nx project. You do not list crates anywhere: the plugin asks
@@ -61,7 +68,8 @@ repository-wide name for "the lockfile".
 ## Project names
 
 A project is named after its crate. If two crates in the repository have the
-same name, the graph fails with an error that names both manifests:
+same name, the graph fails: Nx's error names both folders, and nx-rust's error
+after it names both manifests and how to rename one of them:
 
 ```toml
 # tools/api/Cargo.toml - a second crate called "api"
@@ -88,8 +96,11 @@ every plugin. Where Nx takes the name from one of those files, the crate's
 `name` override has no effect; a `project.json` without a name and without a
 `package.json` beside it keeps the name the plugin gives the crate. To choose
 another name, set `name` in the folder's `project.json` if it has one, and
-otherwise `nx.name` in its `package.json`. A crate and a JS project with the
-same name make Nx fail with its own error, which names both folders.
+otherwise `nx.name` in its `package.json`. Such a name also settles a
+collision between two crates. A crate and a JS project with the same name make
+Nx fail with its own error, which names both folders. In such mixed cases, and
+when three or more projects share a name, nx-rust's error may be missing or
+incomplete; Nx's error always names every folder.
 
 ## Workspace-level tasks
 
@@ -145,7 +156,9 @@ workspace pattern that includes the root is enough to give the project the name
 in the root `package.json`.
 
 A workspace project with the same name as a crate, or two workspace projects
-with one name, make the graph fail with an error that names both manifests.
+with one name, make the graph fail: Nx's error names both folders, and
+nx-rust's error names both manifests, though not always for a project at the
+root of the Nx workspace.
 Default names can collide: a workspace in `services/billing/` and one in
 `services-billing/` both get `services-billing`, and one at the root and one in
 `cargo-workspace/` both get `cargo-workspace`. Set a `name` in the table of one
@@ -223,7 +236,7 @@ Crates under paths ignored by `.gitignore` or `.nxignore`, and crates matched by
 :status: accepted
 :satisfies: NEED-ZERO-CONFIG
 
-An Nx project is named after its crate. When the crate's folder also is a JS project, the name set by its `package.json` or `project.json` applies instead, because Nx applies those files after every plugin ([[EVD-NX-PROJECT-MERGE]]). A [[TERM-WORKSPACE-PROJECT]] that is not a crate's project is named after the path of the workspace folder from the root of the Nx workspace, and a workspace at that root has a fixed name; the same exception applies to its folder, and a name set for it in the workspace's metadata replaces the default ([[ADR-WORKSPACE-PROJECT-NAME]]). When two projects of this plugin would get the same name, graph creation fails with an error that names both manifest paths; the plugin never renames a project on its own. A per-crate name, a per-workspace name prefix and a name for the workspace project resolve a collision. Whatever the project is called, every cargo command addresses the crate by its real package name and manifest path.
+An Nx project is named after its crate. When the crate's folder also is a JS project, the name set by its `package.json` or `project.json` applies instead, because Nx applies those files after every plugin ([[EVD-NX-PROJECT-MERGE]]). A [[TERM-WORKSPACE-PROJECT]] that is not a crate's project is named after the path of the workspace folder from the root of the Nx workspace, and a workspace at that root has a fixed name; the same exception applies to its folder, and a name set for it in the workspace's metadata replaces the default ([[ADR-WORKSPACE-PROJECT-NAME]]). When two projects of this plugin get the same name, graph creation fails. Nx's own error names their folders, and where the plugin can tell that the colliding projects are its own it adds an error that names their manifest paths and the remedies ([[DES-PROJECT-GRAPH]]). The plugin never renames a project on its own. A per-crate name, a per-workspace name prefix and a name for the workspace project resolve a collision. Whatever the project is called, every cargo command addresses the crate by its real package name and manifest path.
 :::
 
 :::mara requirement REQ-WORKSPACE-PROJECT
@@ -311,11 +324,13 @@ Every cargo call of graph creation starts in the root folder of a workspace, whe
 :satisfies: REQ-WORKSPACE-PROJECT
 :satisfies: REQ-DEPENDENCY-EDGES
 
-**Projects.** Each claimed member becomes a project rooted at the crate directory. Its name is the crate's `name` override when one is set, used as it is. Otherwise it is the package name, with the workspace's `namePrefix` put in front of it as it is, without a separator, when the workspace sets one, also for the crate of the root manifest ([[DES-METADATA-TABLES]]). In a folder that also is a JS project, Nx replaces that name with the one from `package.json` or `project.json` ([[EVD-NX-PROJECT-MERGE]]). Two projects of this plugin with one name, whether crates or workspace projects, fail graph creation with an error naming both manifest paths and the remedy for each: the crate's `name` override or the workspace's prefix for a crate, the `name` in `[workspace.metadata.nx.project]` for a workspace project. A collision with another plugin's project fails with Nx's own error. Commands never use the Nx name: they pass the real package name and the manifest path.
+**Projects.** Each claimed member becomes a project rooted at the crate directory. Its name is the crate's `name` override when one is set, used as it is. Otherwise it is the package name, with the workspace's `namePrefix` put in front of it as it is, without a separator, when the workspace sets one, also for the crate of the root manifest ([[DES-METADATA-TABLES]]). In a folder that also is a JS project, Nx replaces that name with the one from `package.json` or `project.json` ([[EVD-NX-PROJECT-MERGE]]). Two projects of this plugin that hold one name once Nx has applied those files, whether crates or workspace projects, fail graph creation, and so does a collision with another plugin's project. Whether projects keep one name is known only once Nx has merged the projects of all plugins and of all entries of this plugin in `nx.json`, so each entry checks the names in `createDependencies`, against the merged projects that the hook receives. A project holds the name it has there, or, where another project took that name from it, the name under which Nx lists the files of its folder; a name that a `package.json` or `project.json` gave a project replaces the plugin's. To recognise another entry's projects there, each project carries in its metadata, under `cargo`, the name the plugin gives it, its manifest, the root manifest of its workspace and, for a crate, the package name. Nx reports two projects with one name itself while it merges them, before it calls `createDependencies`, so its error "The following projects are defined in multiple locations", which names every folder, comes first. Commands never use the Nx name: they pass the real package name and the manifest path.
+
+The plugin's own error names the manifest paths and the remedy for each: the crate's `name` override or the workspace's prefix for a crate, the `name` in `[workspace.metadata.nx.project]` for a workspace project. It is promised for two projects that collide under the names the plugin gave them, in one entry or across two entries that receive different manifests. Elsewhere it is best effort: when a project that is not the plugin's holds the name too, when three or more projects hold it, when the common name comes from `package.json` or `project.json` files, when entries of the plugin receive the same manifests, or when one of the projects is at the repository root, the message can be missing, can name only some of the manifests, or can appear once per entry. In every case graph creation fails with Nx's error, which names every folder.
 
 **Workspace project.** Each workspace gets one project rooted at the workspace folder, with a dependency on every member. If the root manifest has a `[package]` table, no extra project is created and the workspace-level targets attach to that crate's project, which is named like any crate; a `[workspace.metadata.nx.project]` table in that manifest fails graph creation with an error that names the manifest and points to `[package.metadata.nx]`. Otherwise the project is named after the path of the workspace folder from the root of the Nx workspace, with each `/` replaced by `-` and nothing else changed: `rust/` gives `rust` and `services/billing/` gives `services-billing`. A workspace at the root of the Nx workspace is called `cargo-workspace`. Two folders can give one default name, such as `services/billing/` and `services-billing/`, or the root and `cargo-workspace/`; that fails as a collision between two projects of this plugin. The `name` in `[workspace.metadata.nx.project]` replaces this default, and the workspace's prefix does not apply to it ([[DES-METADATA-TABLES]], [[ADR-WORKSPACE-PROJECT-NAME]]). When the workspace folder already is an Nx project, through a `project.json` or a `package.json` that Nx reads, Nx merges the two into one project. Nx reads a `package.json` when the package manager's workspace patterns include it or a `project.json` sits beside it, and the root one also when it has an `nx` key. A `project.json` that sets a name gives the name. Otherwise a `package.json` in the folder gives it, and a `project.json` without a name is enough to make Nx read that file. Only a `project.json` without a name and without a `package.json` beside it leaves the plugin's name. A `name` in the sub-table has no effect where Nx renames the project ([[EVD-NX-PROJECT-MERGE]], [[EVD-WORKSPACE-PROJECT-NAMES]]). The edges from the workspace project to its members name it by the project Nx has at the workspace folder, as listed in the projects that `createDependencies` receives.
 
-**Edges.** For each member, every dependency of kind normal, build or dev that resolves to a crate with an Nx project becomes an edge. That includes a path dependency on a member of another workspace: the target crate keeps its single project in its home workspace, where its own targets run in that [[TERM-WORKSPACE-CONTEXT]]. A path dependency on a crate without an Nx project produces no edge; its files reach the cache key as inputs ([[DES-INPUTS]]). Each edge names its two projects by the name Nx gives the project at the crate's root, as listed in the projects that `createDependencies` receives, because a `package.json` or `project.json` may have renamed it ([[EVD-NX-PROJECT-MERGE]]).
+**Edges.** For each member, every dependency of kind normal, build or dev that resolves to a crate with an Nx project becomes an edge. That includes a path dependency on a member of another workspace: the target crate keeps its single project in its home workspace, where its own targets run in that [[TERM-WORKSPACE-CONTEXT]]. A path dependency on a crate without an Nx project produces no edge; its files reach the cache key as inputs ([[DES-INPUTS]]). Each edge names its two projects by the name Nx gives the project at the crate's root, as listed in the projects that `createDependencies` receives, because a `package.json` or `project.json` may have renamed it ([[EVD-NX-PROJECT-MERGE]]). Edges have Nx's type `implicit`, which names no source file, so that Nx takes them as returned on every graph computation: for the other types, Nx puts back the file dependencies it cached in an earlier computation for each file whose hash is unchanged, and a crate's edges depend on more than its own manifest ([[EVD-NX-EDGE-CACHE]]). The maintainer accepted the cost on 13 November 2026: `nx graph` labels the edges implicit and shows no file for them, and the default dependency reading of Nx release skips implicit edges, which the release work has to handle (nxr-jhdr3x).
 
 **External nodes.** Each direct external dependency becomes a [[TERM-EXTERNAL-NODE]] with an edge from the crate. The nodes are created together with the mechanism that uses them for cache keys ([[DES-LOCKFILE-HASHING]]), not before: a node's identity has to tell apart two locked versions of one crate, and the same crate in the lockfiles of two workspaces, which the crate name alone cannot. Until then the graph has no external nodes.
 

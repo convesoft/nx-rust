@@ -80,13 +80,12 @@ describe("@convesoft/nx-rust", () => {
     });
 
     it(
-      "reads the fixture's workspace through the installed plugin",
+      "creates the fixture's projects and edges through the installed plugin",
       () => {
         const projects = JSON.parse(nx(projectDirectory, cargo, ["show", "projects", "--json"]));
 
-        // The plugin creates no project yet (nxr-1bv0wm), but it reads the
-        // workspace with one cargo call.
-        expect(projects).toEqual([]);
+        // A project per crate and the workspace project, from one cargo call.
+        expect([...projects].sort()).toEqual(["api", "codegen", "model", "rust", "testkit"]);
         expect(cargo.calls(projectDirectory)).toEqual([
           {
             cwd: "rust",
@@ -100,6 +99,28 @@ describe("@convesoft/nx-rust", () => {
             ],
           },
         ]);
+
+        // Outside the test project, like the wrapper.
+        const file = join(wrapperDirectory, "graph.json");
+        nx(projectDirectory, cargo, ["graph", `--file=${file}`]);
+        const dependencies: Record<string, { source: string; target: string }[]> = JSON.parse(
+          readFileSync(file, "utf8"),
+        ).graph.dependencies;
+        const edges = Object.values(dependencies)
+          .flat()
+          .map((edge) => [edge.source, edge.target]);
+        expect(edges).toEqual(
+          expect.arrayContaining([
+            ["api", "model"],
+            ["api", "codegen"],
+            ["api", "testkit"],
+            ["rust", "api"],
+            ["rust", "codegen"],
+            ["rust", "model"],
+            ["rust", "testkit"],
+          ]),
+        );
+        expect(edges).toHaveLength(7);
       },
       HARNESS_TIMEOUT,
     );

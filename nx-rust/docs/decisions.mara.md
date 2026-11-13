@@ -1088,6 +1088,38 @@ A reading of the `nx` 24.0.6 package and an experiment on 13 November 2026 with 
 The plugin therefore makes each entry's copy carry a `createNodes` of its own and finds the entry in `createDependencies` through that copy. These are Nx internals, which the tests check in both modes and which have to be checked again for another Nx major.
 :::
 
+:::mara evidence EVD-NX-EDGE-CACHE
+:mid: 01M7AE241Y0VGGYCNWWR01WR7T
+:title: How Nx 24.0.6 keeps a plugin's edges from one graph to the next
+:status: accepted
+:supports: DES-PROJECT-GRAPH
+
+A reading of the `nx` 24.0.6 package and experiments on 13 November 2026 with cargo 1.100.0 and Node 26.12.0 on Linux: the review of pull request #17 ran the plugin through real Nx with the daemon on and off, and runs through the plugin's test harness (`nx-rust/test/harness`), with the edge type switched by a temporary change, repeated the first case below and tried one alternative. The source files named are in `nx/dist/src`.
+
+- **Source files.** An edge of the type `static` or `dynamic` names a source file, which Nx accepts when it is a file of the source project or one of the files that belong to no project: the review saw `nx.json` accepted, and another project's manifest and a file that does not exist rejected (`getFileData` in `project-graph/project-graph-builder.js`). Nx records such an edge in the data of that file, and then builds the `static` and `dynamic` edges of each project from its files' records. An `implicit` edge names no file and is kept as the plugin returned it (`getUpdatedProjectGraph` and `calculateAlreadySetTargetDeps` there). `dynamic` behaves as `static` throughout.
+- **Reuse.** Nx caches the records by project name, file path and file hash. After the plugins' `createDependencies`, it puts the cached records of each file whose project, path and hash are unchanged in place of the records just made for it, and it does so only where the cache holds records for that file (`extractCachedFileData` and `processProjectNode` in `project-graph/nx-deps-cache.js`, `buildProjectGraphUsingContext` in `project-graph/build-project-graph.js`).
+- **Invalidation.** Nx discards the whole cache when its format or the Nx version changed, when a project name of the previous graph is gone, when an existing TypeScript path mapping changed, when the name, version or `options` of a plugin entry changed, when `pluginsConfig` changed, or when the hash of the external nodes changed (`shouldRecomputeWholeGraph` in `project-graph/nx-deps-cache.js`). A new project does not discard it, and neither does a change to a plugin entry's `include` or `exclude`, which the comparison leaves out (`getNxJsonPluginsData`).
+- **Measured.** The review created the graph of a fixture twice, with one change between the two, once with the plugin's edges returned as `static`, once as `dynamic`, each naming the manifest of its source project, and once as `implicit`, with the Nx daemon on and off. The outcomes were the same with and without the daemon. "Wrong" means an edge that was missing or still pointed at the old target:
+
+  | Change between the two graphs                        | `static` or `dynamic` | `implicit` |
+  | ---------------------------------------------------- | --------------------- | ---------- |
+  | A crate removed from `.nxignore`                     | wrong                 | right      |
+  | A crate removed from `.gitignore`                    | wrong                 | right      |
+  | The plugin entry's `exclude` removed                 | wrong                 | right      |
+  | The plugin entry's `include` widened                 | wrong                 | right      |
+  | A new member under an unchanged `members` glob       | wrong                 | right      |
+  | A `[workspace.dependencies]` entry retargeted        | wrong                 | right      |
+  | A project renamed through `project.json`             | right                 | right      |
+  | Only the version requirement of a dependency changed | right                 | right      |
+
+  The runs through the harness repeated the first row without the daemon in `subfolder-workspace`: with `static` and with `dynamic` edges, the second graph had no edge from `api` or `rust` to `testkit`, although `createDependencies` returned both, and with `implicit` edges both were there. The test "adds an edge when a crate gets a project and no manifest changes" in `nx-rust/test/graph.spec.ts` keeps this case.
+
+- **Alternatives.** Another source file, such as the workspace's root manifest or its lockfile, fails in the same way, because the edges still depend on other files. A file that belongs to no project, such as `nx.json`, is reused by its hash in the same way, and Nx keeps only one edge per target and type in such a file's records: in a run through the harness with `nx.json` as the source file of every edge, the first graph of `subfolder-workspace` already lacked the edges from `rust` to `codegen` and to `model`, two crates that `api` depends on as well. `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false` turns the reuse off, but for every plugin and the whole graph, each user has to set both on every command, and the second variable has no effect while the daemon runs (`project-graph/project-graph.js`). Nx 24.0.6 offers a plugin no way to discard its own part of the cache.
+- **Other readers of the type.** Nx's task graph, `affected` and the task hasher follow edges of every type. In the rest of the `nx` package, leaving out the graph viewer and the JS plugin, which were not read, only Nx release tells the types apart: the default `readDependencies` of its `VersionActions` leaves out `implicit` edges, and an implementation can override it (`command-line/release/version/version-actions.js`). In `@nx/eslint-plugin` 24.0.6, read and not run, the rule `enforce-module-boundaries` follows edges of every type when it looks for circular dependencies, for projects reachable under tag constraints and for transitive external dependencies (`buildMatrix` in `dist/src/utils/graph-utils.js`). It reads the type only to find lazy-loaded imports, from `dynamic` edges (`hasDynamicImport` in `dist/src/utils/runtime-lint-utils.js`), and it names the files along a circular path from the files' records, which hold nothing for an `implicit` edge (`findFilesInCircularPath`).
+
+A crate's edges depend on more than its own manifest: on the `[workspace.dependencies]` of its workspace's root manifest, on the ignore files and the plugin entry's options, which decide which crates are projects, and on the members that a glob matches. The plugin therefore returns its edges as `implicit`, and Nx recomputes them on every graph computation. These are Nx internals, to be checked again for another Nx major.
+:::
+
 :::mara evidence EVD-NEXTEST-CARGO-FLAGS
 :mid: 01M7AH88BCFA99QFV4EGE16JHW
 :title: cargo-nextest takes the Cargo profile as --cargo-profile

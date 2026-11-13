@@ -47,6 +47,22 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
   "different-toolchains": {
     workspaces: { pinned: ["pinned/crates/pinned-lib"], stable: ["stable/crates/stable-lib"] },
   },
+  "mixed-folders": {
+    workspaces: {
+      "libs/rust": [
+        "libs/rust/crates/addon",
+        "libs/rust/crates/cli",
+        "libs/rust/crates/engine",
+        "libs/rust/crates/unnamed",
+      ],
+    },
+  },
+  "nested-folders": {
+    workspaces: {
+      "apps/Billing.API/rust_v2": ["apps/Billing.API/rust_v2/crates/gateway"],
+      "services/billing": ["services/billing/crates/invoice"],
+    },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.
