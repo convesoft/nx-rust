@@ -170,3 +170,8 @@ checks you actually ran, link follow-up issues under known limitations, and
 complete the `Refs:` footer. Write each paragraph of the description on a
 single line: GitHub wraps the squash commit body itself, and manual line breaks
 leave it ragged.
+
+GitHub enforces this on `main`, for administrators too: it takes only squash
+merges of pull requests on which both CI jobs passed, and no direct push. The
+required checks are the job names in `.github/workflows/ci.yml`, so renaming or
+adding a job means changing the branch protection as well.
