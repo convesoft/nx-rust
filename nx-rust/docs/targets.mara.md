@@ -5,21 +5,18 @@
 > they run the commands below, each task with a cargo call of its own until
 > the batching of milestone 0.2. The `lockfile` target and the crate targets'
 > dependency on it are not implemented yet and arrive with nxr-xq9ava; until
-> then `targetNames` rejects the key `lockfile`. `run` takes no `args` yet,
-> arguments after `--` do not reach the binary, and an option that the
-> executor does not know, or that the target does not take, is left out of its
-> command without a warning (nxr-wea5vt). Without cargo-audit or cargo-deny,
-> `audit` and `deny` fail with cargo's own message for an unknown command.
-> None of the targets is cached until its inputs are declared (nxr-fy4t4k).
-> A `targetDefaults` entry in `nx.json` that turns caching on for one of them
-> fails graph creation
+> then `targetNames` rejects the key `lockfile`. Without cargo-audit or
+> cargo-deny, `audit` and `deny` fail with cargo's own message for an unknown
+> command. None of the targets is cached until its inputs are declared
+> (nxr-fy4t4k). A `targetDefaults` entry in `nx.json` that turns caching on
+> for one of them fails graph creation
 > ([Target defaults that reach Rust targets](#target-defaults-that-reach-rust-targets)),
 > and a task whose configuration caches it anyway, such as through a
 > `project.json`, fails before cargo runs and says where the setting comes
 > from: Nx's default inputs miss `Cargo.lock`, the toolchain and the
-> environment, so it would restore results that no longer hold. The warning
-> about an entry that adds `^build` is printed when the graph is created and
-> by `nx add`, not yet in the output of a task (nxr-rxzgbq).
+> environment, so it would restore results that no longer hold. The warnings
+> of that section are printed when the graph is created and by `nx add`, not
+> yet in the output of a task (nxr-rxzgbq).
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.
@@ -282,11 +279,25 @@ task runs as if an option it does not know were absent, such as Jest's
 
 ```text
 api:test: ignoring option `coverage`, passed on the command line.
-api:test: ignoring option `passWithNoTests`, which the cargo executor does not know. It comes from the workspace's configuration: run `nx show target api:test --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by the plugin's executor.
+api:test: ignoring option `passWithNoTests`, which the cargo executor does not know. It comes from the workspace's configuration: run `nx show target api:test --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by "@convesoft/nx-rust:cargo".
 ```
 
-Such an option fails no task. On `run`, the arguments after `--` go to the
-binary instead: see [Running binaries](#running-binaries).
+Such an option fails no task. The same goes for an option of the plugin that
+the target does not take, such as `--targetTriple` on `test`, which runs on the
+host triple only, or `--allTargets` on `build`, and for words after `--` on any
+target but `run`, which Nx hands the task as positional arguments:
+
+```text
+api:test: ignoring option `targetTriple`, which this target does not take, passed on the command line.
+api:test: ignoring the positional arguments ["3000"] (option `_`), passed on the command line.
+```
+
+A line says that an option was passed on the command line only where that is
+certain: for a flag you typed, also after `--`, and on a dependency that a
+`dependsOn` entry with `params: "forward"` reaches. Any other line names the
+workspace's configuration, also for an option that a dependency gets through
+`options: "forward"`. On `run`, the arguments after `--` go to the binary
+instead: see [Running binaries](#running-binaries).
 
 To keep a target default away from Rust targets, and so silence the warning,
 narrow the entry with a `filter`. This one assumes that your crates carry the

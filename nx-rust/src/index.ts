@@ -1,5 +1,6 @@
 import type { CreateDependenciesContext, CreateNodes, RawProjectGraphDependency } from "@nx/devkit";
 import { checkNxOnLoad } from "./compatibility/nx-version";
+import { preTasksExecution } from "./executors/nx-command";
 import { failOnNameCollisions } from "./graph/collisions";
 import { projectEdges } from "./graph/edges";
 import { Registration, registrationOf } from "./graph/registration";
@@ -52,6 +53,9 @@ function createDependencies(
  * ({@link Registration}). Nx reads it when it loads the plugin for an entry,
  * and an unsupported Nx stops the plugin there, which fails graph creation
  * also where Nx calls none of its hooks ({@link checkNxOnLoad}).
+ *
+ * Before a command runs its tasks, `preTasksExecution` records the command's
+ * arguments for them ({@link preTasksExecution}).
  */
 const plugin = {
   get createNodes(): CreateNodes {
@@ -59,6 +63,7 @@ const plugin = {
     return new Registration().createNodes;
   },
   createDependencies,
+  preTasksExecution,
 };
 
 export = plugin;
