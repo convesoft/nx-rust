@@ -59,9 +59,9 @@ directly or through other crates, for every platform and feature set.
 rust/Cargo.lock: ryu 1.0.23 -> 1.0.24, which only "api" reaches
 
 nx affected -t test
-  lockfile of rust/   runs and writes new digests
-  api:test            runs: its digest changed
-  core:test           restored from the cache: its digest is the same
+  rust:lockfile   runs and writes new digests
+  api:test        runs: its digest changed
+  core:test       restored from the cache: its digest is the same
 ```
 
 After a change to `Cargo.lock`, `nx affected` selects the cached tasks of every
@@ -284,7 +284,7 @@ When the reports of two or more workspaces name the same artifact directory, the
 Cargo 1.91 and later can keep intermediate files in a [[TERM-BUILD-DIR]] (`build.build-dir`) apart from final artifacts in the [[TERM-ARTIFACT-DIR]] (`build.target-dir`). The plugin relies on that split:
 
 - Nx outputs point only into the artifact directory.
-- The build directory sits outside the repository. CI caches it; Nx does not.
+- The recommended build directory sits outside the repository. CI caches it; Nx never does, wherever it lies.
 - The plugin never references a path inside the build directory, because that layout is internal to Cargo and changed in Cargo 1.100.
 - By default the plugin does not set either directory for its own commands. It uses what Cargo's configuration says, so plain cargo and rust-analyzer share both directories with it. The one exception is the opt-in separate build directory for coverage builds ([[DES-BASELINE]]).
 

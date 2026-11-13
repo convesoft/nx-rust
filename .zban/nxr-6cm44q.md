@@ -18,7 +18,7 @@ nxr-pn1hwr changed only the items the maintainer's answers named. These still re
 
 - `DES-OUTPUTS` and the "What is stored" table in `nx-rust/docs/caching.mara.md` do not list the `lockfile` task, which is cached and stores the crates' digests.
 - `ADR-NO-RUST-BUILD-DEPS` says a crate's `build` declares no dependencies; it now depends on its workspace's `lockfile` task.
-- `ADR-ALL-DEP-KINDS` and the "Cycles" paragraph of `DES-PROJECT-GRAPH` say the plugin's targets declare no dependencies between crates. Where the root manifest is a package, the `lockfile` task is a target of the root crate's project. Pull request #11 (nxr-gdt96k) also changes `DES-PROJECT-GRAPH`, so do this after it has merged.
+- `ADR-ALL-DEP-KINDS` and the "Cycles" paragraph of `DES-PROJECT-GRAPH` say the plugin's targets declare no dependencies between crates. Where the root manifest is a package, the `lockfile` task is a target of the root crate's project.
 
 - [ ] Add the `lockfile` row to `DES-OUTPUTS` and to the "What is stored" table
 - [ ] Bring the sentences above in line with the exception in `REQ-NO-RUST-TASK-DEPS`

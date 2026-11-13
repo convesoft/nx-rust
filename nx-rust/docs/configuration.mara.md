@@ -12,6 +12,7 @@ describes it. Repository-wide choices go into the plugin's entry in `nx.json`.
 | ------------------------------------------------------------ | ------------------------------ | ------------------------------------------------------ |
 | `[package.metadata.nx]` in a crate's `Cargo.toml`            | One crate                      | Project name, tags, options of a target, extra targets |
 | `[workspace.metadata.nx]` in the workspace root `Cargo.toml` | Every member of that workspace | Default tags, test runner, affected tests              |
+| `[workspace.metadata.nx.project]` in the same file           | The workspace project          | Its name, tags and targets                             |
 | The plugin's entry in `nx.json`                              | The repository                 | Target names in `options`, excluded paths in `exclude` |
 
 A value for a crate wins over the workspace default, which wins over the
@@ -39,6 +40,14 @@ features = ["integration"] # option of the inferred "test" target
 command = "cargo run -p api --bin migrate" # an extra target
 ```
 
+In a crate folder that also is a JS project, Nx applies its `package.json`
+and `project.json` after this table. Where Nx takes the project's name from
+them, `name` has no effect
+([Project names](workspaces.mara.md#project-names)). A script or target there
+with the name of one of the crate's targets replaces that target, together with
+the settings this table gives it, unless Nx merges the two
+([napi and wasm artifacts](artifacts.mara.md#things-to-know)).
+
 ## Per workspace
 
 ```toml
@@ -50,7 +59,20 @@ members = ["crates/*"]
 tags = ["lang:rust"]
 testRunner = "nextest"
 affectedTests = true
+
+[workspace.metadata.nx.project]
+name = "rust-tools" # the workspace project, "rust" by default
+tags = ["scope:tooling"]
 ```
+
+The `project` table configures the workspace project itself, the project for
+workspace-level tasks, with the `name`, `tags` and `targets` keys of a crate's
+table. The other keys of `[workspace.metadata.nx]` apply to the members. The
+workspace project has the workspace's tags and its own, but a target set under
+`[workspace.metadata.nx.targets]` is a default for the members only. When the
+root `Cargo.toml` also defines a crate, that crate is the workspace project and
+is configured in its `[package.metadata.nx]` instead
+([Workspaces](workspaces.mara.md#workspace-level-tasks)).
 
 ## Target names
 
@@ -106,7 +128,7 @@ own filter for plugin entries, so it sits beside `options`, not inside:
 :status: accepted
 :satisfies: NEED-CONFIG-IN-CARGO
 
-A crate's tags, Nx project name, options of inferred targets and additional targets can be set in `[package.metadata.nx]` of its manifest. Defaults for all members of a workspace can be set in `[workspace.metadata.nx]` of the workspace root manifest. A value set for a crate takes precedence over the workspace default, except that a crate's tags are added to its workspace's tags. No file other than a Cargo manifest is needed to override what the plugin infers for a crate.
+A crate's tags, Nx project name, options of inferred targets and additional targets can be set in `[package.metadata.nx]` of its manifest. Defaults for all members of a workspace can be set in `[workspace.metadata.nx]` of the workspace root manifest. When that manifest defines no crate, the name, tags, settings of inferred targets and additional targets of the workspace's own [[TERM-WORKSPACE-PROJECT]] can be set there as well, apart from the defaults for members. A value set for a crate takes precedence over the workspace default, except that a crate's tags are added to its workspace's tags. No file other than a Cargo manifest is needed to override what the plugin infers for a crate. Where a project's folder also is a JS project, its `package.json` and `project.json` take precedence over these settings, because Nx applies them after every plugin ([[EVD-NX-PROJECT-MERGE]]). The name Nx takes from them applies instead of the one set here ([[REQ-PROJECT-NAMES]]), and a script or target there with the name of one of the project's targets replaces that target, settings made here included, unless Nx merges the two. Tags from both are kept.
 :::
 
 :::mara requirement REQ-TARGET-NAMES
@@ -134,8 +156,13 @@ Overrides are read from the `metadata` values in the `cargo metadata` report ([[
 | `tags`                        | package, workspace | Nx tags. A crate has its workspace's tags and its own.                                                                                                          |
 | `targets.<name>`              | package, workspace | A table shaped like an Nx target. For an inferred target it overrides that target's settings, such as `options`. For any other name it defines an extra target. |
 | `testRunner`, `affectedTests` | workspace          | The test settings in [[DES-TEST-RUN]].                                                                                                                          |
+| `project`                     | workspace          | The [[TERM-WORKSPACE-PROJECT]] itself: its own `name`, `tags` and `targets.<name>`, as in a package table. An error in a root manifest that defines a crate.    |
+
+In the `project` table, `name` replaces the default name ([[DES-PROJECT-GRAPH]]), `tags` are added to the workspace's tags, and `targets.<name>` overrides a target of the workspace project or adds one. The workspace table's own `targets.<name>` do not reach the workspace project.
 
 For a setting that both tables can hold, the crate's value wins over the workspace default; only tags add up. Key names use the spelling of the matching Nx option, so one name works in `Cargo.toml`, in `nx.json` and on the command line. The remaining keys, the merge rules and the handling of unknown keys are in [[DES-PLUGIN-OPTIONS]].
+
+The plugin puts these values on the project it returns. Where the project's folder also is a JS project, Nx applies `package.json` and `project.json` after them, with the effects [[REQ-METADATA-OVERRIDES]] states ([[EVD-NX-PROJECT-MERGE]]).
 :::
 
 :::mara design DES-PLUGIN-OPTIONS

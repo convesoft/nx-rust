@@ -10,7 +10,7 @@ Cargo.
 .
 ├── nx.json
 ├── apps/web/                  JS app                -> project "web"
-├── rust/                      a Cargo workspace     -> the workspace project
+├── rust/                      a Cargo workspace     -> workspace project "rust"
 │   ├── Cargo.toml             [workspace] members = ["crates/*"]
 │   ├── Cargo.lock
 │   └── crates/
@@ -66,7 +66,9 @@ package name and manifest path.
 
 A crate whose folder is also a JS project takes that project's name, from its
 `package.json` or its `project.json`, because Nx applies those files after
-every plugin. The crate's `name` override has no effect there. To choose
+every plugin. Where Nx takes the name from one of those files, the crate's
+`name` override has no effect; a `project.json` without a name and without a
+`package.json` beside it keeps the name the plugin gives the crate. To choose
 another name, set `name` in the folder's `project.json` if it has one, and
 otherwise `nx.name` in its `package.json`. A crate and a JS project with the
 same name make Nx fail with its own error, which names both folders.
@@ -85,6 +87,63 @@ That project also has the `lockfile` task, which turns the workspace's
 `Cargo.lock` into one digest per crate. Every cached task of a crate waits for
 it and reads the crate's digest, so a dependency update reruns only the crates
 it reaches ([Caching](caching.mara.md#lockfile-changes)).
+
+The workspace project is named after its folder's path from the root of the Nx
+workspace, with each `/` replaced by `-`: a workspace in `rust/` gives `rust`,
+one in `services/billing/` gives `services-billing`. A workspace at the root of
+the Nx workspace itself is called `cargo-workspace`. A workspace's name prefix
+applies to its crates, not to this project. To choose another name, or to give
+the project tags or targets of its own, use the `project` table of the
+workspace's metadata:
+
+```toml
+# services/billing/Cargo.toml
+[workspace]
+members = ["crates/*"]
+
+[workspace.metadata.nx.project]
+name = "billing-rust"
+tags = ["scope:billing"]
+
+[workspace.metadata.nx.project.targets.sqlx-prepare]
+command = "cargo sqlx prepare --workspace"
+```
+
+The table is for a workspace whose root `Cargo.toml` defines no crate. When it
+does, that crate's project is the workspace project, and its name and targets
+go into `[package.metadata.nx]`; a `project` table there is an error.
+
+Names are used as they are. A folder name that contains `,` or `:`, or starts
+with `!`, gives a name that is awkward on Nx's command line: `,` and a leading
+`!` change what `--projects` selects, and `:` separates the project from the
+target in `nx run`. Set a name in the table to avoid that.
+
+If the workspace folder already is an Nx project, because it has a
+`project.json` or a `package.json` that Nx reads, Nx makes the two one project.
+Nx reads a `package.json` when your package manager's workspace patterns
+include it or a `project.json` sits beside it, and the root one also when it
+has an `nx` key. Where Nx takes the name from the folder's `project.json` or
+`package.json`, the `name` in the table has no effect: a `project.json` that
+sets a name gives the name, and otherwise the `package.json` does. A
+`project.json` without a name and without a `package.json` beside it keeps the
+name from the table, or the default. At the root of the Nx workspace, a
+`project.json` without a name, an `nx` key in the root `package.json` or a
+workspace pattern that includes the root is enough to give the project the name
+in the root `package.json`.
+
+A workspace project with the same name as a crate, or two workspace projects
+with one name, make the graph fail with an error that names both manifests.
+Default names can collide: a workspace in `services/billing/` and one in
+`services-billing/` both get `services-billing`, and one at the root and one in
+`cargo-workspace/` both get `cargo-workspace`. Set a `name` in the table of one
+of them. A workspace project and a JS project with one name make Nx fail with
+its own error.
+
+You reach the workspace project by its name, as in `nx run rust:audit`, or with
+the others through `nx run-many -t audit`. Nx also accepts its folder in place
+of the name unless the folder's text matches a project name, as in
+`nx audit services/billing`, and inside the folder `nx audit` is enough; at the
+root of the Nx workspace, `nx audit .` works too.
 
 ## The dependency graph
 
@@ -114,7 +173,7 @@ it reaches ([Caching](caching.mara.md#lockfile-changes)).
 :satisfies: NEED-ZERO-CONFIG
 :satisfies: NEED-CARGO-UNCHANGED
 
-Every member of every discovered Cargo workspace is an Nx project whose name, root, targets and dependencies are derived from Cargo's own description of the workspace. The plugin neither requires nor creates a `project.json` or any other file inside a crate.
+Every member of every discovered Cargo workspace is an Nx project rooted at the crate's folder. The name, targets and dependencies that the plugin gives it are derived from Cargo's own description of the workspace. Where the crate's folder also is a JS project, Nx applies its `package.json` and `project.json` after every plugin, so the name Nx takes from them and their scripts and targets named like the plugin's take precedence ([[EVD-NX-PROJECT-MERGE]]). The plugin neither requires nor creates a `project.json` or any other file inside a crate.
 :::
 
 :::mara requirement REQ-MULTI-WORKSPACE
@@ -151,7 +210,7 @@ Crates under paths ignored by `.gitignore` or `.nxignore`, and crates matched by
 :status: accepted
 :satisfies: NEED-ZERO-CONFIG
 
-An Nx project is named after its crate. When the crate's folder also is a JS project, the name set by its `package.json` or `project.json` applies instead, because Nx applies those files after every plugin ([[EVD-NX-PROJECT-MERGE]]). When two crates would get the same name, graph creation fails with an error that names both manifest paths; the plugin never renames a project on its own. A per-crate name and a per-workspace name prefix resolve a collision. Whatever the project is called, every cargo command addresses the crate by its real package name and manifest path.
+An Nx project is named after its crate. When the crate's folder also is a JS project, the name set by its `package.json` or `project.json` applies instead, because Nx applies those files after every plugin ([[EVD-NX-PROJECT-MERGE]]). A [[TERM-WORKSPACE-PROJECT]] that is not a crate's project is named after the path of the workspace folder from the root of the Nx workspace, and a workspace at that root has a fixed name; the same exception applies to its folder, and a name set for it in the workspace's metadata replaces the default ([[ADR-WORKSPACE-PROJECT-NAME]]). When two projects of this plugin would get the same name, graph creation fails with an error that names both manifest paths; the plugin never renames a project on its own. A per-crate name, a per-workspace name prefix and a name for the workspace project resolve a collision. Whatever the project is called, every cargo command addresses the crate by its real package name and manifest path.
 :::
 
 :::mara requirement REQ-WORKSPACE-PROJECT
@@ -237,9 +296,9 @@ A path dependency that is no member of the workspace appears only as that path. 
 :satisfies: REQ-WORKSPACE-PROJECT
 :satisfies: REQ-DEPENDENCY-EDGES
 
-**Projects.** Each claimed member becomes a project rooted at the crate directory. Its name is the package name, replaced by the crate's `name` override or extended by the workspace's prefix when set ([[DES-METADATA-TABLES]]). In a folder that also is a JS project, Nx replaces that name with the one from `package.json` or `project.json` ([[EVD-NX-PROJECT-MERGE]]). Two crates with one project name fail graph creation with an error naming both manifest paths and both remedies; a collision with another plugin's project fails with Nx's own error. Commands never use the Nx name: they pass the real package name and the manifest path.
+**Projects.** Each claimed member becomes a project rooted at the crate directory. Its name is the package name, replaced by the crate's `name` override or extended by the workspace's prefix when set ([[DES-METADATA-TABLES]]). In a folder that also is a JS project, Nx replaces that name with the one from `package.json` or `project.json` ([[EVD-NX-PROJECT-MERGE]]). Two projects of this plugin with one name, whether crates or workspace projects, fail graph creation with an error naming both manifest paths and the remedy for each: the crate's `name` override or the workspace's prefix for a crate, the `name` in `[workspace.metadata.nx.project]` for a workspace project. A collision with another plugin's project fails with Nx's own error. Commands never use the Nx name: they pass the real package name and the manifest path.
 
-**Workspace project.** Each workspace gets one project rooted at the workspace folder, with a dependency on every member. If the root manifest has a `[package]` table, no extra project is created and the workspace-level targets attach to that crate's project.
+**Workspace project.** Each workspace gets one project rooted at the workspace folder, with a dependency on every member. If the root manifest has a `[package]` table, no extra project is created and the workspace-level targets attach to that crate's project, which is named like any crate; a `[workspace.metadata.nx.project]` table in that manifest fails graph creation with an error that names the manifest and points to `[package.metadata.nx]`. Otherwise the project is named after the path of the workspace folder from the root of the Nx workspace, with each `/` replaced by `-` and nothing else changed: `rust/` gives `rust` and `services/billing/` gives `services-billing`. A workspace at the root of the Nx workspace is called `cargo-workspace`. Two folders can give one default name, such as `services/billing/` and `services-billing/`, or the root and `cargo-workspace/`; that fails as a collision between two projects of this plugin. The `name` in `[workspace.metadata.nx.project]` replaces this default, and the workspace's prefix does not apply to it ([[DES-METADATA-TABLES]], [[ADR-WORKSPACE-PROJECT-NAME]]). When the workspace folder already is an Nx project, through a `project.json` or a `package.json` that Nx reads, Nx merges the two into one project. Nx reads a `package.json` when the package manager's workspace patterns include it or a `project.json` sits beside it, and the root one also when it has an `nx` key. A `project.json` that sets a name gives the name. Otherwise a `package.json` in the folder gives it, and a `project.json` without a name is enough to make Nx read that file. Only a `project.json` without a name and without a `package.json` beside it leaves the plugin's name. A `name` in the sub-table has no effect where Nx renames the project ([[EVD-NX-PROJECT-MERGE]], [[EVD-WORKSPACE-PROJECT-NAMES]]). The edges from the workspace project to its members name it by the project Nx has at the workspace folder, as listed in the projects that `createDependencies` receives.
 
 **Edges.** For each member, every dependency of kind normal, build or dev that resolves to a crate with an Nx project becomes an edge. That includes a path dependency on a member of another workspace: the target crate keeps its single project in its home workspace, where its own targets run in that [[TERM-WORKSPACE-CONTEXT]]. A path dependency on a crate without an Nx project produces no edge; its files reach the cache key as inputs ([[DES-INPUTS]]). Each edge names its two projects by the name Nx gives the project at the crate's root, as listed in the projects that `createDependencies` receives, because a `package.json` or `project.json` may have renamed it ([[EVD-NX-PROJECT-MERGE]]).
 
@@ -260,7 +319,7 @@ Each Cargo workspace has one cached target that turns its `Cargo.lock` into a di
 
 **Task.** The lockfile task reads `Cargo.lock` from disk when it runs, also when git ignores the file; graph creation does not read it ([[DES-METADATA-REPORT]]). Its inputs are the whole `Cargo.lock`, as a fileset that includes git-ignored files, because a plain fileset misses a change to an ignored lockfile and the task then restores the old digests ([[EVD-NX-24-LOCKFILE-TASK]]), and the plugin's own package ([[DES-INPUTS]]). It runs no cargo, depends on no task and uses an executor without a batch implementation, so it never joins a batch ([[TERM-GROUP]]). A `Cargo.lock` that it cannot parse fails the task with a message that names the file; cargo rejects such a file too.
 
-**Where the digests live.** The digests are the output of the lockfile task, in a folder per workspace under `.nx/workspace-data/nx-rust/lockfile/` in the repository. No workspace's folder lies inside another's, because Nx restores a folder output by replacing it ([[EVD-NX-24-TARGETS]]). The folder must be inside the repository: Nx does not hash a dependency's output outside it, so a changed digest there leaves the crates' keys as they were ([[EVD-NX-24-LOCKFILE-TASK]]). `nx init` writes `.nx/workspace-data` into `.gitignore`, and the Nx daemon's watcher ignores it, so git sees no new file, and the folder lies outside every crate's sources and outside Cargo's directories, where plain cargo never looks ([[REQ-CARGO-UNCHANGED]]). The artifact directory was rejected: it can lie outside the repository, several workspaces can share it, and `cargo clean` empties it.
+**Where the digests live.** The digests are the output of the lockfile task, in a folder per workspace under `.nx/workspace-data/nx-rust/lockfile/` in the repository. No workspace's folder lies inside another's, because Nx restores a folder output by replacing it ([[EVD-NX-24-TARGETS]]). The folder must be inside the repository: Nx does not hash a dependency's output outside it, so a changed digest there leaves the crates' keys as they were ([[EVD-NX-24-LOCKFILE-TASK]]). `nx init` writes `.nx/workspace-data` into `.gitignore`, so git sees no new file, and Nx always leaves that folder out of its file map ([[EVD-NX-24-SETUP]]), so the digests never become files of a project, not even of a crate at the root of the repository. The folder lies outside Cargo's directories, where plain cargo never looks ([[REQ-CARGO-UNCHANGED]]). The artifact directory was rejected: it can lie outside the repository, several workspaces can share it, and `cargo clean` empties it.
 
 **Crate targets.** Every cached target of a member depends on the lockfile task of the member's workspace and hashes the member's digest through a `dependentTasksOutputFiles` input ([[DES-INPUTS]]). A crate that a member of another workspace uses by path runs its tasks in its home workspace, keyed on that workspace's digest. The consumer's own digest covers that crate's dependencies as the consumer's lockfile resolves them, so no key reads the lockfile of another workspace.
 

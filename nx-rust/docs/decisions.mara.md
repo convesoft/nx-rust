@@ -62,6 +62,20 @@ Repositories that add Rust to an existing monorepo rarely have one Cargo workspa
 The crate name is what a Rust developer types, so it is the Nx project name. With several workspaces two crates can share a name. Deriving unique names automatically, for example from paths, would make names unpredictable and would change them when a second crate appears. A collision is therefore an error naming both paths, and the user fixes it with a per-crate name or a per-workspace prefix in metadata. Because commands always use the real package name and manifest path, the Nx name is free to differ. A crate whose folder also is a JS project is the exception. Nx applies `package.json` and `project.json` after every plugin, so the name set there wins, and neither the crate name nor its `name` override can change it ([[EVD-NX-PROJECT-MERGE]]).
 :::
 
+:::mara decision ADR-WORKSPACE-PROJECT-NAME
+:mid: 01M7A8AKF5KKZ457ED2PX0NX4D
+:title: Name the workspace project after its folder's path
+:status: accepted
+:justifies: REQ-PROJECT-NAMES
+:justifies: REQ-METADATA-OVERRIDES
+:justifies: DES-PROJECT-GRAPH
+:justifies: DES-METADATA-TABLES
+
+Agreed with the maintainer on 13 November 2026, for a [[TERM-WORKSPACE-PROJECT]] whose root manifest defines no crate. Cargo has no name for a workspace ([[EVD-WORKSPACE-PROJECT-NAMES]]), so the plugin derives one: the path of the workspace folder from the root of the Nx workspace, with each `/` replaced by `-`. Such a name is determined by the workspace's folder alone: it needs no configuration and does not depend on which other workspaces or crates exist, so it does not change when one appears, and the objection of [[ADR-PROJECT-NAMES]] to names derived from paths does not apply. Nx also accepts the folder itself where a project name is expected. The root of the Nx workspace has no such path, and its folder name differs between checkouts, so a workspace there is called `cargo-workspace`. Rejected: the folder's last segment, which is Nx's own default for a `project.json` without a name but lets `a/rust` and `b/rust` collide; the path with a `-workspace` suffix, which collides less often but is longer; one fixed name, which every workspace after the first would have to override; `rust` at the root, which a workspace in `rust/` gets too; and the name in the root `package.json`, which would name a Cargo project from a JS file. The names are not unique. `services/billing/` and `services-billing/` both give `services-billing`, the root and a folder `cargo-workspace/` both give `cargo-workspace`, and a folder named like one of its own crates gives that crate's name. Each of these fails like any other collision between two projects of this plugin, and the `name` in `[workspace.metadata.nx.project]` resolves it.
+
+A collision between any two of the plugin's projects, crates or workspace projects, fails with the plugin's error, so that the user learns both manifests and both remedies; one with a JS project stays Nx's error, as for crates. The override is the sub-table `[workspace.metadata.nx.project]`, holding the `name`, `tags` and `targets` of a package table, because [[ADR-METADATA-KEY]] makes the `nx` table hold what a `project.json` holds while the workspace table's own keys are defaults for the members. Rejected: `workspaceProject`, which is long; `root`, which Nx uses for a project's folder; and a flat `name` in the workspace table, which reads as a default for members and leaves the project's own targets without a place. When the root manifest defines a crate, that crate's table already configures the project, so the sub-table is an error instead of a second place for the same settings. The workspace's name prefix stays with the members, whose names it separates; a workspace project's default name comes from its folder, and a collision of that name is resolved with the project's own `name`. Names are neither checked nor rewritten beyond `/` to `-`: Nx accepts any string, and the characters that are awkward on its command line are rare in folder names and fixed with the override. Where the workspace folder already is an Nx project, Nx merges the two and names the result ([[EVD-NX-PROJECT-MERGE]]); the plugin accepts that as it does for a crate, because [[REQ-WORKSPACE-PROJECT]] fixes the project's root.
+:::
+
 :::mara decision ADR-ALL-DEP-KINDS
 :mid: 01M78FHG7F89HNQ2GAMHTHFRC2
 :title: Keep every dependency kind in the graph, including cycles
@@ -309,6 +323,17 @@ The cost is that a toolchain or configuration file inside a member crate changes
 :accepts: RISK-MACOS-UNVERIFIED
 
 GitHub's hosted macOS runners are in short supply in November 2026, so jobs on them wait long or do not start. The plugin is a JavaScript package with no platform-specific build, so only test runs are affected: this repository's CI runs its unit and end-to-end tests on Linux only for the moment. macOS stays a supported host ([[ADR-COMPATIBILITY]]), and code must not assume Linux. What is deferred is the check: no macOS run backs the claim until the jobs are added, and [[VER-SETUP]] says so. When macOS runners are usable again, the macOS jobs are added to the workflow, the macOS part of the verification is restored, and this decision and its risk are retired.
+:::
+
+:::mara decision ADR-NO-ERROR-CODES
+:mid: 01M7A67WRX56A7M56CJZ7VF326
+:title: Name problems in words, without error codes, in v1
+:status: accepted
+:justifies: DES-DIAGNOSTICS
+
+A diagnostic says what is wrong, where, and what to do ([[REQ-DIAGNOSTICS]]). In v1 it carries no code. Nx 24 shows no numbered codes in its diagnostics, and the cargo messages seen while designing the generators carried none either ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]), so a code would stand alone in a user's output. Once published, a code is an interface to keep stable and to document. Tests check the facts a message names instead.
+
+Codes may be introduced later without breaking anything, because adding a code to a message takes away nothing a user or a script relies on. They would serve people or tools that need to refer to one problem across releases: a documentation page per problem, filtering warnings in a pipeline, or wording that changes often. One possible scheme is a stable code for each row of [[DES-DIAGNOSTICS]], listed in the setup guidance and never reused for another problem. Whether to introduce codes, and in what form, is decided when such a need arises.
 :::
 
 ## Risks
@@ -633,6 +658,9 @@ The workspace was a toy, so this says nothing about how long the call takes on a
 :supports: REQ-PROJECT-NAMES
 :supports: ADR-PROJECT-NAMES
 :supports: DES-PROJECT-GRAPH
+:supports: REQ-INFERRED-PROJECTS
+:supports: REQ-METADATA-OVERRIDES
+:supports: DES-METADATA-TABLES
 
 An experiment on 13 November 2026 with `nx` and `@nx/js` 24.0.6, TypeScript 6.0.3, pnpm 12.18.0, Node 26.12.0 and cargo 1.100.0 on Linux, together with a reading of the same `nx` package (`project-graph/utils/project-configuration-utils.js`, `project-configuration/project-nodes-manager.js` and `target-merging.js`, `plugins/package-json/create-nodes.js`).
 
@@ -647,6 +675,31 @@ The throwaway pnpm workspace, outside this repository, had a Cargo workspace at 
 - **Collisions.** A crate and a JS package with one name in different folders made Nx fail with its own message, "The following projects are defined in multiple locations", which lists both folders and recommends a `project.json`. A lookup by root in `context.projects` finds only one of two projects that share a name. When the stand-in returned an edge with the missing end undefined, Nx failed with "Cannot read properties of undefined (reading '1')" instead.
 
 For a crate folder that also is a JS project, no plugin listed in `nx.json` can set the project's name. [[REQ-PROJECT-NAMES]], [[ADR-PROJECT-NAMES]] and [[DES-PROJECT-GRAPH]] therefore name such a project by its `package.json` or `project.json`; until 13 November 2026 they named every project after its crate or its `name` override. For the review of 13 November 2026, the following were re-run in the same workspace, with `outputs` added to the stand-in's `build`: the target merges and replacements, both edge orders, the dropped edges, the `dependsOn` rewrite, the names given by `nx.name` with and without a named `project.json`, and the TypeScript `build`. The other outcomes are from the first run. The stand-in modelled the planned plugin; the plugin itself and other Nx versions were not tested.
+:::
+
+:::mara evidence EVD-WORKSPACE-PROJECT-NAMES
+:mid: 01M7A8AKF5NT40CMP6236AFA2V
+:title: How Cargo 1.100.0 and Nx 24.0.6 treat names for a workspace project
+:status: accepted
+:supports: ADR-WORKSPACE-PROJECT-NAME
+:supports: REQ-PROJECT-NAMES
+:supports: DES-PROJECT-GRAPH
+:supports: DES-METADATA-TABLES
+
+Experiments on 13 November 2026 with cargo 1.100.0, `nx` 24.0.6 and Node 26.12.0 on Linux, in throwaway folders outside this repository, together with a reading of the same `nx` package. The Nx workspaces linked the `node_modules` of this repository, had a root `package.json` and listed one stand-in plugin in `nx.json`. Its `createNodesV2` matched `**/name.txt` and returned a project at that file's folder, named by the file's content, with targets `fmt` and `audit` that echo the folder. Commands ran with `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false NX_NO_CLOUD=true NX_TUI=false`, and runs with `--output-style=static --skip-nx-cache`.
+
+- **Cargo has no workspace name.** In a virtual manifest, `name` under `[workspace.package]` made `cargo check --offline` warn `unused manifest key: workspace.package.name`. `cargo metadata --no-deps --offline --format-version 1` reported `workspace_root` as an absolute path, and `[workspace.metadata.nx]` with its nested `project` table (`name`, `tags`, `targets.sqlx-prepare.command`) unchanged under the report's top-level `metadata`. For a root manifest with both `[package]` and `[workspace]`, the report carried `[package.metadata.nx]` on that package and `[workspace.metadata.nx.project]` at the top level.
+- **Cargo package names.** `cargo metadata` on a one-package manifest rejected the names `a.b`, `a:b`, `a/b`, `a+b`, `a b` and `a~b` ("characters must be Unicode XID characters (numbers, `-`, `_`, or most letters)"), `@a` (not a Unicode XID start character) and `1abc` (starts with a digit), and accepted `abc`, `a_b`, `a-b`, `Rust-WS` and `ü-crate`.
+- **Nx accepts any name.** The stand-in created projects named `rust`, `a.b`, `@ws/rust`, `a:b`, `a b`, `Rust-WS`, `rust+ws`, `ws/rust`, `cargo:ws`, `ü-rust`, `a,b`, `!bang`, `x*y`, `tag:foo`, `a#b`, `rust/` and `.dot`. `nx show projects` listed all of them, and for each one `nx run <name>:fmt`, `nx fmt <name>` and `nx show project <name> --json` reached that project. Nx checks only that a name is present and unique (`validateProject` in `project-graph/utils/project-configuration/target-normalization.js`).
+- **Patterns.** `nx run-many -t fmt -p <name>` ran exactly that project for each name except two: `-p 'a,b'` split into `a` and `b` and ran five projects, and `-p '!bang'` excluded that project and ran every other one. A pattern without glob characters that is not exactly a project name matches the names that contain it as a whole word, ignoring case and counting `-` and `@` as part of a word, and only when no name matches, a project folder: `-p Rust` ran `rust`, `@ws/rust`, `rust+ws`, `ws/rust` and `rust/` (`utils/find-matching-projects.js`). With a `:` in a name, `nx run` tries every split of the string against the graph and warns when more than one fits (`utils/split-target.js`); `nx run a:b:fmt` and `nx run cargo:ws:fmt`, which no other project made ambiguous, ran.
+- **Folders.** A project named `rust-workspace` in `rustdir/` was reached by `nx fmt rustdir`, `nx run rustdir:fmt`, `nx show project rustdir --json`, `-p rustdir` and `-p directory:rustdir`, and one named `services-billing` in `services/billing/` by `nx fmt services/billing` and `nx run services/billing:fmt`; `nx fmt ./rustdir` failed with "Cannot find project". When a name is not found, `nx run`, `nx <target> <project>` and `nx show project` fall back to the same pattern matching and accept a single match (`command-line/run/run-one.js`, `command-line/show/project.js`). Inside `rustdir/`, a bare `nx fmt` ran that project (`config/calculate-default-project-name.js`).
+- **Root.** In a second workspace with the stand-in's project `cargo-workspace` at the root, a project `sub-crate` in `sub/` and a root `package.json` named `exp-root-pkg`, `nx fmt` from the root, `nx fmt .`, `-p .` and `-p directory:.` each ran the root project. `nx show project . --json` named the root project `cargo-workspace` without a root `project.json` and without an `nx` key; `exp-root-pkg` with `"nx": {}` in the `package.json`, and also with a root `project.json` of `{}`; and `repo` with a root `project.json` that sets that name. In each of these cases the project kept `fmt` and `audit`. With a `project.json` of `{}` and a root `package.json` without a name, graph creation failed.
+- **Default names.** For the review, a second stand-in matched `**/ws.txt` and named its project by the agreed rule: the path from the root with each `/` replaced by `-`, `cargo-workspace` at the root, or the file's content when it had any. Projects in `services/billing/` and `services-billing/` both got `services-billing`, and projects at the root and in `cargo-workspace/` both got `cargo-workspace`. In both cases Nx failed with "The following projects are defined in multiple locations", listing the two folders.
+- **When Nx reads a `package.json`.** With that stand-in and the name `billing-override` set for `services/billing/`, the project kept `billing-override` after a `project.json` of `{}` was added to that folder with no `package.json` beside it, and took `@acme/billing` once a `package.json` of that name was added beside the `project.json`. Without the `project.json`, that `package.json` left `billing-override` in place, with or without an `nx` key, until the root `package.json` listed `services/*` under `workspaces`. At the root, `cargo-workspace` gave way to the root `package.json` name when the workspace patterns included `.`, through `"workspaces": ["."]` in that file or `packages: ["."]` in `pnpm-workspace.yaml`, and stayed when `pnpm-workspace.yaml` listed only `packages/*`. Nx therefore reads a `package.json` when the package manager's workspace patterns include it or when a `project.json` sits beside it, and the root `package.json` also when it has an `nx` key; a nested `package.json` with only an `nx` key is not read (`plugins/package-json/create-nodes.js`).
+- **Nx's default.** For a `project.json` without a name, Nx uses the last segment of its folder in lower case, and `.` at the root (`config/to-project-name.js`); read, not run.
+- **Checkouts.** The checkout of this repository in which the work was done is a folder named `t3-978a6461-ca0fb10813ae42be`, not `nx-rust`.
+
+How often a workspace folder has the name of one of its own crates was not measured, and macOS was not tested.
 :::
 
 :::mara evidence EVD-NX-FORMAT
@@ -664,6 +717,75 @@ Inspection of the `nx` 24.0.6 package installed in this repository, and two expe
 - **oxfmt.** Given a `.rs` file and a `Cargo.toml`, oxfmt 0.78.0 ignored the `.rs` file and reported the `Cargo.toml` as unformatted. Its configuration schema has no setting for plugins or external formatters. In a workspace that uses oxfmt, `nx format:write` therefore reformats `Cargo.toml` files and leaves Rust sources alone.
 
 The prototype was not run through `nx format` itself; that Nx filters `.rs` out is read from its source, and that the filter excludes plugin languages was tested against prettier directly. Covering Rust in `nx format` would need Nx to pass the configured plugins to its filter, and would still not reach workspaces that use oxfmt.
+:::
+
+:::mara evidence EVD-CARGO-NEW
+:mid: 01M7A66QH6W8544G03RW7GAX0G
+:title: What cargo new does inside a repository and a workspace
+:status: accepted
+:supports: DES-GENERATORS
+:supports: DES-DIAGNOSTICS
+
+Experiments with cargo 1.100.0 (3acc79c0c 2026-11-05) on Linux, on 13 November 2026, in throwaway git repositories (`git init`, no commit) outside this repository. No folder pinned a toolchain.
+
+- **A git repository inside the crate.** In a repository where `rust/` existed and `rust/crates/` did not, `cargo new rust/crates/core` created `.git` and a `.gitignore` inside the new crate. Where the parent folder existed, `cargo new direct` created neither. `cargo new --vcs none newparent2/a/b`, with no folder of that path present, created neither.
+- **Members.** In a workspace with `members = ["crates/*"]`, `cargo new --lib rust/crates/core` left the workspace manifest unchanged. `cargo new --bin rust/tools/cli` printed "Adding `cli` as member of workspace at …" and appended `"tools/cli"` to `members`, keeping the existing entry. In a workspace without a `members` key, `cargo new --vcs none --lib ws-nomembers/crates/a` added `members = ["crates/a"]`. With a workspace inside another workspace's folder, the crate was added to the nearer workspace only.
+- **Exclude.** In a workspace with `members = ["crates/*"]` and `exclude = ["vendor/*"]`, `cargo new --vcs none --lib ws-exclude/vendor/v` appended `"vendor/v"` to `members` and left `exclude` as it was. `cargo metadata --no-deps --format-version 1` then listed `v` among the members: the explicit member overrode `exclude`.
+- **Inheritance.** In a workspace whose `[workspace.package]` set `edition = "2021"` and `license = "MIT"` and which had `[workspace.lints.rust]`, the new manifest had `edition.workspace = true`, `license.workspace = true` and `[lints] workspace = true`. With `--edition 2024`, it had `edition = "2024"` and still `license.workspace = true`.
+- **Name.** `cargo new --vcs none --bin --name my-tool rust/crates/tool-dir` created the package `my-tool` in the folder `tool-dir`. Without `--name`, the package took the folder's name; for `core`, cargo warned that the name may be confused with the standard library's package.
+- **Outside a workspace.** `cargo new --vcs none --lib standalone-parent/s` wrote `edition = "2024"` and changed no other manifest. Inside the folder of a valid package without a `[workspace]` table, the new crate was its own workspace root, according to `cargo metadata`. When the enclosing package's manifest was invalid, cargo still created the crate and warned that compiling it may not work.
+- **An existing folder.** `cargo new --vcs none --lib rust/crates/ed`, run a second time, failed with "destination `…` already exists" and exit status 101, and changed nothing.
+- **Options.** `cargo new --help` lists `--vcs` (`git`, `hg`, `pijul`, `fossil`, `none`), `--bin` (the default), `--lib`, `--edition` (2015, 2018, 2021, 2024), `--name` and `--registry`.
+
+Only one Cargo version was tried, on Linux. The messages observed carried no error codes.
+:::
+
+:::mara evidence EVD-CARGO-DIRECTORIES
+:mid: 01M7A6739R6CSCWVAQ2JJWDHF2
+:title: Where Cargo puts its two directories, and which versions report them
+:status: accepted
+:supports: DES-GENERATORS
+:supports: DES-DIAGNOSTICS
+
+Experiments on Linux on 13 November 2026, in throwaway folders outside this repository, with `cargo metadata --no-deps --format-version 1`. No folder pinned a toolchain, and the older toolchains were already installed and selected with `cargo +<version>` under `RUSTUP_AUTO_INSTALL=0`.
+
+- **Default.** Without configuration, cargo 1.100.0 reported `build_directory` and `target_directory` both as `<workspace>/target`, inside the workspace folder. For a crate that is its own workspace, that is a folder inside the crate.
+- **Template.** With `[build] build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"` in a `.cargo/config.toml` above the workspace, cargo 1.100.0 reported a `build_directory` below the Cargo home (`~/.cargo/build/21/d5123ee45e798c`) and the same `target_directory` as before.
+- **Versions.** For a one-crate package, the report of cargo 1.89 had no `build_directory` key, and the reports of cargo 1.97.1 and 1.100.0 had it. The other top-level keys were the same in all three: `metadata`, `packages`, `resolve`, `target_directory`, `version`, `workspace_default_members`, `workspace_members` and `workspace_root`.
+
+Cargo's source settles where the field begins. It was added to `cargo metadata` by rust-lang/cargo pull request #15377, merged on 2 April 2025, while `build.build-dir` was unstable. In the Cargo that Rust 1.90.0 ships (rust-lang/cargo commit 840b83a, package version 0.91.0), `src/cargo/ops/cargo_output_metadata.rs` writes `build_directory` only when the unstable `-Zbuild-dir` flag is on, and leaves the key out otherwise; unstable flags work only on nightly. In the Cargo that Rust 1.91.0 ships (commit ea2d978, package version 0.92.0), it always writes the field, and Cargo's changelog lists the stabilisation of `build.build-dir` under 1.91. The report of a stable Cargo therefore has `build_directory` from 1.91 on. The source was read through GitHub, at the cargo commits that the `src/tools/cargo` submodule of rust-lang/rust names at the tags `1.90.0` and `1.91.0`. Cargo 1.90 and 1.91 were not run here, because no toolchain was downloaded.
+:::
+
+:::mara evidence EVD-NX-24-SETUP
+:mid: 01M7A67N99XVQ7ZV6NVRJB0W8N
+:title: How Nx 24.0.6 adds a plugin, runs generators and shows plugin output
+:status: accepted
+:supports: DES-GENERATORS
+:supports: DES-DIAGNOSTICS
+
+Inspection of the `nx`, `@nx/devkit` and `@nx/js` 24.0.6 packages installed in this repository, and experiments with that `nx` package, on 13 November 2026. Paths are relative to `nx/dist/src/` unless another package is named.
+
+Read in the compiled source:
+
+- **`nx add`.** For a package outside Nx's own package group, `nx add <package>` installs `latest` unless a version is given, then runs `nx g <package>:init` with the terminal attached, adding `--keepExistingVersions` or `--updatePackageScripts` only when the init schema declares them. When `init` fails, the command exits with status 1 and the package stays installed (`command-line/add/add.js`, `command-line/init/configure-plugins.js`).
+- **The graph comes first.** `nx g` creates the project graph, with every registered plugin, before it runs any generator, unless `--skipProjectGraph` is given (`command-line/generate/generate.js`).
+- **Dry run.** Nx lists a generator's changes to its file tree after the generator returns, and writes them and runs the callback the generator returns only without `--dry-run` (`generate.js`). It takes `dryRun` out of the options it hands the generator and sets `NX_DRY_RUN` to `true` or `false` for the run (`generate.js`, `command-line/generate/command-object.js`).
+- **Prompts.** Prompts for options appear only when standard output is a terminal and `CI` is not `true` (`utils/params.js`).
+- **Directory.** The devkit helper for project names and roots resolves a generator's `directory` against the folder `nx` runs in, unless the path already starts with that folder (`@nx/devkit`, `generators/project-name-and-root-utils.js`). `@nx/js:library` requires `directory`, takes it from the first positional argument, and has an optional `name` (`@nx/js`, `generators/library/schema.json`).
+- **Plugin output.** Plugin workers run with their standard output and error piped into the process that started them (`project-graph/plugins/isolation/isolated-plugin.js`), and the daemon's standard output and error go to its log file (`daemon/client/client.js`). The plugin interface has no channel for warnings (`project-graph/plugins/public-api.d.ts`).
+- **Environment.** A client's first message carries its environment to the daemon, which applies it, forwards it to the plugin workers and recomputes a graph that was created under other values (`daemon/client/client.js`, `daemon/server/handle-client-env.js`).
+- **Ignored paths.** Besides what `.gitignore` and `.nxignore` exclude, Nx always ignores only `**/node_modules`, `**/.git`, `**/.nx/cache`, `**/.nx/workspace-data` and `**/.yarn/cache`, as printed by calling `getHardcodedIgnorePatterns()` from `nx/src/native`.
+- **Codes.** A search of `nx/dist/src` found no numbered codes for user-facing diagnostics, such as `NX` followed by digits.
+- **TOML.** `nx` depends on `smol-toml`; `@nx/devkit` has no TOML dependency.
+
+Observed in a throwaway git repository outside this one, with that `nx` package linked into its `node_modules`, Node.js 26.12.0, one `Cargo.toml` and a local plugin file listed in `nx.json` whose `createNodes` printed a line with `console.warn`, including the value of an environment variable:
+
+- With `NX_DAEMON=false`, `nx show projects` printed the line in the terminal.
+- With `NX_DAEMON=true`, the terminal showed only the project list, and the line appeared in `.nx/workspace-data/d/daemon.log`. A second run with the same environment did not run the plugin again. A run with the variable changed made the daemon log "Graph recompute necessary due to env variable refresh. Changed keys: …", and the plugin printed the new value there.
+- A second local plugin whose module threw when loaded made `nx run js-app:build`, the `package.json` script of a JS project, fail with "Failed to load 1 Nx plugin(s)" and the thrown message, exit status 1. `nx show projects` and `nx g <package>:init` failed the same way. `nx --version` still worked, and so did `nx g <package>:init --skipProjectGraph`, which ran the generator.
+- A `crate/target` folder that neither `.gitignore` nor `.nxignore` covered was part of the crate's project: Nx's file map listed `crate/target/junk.rs` among the project's files, and the plugin was handed a `Cargo.toml` from `crate/target/package/`. With `target/` in `.nxignore` alone, neither happened. Neither did it for `crate/.nx/cache/target` and `crate/node_modules/target`, which `git check-ignore` confirmed neither ignore file covered, with `.gitignore` holding only `/.nx` and no `.nxignore`: Nx's fixed exclusions kept the files of both out of the file map, and the plugin was not handed the `Cargo.toml` under `crate/.nx/cache/target/package/`.
+
+Observed with pnpm 12.18.0 in a second throwaway repository, whose `package.json` linked that `nx` package, and a local package whose `init` generator threw: `nx add probe-plugin@file:<folder>` added the package to `package.json` and `pnpm-lock.yaml` and installed it, then failed with the generator's message and exit status 1. The package stayed in `package.json` and `node_modules`, and `nx.json` was unchanged.
 :::
 
 :::mara evidence EVD-CARGO-TARGET-COMMANDS
