@@ -171,7 +171,10 @@ are those at the workspace root and above it.
   although a change to it still changes the cache key.
 - The toolchain in the key is whatever `rustc -Vv` reports in the workspace
   root. `RUSTUP_TOOLCHAIN`, `rustup override` and a toolchain installed without
-  rustup are all respected. If that toolchain is not installed, computing the
+  rustup are all respected. Nx runs `rustc -Vv` with each task's environment, so
+  a `RUSTUP_TOOLCHAIN` in a crate's `.env` gives that crate's tasks another
+  toolchain, in their keys and when they run. Plain `cargo` does not read
+  `.env` files. If that toolchain is not installed, computing the
   key does not install it: the task gets a key that matches no stored result
   and runs, and its cargo installs the toolchain as plain `cargo` would.
 - Cargo may create or update `Cargo.lock` during a task, as it does for plain
@@ -265,11 +268,11 @@ The cache key of a cached target includes the values of a fixed list of environm
 
 :::mara requirement REQ-TOOLCHAIN-KEY
 :mid: 01M78FHG7FRC3KSSDACETE745J
-:title: Key each task on the toolchain its crate uses
+:title: Key each task on the toolchain it uses
 :status: accepted
 :satisfies: NEED-CORRECT-CACHE
 
-The cache key of a cached target includes the identity of the Rust toolchain that the plugin's cargo commands use for that crate, which is the one that applies in the root folder of its workspace. Two crates that use different toolchains never share a toolchain identity in their keys, and a toolchain update changes the keys of exactly the crates that use it.
+The cache key of a cached target includes the identity of the Rust toolchain that the plugin's cargo commands use for that task, which is the one that applies in the root folder of its workspace with the task's environment. Two tasks that use different toolchains never share a toolchain identity in their keys, and a toolchain update changes the keys of exactly the tasks that use it.
 :::
 
 :::mara requirement REQ-CACHE-OUTPUTS
@@ -451,7 +454,7 @@ The split does not remove lock contention: there is one lock per build directory
 :satisfies: REQ-CARGO-UNCHANGED
 :satisfies: REQ-NO-MANIFEST-WRITES
 
-Every cargo command of a task starts in the root folder of the crate's workspace and addresses crates by their real package name and manifest path. rustup and Cargo choose the toolchain file and the configuration files by the folder a command starts in and its parents, so all tasks of a workspace use one toolchain and one configuration, which a single invocation for a group needs ([[DES-BATCH]]). A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate applies only to a cargo that the user starts in that folder, not to the plugin's commands ([[ADR-WORKSPACE-ROOT]]).
+Every cargo command of a task starts in the root folder of the crate's workspace and addresses crates by their real package name and manifest path. rustup and Cargo choose the toolchain file and the configuration files by the folder a command starts in and its parents, so the same toolchain and configuration files apply to all tasks of a workspace, which a single invocation for a group needs ([[DES-BATCH]]). A task's environment can still choose another toolchain, for example through `RUSTUP_TOOLCHAIN` in a crate's `.env`: the task then runs and is keyed with that toolchain ([[DES-INPUTS]]) and shares no cargo call with tasks whose environment differs. A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate applies only to a cargo that the user starts in that folder, not to the plugin's commands ([[ADR-WORKSPACE-ROOT]]).
 
 The plugin adds no flag that changes what Cargo builds or where. It sets no build or artifact directory ([[DES-BUILD-DIRS]]) and passes only what the target's options ask for.
 

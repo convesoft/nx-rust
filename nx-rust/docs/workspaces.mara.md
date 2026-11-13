@@ -61,7 +61,7 @@ including the repository root, and there can be any number of them.
   in that folder to install it. Plain `cargo` still installs it as before.
 
 Everything Cargo scopes to a workspace stays per workspace: the lockfile, the
-build directory, the toolchain, the batches and the coverage baseline. That is
+build directory, the toolchain file, the batches and the coverage baseline. That is
 why a cache input is a real path such as `rust/Cargo.lock`, never one
 repository-wide name for "the lockfile".
 
