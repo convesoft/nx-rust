@@ -64,6 +64,13 @@ A per-workspace prefix does the same for all members of a workspace. Renaming
 the project changes nothing for Cargo: every command still uses the real
 package name and manifest path.
 
+A crate whose folder is also a JS project takes that project's name, from its
+`package.json` or its `project.json`, because Nx applies those files after
+every plugin. The crate's `name` override has no effect there. To choose
+another name, set `name` in the folder's `project.json` if it has one, and
+otherwise `nx.name` in its `package.json`. A crate and a JS project with the
+same name make Nx fail with its own error, which names both folders.
+
 ## Workspace-level tasks
 
 Some tasks belong to a workspace, not to one crate: documentation, `cargo audit`,
@@ -139,7 +146,7 @@ Crates under paths ignored by `.gitignore` or `.nxignore`, and crates matched by
 :status: accepted
 :satisfies: NEED-ZERO-CONFIG
 
-An Nx project is named after its crate. When two projects would get the same name, graph creation fails with an error that names both manifest paths; the plugin never renames a project on its own. A per-crate name and a per-workspace name prefix resolve a collision. Whatever the project is called, every cargo command addresses the crate by its real package name and manifest path.
+An Nx project is named after its crate. When the crate's folder also is a JS project, the name set by its `package.json` or `project.json` applies instead, because Nx applies those files after every plugin ([[EVD-NX-PROJECT-MERGE]]). When two crates would get the same name, graph creation fails with an error that names both manifest paths; the plugin never renames a project on its own. A per-crate name and a per-workspace name prefix resolve a collision. Whatever the project is called, every cargo command addresses the crate by its real package name and manifest path.
 :::
 
 :::mara requirement REQ-WORKSPACE-PROJECT
@@ -225,11 +232,11 @@ A path dependency that is no member of the workspace appears only as that path. 
 :satisfies: REQ-WORKSPACE-PROJECT
 :satisfies: REQ-DEPENDENCY-EDGES
 
-**Projects.** Each claimed member becomes a project rooted at the crate directory. Its name is the package name, replaced by the crate's `name` override or extended by the workspace's prefix when set ([[DES-METADATA-TABLES]]). Two projects with one name fail graph creation with an error naming both manifest paths and both remedies. Commands never use the Nx name: they pass the real package name and the manifest path.
+**Projects.** Each claimed member becomes a project rooted at the crate directory. Its name is the package name, replaced by the crate's `name` override or extended by the workspace's prefix when set ([[DES-METADATA-TABLES]]). In a folder that also is a JS project, Nx replaces that name with the one from `package.json` or `project.json` ([[EVD-NX-PROJECT-MERGE]]). Two crates with one project name fail graph creation with an error naming both manifest paths and both remedies; a collision with another plugin's project fails with Nx's own error. Commands never use the Nx name: they pass the real package name and the manifest path.
 
 **Workspace project.** Each workspace gets one project rooted at the workspace folder, with a dependency on every member. If the root manifest has a `[package]` table, no extra project is created and the workspace-level targets attach to that crate's project.
 
-**Edges.** For each member, every dependency of kind normal, build or dev that resolves to a crate with an Nx project becomes an edge. That includes a path dependency on a member of another workspace: the target crate keeps its single project in its home workspace, where its own targets run in that [[TERM-WORKSPACE-CONTEXT]]. A path dependency on a crate without an Nx project produces no edge; its files reach the cache key as inputs ([[DES-INPUTS]]).
+**Edges.** For each member, every dependency of kind normal, build or dev that resolves to a crate with an Nx project becomes an edge. That includes a path dependency on a member of another workspace: the target crate keeps its single project in its home workspace, where its own targets run in that [[TERM-WORKSPACE-CONTEXT]]. A path dependency on a crate without an Nx project produces no edge; its files reach the cache key as inputs ([[DES-INPUTS]]). Each edge names its two projects by the name Nx gives the project at the crate's root, as listed in the projects that `createDependencies` receives, because a `package.json` or `project.json` may have renamed it ([[EVD-NX-PROJECT-MERGE]]).
 
 **External nodes.** Each direct external dependency becomes a [[TERM-EXTERNAL-NODE]] with an edge from the crate. The nodes are created together with the mechanism that uses them for cache keys ([[DES-LOCKFILE-HASHING]]), not before: a node's identity has to tell apart two locked versions of one crate, and the same crate in the lockfiles of two workspaces, which the crate name alone cannot. Until then the graph has no external nodes.
 

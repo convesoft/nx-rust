@@ -159,7 +159,7 @@ The plugin does not look at branches. A pipeline for main that sets nothing is i
 
 A task in affected mode may run more than its selection, up to the full suite, and still store its result under the affected key. The reverse never happens.
 
-Whether Nx evaluates the command once per run, afresh under the Nx daemon, and with the environment of the `nx` command is not confirmed ([[RISK-NX-INPUT-SEMANTICS]]).
+Nx evaluates the command afresh for every task of every run, also under the Nx daemon, in the repository root and with the task's environment: that of the `nx` command and the dotenv files Nx loads for the task ([[EVD-NX-24-INPUT-SEMANTICS]]). The executor decides the mode from the same environment. A batch process lacks the task's own dotenv files, so the batch implementation rebuilds each task's environment before it decides ([[DES-BATCH]]).
 :::
 
 :::mara design DES-TEST-RUN
