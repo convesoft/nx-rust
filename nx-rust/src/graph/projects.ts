@@ -1,8 +1,10 @@
 import type { CreateNodesResultArray, TargetConfiguration } from "@nx/devkit";
 import { dirname, join, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
+import { CacheContext, projectWarnings } from "./caching";
 import { cargoMetadata, cargoMetadataKey } from "./collisions";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
+import { Input, namedInputs } from "./inputs";
 import { projectName } from "./names";
 import type { TargetNames } from "./options";
 import { inferTargets, nameTargets } from "./targets";
@@ -43,6 +45,14 @@ export interface CargoProject {
   isWorkspaceProject: boolean;
   /** The inferred targets, under the names that `targetNames` gives them. */
   targets: Record<string, TargetConfiguration>;
+  /** The project's named inputs, which its targets and its dependents hash (`DES-INPUTS`). */
+  namedInputs: Record<string, Input[]>;
+  /**
+   * The warnings found while creating the graph that concern the project,
+   * which the executor prints again at the start of each of its tasks
+   * (`DES-DIAGNOSTICS`).
+   */
+  warnings: string[];
 }
 
 /** What one `createNodes` call of a plugin entry found, kept for its `createDependencies`. */
@@ -64,14 +74,16 @@ export interface CargoGraph {
  * checks it (`failOnNameCollisions` in `collisions.ts`).
  *
  * @param targetNames The names of the inferred targets from the plugin options.
+ * @param context What the caching of the projects shares (`cacheContext` in `caching.ts`).
  * @throws {Error} When `targetNames` gives two targets of one project the same name.
  */
 // @mara implements DES-PROJECT-GRAPH
 export function inferProjects(
   discovery: CargoDiscovery,
-  targetNames: TargetNames = {},
+  targetNames: TargetNames,
+  context: CacheContext,
 ): CargoProject[] {
-  const projects: Omit<CargoProject, "targets">[] = [];
+  const projects: Omit<CargoProject, "targets" | "namedInputs" | "warnings">[] = [];
   for (const workspace of discovery.workspaces) {
     const rootManifest = join(workspace.report.workspace_root, "Cargo.toml");
     for (const pkg of workspace.members) {
@@ -98,17 +110,23 @@ export function inferProjects(
   const targets = nameTargets(
     projects.map((project) => ({
       project,
-      targets: inferTargets(project, discovery.workspaceRoot),
+      targets: inferTargets(project, context),
     })),
     targetNames,
   );
-  return projects.map((project, index) => ({ ...project, targets: targets[index] }));
+  return projects.map((project, index) => ({
+    ...project,
+    targets: targets[index],
+    namedInputs: namedInputs(project, context),
+    warnings: projectWarnings(project, context),
+  }));
 }
 
 /**
  * The result of `createNodes` for the projects: each project under the
- * manifest it comes from, with its name, its targets and, in its metadata,
- * what another entry of the plugin needs to recognise it ({@link cargoMetadata}).
+ * manifest it comes from, with its name, its named inputs, its targets and,
+ * in its metadata, what another entry of the plugin needs to recognise it
+ * ({@link cargoMetadata}) and the warnings that concern it.
  */
 export function projectNodes(projects: readonly CargoProject[]): CreateNodesResultArray {
   return projects.map((project) => [
@@ -117,8 +135,14 @@ export function projectNodes(projects: readonly CargoProject[]): CreateNodesResu
       projects: {
         [project.root]: {
           name: project.name,
+          namedInputs: project.namedInputs,
           targets: project.targets,
-          metadata: { [cargoMetadataKey]: cargoMetadata(project) },
+          metadata: {
+            [cargoMetadataKey]: {
+              ...cargoMetadata(project),
+              ...(project.warnings.length > 0 ? { warnings: project.warnings } : {}),
+            },
+          },
         },
       },
     },

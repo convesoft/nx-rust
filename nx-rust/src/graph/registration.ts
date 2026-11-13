@@ -1,4 +1,5 @@
-import type { CreateNodes } from "@nx/devkit";
+import type { CreateNodes, NxJsonConfiguration } from "@nx/devkit";
+import { cacheContext } from "./caching";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
 import { readTargetNames } from "./options";
@@ -39,7 +40,12 @@ export class Registration {
     this.createNodes = [
       "**/Cargo.toml",
       async (manifests, options, context) => {
-        const graph = await this.discover(manifests, context.workspaceRoot, options);
+        const graph = await this.discover(
+          manifests,
+          context.workspaceRoot,
+          options,
+          context.nxJsonConfiguration,
+        );
         return projectNodes(graph.projects);
       },
     ];
@@ -60,6 +66,8 @@ export class Registration {
    * its own.
    *
    * @param options The entry's plugin options, of which `targetNames` is read.
+   * @param nxJson `nx.json`, which says whether Nx analyses the JS lockfile
+   *   (`pluginInput` in `plugin-package.ts`).
    * @throws {Error} When the options are invalid, when discovery fails (see
    *   {@link discoverWorkspaces}) or when `targetNames` gives two targets of
    *   one project the same name.
@@ -68,6 +76,7 @@ export class Registration {
     manifests: readonly string[],
     workspaceRoot: string,
     options?: unknown,
+    nxJson?: NxJsonConfiguration,
   ): Promise<CargoGraph> {
     const sequence = ++this.started;
     // Before the first await: it decides which computation this call joins.
@@ -76,7 +85,8 @@ export class Registration {
     try {
       const targetNames = readTargetNames(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
-      graph = { discovery, projects: inferProjects(discovery, targetNames) };
+      const context = await cacheContext(discovery, nxJson);
+      graph = { discovery, projects: inferProjects(discovery, targetNames, context) };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {

@@ -1,6 +1,6 @@
 ---
 title: Declare cache inputs and outputs
-status: todo
+status: in-progress
 type: feature
 priority: high
 parent: nxr-w9qa5f

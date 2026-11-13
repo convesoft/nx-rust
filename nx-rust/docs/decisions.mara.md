@@ -1298,6 +1298,27 @@ An experiment on 13 November 2026 with `nx` 24.0.6 and Node.js 26.12.0, in a thr
 The stand-in was not the plugin; how the plugin's two entries share reports is [[EVD-NX-PLUGIN-ENTRIES]].
 :::
 
+:::mara evidence EVD-NX-24-INPUTS-OUTPUTS
+:mid: 01M7AT8XZ93BXDYFHRTR7WF434
+:title: What Nx 24.0.6 does with the plugin's inputs, outputs and dotenv files
+:status: accepted
+:supports: DES-INPUTS
+:supports: DES-OUTPUTS
+:supports: DES-DIAGNOSTICS
+
+Experiments on 13 November 2026 with the `nx` 24.0.6 package that this repository installs, cargo and rustc 1.100.0, Node 26.12.0 and rustup 1.29.3, on Linux x86-64, through the cache-key harness of `nx-rust/test` (`nx-rust/test/README.md`): in a copy of a fixture, Nx's own `createProjectGraphAsync`, `createTaskGraph` and task hasher built the graph and the task hashes with `NX_DAEMON=false`, `RUSTUP_AUTO_INSTALL=0` and the plugin loaded from source. A reading of that package went with them; paths below are under `dist/src/`, and a point marked "read" was not run.
+
+- **A named input that a dependency lacks.** A crate whose `project.json` gave it an implicit dependency on a JS project, its own named input `cargoCrate`, and the inputs `cargoCrate` and `^cargoCrate` on a target, failed the hash with `Input 'cargoCrate' is not defined`. Nx expands a `^` input with the named inputs of each project that the task's project depends on, and those are Nx's own `default`, `{projectRoot}/**/*`, then those of `nx.json`, then the project's own (`getNamedInputs` and `expandNamedInput` in `hasher/task-hasher.js`, read). Every project therefore has a `default`.
+- **Executors.** Hashing a task looks up its executor in every case, for a custom hasher (`getCustomHasher` in `tasks-runner/utils.js`, called from `hasher/hash-task.js`). A target whose executor's package declares no executors failed the hash with `Unable to resolve @convesoft/nx-rust:cargo. The "@convesoft/nx-rust" package does not support Nx executors.` `nx show target inputs` takes that failure as "no custom hasher" and lists the inputs (`hasCustomHasher` in `command-line/show/show-target/utils.js`, read).
+- **Outputs.** `getOutputsForTargetAndConfiguration` (`tasks-runner/utils.js`) interpolates an output from the task's options, with the tokens of `tasks-runner/tokens.js`, in which `{options.a ?? b}` falls back to the literal `b` when the option has no value, and then normalises the path. Called directly, `{workspaceRoot}/rust/target/{options.targetTriple ?? .}/{options.profile ?? debug}/api` gave `rust/target/debug/api` without options, `rust/target/release/api` with `profile: "release"`, and `rust/target/x86_64-unknown-linux-gnu/release/api` with that `targetTriple` as well. An output whose `{options.…}` token keeps no value is dropped, and a target named `build` without `outputs` gets `dist/{projectRoot}`, `{projectRoot}/dist`, `{projectRoot}/build` and `{projectRoot}/public` (read).
+- **A task's dotenv files.** `getTaskSpecificEnv` (`tasks-runner/task-env.js`) loads the dotenv files of a task only when `NX_LOAD_DOT_ENV_FILES` is `true`, which `nx run`, `nx run-many` and `nx affected` set unless it is `false` (`setEnvVarsBasedOnArgs` in `tasks-runner/run-command.js`, read). With the variable set, `RUSTUP_TOOLCHAIN=1.91.0` in a crate's `.env`, which `.gitignore` listed, changed the keys of that crate's tasks and of no other crate of its workspace, and a toolchain name that rustup cannot have gave a new key at each hash while the keys of the other crates stayed the same. Without the variable, as the harness first hashed, neither changed a key.
+- **The toolchain of one workspace.** With a `rustc` first on `PATH` that printed a value of its own in the folder `backend` and ran the real `rustc` elsewhere, a new value changed the keys of the crate in `backend` and not those of the crate in `shared` that it depends on. The command `cd './backend' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom` thus ran per task, in the folder it names.
+- **npm nodes from a pnpm lockfile.** With a root `package.json` and a `pnpm-lock.yaml` in pnpm 9's format written by hand, Nx's JS plugin made an npm node of each package listed, `npm:@convesoft/nx-rust` among them, and `externalDependencies: ["@convesoft/nx-rust"]` hashed that node and `npm:tslib@2.9.1` behind it: a new integrity of `tslib` changed the key, one of `left-pad` did not. Without `node_modules/.modules.yaml`, which a pnpm install writes, graph creation failed with "pnpm lockfile detected, but … node_modules/.modules.yaml is missing" (`plugins/js/lock-file/utils/pnpm-normalizer.js`).
+- **Files that Nx sees.** `globWithWorkspaceContext` (`utils/workspace-context.js`), which Nx's own plugins call in `createNodes`, returned the manifest of a path dependency only while no `.gitignore` listed its folder; it asks the daemon where one serves the command (read).
+
+No executor of the plugin ran: this shows what Nx hashes and declares for targets of this shape, not what a run stores or restores.
+:::
+
 ## Sources
 
 Pages and repositories read for the design discussion, on 12 November 2026.

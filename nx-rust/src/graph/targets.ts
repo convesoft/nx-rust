@@ -1,9 +1,11 @@
 import type { TargetConfiguration } from "@nx/devkit";
 import { statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
 import { cargoDenyConfigurationFiles } from "../tools/optional-tools";
+import { CacheContext, configureCaching } from "./caching";
 import type { CargoWorkspace } from "./discovery";
+import { memberManifests } from "./inputs";
 import type { TargetNames } from "./options";
 
 /**
@@ -62,6 +64,8 @@ export interface TargetCargoMetadata {
 
 /** What the inference of a project's targets needs to know about the project. */
 export interface TargetSubject {
+  /** The project's folder, relative to the repository root: `.` for the root itself. */
+  root: string;
   /** The workspace the project belongs to. */
   workspace: CargoWorkspace;
   /** The crate; absent for a workspace project without a crate. */
@@ -81,20 +85,17 @@ export interface TargetSubject {
  * crate gets both sets. Whether a tool is installed decides nothing.
  *
  * No target depends on another task, so no target of a crate depends on one
- * of another crate (`REQ-NO-RUST-TASK-DEPS`). Every target is uncached until
- * the inputs of `DES-INPUTS` are declared (nxr-fy4t4k): with Nx's default
- * inputs, a change to `Cargo.lock`, the workspace's manifest, the toolchain
- * or the environment would restore a result produced without it
- * (`GOAL-TRUSTED-CACHE`).
+ * of another crate (`REQ-NO-RUST-TASK-DEPS`). Whether a target is cached,
+ * and its inputs and outputs, come from `configureCaching` in `caching.ts`.
  *
- * @param repositoryRoot The absolute path of the repository root.
+ * @param context What the caching of the graph's projects shares.
  */
 // @mara implements DES-TARGETS
 // @mara implements DES-TARGET-COMMANDS
 // @mara implements DES-WORKSPACE-TARGETS
 export function inferTargets(
   subject: TargetSubject,
-  repositoryRoot: string,
+  context: CacheContext,
 ): Map<InferredTargetName, TargetConfiguration> {
   const targets = new Map<InferredTargetName, TargetConfiguration>();
   const { pkg, workspace } = subject;
@@ -146,7 +147,7 @@ export function inferTargets(
           lockfile,
           manifest,
           ...cargoDenyConfigurationFiles.map((file) => `{projectRoot}/${file}`),
-          ...memberManifests(workspace, repositoryRoot),
+          ...memberManifests(workspace, context.repositoryRoot),
         ],
       });
     }
@@ -155,6 +156,7 @@ export function inferTargets(
       inputs: [lockfile, manifest],
     });
   }
+  configureCaching(targets, subject, context);
   return targets;
 }
 
@@ -205,7 +207,7 @@ export function nameTargets<P extends { name: string; manifest: string }>(
   return named;
 }
 
-// A target of the plugin, uncached until nxr-fy4t4k declares its inputs.
+// A target of the plugin, before `configureCaching` gives it its caching.
 function target(
   inferred: InferredTargetName,
   description: string,
@@ -215,7 +217,6 @@ function target(
   return {
     executor: cargoExecutor,
     options,
-    cache: false,
     metadata: {
       description,
       technologies: ["cargo"],
@@ -233,18 +234,6 @@ function hasCargoDenyConfiguration(workspace: CargoWorkspace): boolean {
       return false;
     }
   });
-}
-
-// The manifests of the workspace's members as inputs, those inside the
-// repository only: Nx hashes no file outside it.
-function memberManifests(workspace: CargoWorkspace, repositoryRoot: string): string[] {
-  const members = new Set(workspace.report.workspace_members);
-  return workspace.report.packages
-    .filter((pkg) => members.has(pkg.id))
-    .map((pkg) => relative(repositoryRoot, pkg.manifest_path))
-    .filter((path) => path !== "" && !path.startsWith("../") && path !== "..")
-    .sort()
-    .map((path) => `{workspaceRoot}/${path}`);
 }
 
 // "`a`, `b` and `c`"

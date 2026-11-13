@@ -4,13 +4,9 @@
 > artifact and release targets and `lockfile`, and `targetNames` renames them.
 > The `lockfile` target and the crate targets' dependency on it are not
 > implemented yet and arrive with nxr-xq9ava; until then `targetNames` rejects
-> the key `lockfile`. The targets do not run yet, because the plugin's
-> executors are still missing (nxr-kmdpgj), and none of them is cached until
-> its inputs are declared (nxr-fy4t4k). A
-> `targetDefaults` entry in `nx.json` that sets `cache: true`, keyed by a
-> target's name or by its executor, overrides that: once the executors exist
-> and until the inputs are declared, such a target would be cached with Nx's
-> default inputs, which miss `Cargo.lock`, the toolchain and the environment.
+> the key `lockfile`. The targets declare their caching, inputs and outputs
+> ([Caching](caching.mara.md)), but do not run yet, because the plugin's
+> executors are still missing (nxr-kmdpgj).
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.

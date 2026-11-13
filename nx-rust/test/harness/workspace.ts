@@ -149,9 +149,7 @@ export class FixtureWorkspace {
     symlinkSync(nxPackage, join(modules, "nx"), "dir");
     // Lets `nx g @convesoft/nx-rust:<generator>` find the generators, which
     // Nx then loads from their TypeScript source.
-    const pluginLink = join(modules, ...pluginPackageName.split("/"));
-    mkdirSync(dirname(pluginLink), { recursive: true });
-    symlinkSync(pluginPackageDirectory, pluginLink, "dir");
+    linkPluginPackage(join(modules, ...pluginPackageName.split("/")));
     this.cargo.clear();
   }
 
@@ -303,6 +301,56 @@ export async function loadFixtureGraph(
   } finally {
     workspace.remove();
   }
+}
+
+/** The folder of the stand-in for the plugin's executors ({@link linkPluginPackage}). */
+const standInExecutors = join(__dirname, "probe-executor");
+
+/**
+ * Makes the plugin's package folder reachable as `node_modules/<name>` at
+ * `link`.
+ *
+ * Nx resolves an inferred target's executor, `@convesoft/nx-rust:cargo` or
+ * `:run`, through that package whenever it hashes the target, to look for a
+ * custom hasher. Until the package declares its executors (nxr-kmdpgj), the
+ * link is a folder of its own instead: it links every file of the package
+ * but `package.json`, which it copies with an `executors` entry added, and
+ * holds the probe executor (`probeExecutor` in cargo-wrapper.ts) under the names of the
+ * plugin's executors. Nx then hashes the plugin's targets as written, so the
+ * cache-key matrix checks their real inputs.
+ */
+function linkPluginPackage(link: string): void {
+  mkdirSync(dirname(link), { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(pluginPackageDirectory, "package.json"), "utf8"));
+  if (manifest.executors !== undefined) {
+    symlinkSync(pluginPackageDirectory, link, "dir");
+    return;
+  }
+  mkdirSync(link);
+  for (const entry of readdirSync(pluginPackageDirectory)) {
+    if (entry !== "package.json") {
+      symlinkSync(join(pluginPackageDirectory, entry), join(link, entry));
+    }
+  }
+  const folder = "stand-in-executors";
+  mkdirSync(join(link, folder));
+  for (const file of ["cargo.cjs", "schema.json"]) {
+    writeFileSync(join(link, folder, file), readFileSync(join(standInExecutors, file)));
+  }
+  const executor = (batch: boolean) => ({
+    implementation: `./${folder}/cargo.cjs`,
+    ...(batch ? { batchImplementation: `./${folder}/cargo.cjs#batch` } : {}),
+    schema: `./${folder}/schema.json`,
+    description: "A stand-in for the plugin's executor, for hashing in the test harness",
+  });
+  writeFileSync(
+    join(link, `${folder}.json`),
+    JSON.stringify({ executors: { cargo: executor(true), run: executor(false) } }),
+  );
+  writeFileSync(
+    join(link, "package.json"),
+    JSON.stringify({ ...manifest, executors: `./${folder}.json` }),
+  );
 }
 
 // ESC, `[`, parameters and `m`; built from the character code, because a

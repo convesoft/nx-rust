@@ -72,7 +72,10 @@ names a fixture, an optional `base` state that both states share, a `before`
 and an `after` state (`files`, `env`, and `overrides` for options passed on
 the command line), and a verdict per task. Both states are built from a
 fresh copy in the same folder and hashed with Nx's own task hasher, the way
-`nx run` hashes the task. A failing row says which inputs changed.
+`nx run` hashes the task: with the root dotenv files loaded, and with each
+task's own dotenv files, such as a `.env` in a crate's folder, in the
+environment that its runtime inputs see. A failing row says which inputs
+changed.
 
 ```ts
 describeCacheKeyMatrix("cache keys", [
@@ -85,9 +88,15 @@ describeCacheKeyMatrix("cache keys", [
 ]);
 ```
 
-This row shows the intended use: it needs the inputs of the `test` target,
-which the plugin does not declare yet (nxr-fy4t4k). `compareCacheKeys(row)` returns the hashes
-instead of failing.
+[`cache-keys.spec.ts`](cache-keys.spec.ts) holds the rows of
+`VER-CACHE-KEYS` that the plugin's inputs decide. `compareCacheKeys(row)`
+returns the hashes instead of failing.
+
+**`pnpmLockfile(version, integrity)`** writes a `pnpm-lock.yaml` that lists
+the plugin's package at `version`, with `tslib` behind it, and `left-pad`
+beside it. With a root `package.json` and an empty
+`node_modules/.modules.yaml`, without which Nx refuses a pnpm lockfile, Nx
+makes npm nodes of them, as in a repository that installs the plugin.
 
 **`FixtureWorkspace.create(fixture, files)`** is the copy both helpers use:
 `graph()`, `hashTasks(tasks, { env, overrides })`, `nx(args, env)`, which
@@ -107,6 +116,15 @@ Graph creation cannot load the plugin by its package name from that link,
 because the package names its built entry point: a test that runs a
 generator on an `nx.json` that lists `@convesoft/nx-rust` passes
 `--skipProjectGraph`, and the end-to-end tests cover the installed package.
+
+Nx looks up a target's executor whenever it hashes the target, and fails the
+hash when the executor's package declares none. Until the plugin's
+`package.json` declares its executors (nxr-kmdpgj), the link is a folder of
+its own: it links every file of the plugin's package folder but
+`package.json`, which it copies with an `executors` entry added, and holds the
+probe executor (`cargoProbeProject` below) under the names of the plugin's
+executors, `cargo` and `run`. Nx then hashes the inferred targets as the
+plugin writes them; running one runs the probe.
 
 **`repositoryFiles(root)`** returns every file below `root` with its content,
 leaving out `node_modules` and `.nx`, and **`changedFiles(before, after)`**

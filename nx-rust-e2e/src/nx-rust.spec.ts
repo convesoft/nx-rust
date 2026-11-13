@@ -223,8 +223,12 @@ describe("@convesoft/nx-rust", () => {
 
         expect(Object.keys(api)).toEqual(["build", "check", "lint", "test", "fmt-check", "fmt"]);
         expect(Object.keys(rust)).toEqual(["doc", "audit", "update"]);
-        for (const target of [...Object.values(api), ...Object.values(rust)]) {
-          expect(target).toMatchObject({ executor: "@convesoft/nx-rust:cargo", cache: false });
+        const cached = ["build", "check", "lint", "test", "fmt-check", "doc"];
+        for (const [name, target] of [...Object.entries(api), ...Object.entries(rust)]) {
+          expect(target).toMatchObject({
+            executor: "@convesoft/nx-rust:cargo",
+            cache: cached.includes(name),
+          });
           expect(target).not.toHaveProperty("dependsOn");
         }
 
@@ -235,6 +239,39 @@ describe("@convesoft/nx-rust", () => {
         const { tasks } = JSON.parse(readFileSync(file, "utf8"));
         expect(Object.keys(tasks.tasks)).toHaveLength(12);
         expect(Object.values(tasks.dependencies).flat()).toEqual([]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "declares inputs that Nx resolves, with the installed plugin's npm node in the keys",
+      () => {
+        const api = JSON.parse(nx(projectDirectory, cargo, ["show", "project", "api", "--json"]));
+
+        // pnpm-lock.yaml lists the installed plugin, so Nx has a node for it.
+        expect(api.targets.test.inputs).toContainEqual({
+          externalDependencies: ["@convesoft/nx-rust"],
+        });
+        expect(api.targets.test.options).not.toHaveProperty("pluginVersion");
+        const inputs = JSON.parse(
+          nx(projectDirectory, cargo, ["show", "target", "inputs", "api:test", "--json"]),
+        );
+        expect(inputs.external).toContain("npm:@convesoft/nx-rust");
+        expect(inputs.external.every((node: string) => node.startsWith("npm:"))).toBe(true);
+        expect(inputs.environment).toEqual(
+          expect.arrayContaining(["RUSTFLAGS", "CARGO_BUILD_WARNINGS"]),
+        );
+        expect(inputs.runtime).toEqual([
+          "cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom",
+        ]);
+        expect(inputs.files).toEqual(
+          expect.arrayContaining([
+            "rust/Cargo.lock",
+            "rust/Cargo.toml",
+            "rust/crates/api/Cargo.toml",
+            "rust/crates/model/Cargo.toml",
+          ]),
+        );
       },
       HARNESS_TIMEOUT,
     );

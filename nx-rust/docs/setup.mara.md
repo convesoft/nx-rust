@@ -4,8 +4,11 @@
 > implemented. So far `init` stops only for the problems that graph creation
 > detects already, which are a missing cargo and a failing `cargo metadata`,
 > and of the tools below it counts only cargo-deny as needed by your settings.
-> The version checks, the warnings and the errors for missing tools are not
-> implemented yet. The package is not published to npm yet.
+> The version checks and the errors for missing tools are not implemented yet.
+> Of the warnings, graph creation and `init` print those for a path dependency
+> whose files Nx cannot see and for an artifact directory outside the
+> repository or shared by two workspaces; a task does not print them again yet
+> (nxr-kmdpgj). The package is not published to npm yet.
 
 ## What you need
 
@@ -291,7 +294,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 
 **Errors.** A problem found when the graph is created stops graph creation for the whole repository; the plugin never leaves a workspace or a crate out to get past it ([[REQ-DIAGNOSTICS]]). `init` runs the same checks and stops before it registers the plugin ([[DES-GENERATORS]]). An error found when a task starts, or when the cargo call of a `build` task has finished, fails that task, so that no success is cached for it. By default Nx stores no failure either; with `NX_CACHE_FAILURES=true` it stores the failure and replays it until an input of the task changes ([[EVD-NX-24-FILE-INPUTS]]).
 
-**Warnings where they are seen.** While the Nx daemon creates the graph, what the plugin prints goes to the daemon's log file and not to the terminal, and Nx's plugin interface has no channel for warnings ([[EVD-NX-24-SETUP]]). The plugin therefore prints a warning found when the graph is created three times: when the graph is created, again from the executor at the start of each task of the crate or workspace it concerns, and from `init`.
+**Warnings where they are seen.** While the Nx daemon creates the graph, what the plugin prints goes to the daemon's log file and not to the terminal, and Nx's plugin interface has no channel for warnings ([[EVD-NX-24-SETUP]]). The plugin therefore prints a warning found when the graph is created three times: when the graph is created, again from the executor at the start of each task of the crate or workspace it concerns, and from `init`. Graph creation records the warnings that concern a project in the project's metadata, under `cargo.warnings`, where the executor finds them.
 
 **Nx version.** When it loads, the plugin compares the major version of the installed `nx` with the majors in its peer dependency range, so an unsupported Nx fails graph creation also in a repository without a crate. The error names the major found and the supported majors. For a newer major, `NX_RUST_ALLOW_UNSUPPORTED_NX=true` turns the error into a warning that says the plugin has not been checked on that major, and the plugin continues ([[REQ-COMPATIBILITY]]). The variable has no effect on an older major. The daemon takes over each client's environment and recomputes the graph when a variable changes, so the variable works with the daemon as well ([[EVD-NX-24-SETUP]]).
 
