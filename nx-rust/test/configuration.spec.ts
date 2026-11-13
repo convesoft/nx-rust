@@ -25,6 +25,10 @@ import {
 // for the issues that build those effects.
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
+/** The option that carries the plugin's version where no npm node does (`DES-PLUGIN-OPTIONS`). */
+const pluginVersion = {
+  pluginVersion: (require("../package.json") as { version: string }).version,
+};
 
 describe("per crate and per workspace", () => {
   // The virtual workspace in rust/ with the members api, codegen, model and
@@ -101,10 +105,12 @@ command = "cargo run -p api --bin migrate"
     expect(graph.projects["backend-api"].targets.test.options).toEqual({
       features: ["integration"],
       noDefaultFeatures: true,
+      ...pluginVersion,
     });
     expect(graph.projects.model.targets.test.options).toEqual({
       features: ["workspace"],
       noDefaultFeatures: true,
+      ...pluginVersion,
     });
     expect(graph.projects.model.targets.test.executor).toBe(cargoExecutor);
   });
@@ -128,7 +134,7 @@ command = "cargo run -p api --bin migrate"
     expect(project.root).toBe("rust");
     expect(graph.projects.rust).toBeUndefined();
     expect(project.tags).toEqual(["lang:rust", "scope:tooling"]);
-    expect(project.targets.doc.options).toEqual({ noDeps: false });
+    expect(project.targets.doc.options).toEqual({ noDeps: false, ...pluginVersion });
     expect(project.targets.coverage).toMatchObject({
       executor: "nx:run-commands",
       options: { command: "cargo llvm-cov" },
@@ -161,7 +167,10 @@ allTargets = false
         metadata: { cargo: { target: "check" } },
       });
       expect(graph.projects.model.targets.check).toBeUndefined();
-      expect(graph.projects.api.targets.typecheck.options).toEqual({ allTargets: true });
+      expect(graph.projects.api.targets.typecheck.options).toEqual({
+        allTargets: true,
+        ...pluginVersion,
+      });
     },
     HARNESS_TIMEOUT,
   );
@@ -207,6 +216,7 @@ features = ["extra"]
       expect(graph.projects.model.targets.check.options).toEqual({
         allTargets: true,
         features: ["extra"],
+        ...pluginVersion,
       });
     },
     HARNESS_TIMEOUT,
@@ -666,7 +676,10 @@ describe("graph-creation errors", () => {
         },
       });
 
-      expect(graph.projects.model.targets.test.options).toEqual({ affectedTests: true });
+      expect(graph.projects.model.targets.test.options).toEqual({
+        affectedTests: true,
+        ...pluginVersion,
+      });
     },
     HARNESS_TIMEOUT,
   );

@@ -262,8 +262,12 @@ describe("@convesoft/nx-rust", () => {
 
         expect(Object.keys(api)).toEqual(["build", "check", "lint", "test", "fmt-check", "fmt"]);
         expect(Object.keys(rust)).toEqual(["doc", "audit", "update"]);
-        for (const target of [...Object.values(api), ...Object.values(rust)]) {
-          expect(target).toMatchObject({ executor: "@convesoft/nx-rust:cargo", cache: false });
+        const cached = ["build", "check", "lint", "test", "fmt-check", "doc"];
+        for (const [name, target] of [...Object.entries(api), ...Object.entries(rust)]) {
+          expect(target).toMatchObject({
+            executor: "@convesoft/nx-rust:cargo",
+            cache: cached.includes(name),
+          });
           expect(target).not.toHaveProperty("dependsOn");
         }
 
@@ -273,6 +277,39 @@ describe("@convesoft/nx-rust", () => {
         const { tasks } = JSON.parse(readFileSync(file, "utf8"));
         expect(Object.keys(tasks.tasks)).toHaveLength(12);
         expect(Object.values(tasks.dependencies).flat()).toEqual([]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "declares inputs that Nx resolves, with the installed plugin's npm node in the keys",
+      () => {
+        const api = JSON.parse(nx(projectDirectory, cargo, ["show", "project", "api", "--json"]));
+
+        // pnpm-lock.yaml lists the installed plugin, so Nx has a node for it.
+        expect(api.targets.test.inputs).toContainEqual({
+          externalDependencies: ["@convesoft/nx-rust"],
+        });
+        expect(api.targets.test.options).not.toHaveProperty("pluginVersion");
+        const inputs = JSON.parse(
+          nx(projectDirectory, cargo, ["show", "target", "inputs", "api:test", "--json"]),
+        );
+        expect(inputs.external).toContain("npm:@convesoft/nx-rust");
+        expect(inputs.external.every((node: string) => node.startsWith("npm:"))).toBe(true);
+        expect(inputs.environment).toEqual(
+          expect.arrayContaining(["RUSTFLAGS", "CARGO_BUILD_WARNINGS"]),
+        );
+        expect(inputs.runtime).toEqual([
+          "{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true",
+        ]);
+        expect(inputs.files).toEqual(
+          expect.arrayContaining([
+            "rust/Cargo.lock",
+            "rust/Cargo.toml",
+            "rust/crates/api/Cargo.toml",
+            "rust/crates/model/Cargo.toml",
+          ]),
+        );
       },
       HARNESS_TIMEOUT,
     );
@@ -446,6 +483,22 @@ describe("@convesoft/nx-rust", () => {
       );
 
       it(
+        "restores a cached task from the cache, running no cargo",
+        () => {
+          cargo.clear();
+          const output = withoutColours(
+            nx(projectDirectory, cargo, ["run", "api:build", "--output-style=static"]),
+          );
+
+          expect(output).toMatch(
+            /nx run api:build\s+\[(local cache|existing outputs match the cache, left as is)\]/,
+          );
+          expect(cargo.calls(projectDirectory)).toEqual([readRustWorkspace]);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
         "ignores options that the executor does not know and says they came from the command line",
         () => {
           // The installed plugin's preTasksExecution hook records the
@@ -490,11 +543,19 @@ describe("@convesoft/nx-rust", () => {
         HARNESS_TIMEOUT,
       );
 
+      // Without Nx's cache, which would restore the tasks instead of running cargo.
       it(
         "shares its builds with plain cargo in both orders",
         () => {
           // Nx first, then plain cargo, which finds nothing to compile.
-          nx(projectDirectory, cargo, ["run-many", "-t", "build", "test", "lint"]);
+          nx(projectDirectory, cargo, [
+            "run-many",
+            "-t",
+            "build",
+            "test",
+            "lint",
+            "--skip-nx-cache",
+          ]);
           for (const result of plainCargo()) {
             expect(result).toEqual({ ...result, status: 0 });
             expect(result.output).not.toMatch(compiles);
@@ -516,6 +577,7 @@ describe("@convesoft/nx-rust", () => {
               "build",
               "test",
               "lint",
+              "--skip-nx-cache",
               "--output-style=static",
             ]),
           );
@@ -640,7 +702,9 @@ describe("@convesoft/nx-rust", () => {
           "rust",
         ]);
         expect(api.tags).toEqual(["lang:rust"]);
-        expect(api.targets.test.inputs).toEqual([{ env: "DATABASE_URL" }]);
+        // "..." keeps the inferred inputs and adds the table's.
+        expect(api.targets.test.inputs.slice(0, 2)).toEqual(["default", "^default"]);
+        expect(api.targets.test.inputs.at(-1)).toEqual({ env: "DATABASE_URL" });
         // Checked against the schema that the installed package's executors.json names.
         expect(api.targets.test.options).toMatchObject({ noDefaultFeatures: true });
       },

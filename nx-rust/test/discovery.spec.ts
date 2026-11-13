@@ -18,6 +18,7 @@ import {
   pinnedToolchainAvailable,
   ProbeRecord,
   testEnvironment,
+  withoutColours,
 } from "./harness";
 
 // Checks the discovery part of VER-GRAPH: which workspaces the plugin finds,
@@ -430,14 +431,18 @@ describe("failed discovery", () => {
             workspaceCall("backend"),
             metadataCall("backend", "shared/crates/model/Cargo.toml"),
           ]);
-          expect(shown.status).toBe(0);
-          expect(shown.output).toContain(
+          // The executor prints it again at the start of each task of server.
+          const warnings: string[] = graph.projects.server.metadata.cargo.warnings;
+          const [warning] = warnings.filter((message) => message.includes("`cargo metadata`"));
+          expect(warning).toContain(
             "`cargo metadata` failed for shared/crates/model/Cargo.toml, a path dependency of backend/crates/server/Cargo.toml that has no project of its own",
           );
-          expect(shown.output).toContain("believes it's in a workspace when it's not");
-          expect(shown.output).toContain(
-            "it does not follow the path dependencies behind that crate",
-          );
+          expect(warning).toContain("believes it's in a workspace when it's not");
+          expect(warning).toContain("it does not follow the path dependencies behind that crate");
+          expect(graph.projects.backend.metadata.cargo.warnings ?? []).not.toContain(warning);
+          // Graph creation prints it once.
+          expect(shown.status).toBe(0);
+          expect(withoutColours(shown.output).split(warning)).toHaveLength(2);
         } finally {
           workspace.remove();
         }

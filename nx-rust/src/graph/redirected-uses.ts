@@ -35,14 +35,17 @@ export interface RedirectedUse {
    * the workspace, declares a dependency of the crate's name whose source
    * the entry redirects and whose version requirement the crate's version
    * satisfies. `possible` where the member only has a registry or git
-   * dependency that may lead there.
+   * dependency that may lead there. `assumed` where the member has none that
+   * a report shows, but reaches a path crate that no report describes, whose
+   * dependencies may lead there.
    */
-  kind: "direct" | "possible";
+  kind: "direct" | "possible" | "assumed";
   /**
    * Whether the member gets an edge to the crate's project. Otherwise its
    * targets get the crate's folder as an input: where the crate has no
-   * project, where a possible use would close a cycle with real
-   * dependencies, and where two crates may only possibly use each other.
+   * project, where a possible or assumed use would close a cycle with real
+   * dependencies, where two crates may only possibly use each other, and
+   * where an assumed use meets another edge in the opposite direction.
    */
   edge: boolean;
 }
@@ -62,6 +65,13 @@ export interface RedirectedUse {
  * - Two redirected crates that may only possibly use each other get no edge
  *   either way: cargo can have at most one of them, and which one is not
  *   known.
+ * - A member that has no such dependency that a report shows, but reaches
+ *   a path crate without a report, may use every other redirected crate as
+ *   well: an assumed use, the weakest kind, which never removes or weakens
+ *   another edge. Its own edge is left out where the redirected crate
+ *   reaches the member through real dependencies of kind normal or build,
+ *   and where any other edge between the two projects points the opposite
+ *   way: a path dependency, a direct, possible or other assumed use.
  *
  * A requirement that the plugin cannot evaluate, or a source it cannot
  * match to the entry, makes a declaration possible, not direct.
@@ -90,7 +100,34 @@ export function redirectedUses(
       uses.push(...workspaceUses(workspace, known, rootByFolder));
     }
   }
+  // An assumed use gives way to every other edge in the opposite direction.
+  const edges = new Set(
+    uses.filter((use) => use.edge).map((use) => pair(folderOf(use.member), use.folder)),
+  );
+  for (const use of uses) {
+    if (
+      use.kind === "assumed" &&
+      use.edge &&
+      (edges.has(pair(use.folder, folderOf(use.member))) ||
+        dependsByPath(known.get(use.folder), folderOf(use.member)))
+    ) {
+      use.edge = false;
+    }
+  }
   return uses;
+}
+
+function pair(from: string, to: string): string {
+  return JSON.stringify([from, to]);
+}
+
+// Whether `pkg` has a path dependency of any kind on the crate in `folder`.
+function dependsByPath(pkg: CargoPackage | undefined, folder: string): boolean {
+  return (
+    pkg?.dependencies.some(
+      (dependency) => typeof dependency.path === "string" && realPath(dependency.path) === folder,
+    ) ?? false
+  );
 }
 
 /** A crate that a workspace's entries redirect to. */
@@ -142,11 +179,11 @@ function workspaceUses(
       };
       if (direct.has(target.folder)) {
         uses.push({ ...base, kind: "direct", edge: target.projectRoot !== undefined });
-      } else if (external) {
+      } else if (external !== undefined) {
         const cycle = target.pkg !== undefined && reaches(target.pkg, own, resolved);
         uses.push({
           ...base,
-          kind: "possible",
+          kind: external,
           edge: target.projectRoot !== undefined && !cycle,
         });
       }
@@ -335,14 +372,19 @@ function reaches(
   return false;
 }
 
-// Whether the member, or a path crate that it reaches through its own
-// dependencies and then through normal and build dependencies, has a
+// `possible` where the member, or a path crate that it reaches through its
+// own dependencies and then through normal and build dependencies, has a
 // registry or git dependency. Cargo builds no dev-dependency of a crate
-// other than the one it builds or tests. A path crate that no report
-// describes counts as having one: what it depends on is not known.
-function reachesExternal(member: CargoPackage, known: Map<string, CargoPackage>): boolean {
+// other than the one it builds or tests. Otherwise `assumed` where such a
+// path crate has no report, so that what it depends on is not known, and
+// `undefined` where the member reaches no registry or git crate.
+function reachesExternal(
+  member: CargoPackage,
+  known: Map<string, CargoPackage>,
+): "possible" | "assumed" | undefined {
   const visited = new Set<string>([folderOf(member)]);
   const queue = [member];
+  let unreported = false;
   while (queue.length > 0) {
     const pkg = queue.shift();
     for (const dependency of pkg.dependencies) {
@@ -350,19 +392,18 @@ function reachesExternal(member: CargoPackage, known: Map<string, CargoPackage>)
         continue;
       }
       if (typeof dependency.path !== "string") {
-        return true;
+        return "possible";
       }
       const next = known.get(realPath(dependency.path));
       if (next === undefined) {
-        return true;
-      }
-      if (!visited.has(folderOf(next))) {
+        unreported = true;
+      } else if (!visited.has(folderOf(next))) {
         visited.add(folderOf(next));
         queue.push(next);
       }
     }
   }
-  return false;
+  return unreported ? "assumed" : undefined;
 }
 
 // Every package that a report of the graph computation describes, by the
