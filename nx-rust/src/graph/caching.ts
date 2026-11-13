@@ -57,7 +57,9 @@ export interface CacheContext extends InputContext {
  * that these give, together with those about Cargo directories that Nx reads
  * ({@link unignoredDirectoryWarnings}), which it also prints, each once. A
  * path dependency whose report cargo refused adds its warning to the crates
- * that reach it; discovery has printed that one already.
+ * that reach it, and the warnings about a workspace's redirections
+ * ({@link CargoWorkspace.warnings}) go to every project of the workspace;
+ * discovery has printed those already.
  *
  * The redirected uses come from `redirectedUses`, which `createDependencies`
  * asks again with the projects of every plugin and entry. Here it knows only
@@ -119,6 +121,7 @@ export async function cacheContext(
   const withoutLockfileTask = await workspacesWithoutRootProject(discovery, nxJson);
   for (const workspace of discovery.workspaces) {
     const messages = [
+      ...workspace.warnings,
       artifactDirectoryWarning(workspace, artifactDirectories, sharers),
       buildTargetWarning(workspace, workspaceRoot),
       ...(directoryWarnings.get(workspace) ?? []),

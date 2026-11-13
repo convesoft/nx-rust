@@ -12,10 +12,10 @@
 > artifact directory outside the repository or shared by two workspaces, for
 > a target triple that Cargo's configuration chooses, and for Cargo's build or
 > artifact directory inside the repository where Nx does not ignore it. A task
-> prints again those that concern its crate or workspace, apart from the
-> warnings about redirections, `targetDefaults` and a newer Nx. The errors of a
-> task for a missing tool are not implemented yet (nxr-zqvnrh). The package is
-> not published to npm yet.
+> prints again the warning for a newer Nx and those that concern its crate or
+> workspace, apart from the warnings about `targetDefaults` (nxr-rxzgbq). The
+> `audit` and `deny` tasks fail before cargo runs when cargo-audit or
+> cargo-deny is missing. The package is not published to npm yet.
 
 ## What you need
 
