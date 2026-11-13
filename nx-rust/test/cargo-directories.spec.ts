@@ -1,5 +1,4 @@
 import type { ProjectConfiguration } from "@nx/devkit";
-import { spawnSync } from "node:child_process";
 import { cargoMetadataOf } from "../src/graph/collisions";
 import {
   Env,
@@ -9,7 +8,6 @@ import {
   HARNESS_TIMEOUT,
   inFixture,
   runNx,
-  testEnvironment,
   withoutColours,
 } from "./harness";
 
@@ -55,16 +53,6 @@ async function showProjects(...files: FileChanges[]): Promise<string> {
 /** How often `text` occurs in `output`. */
 function occurrences(output: string, text: string): number {
   return output.split(text).length - 1;
-}
-
-/** The host's target triple, as the toolchain of the tests reports it. */
-function hostTriple(): string {
-  const { stdout } = spawnSync("rustc", ["-vV"], { env: testEnvironment(), encoding: "utf8" });
-  const host = /^host: (.+)$/m.exec(stdout)?.[1];
-  if (host === undefined) {
-    throw new Error(`rustc -vV names no host:\n${stdout}`);
-  }
-  return host;
 }
 
 /** The warnings that a project records in its metadata, if any. */
@@ -220,16 +208,17 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
   );
 
   it(
-    "appears beside the warnings about a shared artifact directory and a configured triple, each once, when the graph is created and at the start of a task",
+    "appears beside the warnings about a shared artifact directory and a configured triple that the plugin cannot name, each once, when the graph is created and at the start of a task",
     () =>
       // The configuration at the root puts the artifacts of both workspaces
-      // into target/, and tools/ chooses a triple.
+      // into target/, and tools/ picks a triple whose folder the plugin
+      // cannot name.
       inFixture(
         "two-workspaces",
         {
           ...unignored,
           ".cargo/config.toml": '[build]\ntarget-dir = "target"\n',
-          "tools/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
+          "tools/.cargo/config.toml": '[build]\ntarget = "host-tuple"\n',
         },
         async (workspace) => {
           const sharedTarget = directoryWarning(
@@ -249,7 +238,9 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
                     ? "root shares target"
                     : line.startsWith("nx-rust: the Cargo workspace in tools shares")
                       ? "tools shares target"
-                      : line.startsWith("nx-rust: tools/.cargo/config.toml sets build.target")
+                      : line.startsWith(
+                            'nx-rust: build.target in tools/.cargo/config.toml picks the target triple "host-tuple"',
+                          )
                         ? "tools sets build.target"
                         : line,
               )

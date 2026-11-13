@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -45,6 +46,12 @@ function taskCalls(workspace: FixtureWorkspace): string[] {
 
 /** How Nx marks a task that it restored from the cache, with or without copying outputs. */
 const hit = String.raw`\[(local cache|existing outputs match the cache, left as is)\]`;
+
+/**
+ * A triple other than the host's that a test may build for where its
+ * target is installed; CI installs only the host's.
+ */
+const secondTriple = "x86_64-unknown-linux-musl";
 
 /** Every file below `folder` with its modification time, by path relative to it. */
 function modificationTimes(folder: string): Record<string, number> {
@@ -302,30 +309,49 @@ describe("a run with the plugin's executor", () => {
   );
 
   it(
-    "fails a cached build or doc whose triple CARGO_BUILD_TARGET chooses, and caches it with the targetTriple option",
+    "caches build and doc where CARGO_BUILD_TARGET in the nx command's environment picks the triple, and restores what the run wrote",
     async () => {
       const workspace = FixtureWorkspace.create("crate-shapes");
       try {
         const env = { CARGO_BUILD_TARGET: hostTriple() };
+        await expectRestored(workspace, env, [hostTriple()]);
+        expect(taskCalls(workspace)).toEqual(["build -p cli", "doc --no-deps --workspace"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails a cached build or doc whose triple only a dotenv file of the task picks before cargo runs, and caches it with the targetTriple option",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "rust/crates/cli/.env": `CARGO_BUILD_TARGET=${hostTriple()}\n`,
+        ".env.doc": `CARGO_BUILD_TARGET=${hostTriple()}\n`,
+      });
+      try {
         for (const task of ["cli:build", "rust:doc"]) {
-          const failed = await nx(workspace, ["run", task], env);
+          const failed = await nx(workspace, ["run", task]);
+          const target = task.split(":")[1];
           expect(failed.status).toBe(1);
           expect(failed.output).toContain(
-            `${task}: CARGO_BUILD_TARGET is "${hostTriple()}", and @convesoft/nx-rust cannot cache`,
+            `${task}: cargo builds this run of the cached ${target} for the triple ${hostTriple()}, as CARGO_BUILD_TARGET picks, but its outputs name the artifact directory itself, for no triple, as Cargo's configuration and the environment picked them when Nx created the graph.`,
           );
           expect(failed.output).toContain(`--targetTriple=${hostTriple()}`);
         }
         expect(taskCalls(workspace)).toEqual([]);
         // Other targets run as before.
-        expect((await nx(workspace, ["run", "cli:check"], env)).status).toBe(0);
+        expect((await nx(workspace, ["run", "cli:check"])).status).toBe(0);
 
         const option = ["run", "cli:build", `--targetTriple=${hostTriple()}`];
-        expect((await nx(workspace, option, env)).status).toBe(0);
+        expect((await nx(workspace, option)).status).toBe(0);
         const artifact = join(workspace.root, "rust/target", hostTriple(), "debug/cli");
+        const built = contents(artifact);
         rmSync(artifact);
-        const restored = await nx(workspace, option, env);
+        const restored = await nx(workspace, option);
         expect(restored.output).toMatch(new RegExp(hit));
-        expect(existsSync(artifact)).toBe(true);
+        expect(contents(artifact)).toEqual(built);
       } finally {
         workspace.remove();
       }
@@ -360,19 +386,33 @@ describe("a run with the plugin's executor", () => {
     HARNESS_TIMEOUT,
   );
 
-  it(
-    "runs build every time where Cargo's configuration chooses the triple",
-    async () => {
+  it.each([
+    ["a string", (triple: string) => `"${triple}"`],
+    ["a list that names it twice", (triple: string) => `["${triple}", "${triple}"]`],
+  ])(
+    "caches build and doc where Cargo's configuration picks the triple as %s, and restores what the run wrote",
+    async (_case, value) => {
       const workspace = FixtureWorkspace.create("crate-shapes", {
-        "rust/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
+        "rust/.cargo/config.toml": `[build]\ntarget = ${value(hostTriple())}\n`,
       });
       try {
-        expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
-        const second = await nx(workspace, ["run", "cli:build"]);
-        expect(second.status).toBe(0);
-        expect(second.output).not.toMatch(new RegExp(hit));
-        expect(second.output).toContain("sets build.target");
-        expect(taskCalls(workspace)).toEqual(["build -p cli", "build -p cli"]);
+        await expectRestored(workspace, {}, [hostTriple()]);
+        expect(taskCalls(workspace)).toEqual(["build -p cli", "doc --no-deps --workspace"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  (secondTripleInstalled() ? it : it.skip)(
+    "caches build and doc in the folder of each triple of a list in Cargo's configuration, and restores what the run wrote",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "rust/.cargo/config.toml": `[build]\ntarget = ["${hostTriple()}", "${secondTriple}"]\n`,
+      });
+      try {
+        await expectRestored(workspace, {}, [hostTriple(), secondTriple]);
       } finally {
         workspace.remove();
       }
@@ -382,7 +422,7 @@ describe("a run with the plugin's executor", () => {
 
   it.each([
     [
-      "only a configuration that the run does not select names it",
+      "only a configuration that the run does not select names a triple",
       (triple: string) =>
         `\n[package.metadata.nx.targets.build.configurations.explicit]\ntargetTriple = "${triple}"\n`,
     ],
@@ -392,7 +432,7 @@ describe("a run with the plugin's executor", () => {
         `\n[package.metadata.nx.targets.build.options]\ntargetTriple = "${triple}"\n[package.metadata.nx.targets.build.configurations.plain]\ntargetTriple = ""\n`,
     ],
   ])(
-    "runs build every time, and leaves no artifact missing, where Cargo's configuration chooses the triple and %s",
+    "caches build where Cargo's configuration picks the triple and %s, and restores the artifact",
     async (_case, table) => {
       const workspace = FixtureWorkspace.create("crate-shapes", {
         "rust/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
@@ -401,13 +441,14 @@ describe("a run with the plugin's executor", () => {
       try {
         expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
         const artifact = join(workspace.root, "rust/target", hostTriple(), "debug/cli");
+        const built = contents(artifact);
         rmSync(artifact);
         const second = await nx(workspace, ["run", "cli:build"]);
 
         expect(second.status).toBe(0);
-        expect(second.output).not.toMatch(new RegExp(hit));
-        expect(existsSync(artifact)).toBe(true);
-        expect(taskCalls(workspace)).toHaveLength(2);
+        expect(second.output).toMatch(new RegExp(hit));
+        expect(contents(artifact)).toEqual(built);
+        expect(taskCalls(workspace)).toHaveLength(1);
       } finally {
         workspace.remove();
       }
@@ -416,10 +457,32 @@ describe("a run with the plugin's executor", () => {
   );
 
   it(
-    "caches build with the triple in the target's options where Cargo's configuration chooses it, restores the artifact, and fails a run that clears the triple before cargo runs",
+    "runs build every time where Cargo's configuration picks a triple whose folder the plugin cannot name",
     async () => {
       const workspace = FixtureWorkspace.create("crate-shapes", {
-        "rust/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
+        "rust/.cargo/config.toml": '[build]\ntarget = "host-tuple"\n',
+      });
+      try {
+        expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
+        const second = await nx(workspace, ["run", "cli:build"]);
+        expect(second.status).toBe(0);
+        expect(second.output).not.toMatch(new RegExp(hit));
+        expect(second.output).toContain(
+          'build.target in rust/.cargo/config.toml picks the target triple "host-tuple"',
+        );
+        expect(taskCalls(workspace)).toEqual(["build -p cli", "build -p cli"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "caches build with the triple in the target's options where Cargo's configuration picks one that the plugin cannot name, restores the artifact, and fails a run that clears the triple before cargo runs",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "rust/.cargo/config.toml": '[build]\ntarget = "host-tuple"\n',
         "rust/crates/cli/Cargo.toml": (manifest) =>
           `${manifest}\n[package.metadata.nx.targets.build.options]\ntargetTriple = "${hostTriple()}"\n`,
         // A configuration that the plugin cannot see when it creates the graph.
@@ -430,18 +493,19 @@ describe("a run with the plugin's executor", () => {
       try {
         expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
         const artifact = join(workspace.root, "rust/target", hostTriple(), "debug/cli");
+        const built = contents(artifact);
         rmSync(artifact);
         const restored = await nx(workspace, ["run", "cli:build"]);
 
         expect(restored.status).toBe(0);
         expect(restored.output).toMatch(new RegExp(hit));
-        expect(existsSync(artifact)).toBe(true);
+        expect(contents(artifact)).toEqual(built);
 
         const cleared = await nx(workspace, ["run", "cli:build", "--configuration=plain"]);
 
         expect(cleared.status).toBe(1);
         expect(cleared.output).toContain(
-          "cli:build: build.target in rust/.cargo/config.toml chooses the target triple, and this run of the cached build names none in the targetTriple option",
+          `cli:build: build.target in rust/.cargo/config.toml picks the target triple "host-tuple", whose folder @convesoft/nx-rust cannot name: cargo replaces it with the host's triple, and this run of the cached build names no triple in the targetTriple option.`,
         );
         expect(taskCalls(workspace)).toHaveLength(1);
       } finally {
@@ -547,6 +611,70 @@ describe("a run with the plugin's executor", () => {
 });
 
 /** The triple that the installed toolchain builds for by default. */
+function secondTripleInstalled(): boolean {
+  const { stdout } = spawnSync("rustup", ["target", "list", "--installed"], {
+    env: testEnvironment(),
+    encoding: "utf8",
+  });
+  return (
+    hostTriple() === "x86_64-unknown-linux-gnu" && (stdout ?? "").split("\n").includes(secondTriple)
+  );
+}
+
+/** Every file below `path`, or the file itself, with its content, by path relative to it. */
+function contents(path: string): Record<string, string> {
+  if (!existsSync(path)) {
+    return {};
+  }
+  if (statSync(path).isFile()) {
+    return { ".": readFileSync(path).toString("base64") };
+  }
+  const files: Record<string, string> = {};
+  for (const entry of readdirSync(path, { recursive: true, withFileTypes: true })) {
+    if (entry.isFile()) {
+      const file = join(entry.parentPath, entry.name);
+      files[relative(path, file)] = readFileSync(file).toString("base64");
+    }
+  }
+  return files;
+}
+
+/**
+ * Runs `cli:build` and `rust:doc` in the folders of `triples`, deletes the
+ * binary and the doc folders, runs them again, and expects Nx to restore
+ * exactly what the first run wrote there, without cargo.
+ */
+async function expectRestored(
+  workspace: FixtureWorkspace,
+  env: Record<string, string>,
+  triples: string[],
+): Promise<void> {
+  const tasks = ["run-many", "-t", "build", "doc", "-p", "cli", "rust"];
+  const first = await nx(workspace, tasks, env);
+  expect({ status: first.status, output: first.output }).toEqual({
+    status: 0,
+    output: expect.any(String),
+  });
+  const paths = triples.flatMap((triple) => [
+    join(workspace.root, "rust/target", triple, "debug/cli"),
+    join(workspace.root, "rust/target", triple, "doc"),
+  ]);
+  const written = paths.map((path) => ({ path, files: contents(path) }));
+  for (const { path, files } of written) {
+    expect({ path, files: Object.keys(files).length > 0 }).toEqual({ path, files: true });
+    rmSync(path, { recursive: true });
+  }
+  const calls = taskCalls(workspace).length;
+  const second = await nx(workspace, tasks, env);
+
+  expect(second.status).toBe(0);
+  for (const task of ["cli:build", "rust:doc"]) {
+    expect(second.output).toMatch(new RegExp(`nx run ${task}\\s+${hit}`));
+  }
+  expect(taskCalls(workspace)).toHaveLength(calls);
+  expect(paths.map((path) => ({ path, files: contents(path) }))).toEqual(written);
+}
+
 function hostTriple(): string {
   const { stdout } = spawnSync("rustc", ["-vV"], { env: testEnvironment(), encoding: "utf8" });
   const host = /^host: (.+)$/m.exec(stdout)?.[1];

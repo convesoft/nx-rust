@@ -54,11 +54,12 @@ const web: FileChanges = {
 };
 
 /**
- * Cargo's configuration of the workspace chooses the triple, so that the
- * plugin leaves `build` and `doc` uncached (`DES-OUTPUTS`).
+ * Cargo's configuration of the workspace picks a triple whose folder the
+ * plugin cannot name, so that it leaves `build` and `doc` uncached
+ * (`DES-OUTPUTS`).
  */
 const tripleFromConfiguration: FileChanges = {
-  "rust/.cargo/config.toml": '[build]\ntarget = "x86_64-unknown-linux-gnu"\n',
+  "rust/.cargo/config.toml": '[build]\ntarget = "host-tuple"\n',
 };
 
 /** Sets `targetDefaults` in a fixture copy's `nx.json`. */
@@ -137,7 +138,7 @@ describe("a target default that adds dependencies on other projects' tasks", () 
 
 describe("a target default that fails graph creation", () => {
   it(
-    "turns on caching for build, keyed by the target's name, where the plugin leaves build uncached because Cargo's configuration chooses the triple",
+    "turns on caching for build, keyed by the target's name, where the plugin leaves build uncached because Cargo's configuration picks a triple that it cannot name",
     async () => {
       const output = await failed({ build: { cache: true } }, tripleFromConfiguration);
 

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { CargoMetadata, CargoPackage } from "../cargo/metadata";
 import { readRedirections, Redirection } from "../cargo/redirections";
+import { PickedTriples, pickedTriples } from "../cargo/target-triples";
 import { CargoError } from "../cargo/run-cargo";
 import { UnsupportedCargoError } from "../compatibility/cargo-version";
 import { ComputationReports } from "./computation-reports";
@@ -33,10 +34,11 @@ export interface CargoWorkspace {
    */
   redirections: Redirection[];
   /**
-   * The configuration files that cargo reads for the workspace and that set
-   * `build.target` ({@link readRedirections}).
+   * The target triples that cargo builds for in the workspace root when a
+   * command names none, as Cargo's configuration and the `CARGO_BUILD_TARGET`
+   * of the graph's environment pick them ({@link pickedTriples}).
    */
-  buildTargetFiles: string[];
+  triples: PickedTriples;
   /**
    * The configuration files that `include` adds for the workspace
    * ({@link readRedirections}).
@@ -154,7 +156,7 @@ export async function discoverWorkspaces(
         .filter((pkg) => handed.has(repositoryPath(workspaceRoot, pkg.manifest_path)))
         .sort((a, b) => compare(a.manifest_path, b.manifest_path)),
       redirections: found.redirections,
-      buildTargetFiles: found.buildTargetFiles,
+      triples: pickedTriples(report.workspace_root, process.env),
       configIncludes: found.includedFiles,
       warnings: [...new Set(found.warnings)],
     });
