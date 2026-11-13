@@ -14,8 +14,8 @@ describes it. Repository-wide choices go into the plugin's entry in `nx.json`.
 | The plugin's entry in `nx.json`                              | The repository                 | Target names and locked mode in `options`, excluded paths in `exclude` |
 
 A value for a crate wins over the workspace default, which wins over the
-plugin options. Tags, implicit dependencies and added cache inputs are the
-exception: they add up, so a crate has its workspace's and its own. Which
+plugin options. Tags, `implicitDependencies`, `envInputs` and `runtimeInputs`
+are the exceptions: they add up, so a crate has its workspace's and its own. Which
 setting goes where is listed under [All settings](#all-settings).
 
 Nx applies some files after the plugin, and they win over all of these:
@@ -280,7 +280,7 @@ Overrides are read from the `metadata` values in the `cargo metadata` report ([[
 
 In the `project` table, `name` replaces the default name ([[DES-PROJECT-GRAPH]]), `tags` are added to the workspace's tags, and `targets.<name>` overrides a target of the workspace project or adds one. The workspace table's own `targets.<name>` do not reach the workspace project.
 
-For a setting that both tables can hold, the crate's value wins over the workspace default; tags, implicit dependencies and added inputs add up. Key names use the spelling of the matching Nx option, so one name works in `Cargo.toml`, in `nx.json` and on the command line. Where each setting can be set, the plugin options, the merge rules and the handling of unknown keys are in [[DES-PLUGIN-OPTIONS]].
+For a setting that both tables can hold, the crate's value wins over the workspace default; only tags, `implicitDependencies`, `envInputs` and `runtimeInputs` add up. Key names use the spelling of the matching Nx option, so one name works in `Cargo.toml`, in `nx.json` and on the command line. Where each setting can be set, the plugin options, the merge rules and the handling of unknown keys are in [[DES-PLUGIN-OPTIONS]].
 
 The plugin puts these values on the project it returns. Where the project's folder also is a JS project, Nx applies `package.json` and `project.json` after them, with the effects [[REQ-METADATA-OVERRIDES]] states ([[EVD-NX-PROJECT-MERGE]]).
 :::
