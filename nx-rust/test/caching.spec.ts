@@ -23,7 +23,12 @@ const pluginVersion: string = JSON.parse(
 ).version;
 
 const cached = ["build", "check", "lint", "test", "fmt-check"];
-const uncached = ["fmt", "bench", "run", "audit", "deny", "update"];
+const uncached = ["fmt", "bench", "run", "lockfile", "audit", "deny", "update"];
+
+/** The dependency of a cached target on the lockfile task of the workspace in `root`. */
+function lockfileDependency(root: string) {
+  return { projects: [`directory:${root}`], target: "lockfile" };
+}
 
 /** The inputs of a target that are files or named inputs, written as strings. */
 function fileInputs(target: TargetConfiguration): string[] {
@@ -123,19 +128,32 @@ describe("caching", () => {
         ]);
       }
 
-      const lockfile = { fileset: "{workspaceRoot}/rust/Cargo.lock", includeIgnored: true };
+      // The crate's digest from the workspace's lockfile task, on which the
+      // target depends, and no Cargo.lock as a file (DES-LOCKFILE-HASHING).
       for (const name of ["build", "check", "lint", "test"]) {
-        expect(inputsOf(api.targets[name], "fileset")).toEqual([lockfile]);
+        expect(inputsOf(api.targets[name], "fileset")).toEqual([]);
+        expect(inputsOf(api.targets[name], "dependentTasksOutputFiles")).toEqual([
+          { dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/rust/api.digest" },
+        ]);
+        expect(api.targets[name].dependsOn).toEqual([lockfileDependency("rust")]);
+        expect(api.targets[name].metadata?.cargo.digests).toEqual([
+          { name: "api", version: "0.1.0" },
+        ]);
       }
       for (const name of ["fmt-check", "fmt"]) {
         expect(inputsOf(api.targets[name], "fileset")).toEqual([]);
+        expect(inputsOf(api.targets[name], "dependentTasksOutputFiles")).toEqual([]);
+        expect(api.targets[name].dependsOn).toBeUndefined();
+        expect(api.targets[name].metadata?.cargo.digests).toBeUndefined();
       }
 
       expect(envInputs(api.targets.build)).toEqual([
+        "NX_RUST_RUN_ID",
         ...environmentVariables,
         "CARGO_BUILD_WARNINGS",
       ]);
       expect(envInputs(api.targets.lint)).toEqual([
+        "NX_RUST_RUN_ID",
         ...environmentVariables,
         "CARGO_BUILD_WARNINGS",
         "CLIPPY_CONF_DIR",
@@ -158,7 +176,7 @@ describe("caching", () => {
   );
 
   it(
-    "gives bench and run the inputs of the targets that compile, so that nx affected selects them",
+    "gives bench and run the inputs of the targets that compile, so that nx affected selects them, with Cargo.lock in place of the digest",
     async () => {
       const graph = await loadFixtureGraph("crate-shapes");
 
@@ -167,10 +185,83 @@ describe("caching", () => {
         ["cli", "run"],
       ]) {
         const target = graph.projects[project].targets[name];
+        const digest = {
+          dependentTasksOutputFiles: `.nx/workspace-data/nx-rust/lockfile/rust/${project}.digest`,
+        };
         expect(target.cache).toBe(false);
-        expect(target.inputs).toEqual(graph.projects[project].targets.build.inputs);
+        expect(target.dependsOn).toBeUndefined();
+        expect(target.inputs).toEqual(
+          graph.projects[project].targets.build.inputs?.flatMap((input) =>
+            JSON.stringify(input) === JSON.stringify(digest)
+              ? [{ fileset: "{workspaceRoot}/rust/Cargo.lock", includeIgnored: true }]
+              : JSON.stringify(input) === JSON.stringify({ env: "NX_RUST_RUN_ID" })
+                ? []
+                : [input],
+          ),
+        );
         expect(envInputs(target)).toContain("CARGO_BUILD_WARNINGS");
       }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "gives the lockfile task its inputs and its digest folder as output, and doc every member's digest",
+    async () => {
+      const graph = await loadFixtureGraph("cross-workspace-path");
+      const { backend, shared } = graph.projects;
+
+      // server, in backend, depends by path on model, a member of shared.
+      expect(backend.targets.lockfile).toMatchObject({
+        executor: "@convesoft/nx-rust:lockfile",
+        cache: false,
+        inputs: [
+          { fileset: "{workspaceRoot}/backend/Cargo.lock", includeIgnored: true },
+          "{workspaceRoot}/backend/Cargo.toml",
+          "{workspaceRoot}/backend/crates/server/Cargo.toml",
+          "{workspaceRoot}/shared/crates/model/Cargo.toml",
+          ...["backend", ""].flatMap((folder) =>
+            ["rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml", ".cargo/config"].map(
+              (file) => `{workspaceRoot}/${folder === "" ? "" : `${folder}/`}${file}`,
+            ),
+          ),
+        ],
+        outputs: ["{workspaceRoot}/.nx/workspace-data/nx-rust/lockfile/backend"],
+        metadata: { cargo: { target: "lockfile", members: [{ name: "server", version: "0.1.0" }] } },
+      });
+      expect(backend.targets.lockfile.dependsOn).toBeUndefined();
+      expect(shared.targets.doc).toMatchObject({
+        dependsOn: [lockfileDependency("shared")],
+        metadata: { cargo: { digests: [{ name: "model", version: "0.1.0" }] } },
+      });
+      expect(inputsOf(shared.targets.doc, "dependentTasksOutputFiles")).toEqual([
+        { dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/shared/*.digest" },
+      ]);
+      // model's own targets read the digest of its home workspace.
+      expect(inputsOf(graph.projects.model.targets.test, "dependentTasksOutputFiles")).toEqual([
+        { dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/shared/model.digest" },
+      ]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "names the digest folder of a workspace at the repository root and of one nested below it in one segment each",
+    async () => {
+      const graph = await loadFixtureGraph("two-workspaces");
+
+      expect(graph.projects["cargo-workspace"].targets.lockfile.outputs).toEqual([
+        "{workspaceRoot}/.nx/workspace-data/nx-rust/lockfile/%2E",
+      ]);
+      expect(graph.projects.app.targets.build.dependsOn).toEqual([lockfileDependency(".")]);
+      expect(graph.projects.tools.targets.lockfile.outputs).toEqual([
+        "{workspaceRoot}/.nx/workspace-data/nx-rust/lockfile/tools",
+      ]);
+      // The root crate of tools depends on its own project's lockfile task.
+      expect(graph.projects.tools.targets.test.dependsOn).toEqual([lockfileDependency("tools")]);
+      expect(graph.projects.scaffold.targets.test.dependsOn).toEqual([
+        lockfileDependency("tools"),
+      ]);
     },
     HARNESS_TIMEOUT,
   );
@@ -183,9 +274,12 @@ describe("caching", () => {
       expect(graph.projects.xtask.namedInputs).toEqual({
         default: ["{projectRoot}/**/*", "!{projectRoot}/Cargo.lock"],
       });
-      // It reaches the targets of its own workspace as a file of their own.
-      expect(inputsOf(graph.projects.xtask.targets.test, "fileset")).toEqual([
-        { fileset: "{workspaceRoot}/tools/xtask/Cargo.lock", includeIgnored: true },
+      // It reaches the crate's targets only through the crate's digest.
+      expect(inputsOf(graph.projects.xtask.targets.test, "fileset")).toEqual([]);
+      expect(inputsOf(graph.projects.xtask.targets.test, "dependentTasksOutputFiles")).toEqual([
+        {
+          dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/tools%2Fxtask/xtask.digest",
+        },
       ]);
       // The root manifest is among the crate's files.
       expect(fileInputs(graph.projects.xtask.targets.test)).not.toContain(
@@ -363,8 +457,11 @@ describe("caching", () => {
         expect(graph.projects.rust.targets.doc.outputs).toEqual([
           "{workspaceRoot}/rust/target/{options.targetTriple ?? .}/doc",
         ]);
+        // The lockfile task's output is its digest folder, which no
+        // build writes (caching.spec.ts checks it above).
         const others = everyTarget(graph).filter(
-          ([task]) => !task.endsWith(":build") && !task.endsWith(":doc"),
+          ([task]) =>
+            !task.endsWith(":build") && !task.endsWith(":doc") && !task.endsWith(":lockfile"),
         );
         expect(others.length).toBeGreaterThan(0);
         for (const [task, target] of others) {
@@ -385,6 +482,9 @@ describe("caching", () => {
         });
 
         for (const [task, target] of everyTarget(graph)) {
+          if (task.endsWith(":lockfile")) {
+            continue;
+          }
           for (const output of target.outputs ?? []) {
             expect({ task, output }).toEqual({
               task,
@@ -580,9 +680,9 @@ describe("caching", () => {
             version: undefined,
           });
         }
-        // audit and update keep the inputs of DES-WORKSPACE-TARGETS.
+        // lockfile, audit and update keep the inputs of DES-WORKSPACE-TARGETS.
         const withInputs = everyTarget(graph).filter(
-          ([task]) => task !== "rust:audit" && task !== "rust:update",
+          ([task]) => !["rust:lockfile", "rust:audit", "rust:update"].includes(task),
         );
         for (const [task, target] of withInputs) {
           expect({ task, plugin: inputsOf(target, "externalDependencies") }).toEqual({

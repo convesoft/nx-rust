@@ -20,14 +20,19 @@ import {
 // their caching, inputs and outputs.
 
 const crateTargets = ["build", "check", "lint", "test", "fmt-check", "fmt"];
-const workspaceTargets = ["doc", "audit", "update"];
+const workspaceTargets = ["doc", "lockfile", "audit", "update"];
 /** The workspace project's targets where cargo-deny is configured, in their order. */
-const withDeny = ["doc", "audit", "deny", "update"];
+const withDeny = ["doc", "lockfile", "audit", "deny", "update"];
 const allTargets = [...crateTargets, "bench", "run", ...withDeny];
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 const runExecutor = "@convesoft/nx-rust:run";
+const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 /** The targets that DES-TARGETS caches. */
 const cachedTargets = ["build", "check", "lint", "test", "fmt-check", "doc"];
+/** The dependency of a cached target on the lockfile task of the workspace in `root`. */
+function lockfileTask(root: string, target = "lockfile") {
+  return { projects: [`directory:${root}`], target };
+}
 /** The option that carries the plugin's version where no npm node does (DES-PLUGIN-OPTIONS). */
 const pluginVersion = {
   pluginVersion: JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")).version,
@@ -177,6 +182,7 @@ describe("inferred targets", () => {
         ["server", "run", { executor: runExecutor, options: {}, continuous: false }],
         ["rust", "doc", { executor: cargoExecutor, options: { noDeps: true } }],
         ["rust", "audit", { executor: cargoExecutor, options: {} }],
+        ["rust", "lockfile", { executor: lockfileExecutor, options: {} }],
         ["rust", "deny", { executor: cargoExecutor, options: {} }],
         ["rust", "update", { executor: cargoExecutor, options: {} }],
       ];
@@ -196,7 +202,15 @@ describe("inferred targets", () => {
           },
         });
         expect(configuration.continuous ?? false).toBe(false);
-        expect(configuration.dependsOn).toBeUndefined();
+        // The one task dependency: that of the cached targets other than
+        // fmt-check on the workspace's lockfile task (REQ-NO-RUST-TASK-DEPS).
+        expect({ target: `${project}:${name}`, dependsOn: configuration.dependsOn }).toEqual({
+          target: `${project}:${name}`,
+          dependsOn:
+            cachedTargets.includes(name) && name !== "fmt-check"
+              ? [lockfileTask("rust")]
+              : undefined,
+        });
       }
     },
     HARNESS_TIMEOUT,
@@ -211,8 +225,10 @@ describe("inferred targets", () => {
 
       for (const project of Object.values(graph.projects)) {
         for (const [name, target] of Object.entries(project.targets ?? {})) {
-          // An uncached target also carries why (caching.spec.ts).
-          const { uncached, ...cargo } = target.metadata?.cargo ?? {};
+          // An uncached target also carries why (caching.spec.ts), and the
+          // targets around the lockfile task the members of its digests.
+          const { uncached, digests: _digests, members: _members, ...cargo } =
+            target.metadata?.cargo ?? {};
           expect({ name, cargo }).toEqual({ name, cargo: { target: name, locked: true } });
           expect({ name, explained: typeof uncached === "string" }).toEqual({
             name,
@@ -230,6 +246,17 @@ describe("inferred targets", () => {
       const graph = await loadFixtureGraph("crate-shapes", { files: { "rust/deny.toml": "" } });
       const { targets } = graph.projects.rust;
 
+      // The lockfile task's inputs only decide what nx affected selects
+      // (caching.spec.ts checks them in another fixture).
+      expect(targets.lockfile.inputs?.slice(0, 7)).toEqual([
+        { fileset: "{workspaceRoot}/rust/Cargo.lock", includeIgnored: true },
+        "{workspaceRoot}/rust/Cargo.toml",
+        "{workspaceRoot}/rust/crates/cli/Cargo.toml",
+        "{workspaceRoot}/rust/crates/core/Cargo.toml",
+        "{workspaceRoot}/rust/crates/internal/Cargo.toml",
+        "{workspaceRoot}/rust/crates/perf/Cargo.toml",
+        "{workspaceRoot}/rust/crates/server/Cargo.toml",
+      ]);
       expect(targets.audit.inputs).toEqual([
         "{projectRoot}/Cargo.lock",
         "{projectRoot}/Cargo.toml",
@@ -377,19 +404,74 @@ describe("nx affected", () => {
 
 describe("task dependencies", () => {
   it(
-    "are none between Rust tasks, in a workspace whose crates depend on each other",
+    "are none between Rust tasks but those on the workspace's lockfile task, in a workspace whose crates depend on each other",
     async () => {
       const workspace = FixtureWorkspace.create("crate-shapes");
       try {
         const graph = await taskGraph(workspace, ["run-many", "-t", "build", "test", "lint"]);
 
         const crates = ["cli", "core-lib", "internal", "perf", "server"];
-        expect(graph.tasks).toEqual(
-          crates.flatMap((crate) => [`${crate}:build`, `${crate}:lint`, `${crate}:test`]),
-        );
-        expect(graph.dependencies).toEqual(
-          Object.fromEntries(graph.tasks.map((task) => [task, []])),
-        );
+        const crateTasks = crates.flatMap((crate) => [
+          `${crate}:build`,
+          `${crate}:lint`,
+          `${crate}:test`,
+        ]);
+        expect(graph.tasks).toEqual([...crateTasks, "rust:lockfile"].sort());
+        expect(graph.dependencies).toEqual({
+          ...Object.fromEntries(crateTasks.map((task) => [task, ["rust:lockfile"]])),
+          "rust:lockfile": [],
+        });
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "lead to the lockfile task of the root crate's project in a workspace whose root manifest is a package, and to that of each workspace",
+    async () => {
+      const workspace = FixtureWorkspace.create("two-workspaces");
+      try {
+        const graph = await taskGraph(workspace, ["run-many", "-t", "build", "test", "fmt-check"]);
+
+        // tools is the crate of the root manifest of tools/, with the member scaffold.
+        expect(graph.dependencies).toEqual({
+          "app:build": ["cargo-workspace:lockfile"],
+          "app:test": ["cargo-workspace:lockfile"],
+          "app:fmt-check": [],
+          "util:build": ["cargo-workspace:lockfile"],
+          "util:test": ["cargo-workspace:lockfile"],
+          "util:fmt-check": [],
+          "cargo-workspace:lockfile": [],
+          "tools:build": ["tools:lockfile"],
+          "tools:test": ["tools:lockfile"],
+          "tools:fmt-check": [],
+          "scaffold:build": ["tools:lockfile"],
+          "scaffold:test": ["tools:lockfile"],
+          "scaffold:fmt-check": [],
+          "tools:lockfile": [],
+        });
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "reach the lockfile task of a workspace project that a project.json renames",
+    async () => {
+      const workspace = FixtureWorkspace.create("subfolder-workspace", {
+        "rust/project.json": JSON.stringify({ name: "rust-workspace" }),
+      });
+      try {
+        const graph = await taskGraph(workspace, ["run", "api:test"]);
+
+        expect(graph.dependencies).toEqual({
+          "api:test": ["rust-workspace:lockfile"],
+          "rust-workspace:lockfile": [],
+        });
       } finally {
         workspace.remove();
       }
@@ -417,8 +499,13 @@ describe("task dependencies", () => {
         try {
           const graph = await taskGraph(workspace, ["run", "web:build"]);
 
-          expect(graph.tasks).toEqual(["api:build", "web:build"]);
-          expect(graph.dependencies).toEqual({ "api:build": [], "web:build": ["api:build"] });
+          // api's build waits only for its workspace's lockfile task.
+          expect(graph.tasks).toEqual(["api:build", "rust:lockfile", "web:build"]);
+          expect(graph.dependencies).toEqual({
+            "api:build": ["rust:lockfile"],
+            "rust:lockfile": [],
+            "web:build": ["api:build"],
+          });
         } finally {
           workspace.remove();
         }
@@ -449,6 +536,7 @@ describe("task dependencies", () => {
             "api:lint",
             "codegen:lint",
             "model:lint",
+            "rust:lockfile",
             "testkit:lint",
             "web:lint",
           ]);
@@ -480,11 +568,16 @@ describe("targetNames", () => {
         rust: prefixed(withDeny),
       });
       // The executor still learns which target it runs.
-      expect(graph.projects.cli.targets["cargo-lint"].metadata.cargo).toEqual({
+      expect(graph.projects.cli.targets["cargo-lint"].metadata.cargo).toMatchObject({
         target: "lint",
         locked: false,
       });
       expect(graph.projects.cli.targets["cargo-run"].executor).toBe(runExecutor);
+      // The crates depend on the lockfile task under its new name.
+      expect(graph.projects.cli.targets["cargo-build"].dependsOn).toEqual([
+        lockfileTask("rust", "cargo-lockfile"),
+      ]);
+      expect(graph.projects.rust.targets["cargo-lockfile"].executor).toBe(lockfileExecutor);
     },
     HARNESS_TIMEOUT,
   );
@@ -519,11 +612,11 @@ describe("targetNames", () => {
         files: { "nx.json": pluginOptions({ targetNames: { lint: "check", check: "lint" } }) },
       });
 
-      expect(graph.projects.cli.targets.lint.metadata.cargo).toEqual({
+      expect(graph.projects.cli.targets.lint.metadata.cargo).toMatchObject({
         target: "check",
         locked: false,
       });
-      expect(graph.projects.cli.targets.check.metadata.cargo).toEqual({
+      expect(graph.projects.cli.targets.check.metadata.cargo).toMatchObject({
         target: "lint",
         locked: false,
       });
@@ -569,6 +662,20 @@ describe("targetNames", () => {
   );
 
   it(
+    "fails graph creation when the lockfile task would take the name of another target of the workspace project",
+    async () => {
+      const message = await graphError("crate-shapes", {
+        "nx.json": pluginOptions({ targetNames: { lockfile: "update" } }),
+      });
+
+      expect(message).toContain(
+        '- the project "rust" (rust/Cargo.toml): `lockfile` and `update` would both be called "update"',
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "fails graph creation when three targets get one name",
     async () => {
       const message = await graphError("crate-shapes", {
@@ -609,7 +716,7 @@ describe("targetNames", () => {
       });
 
       expect(message).toContain(
-        '"targetNames" in the options of the @convesoft/nx-rust entry in nx.json names "clippy", which is not the default name of an inferred target. The targets that can be renamed are "build", "check", "lint", "test", "fmt-check", "fmt", "bench", "run", "doc", "audit", "deny" and "update".',
+        '"targetNames" in the options of the @convesoft/nx-rust entry in nx.json names "clippy", which is not the default name of an inferred target. The targets that can be renamed are "build", "check", "lint", "test", "fmt-check", "fmt", "bench", "run", "doc", "lockfile", "audit", "deny" and "update".',
       );
     },
     HARNESS_TIMEOUT,
