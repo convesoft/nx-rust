@@ -8,7 +8,7 @@ import {
   type NxJsonConfiguration,
 } from "@nx/devkit";
 import { targetDefaultsGuide } from "../../graph/target-defaults";
-import { cargoExecutor, runExecutor } from "../../graph/targets";
+import { cargoExecutor, lockfileExecutor, runExecutor } from "../../graph/targets";
 import {
   checkGraphCreation,
   GraphCheckError,
@@ -25,7 +25,7 @@ export type InitGeneratorSchema = Record<string, never>;
  * The executors of the plugin's targets, each of which gets an empty
  * `targetDefaults` entry where `nx.json` has none for it.
  */
-export const shieldedExecutors = [cargoExecutor, runExecutor];
+export const shieldedExecutors = [cargoExecutor, runExecutor, lockfileExecutor];
 
 /**
  * The generator that `nx add @convesoft/nx-rust` runs once Nx has installed
@@ -105,11 +105,18 @@ export async function initGenerator(tree: Tree, _options: InitGeneratorSchema): 
 
 /** What `init` says about the `targetDefaults` entries it added. */
 export function addedEntriesMessage(executors: string[]): string {
-  const names = executors.map((executor) => `"${executor}": {}`).join(" and ");
+  const names = list(executors.map((executor) => `"${executor}": {}`));
   return [
     `Added ${names} to targetDefaults in nx.json, keyed by the executors of the targets that nx-rust infers.`,
     `Nx chooses an entry keyed by a target's executor before one keyed by the target's name or a glob, so entries such as "build" or "test" apply to your other projects and not to Rust targets, whose inputs, outputs, caching and dependencies nx-rust declares itself (${targetDefaultsGuide}).`,
   ].join("\n");
+}
+
+// "a", "a and b", "a, b and c"
+function list(items: readonly string[]): string {
+  return items.length <= 1
+    ? items.join("")
+    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 // Writes `changes` into nx.json, leaving its other keys as they are. Where

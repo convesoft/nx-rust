@@ -1,5 +1,7 @@
 import type { NxJsonConfiguration, TargetConfiguration } from "@nx/devkit";
-import { dirname, isAbsolute, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import type { PackageVersion } from "../cargo/lockfile";
+import type { CargoPackage } from "../cargo/metadata";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import {
   defaultInputSettings,
@@ -7,14 +9,21 @@ import {
   InputContext,
   InputSettings,
   InputSubject,
+  lockfileInputs,
   repositoryDefaultInputs,
   targetInputs,
 } from "./inputs";
+import { digestFolder, lockfileDependency } from "./lockfile-task";
 import { ArtifactDirectory, targetOutputs, uncachedByDesign, uncachedReason } from "./outputs";
 import { crateInputs, findCrateFolders, unseenPathDependencyWarning } from "./path-dependencies";
 import { pluginInput } from "./plugin-package";
 import { redirectedUses } from "./redirected-uses";
-import { InferredTargetName, TargetCargoMetadata, targetCargoMetadataKey } from "./targets";
+import {
+  cachedTargets,
+  InferredTargetName,
+  TargetCargoMetadata,
+  targetCargoMetadataKey,
+} from "./targets";
 
 /** What the caching of every project of one graph computation shares. */
 export interface CacheContext extends InputContext {
@@ -96,6 +105,7 @@ export async function cacheContext(
     repositoryDefault: repositoryDefaultInputs(nxJson?.namedInputs),
     pathDependencyInputs,
     redirectedInputs,
+    pathPackageManifests: pathPackageManifests(discovery),
     artifactDirectories,
     warnings,
   };
@@ -115,6 +125,8 @@ export interface CacheOptions {
    * whether every run of the target names a triple.
    */
   targetTables?: (target: InferredTargetName) => readonly TargetConfiguration[];
+  /** The name that `targetNames` gives the lockfile task, on which cached targets depend. */
+  lockfileTarget?: string;
 }
 
 /**
@@ -126,8 +138,16 @@ export interface CacheOptions {
  * inferred target gets `cache` and `outputs`, and an uncached one the
  * reason in `metadata.cargo.uncached`, from which the executor fails a task
  * that the configuration caches anyway. The targets that `DES-INPUTS`
- * covers get their inputs, and `audit`, `deny` and `update` keep the inputs
- * that `inferTargets` gave them.
+ * covers get their inputs, the lockfile task those of
+ * `DES-WORKSPACE-TARGETS` and its digest folder as its output, and `audit`,
+ * `deny` and `update` keep the inputs that `inferTargets` gave them.
+ *
+ * A target that stays cached, other than `fmt-check`, depends on the
+ * lockfile task of its workspace, the project at the workspace's root
+ * folder, and hashes the digests it writes; its metadata names the members
+ * whose digests those are, for the executor's check after cargo's call
+ * (`DES-LOCKFILE-HASHING`). It is the one dependency of a crate's target on
+ * another task (`REQ-NO-RUST-TASK-DEPS`).
  */
 // @mara implements DES-INPUTS
 // @mara implements DES-OUTPUTS
@@ -141,6 +161,8 @@ export function configureCaching(
   const artifacts = context.artifactDirectories.get(subject.workspace.root) ?? { inside: false };
   const place = { artifacts, buildTargetFiles: subject.workspace.buildTargetFiles ?? [] };
   const [buildTargetFile] = place.buildTargetFiles;
+  const workspaceRoot = workspaceFolder(subject, context);
+  const members = workspaceMembers(subject);
   for (const [name, target] of targets) {
     const reason =
       target.cache === true
@@ -162,15 +184,110 @@ export function configureCaching(
     ) {
       metadata.buildTargetFile = shownPath(buildTargetFile, context.repositoryRoot);
     }
-    const inputs = targetInputs(name, subject, context, settings);
+    const readsDigest = target.cache && cachedTargets.has(name) && name !== "fmt-check";
+    if (readsDigest) {
+      target.dependsOn = [
+        lockfileDependency(workspaceRoot, options.lockfileTarget ?? "lockfile"),
+      ];
+      if (metadata !== undefined) {
+        metadata.digests =
+          name === "doc" || subject.pkg === undefined ? members : [packageVersion(subject.pkg)];
+      }
+    }
+    const inputs =
+      name === "lockfile"
+        ? lockfileInputs(subject, context)
+        : targetInputs(name, subject, context, settings, readsDigest);
     if (inputs !== undefined) {
       target.inputs = inputs;
     }
-    target.outputs = targetOutputs(name, subject.pkg, artifacts, target.cache);
+    if (name === "lockfile") {
+      target.outputs = [`{workspaceRoot}/${digestFolder(workspaceRoot)}`];
+      if (metadata !== undefined) {
+        metadata.members = members;
+      }
+    } else {
+      target.outputs = targetOutputs(name, subject.pkg, artifacts, target.cache);
+    }
     if (context.plugin.kind === "option") {
       target.options = { ...target.options, pluginVersion: context.plugin.version };
     }
   }
+}
+
+/** The workspace's root folder relative to the repository root, `.` for the root itself. */
+function workspaceFolder(subject: CacheSubject, context: CacheContext): string {
+  return relative(context.repositoryRoot, subject.workspace.report.workspace_root) || ".";
+}
+
+/** The members of the project's workspace, those without a project included, by package name. */
+function workspaceMembers(subject: CacheSubject): PackageVersion[] {
+  const ids = new Set(subject.workspace.report.workspace_members);
+  return subject.workspace.report.packages
+    .filter((pkg) => ids.has(pkg.id))
+    .map(packageVersion)
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+function packageVersion(pkg: CargoPackage): PackageVersion {
+  return { name: pkg.name, version: pkg.version };
+}
+
+/**
+ * The manifests inside the repository of the path packages that each
+ * workspace's members reach, by the workspace's root folder relative to the
+ * repository root, as `{workspaceRoot}` paths ({@link CacheContext}): the
+ * crates of path dependencies, with a project or without, directly or
+ * through other path packages, and the crates of the workspace's `[patch]`
+ * and `[replace]` entries with those behind them. A crate without a report
+ * counts with its manifest alone. A `paths` override leaves no trace in the
+ * lockfile and is not read.
+ */
+function pathPackageManifests(discovery: CargoDiscovery): Map<string, string[]> {
+  const known = new Map<string, CargoPackage>();
+  for (const report of [
+    ...discovery.workspaces.map((workspace) => workspace.report),
+    ...discovery.pathDependencyReports.map((entry) => entry.report),
+  ]) {
+    for (const pkg of report.packages) {
+      if (!known.has(pkg.manifest_path)) {
+        known.set(pkg.manifest_path, pkg);
+      }
+    }
+  }
+  const result = new Map<string, string[]>();
+  for (const workspace of discovery.workspaces) {
+    const ids = new Set(workspace.report.workspace_members);
+    const visited = new Set<string>();
+    const queue: string[] = [
+      ...workspace.report.packages.filter((pkg) => ids.has(pkg.id)).map((pkg) => pkg.manifest_path),
+      ...workspace.redirections
+        .filter((redirection) => redirection.table !== "paths")
+        .map((redirection) => join(redirection.folder, "Cargo.toml")),
+    ];
+    while (queue.length > 0) {
+      const manifest = queue.shift() as string;
+      if (visited.has(manifest)) {
+        continue;
+      }
+      visited.add(manifest);
+      for (const dependency of known.get(manifest)?.dependencies ?? []) {
+        if (typeof dependency.path === "string") {
+          queue.push(join(dependency.path, "Cargo.toml"));
+        }
+      }
+    }
+    const root = relative(discovery.workspaceRoot, workspace.report.workspace_root) || ".";
+    result.set(
+      root,
+      [...visited]
+        .map((manifest) => relative(discovery.workspaceRoot, manifest))
+        .filter((path) => path !== "" && !path.startsWith("..") && !isAbsolute(path))
+        .map((path) => `{workspaceRoot}/${path}`)
+        .sort(),
+    );
+  }
+  return result;
 }
 
 /** The warnings that concern a project, for its crate's manifest path or its workspace's root manifest. */

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/schema",
+  "version": 2,
+  "outputCapture": "pipe",
+  "title": "lockfile",
+  "description": "Lets cargo update --workspace bring the Cargo workspace's Cargo.lock up to date, in the workspace's root folder, and writes a digest of each member's locked dependencies, which the cached targets of the members read.",
+  "type": "object",
+  "properties": {
+    "pluginVersion": {
+      "type": "string",
+      "description": "The plugin's version, which the plugin sets for the cache key. Not meant to be set by hand."
+    }
+  }
+}
