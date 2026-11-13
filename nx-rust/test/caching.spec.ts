@@ -520,9 +520,19 @@ describe("caching", () => {
     it(
       "warns when the graph is created, naming the crate and the dependency, and gives no fileset for it",
       async () => {
-        for (const [files, reason, folder] of [
-          [ignored, ".gitignore or .nxignore leaves it out", "vendor/parser"],
-          [outside, "it lies outside the repository", "/far"],
+        for (const [files, reason, folder, remedy] of [
+          [
+            ignored,
+            ".gitignore or .nxignore leaves it out",
+            "vendor/parser",
+            "Stop ignoring vendor/parser, or add a command whose output changes with its files to runtimeInputs in the [package.metadata.nx] table of rust/crates/lib/Cargo.toml.",
+          ],
+          [
+            outside,
+            "it lies outside the repository",
+            "/far",
+            "Move the crate into the repository, or add a command whose output changes with its files to runtimeInputs in the [package.metadata.nx] table of rust/crates/lib/Cargo.toml.",
+          ],
         ] as const) {
           const workspace = FixtureWorkspace.create("vendored-crate", files);
           try {
@@ -546,6 +556,9 @@ describe("caching", () => {
             const { status, output } = await workspace.nx(["show", "projects"]);
             expect(status).toBe(0);
             expect(withoutColours(output)).toContain(warnings[0]);
+            expect(warnings.find((warning) => warning.includes("depends by path on"))).toContain(
+              remedy,
+            );
           } finally {
             workspace.remove();
           }
