@@ -1,5 +1,5 @@
 import type { CreateDependenciesContext, CreateNodes, RawProjectGraphDependency } from "@nx/devkit";
-import { failOnCollisionsAcrossEntries } from "./graph/collisions";
+import { failOnNameCollisions } from "./graph/collisions";
 import { projectEdges } from "./graph/edges";
 import { Registration, registrationOf } from "./graph/registration";
 
@@ -8,9 +8,9 @@ import { Registration, registrationOf } from "./graph/registration";
  * the same graph computation, from the reports it requested there; none when
  * that call failed, whose error already fails graph creation.
  *
- * It fails first when one of those projects has the name of a project that
- * another entry of the plugin created, which only the merged projects that
- * Nx passes here can show.
+ * It fails first when projects of the plugin still share a name once Nx has
+ * merged the projects of all plugins and entries, which only the projects
+ * and files that Nx passes here can show.
  *
  * Nx calls it as a method of its copy of the plugin for the entry, which is
  * `this`.
@@ -24,7 +24,7 @@ function createDependencies(
   if (graph === undefined) {
     return [];
   }
-  failOnCollisionsAcrossEntries(graph, context.projects);
+  failOnNameCollisions(graph, context);
   return projectEdges(graph, context.projects);
 }
 

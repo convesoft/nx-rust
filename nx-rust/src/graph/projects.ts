@@ -1,7 +1,7 @@
 import type { CreateNodesResultArray } from "@nx/devkit";
 import { dirname, join, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
-import { cargoMetadata, cargoMetadataKey, failOnCollisions } from "./collisions";
+import { cargoMetadata, cargoMetadataKey } from "./collisions";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import { projectName } from "./names";
 
@@ -54,8 +54,9 @@ export interface CargoGraph {
  * to the plugin, rooted at the workspace folder. Where the root manifest
  * defines a crate, that crate's project has the workspace project's role.
  *
- * @throws {Error} When two of the projects would have the same name. The
- *   plugin never renames a project on its own.
+ * Two of them may get one name: whether they keep it is known only once Nx
+ * has applied `package.json` and `project.json`, so `createDependencies`
+ * checks it (`failOnNameCollisions` in `collisions.ts`).
  */
 // @mara implements DES-PROJECT-GRAPH
 export function inferProjects(discovery: CargoDiscovery): CargoProject[] {
@@ -83,7 +84,6 @@ export function inferProjects(discovery: CargoDiscovery): CargoProject[] {
       });
     }
   }
-  failOnCollisions(projects);
   return projects;
 }
 

@@ -378,7 +378,10 @@ describe("name collisions", () => {
       const loading = loadFixtureGraph("name-collision");
 
       await expect(loading).rejects.toThrow(GraphCreationError);
-      const message = await loading.catch((error: Error) => error.message);
+      const message = await loading.then(
+        () => "",
+        (error: Error) => error.message,
+      );
       expect(message).toContain(
         'nx-rust would give 2 projects the name "api", and Nx needs every project name to be unique',
       );
@@ -391,6 +394,10 @@ describe("name collisions", () => {
       );
       expect(message).toContain("nx-rust never renames a project on its own.");
       expect(message).not.toContain("two entries");
+      // Nx reports the duplicate first, as for projects from two entries.
+      expect(message.indexOf("defined in multiple locations")).toBeLessThan(
+        message.indexOf("nx-rust would give"),
+      );
     },
     HARNESS_TIMEOUT,
   );
@@ -536,6 +543,152 @@ describe.each([
 
       expect(roots(graph)).toEqual(expected["subfolder-workspace"].projects);
       expect(edges(graph)).toEqual(expected["subfolder-workspace"].edges);
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe.each([
+  ["in plugin workers", "true"],
+  ["in one process", "false"],
+])("name collisions after renames and with other projects, %s", (_mode, isolation) => {
+  const env = { NX_ISOLATE_PLUGINS: isolation };
+  const oneEntry = pluginEntries({});
+  const twoEntries = pluginEntries({ include: ["rust/**"] }, { include: ["tools/**"] });
+
+  /** The project names of a graph, or the error that graph creation failed with. */
+  async function outcome(workspace: FixtureWorkspace): Promise<string[] | string> {
+    return workspace.graph(env).then(
+      (graph) => Object.keys(graph.projects).sort(),
+      (error: Error) => error.message,
+    );
+  }
+
+  /** Expects Nx's duplicate-name error naming `roots`, and no message of the plugin. */
+  function expectNxErrorAlone(result: string[] | string, roots: string[]): void {
+    expect(typeof result).toBe("string");
+    expect(result).toContain("The following projects are defined in multiple locations");
+    for (const root of roots) {
+      expect(result).toContain(`  - ${root}\n`);
+    }
+    expect(result).not.toContain("nx-rust would give");
+  }
+
+  it.each([
+    ["in one entry", oneEntry],
+    ["in two entries", twoEntries],
+  ])(
+    "follow a name that a project.json gives, %s, and fail again once both crates are called api",
+    async (_where, nxJson) => {
+      const workspace = FixtureWorkspace.create("name-collision", { "nx.json": nxJson });
+      try {
+        const collision = 'nx-rust would give 2 projects the name "api"';
+        expect(await outcome(workspace)).toContain(collision);
+
+        applyFileChanges(workspace.root, { "tools/api/project.json": '{ "name": "toolbox" }' });
+        expect(await outcome(workspace)).toEqual(["api", "rust", "toolbox"]);
+
+        applyFileChanges(workspace.root, {
+          "rust/crates/api/project.json": '{ "name": "rust-api" }',
+        });
+        expect(await outcome(workspace)).toEqual(["rust", "rust-api", "toolbox"]);
+
+        applyFileChanges(workspace.root, { "tools/api/project.json": null });
+        expect(await outcome(workspace)).toEqual(["api", "rust", "rust-api"]);
+
+        applyFileChanges(workspace.root, { "rust/crates/api/project.json": null });
+        expect(await outcome(workspace)).toContain(collision);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each([
+    ["in one entry", oneEntry],
+    ["in two entries", twoEntries],
+  ])(
+    "leave a name that a project which is not the plugin's holds too to Nx's error alone, %s",
+    async (_where, nxJson) => {
+      const workspace = FixtureWorkspace.create("name-collision", {
+        "nx.json": nxJson,
+        "web/project.json": '{ "name": "api" }',
+      });
+      try {
+        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api", "web"]);
+
+        // The plugin's message appears once the other project gives up the name.
+        applyFileChanges(workspace.root, { "web/project.json": '{ "name": "web" }' });
+        expect(await outcome(workspace)).toContain('nx-rust would give 2 projects the name "api"');
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "leave two crates that project.json files give one new name to Nx's error alone",
+    async () => {
+      const workspace = FixtureWorkspace.create("name-collision", {
+        "nx.json": twoEntries,
+        "rust/crates/api/project.json": '{ "name": "shared" }',
+        "tools/api/project.json": '{ "name": "shared" }',
+      });
+      try {
+        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "leave three crates with one name from three entries to Nx's error alone",
+    async () => {
+      const workspace = FixtureWorkspace.create("name-collision", {
+        "nx.json": pluginEntries(
+          { include: ["rust/**"] },
+          { include: ["tools/**"] },
+          { include: ["other/**"] },
+        ),
+        "other/api/Cargo.toml": crateManifest("api"),
+        "other/api/src/lib.rs": "",
+      });
+      try {
+        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api", "other/api"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "report a collision in one entry together with one across entries once only two crates remain",
+    async () => {
+      // rust/crates/api and other/api are in the first entry, tools/api in the second.
+      const workspace = FixtureWorkspace.create("name-collision", {
+        "nx.json": pluginEntries({ include: ["rust/**", "other/**"] }, { include: ["tools/**"] }),
+        "other/api/Cargo.toml": crateManifest("api"),
+        "other/api/src/lib.rs": "",
+      });
+      try {
+        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api", "other/api"]);
+
+        applyFileChanges(workspace.root, { "other/api/project.json": '{ "name": "other-api" }' });
+        const two = await outcome(workspace);
+        expect(two).toContain('nx-rust would give 2 projects the name "api"');
+        expect(two).toContain("- the crate api in rust/crates/api/Cargo.toml");
+        expect(two).toContain("- the crate api in tools/api/Cargo.toml");
+
+        applyFileChanges(workspace.root, { "other/api/project.json": null });
+        expectNxErrorAlone(await outcome(workspace), ["rust/crates/api", "tools/api", "other/api"]);
+      } finally {
+        workspace.remove();
+      }
     },
     HARNESS_TIMEOUT,
   );

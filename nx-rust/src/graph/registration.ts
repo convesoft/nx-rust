@@ -58,8 +58,7 @@ export class Registration {
    * all its manifests in one call, so each call is taken as a computation of
    * its own.
    *
-   * @throws {Error} When discovery fails, see {@link discoverWorkspaces}, or
-   *   when two projects would have one name, see {@link inferProjects}.
+   * @throws {Error} When discovery fails, see {@link discoverWorkspaces}.
    */
   async discover(manifests: readonly string[], workspaceRoot: string): Promise<CargoGraph> {
     const sequence = ++this.started;

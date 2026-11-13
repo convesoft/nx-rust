@@ -1,4 +1,5 @@
 import type { CreateDependenciesContext, ProjectConfiguration } from "@nx/devkit";
+import { basename, dirname } from "node:path";
 import type { CargoGraph, CargoProject } from "./projects";
 
 /** The key of {@link ProjectCargoMetadata} in the metadata of each project of the plugin. */
@@ -35,54 +36,109 @@ export function cargoMetadata(project: CargoProject): ProjectCargoMetadata {
 }
 
 /**
- * Fails when two projects of one entry would have the same name.
+ * Fails when projects of the plugin still hold one name after Nx has merged
+ * the projects of all plugins, which it has done when it calls
+ * `createDependencies`.
+ *
+ * A project holds the name it has among the merged projects, so a name
+ * that a `package.json` or `project.json` gave it replaces the plugin's.
+ * Nx lists one project per name there, and reports a name that several
+ * projects hold with its own error first. A project of this entry that is
+ * not listed lost its name to another project; the name it held is the one
+ * under which Nx lists the files of its folder.
+ *
+ * An entry reports a name only when it can see every project that holds
+ * it, and they are all the plugin's: its own projects, together with the
+ * project Nx lists under the name when that one is another entry's project
+ * that still holds the name the plugin gave it, and then only one of its
+ * own. The name must hold no file outside their folders, and no
+ * `project.json` in a subfolder. Otherwise, as when a project that is not
+ * the plugin's holds the name too, Nx's error stands alone. So one entry
+ * at most reports a name, whatever order Nx merged the projects in.
  *
  * @throws {Error} Naming each name with every manifest and its remedy.
  */
 // @mara implements DES-PROJECT-GRAPH
-export function failOnCollisions(projects: readonly CargoProject[]): void {
-  const byName = new Map<string, ProjectCargoMetadata[]>();
-  for (const project of projects) {
-    byName.set(project.name, [...(byName.get(project.name) ?? []), cargoMetadata(project)]);
-  }
-  throwCollisions(
-    [...byName].filter(([, named]) => named.length > 1),
-    false,
+export function failOnNameCollisions(
+  graph: CargoGraph,
+  context: Pick<CreateDependenciesContext, "projects" | "fileMap">,
+): void {
+  const { projects, fileMap } = context;
+  const nameByRoot = new Map(
+    Object.entries(projects).map(([name, project]) => [project.root, name] as const),
   );
+  const fileOwners = lazyFileOwners(graph, fileMap.projectFileMap);
+  const holders = new Map<string, CargoProject[]>();
+  for (const project of graph.projects) {
+    const held = nameByRoot.get(project.root) ?? fileOwners().get(project.manifest);
+    if (held === project.name) {
+      holders.set(held, [...(holders.get(held) ?? []), project]);
+    }
+  }
+  const collisions: Collision[] = [];
+  for (const [name, own] of holders) {
+    const listed = projects[name];
+    const named = own.map(cargoMetadata);
+    const roots = own.map((project) => project.root);
+    let acrossEntries = false;
+    if (listed !== undefined && !roots.includes(listed.root)) {
+      const theirs = cargoMetadataOf(listed);
+      if (theirs?.projectName !== name || own.length > 1) {
+        continue;
+      }
+      named.push(theirs);
+      roots.push(listed.root);
+      acrossEntries = true;
+    }
+    if (named.length > 1 && !heldElsewhere(fileMap.projectFileMap[name] ?? [], roots)) {
+      collisions.push({ name, named, acrossEntries });
+    }
+  }
+  if (collisions.length > 0) {
+    throw new Error(collisionMessage(collisions));
+  }
 }
 
-/**
- * Fails when a project of this entry has the name that the plugin gave a
- * project of another entry, as the projects that `createDependencies`
- * receives show.
- *
- * Nx merges the projects of all entries before it calls `createDependencies`,
- * and lists only one project for a name that two have. When that one is
- * another entry's project, this entry finds it by its
- * {@link ProjectCargoMetadata}, so that exactly one entry reports the
- * collision. A project that only a `package.json` or `project.json` gave the
- * name, or another plugin's project, is left to Nx's own error.
- *
- * @param projects The projects that `createDependencies` receives, by name.
- * @throws {Error} Naming each name with both manifests and their remedies.
- */
-// @mara implements DES-PROJECT-GRAPH
-export function failOnCollisionsAcrossEntries(
+interface Collision {
+  name: string;
+  named: ProjectCargoMetadata[];
+  acrossEntries: boolean;
+}
+
+// The merged project that lists each manifest of this entry among its files,
+// computed once and only when a project of this entry is not listed.
+function lazyFileOwners(
   graph: CargoGraph,
-  projects: CreateDependenciesContext["projects"],
-): void {
-  const collisions: [string, ProjectCargoMetadata[]][] = [];
-  for (const project of graph.projects) {
-    const other = projects[project.name];
-    if (other === undefined || other.root === project.root) {
-      continue;
+  projectFileMap: CreateDependenciesContext["fileMap"]["projectFileMap"],
+): () => Map<string, string> {
+  let owners: Map<string, string> | undefined;
+  return () => {
+    if (owners === undefined) {
+      const manifests = new Set(graph.projects.map((project) => project.manifest));
+      owners = new Map();
+      for (const [name, files] of Object.entries(projectFileMap)) {
+        for (const { file } of files) {
+          if (manifests.has(file)) {
+            owners.set(file, name);
+          }
+        }
+      }
     }
-    const theirs = cargoMetadataOf(other);
-    if (theirs?.projectName === project.name) {
-      collisions.push([project.name, [cargoMetadata(project), theirs]]);
-    }
-  }
-  throwCollisions(collisions, true);
+    return owners;
+  };
+}
+
+// Whether a project in no folder of `roots` holds the name as well: a file of
+// the name lies outside those folders, or a project.json lies in a subfolder
+// of one of them, which Nx makes a project of its own.
+function heldElsewhere(files: readonly { file: string }[], roots: readonly string[]): boolean {
+  const inside = (file: string, root: string) =>
+    root === "." || file === root || file.startsWith(`${root}/`);
+  return files.some(
+    ({ file }) =>
+      !roots.some((root) => inside(file, root)) ||
+      (basename(file) === "project.json" && !roots.includes(dirname(file))),
+  );
 }
 
 function cargoMetadataOf(project: ProjectConfiguration): ProjectCargoMetadata | undefined {
@@ -94,29 +150,23 @@ function cargoMetadataOf(project: ProjectConfiguration): ProjectCargoMetadata | 
     : undefined;
 }
 
-// Fails with one message that covers every name that more than one project
-// would get, naming each project's manifest and how to rename it.
-function throwCollisions(
-  collisions: readonly [string, ProjectCargoMetadata[]][],
-  acrossEntries: boolean,
-): void {
-  if (collisions.length === 0) {
-    return;
-  }
-  throw new Error(
-    collisions
-      .map(([name, named]) =>
-        [
-          `nx-rust would give ${named.length} projects the name "${name}", and Nx needs every project name to be unique:`,
-          ...named.map((project) => `- ${describeProject(project)}: ${remedy(project)}`),
-          ...(acrossEntries
-            ? ["The projects come from two entries of @convesoft/nx-rust in nx.json."]
-            : []),
-          "nx-rust never renames a project on its own. Rename all of them but one.",
-        ].join("\n"),
-      )
-      .join("\n\n"),
-  );
+// One message that covers every name, naming each project's manifest and how
+// to rename it.
+function collisionMessage(collisions: readonly Collision[]): string {
+  return collisions
+    .map(({ name, named, acrossEntries }) =>
+      [
+        `nx-rust would give ${named.length} projects the name "${name}", and Nx needs every project name to be unique:`,
+        ...[...named]
+          .sort((a, b) => (a.manifest < b.manifest ? -1 : a.manifest > b.manifest ? 1 : 0))
+          .map((project) => `- ${describeProject(project)}: ${remedy(project)}`),
+        ...(acrossEntries
+          ? ["The projects come from two entries of @convesoft/nx-rust in nx.json."]
+          : []),
+        "nx-rust never renames a project on its own. Rename all of them but one.",
+      ].join("\n"),
+    )
+    .join("\n\n");
 }
 
 function describeProject(project: ProjectCargoMetadata): string {
