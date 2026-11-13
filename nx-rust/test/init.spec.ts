@@ -684,6 +684,14 @@ describe("init", () => {
         },
         "outside.txt, outside the repository, whose files Nx does not track. To key the crate's tasks on such files, add a command to runtimeInputs",
       ],
+      [
+        "a fileInputs pattern with a .. segment after a glob character",
+        {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx]\nfileInputs = ["../*/../model/README.md"]\n`,
+        },
+        'rust/crates/model/Cargo.toml: the fileInputs pattern "../*/../model/README.md" has a ".." segment after a glob character',
+      ],
       ...(
         [
           ['options = "broken"', 'has to be a table, not "broken".'],

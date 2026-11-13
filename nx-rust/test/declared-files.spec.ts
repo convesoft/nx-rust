@@ -15,7 +15,7 @@ import {
 // cache-keys.spec.ts does not: what `nx affected` selects after a commit or
 // with --files, declared files that Git or Nx ignores and declared links,
 // each hashed twice in one workspace as consecutive runs hash them, and the
-// graph-creation errors of REQ-FILE-INPUTS-HASHABLE.
+// graph-creation errors of REQ-FILE-INPUTS-HASHABLE and DES-INPUTS.
 //
 // In declared-files, the workspace table declares proto/**/*.proto for every
 // member, and api's own table declares docs/banner.txt. app depends on api;
@@ -112,7 +112,7 @@ async function affectedTasks(workspace: FixtureWorkspace, args: string[]): Promi
     .sort();
 }
 
-/** What a change to one declared file does to the keys of api and app and to `nx affected`. */
+/** What a change to one declared file does to the keys of some tasks and to `nx affected`. */
 interface DeclaredFileOutcome {
   /** Whether the key of each task changed. */
   keysDiffer: Record<string, boolean>;
@@ -124,16 +124,17 @@ interface DeclaredFileOutcome {
 
 /**
  * Commits the fixture with `files` and `links`, `changed` also where Git
- * ignores it, hashes `api:test` and `app:test`, commits a change to
- * `changed`, hashes them again in the same workspace and asks `nx affected`
- * what the commit and `--files` select.
+ * ignores it, hashes `tasks`, by default `api:test` and `app:test`, commits
+ * a change to `changed`, hashes them again in the same workspace and asks
+ * `nx affected` what the commit and `--files` select.
  */
 async function changeDeclaredFile(options: {
   files: FileChanges;
   changed: string;
   links?: Record<string, string>;
+  tasks?: string[];
 }): Promise<DeclaredFileOutcome> {
-  const tasks = ["api:test", "app:test"];
+  const { tasks = ["api:test", "app:test"] } = options;
   const workspace = FixtureWorkspace.create("declared-files", options.files);
   try {
     for (const [link, target] of Object.entries(options.links ?? {})) {
@@ -220,15 +221,18 @@ describe("declared files", () => {
   );
 
   it(
-    "resolve an absolute pattern, one through a folder link inside the repository and one below a file by the path they give",
+    "resolve an absolute pattern, links to a file or a folder inside the repository and a path below a file to their real paths",
     () =>
       inFixture("declared-files", { "shared/real/schema.sql": "" }, async (workspace) => {
         symlinkSync("real", join(workspace.root, "shared", "linked"));
+        symlinkSync("banner.txt", join(workspace.root, "docs", "alias.txt"));
         applyFileChanges(
           workspace.root,
           apiDeclares(
             join(workspace.root, "shared", "real", "schema.sql"),
             "../../../shared/linked/*.sql",
+            "../../../shared/linked/schema.sql",
+            "../../../docs/alias.txt",
             // Below a file: no such file exists, and none is hashed.
             "../../../docs/banner.txt/part",
           ),
@@ -238,10 +242,13 @@ describe("declared files", () => {
         expect(graph.projects.api.namedInputs.default).toEqual(
           expect.arrayContaining([
             { fileset: "{workspaceRoot}/shared/real/schema.sql", includeIgnored: true },
-            { fileset: "{workspaceRoot}/shared/linked/*.sql", includeIgnored: true },
+            { fileset: "{workspaceRoot}/shared/real/*.sql", includeIgnored: true },
+            { fileset: "{workspaceRoot}/shared/real/schema.sql", includeIgnored: true },
+            { fileset: "{workspaceRoot}/docs/banner.txt", includeIgnored: true },
             { fileset: "{workspaceRoot}/docs/banner.txt/part", includeIgnored: true },
           ]),
         );
+        expect(JSON.stringify(graph.projects.api.namedInputs)).not.toMatch(/linked|alias/);
       }),
     HARNESS_TIMEOUT,
   );
@@ -359,20 +366,46 @@ describe("declared files", () => {
   describe("through a symbolic link", () => {
     // Nx keeps the hash of a link's destination until the link itself
     // changes or `nx reset` clears it (EVD-NX-24-FILE-INPUTS), so the
-    // workspace is hashed twice without a reset in between.
+    // workspace is hashed twice without a reset in between, and the link is
+    // older than the moment within which Nx reads it again.
+    const compiling = ["api:build", "api:check", "api:lint", "api:test", "rust:doc"];
+
     it(
-      "change no key and select no task when the link is declared in place of the file it points to",
+      "change the keys of check, lint, test, build and doc and select the tasks when the link is declared in place of the file it points to",
       async () => {
         const outcome = await changeDeclaredFile({
           files: apiDeclares("../../../docs/alias.txt"),
           links: { "docs/alias.txt": "banner.txt" },
           changed: "docs/banner.txt",
+          tasks: compiling,
         });
 
         expect(outcome).toEqual({
-          keysDiffer: { "api:test": false, "app:test": false },
-          afterCommit: [],
-          withFiles: [],
+          keysDiffer: Object.fromEntries(compiling.map((task) => [task, true])),
+          afterCommit: apiAndDependents,
+          withFiles: apiAndDependents,
+        });
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "change the keys and select the tasks when the fixed part of the pattern runs through a link to a folder",
+      async () => {
+        const outcome = await changeDeclaredFile({
+          files: {
+            "shared/real/schema.sql": "create table api ();\n",
+            ...apiDeclares("../../../shared/linked/*.sql"),
+          },
+          links: { "shared/linked": "real" },
+          changed: "shared/real/schema.sql",
+          tasks: compiling,
+        });
+
+        expect(outcome).toEqual({
+          keysDiffer: Object.fromEntries(compiling.map((task) => [task, true])),
+          afterCommit: apiAndDependents,
+          withFiles: apiAndDependents,
         });
       },
       HARNESS_TIMEOUT,
@@ -447,20 +480,50 @@ describe("declared files", () => {
     );
 
     it(
+      "fail graph creation for patterns with a .. segment after a glob character",
+      () =>
+        inFixture(
+          "declared-files",
+          apiDeclares("../../../proto/*/../greeting.proto", "../../../{docs,..}/banner.txt"),
+          async (workspace) => {
+            const advice =
+              'has a ".." segment after a glob character, so that nx-rust cannot tell which folder it reaches, and Nx cannot hash it. Put every ".." before the first glob character, such as "*", "?" or "{".';
+
+            expect(await graphErrors(workspace)).toEqual([
+              `rust/crates/api/Cargo.toml: the fileInputs pattern "../../../proto/*/../greeting.proto" ${advice}`,
+              `rust/crates/api/Cargo.toml: the fileInputs pattern "../../../{docs,..}/banner.txt" ${advice}`,
+            ]);
+          },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
       "fail graph creation for patterns that resolve into the workspace's build or artifact directory",
       () =>
         inFixture(
           "declared-files",
           {
             "rust/.cargo/config.toml": '[build]\nbuild-dir = "build-cache"\n',
-            ...apiDeclares("../../target/debug/api", "../../build-cache/**/output"),
+            ...apiDeclares(
+              "../../target/debug/api",
+              "../../build-cache/**/output",
+              "../../../docs/output-link.txt",
+            ),
             "rust/crates/other/Cargo.toml": (manifest) =>
               `${manifest}\n[package.metadata.nx]\nfileInputs = ["../../target"]\n`,
           },
           async (workspace) => {
+            // A link inside the repository to a file that a build writes.
+            symlinkSync(
+              "../rust/target/debug/output.txt",
+              join(workspace.root, "docs", "output-link.txt"),
+            );
+
             expect(await graphErrors(workspace)).toEqual([
               'rust/crates/api/Cargo.toml: the fileInputs pattern "../../target/debug/api" resolves into rust/target, Cargo\'s artifact directory of the Cargo workspace in rust. Cargo writes the files there; declare the files that they are made from instead.',
               'rust/crates/api/Cargo.toml: the fileInputs pattern "../../build-cache/**/output" resolves into rust/build-cache, Cargo\'s build directory of the Cargo workspace in rust. Cargo writes the files there; declare the files that they are made from instead.',
+              'rust/crates/api/Cargo.toml: the fileInputs pattern "../../../docs/output-link.txt" resolves into rust/target, Cargo\'s artifact directory of the Cargo workspace in rust. Cargo writes the files there; declare the files that they are made from instead.',
               'rust/crates/other/Cargo.toml: the fileInputs pattern "../../target" resolves into rust/target, Cargo\'s artifact directory of the Cargo workspace in rust. Cargo writes the files there; declare the files that they are made from instead.',
             ]);
           },

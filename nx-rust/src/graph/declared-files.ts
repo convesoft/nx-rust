@@ -17,23 +17,34 @@ export interface DeclaredFiles {
 const globCharacters = /[*?[\]{}()\\]/;
 
 /**
+ * A `..` segment in a glob, also one that an alternative of braces gives,
+ * such as `{a,..}/x`.
+ */
+const parentAfterGlob = /(^|[/{,])\.\.($|[/},])/;
+
+/**
  * Turns the `fileInputs` patterns of a crate's tables into the filesets of
  * `DES-INPUTS` ("Declared files"): each pattern resolved against the folder
  * of the manifest that holds it, as `{workspaceRoot}/<path>` with
  * `includeIgnored`, so that Nx hashes a declared file that Git ignores.
  *
  * Nx fails the hash of every task whose `includeIgnored` fileset has a `.`
- * or `..` segment, so the path is resolved here, up to the pattern's first
- * segment with a glob character. A `..` after that segment stays in the
- * fileset, and Nx's own error names it.
+ * or `..` segment, so the pattern's fixed part, its segments before the
+ * first one with a glob character, is resolved here, and the symbolic links
+ * in it as well: Nx keeps the hash of a link to a file until the link
+ * itself changes, and matches changed files by their real paths, so a
+ * fileset that names a link would miss a change to what it points to
+ * (`EVD-NX-24-FILE-INPUTS`). A link that only the glob part reaches stays
+ * as it is.
  *
- * A pattern whose fixed part resolves outside the repository, also through
- * a symbolic link, or into the build or artifact directory of the crate's
- * workspace, is a problem that names the manifest and the pattern
- * (`REQ-FILE-INPUTS-HASHABLE`). Nx hashes no file that a fileset names by a
- * path that leaves the repository, and `nx affected` sees no change to a
- * file outside it, so the message for such a pattern points to
- * `runtimeInputs`.
+ * Each of these is a problem that names the manifest and the pattern
+ * (`REQ-FILE-INPUTS-HASHABLE`): a `..` after a glob character, which could
+ * lead anywhere and fails Nx's hash; a fixed part that resolves outside the
+ * repository, also through a symbolic link; and one that resolves into the
+ * build or artifact directory of the crate's workspace. Nx hashes no file
+ * that a fileset names by a path that leaves the repository, and
+ * `nx affected` sees no change to a file outside it, so the message for
+ * such a pattern points to `runtimeInputs`.
  *
  * @param fileInputs The patterns of both tables, each with its manifest relative to the repository root.
  * @param workspace The crate's workspace, whose Cargo directories no pattern may point into.
@@ -54,15 +65,16 @@ export function declaredFiles(
   const directories = cargoDirectories(workspace);
   for (const input of fileInputs) {
     const { fixed, glob } = resolvePattern(input, repositoryRoot);
+    if (parentAfterGlob.test(glob)) {
+      problems.push(parentAfterGlobProblem(input));
+      continue;
+    }
     const real = realPathOfPrefix(fixed);
-    const realInside = within(realRoot, real);
-    if (realInside === undefined) {
+    const path = within(realRoot, real);
+    if (path === undefined) {
       problems.push(outsideProblem(input, [real, glob].filter((part) => part !== "").join("/")));
       continue;
     }
-    // The path as the pattern gives it, so that a link inside the repository
-    // stays as declared; its real path where only that lies inside.
-    const path = within(repositoryRoot, fixed) ?? realInside;
     const directory = directories.find(
       (directory) =>
         within(directory.path, fixed) !== undefined ||
@@ -174,6 +186,13 @@ function cargoDirectories(workspace: CargoWorkspace): CargoDirectory[] {
     return [directory(role, artifact)];
   }
   return [directory("build directory", build), directory("artifact directory", artifact)];
+}
+
+function parentAfterGlobProblem(input: FileInput): string {
+  return [
+    `${input.manifest}: the fileInputs pattern ${JSON.stringify(input.pattern)} has a ".." segment after a glob character, so that nx-rust cannot tell which folder it reaches, and Nx cannot hash it.`,
+    'Put every ".." before the first glob character, such as "*", "?" or "{".',
+  ].join(" ");
 }
 
 function outsideProblem(input: FileInput, resolved: string): string {
