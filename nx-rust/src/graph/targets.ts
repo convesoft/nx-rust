@@ -66,6 +66,12 @@ export interface TargetCargoMetadata {
    * of a task's key; `nx.json`, where it is set, is part of every key anyway.
    */
   locked: boolean;
+  /**
+   * Why the plugin leaves the target uncached in this project
+   * (`configureCaching` in `caching.ts`); absent where it caches it. The
+   * executor fails a task whose configuration caches the target anyway.
+   */
+  uncached?: string;
 }
 
 /**

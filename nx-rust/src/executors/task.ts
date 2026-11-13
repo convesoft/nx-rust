@@ -2,6 +2,7 @@ import type { ExecutorContext } from "@nx/devkit";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { cargoMetadataOf } from "../graph/collisions";
+import { uncachedByDesign } from "../graph/outputs";
 import {
   cachedTargets,
   type InferredTargetName,
@@ -12,17 +13,15 @@ import {
 import { cargoArguments, type CargoTargetOptions } from "./command";
 
 /**
- * Why `DES-TARGETS` and `DES-WORKSPACE-TARGETS` leave a target uncached, for
- * the message of a task whose configuration caches it anyway.
+ * The profiles whose artifacts Cargo puts in another profile's folder, which
+ * the outputs of `build` and `doc` cannot name (`DES-OUTPUTS`), with what to
+ * build with instead.
  */
-const uncachedReasons: Partial<Record<InferredTargetName, string>> = {
-  fmt: "it rewrites the crate's files, which a result restored from the cache would not do",
-  bench: "benchmark timings differ between runs",
-  run: "it runs a binary, whose effects a result restored from the cache would not repeat",
-  audit:
-    "cargo-audit fetches the advisory database each time it runs, and no input covers it, so a cached pass could hide a newer advisory",
-  deny: "cargo-deny fetches the advisory database each time it runs, and no input covers it, so a cached pass could hide a newer advisory",
-  update: "it exists to change Cargo.lock",
+const renamedProfiles: Readonly<Record<string, string>> = {
+  dev: "no profile: dev is cargo's default profile, whose folder is debug",
+  test: "no profile, which builds the dev profile into the same folder, debug, or a custom profile that inherits from test",
+  bench:
+    "the profile release, whose folder cargo uses for bench too, or a custom profile that inherits from bench",
 };
 
 /** A problem that stops a task before cargo runs; its message is what the task prints. */
@@ -92,9 +91,13 @@ export async function runTask(
  *
  * @param lockedVariable The value of `NX_RUST_LOCKED`.
  * @throws {TaskError} When the target is no inferred target of this
- *   executor, when its configuration caches a target that the plugin does
- *   not cache, or when `NX_RUST_LOCKED` is neither `true` nor `false`.
+ *   executor, when its configuration caches a target that the plugin leaves
+ *   uncached in this project, when `build` or `doc` gets the profile `dev`,
+ *   `test` or `bench`, or is cached while `CARGO_BUILD_TARGET` chooses its
+ *   triple (`DES-OUTPUTS`), or when `NX_RUST_LOCKED` is neither `true` nor
+ *   `false`.
  */
+// @mara implements DES-OUTPUTS
 export function taskInvocation(
   executor: PluginExecutor,
   options: CargoTargetOptions,
@@ -110,13 +113,40 @@ export function taskInvocation(
       `${task}: ${executor.name} runs only the targets that @convesoft/nx-rust infers for a crate or a Cargo workspace, and ${task} is not one of them. To run another cargo command, define a target with a "command" under a name of its own.`,
     );
   }
-  if (context.target?.cache === true && !cachedTargets.has(metadata.target)) {
+  // What the plugin decided for this project's target; a graph from before
+  // that decision was recorded falls back to the target's default name.
+  const uncached =
+    metadata.uncached ??
+    (cachedTargets.has(metadata.target)
+      ? undefined
+      : (uncachedByDesign[metadata.target] ?? "the plugin does not cache this target"));
+  if (context.target?.cache === true && uncached !== undefined) {
     throw new TaskError(
       [
-        `${task}: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves \`${metadata.target}\` uncached, because ${uncachedReasons[metadata.target] ?? "a result restored from the cache would not stand for a run"}. The task does not run, so that Nx stores no result for it.`,
+        `${task}: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves \`${metadata.target}\` uncached in this project, because ${uncached}. The task does not run, so that Nx stores no result for it.`,
         `The setting comes from the workspace's configuration: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry. If it is a \`targetDefaults\` entry in nx.json, add a \`filter\` to it or add an empty entry keyed by "${context.target.executor ?? executor.name}".`,
       ].join("\n"),
     );
+  }
+  if (metadata.target === "build" || metadata.target === "doc") {
+    const replacement =
+      options.profile === undefined ? undefined : renamedProfiles[options.profile];
+    if (replacement !== undefined) {
+      throw new TaskError(
+        `${task}: the profile ${options.profile} puts cargo's artifacts in the folder of another profile, which @convesoft/nx-rust cannot name for the cache. Build with ${replacement}.`,
+      );
+    }
+    const triple = process.env.CARGO_BUILD_TARGET;
+    if (
+      context.target?.cache === true &&
+      triple !== undefined &&
+      triple !== "" &&
+      options.targetTriple === undefined
+    ) {
+      throw new TaskError(
+        `${task}: CARGO_BUILD_TARGET is ${JSON.stringify(triple)}, and @convesoft/nx-rust cannot cache ${metadata.target} for a target triple that comes from the environment, because it cannot name the folder where cargo puts the artifacts. Give the triple as the targetTriple option instead: --targetTriple=${triple} on the command line, or in the crate's or the workspace's configuration. The task does not run, so that Nx stores no result for it.`,
+      );
+    }
   }
   const project = context.projectsConfigurations?.projects?.[projectName];
   const cargo = project === undefined ? undefined : cargoMetadataOf(project);
@@ -209,8 +239,12 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
-  const { target, locked } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
+  const { target, locked, uncached } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
   return (inferredTargetNames as readonly unknown[]).includes(target)
-    ? { target: target as InferredTargetName, locked: locked === true }
+    ? {
+        target: target as InferredTargetName,
+        locked: locked === true,
+        ...(typeof uncached === "string" ? { uncached } : {}),
+      }
     : undefined;
 }

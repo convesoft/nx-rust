@@ -32,6 +32,16 @@ export interface CargoWorkspace {
    * ({@link readRedirections}).
    */
   redirections: Redirection[];
+  /**
+   * The configuration files that cargo reads for the workspace and that set
+   * `build.target` ({@link readRedirections}).
+   */
+  buildTargetFiles: string[];
+  /**
+   * The configuration files that `include` adds for the workspace
+   * ({@link readRedirections}).
+   */
+  configIncludes: string[];
 }
 
 /** The report of a crate without a project that a member may use. */
@@ -115,6 +125,8 @@ export async function discoverWorkspaces(
         .filter((pkg) => handed.has(repositoryPath(workspaceRoot, pkg.manifest_path)))
         .sort((a, b) => compare(a.manifest_path, b.manifest_path)),
       redirections: found.redirections,
+      buildTargetFiles: found.buildTargetFiles,
+      configIncludes: found.includedFiles,
     });
   }
   const pathDependencyReports = await readPathDependencies(

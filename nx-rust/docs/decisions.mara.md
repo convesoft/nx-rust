@@ -1396,6 +1396,21 @@ Experiments on 13 November 2026 with the `nx` 24.0.6 package that this repositor
 No executor of the plugin ran: this shows what Nx hashes and declares for targets of this shape, not what a run stores or restores.
 :::
 
+:::mara evidence EVD-CARGO-DEPENDENCY-SIDE
+:mid: 01M7AXS7AZFTFJX9Y61GK0Z37B
+:title: What cargo applies from a dependency's side when another workspace builds it
+:status: accepted
+:supports: DES-INPUTS
+
+Experiments on 13 November 2026 with cargo 1.100.0 and repeated with 1.91.0, on Linux x86-64, in a copy of the fixture `cross-workspace-path`: `server`, a member of the workspace in `backend/`, depends by path on `model`, a member of the workspace in `shared/`, and `cargo check -p server --offline` ran in `backend/` with `RUSTUP_AUTO_INSTALL=0` and an artifact directory of its own. Each case changed one file on `model`'s side and made `model`'s source fail to compile exactly when the change applied.
+
+- **The dependency's workspace manifest applies.** `model` with `[lints] workspace = true` and `[workspace.lints.rust] unsafe_code = "forbid"` in `shared/Cargo.toml` failed to compile with an `unsafe` block, with both versions. The review of pull request #33 showed the same for `edition.workspace = true`: changing the edition in `[workspace.package]` of `shared/Cargo.toml` from 2021 to 2024 made `server`'s check fail on the reserved keyword `gen`.
+- **Its configuration and toolchain do not.** A `[build] rustflags = ["--cfg", "dep_side"]` in `shared/.cargo/config.toml`, and the same in `shared/.cargo/config`, left `#[cfg(dep_side)] compile_error!` unseen, and a `shared/rust-toolchain.toml` that names a toolchain rustup does not have failed nothing: cargo takes both from the folder it starts in, `backend/`.
+- **Nor do its profiles.** `[profile.dev] debug-assertions = false` in `shared/Cargo.toml`, and in `model`'s own manifest, left `#[cfg(not(debug_assertions))] compile_error!` unseen: cargo applies the profiles of the workspace it builds.
+
+So what decides a dependency when another workspace builds it is its folder and its workspace's root manifest; the configuration, toolchain and profiles come from the consumer's own context.
+:::
+
 ## Sources
 
 Pages and repositories read for the design discussion, on 12 November 2026.

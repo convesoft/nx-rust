@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
-import { FixtureWorkspace, HARNESS_TIMEOUT, withoutColours } from "./harness";
+import { FixtureWorkspace, HARNESS_TIMEOUT, testEnvironment, withoutColours } from "./harness";
 
 // Checks with real Nx runs of the plugin's executor what the caching of
 // nxr-fy4t4k stores and restores: the parts of VER-CARGO-UNCHANGED about
@@ -234,4 +235,118 @@ describe("a run with the plugin's executor", () => {
     },
     HARNESS_TIMEOUT,
   );
+
+  it(
+    "fails a target that the configuration caches where the plugin leaves it uncached in that project",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "nx.json": (text) =>
+          JSON.stringify({ ...JSON.parse(text), targetDefaults: { build: { cache: true } } }),
+      });
+      try {
+        const env = { CARGO_TARGET_DIR: join(workspace.root, "..", "target-outside") };
+        const result = await nx(workspace, ["run", "cli:build"], env);
+
+        expect(result.status).toBe(1);
+        expect(result.output).toContain(
+          'cli:build: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves `build` uncached in this project, because its workspace\'s artifact directory lies outside the repository',
+        );
+        expect(taskCalls(workspace)).toEqual([]);
+        // Where the plugin caches build, the same entry fails nothing.
+        expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails a cached build or doc whose triple CARGO_BUILD_TARGET chooses, and caches it with the targetTriple option",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes");
+      try {
+        const env = { CARGO_BUILD_TARGET: hostTriple() };
+        for (const task of ["cli:build", "rust:doc"]) {
+          const failed = await nx(workspace, ["run", task], env);
+          expect(failed.status).toBe(1);
+          expect(failed.output).toContain(
+            `${task}: CARGO_BUILD_TARGET is "${hostTriple()}", and @convesoft/nx-rust cannot cache`,
+          );
+          expect(failed.output).toContain(`--targetTriple=${hostTriple()}`);
+        }
+        expect(taskCalls(workspace)).toEqual([]);
+        // Other targets run as before.
+        expect((await nx(workspace, ["run", "cli:check"], env)).status).toBe(0);
+
+        const option = ["run", "cli:build", `--targetTriple=${hostTriple()}`];
+        expect((await nx(workspace, option, env)).status).toBe(0);
+        const artifact = join(workspace.root, "rust/target", hostTriple(), "debug/cli");
+        rmSync(artifact);
+        const restored = await nx(workspace, option, env);
+        expect(restored.output).toMatch(new RegExp(hit));
+        expect(existsSync(artifact)).toBe(true);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "rejects the profiles dev, test and bench on build and doc, naming what to use instead",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes");
+      try {
+        for (const [task, profile, instead] of [
+          ["cli:build", "dev", "Build with no profile"],
+          ["cli:build", "test", "Build with no profile"],
+          ["cli:build", "bench", "Build with the profile release"],
+          ["rust:doc", "bench", "Build with the profile release"],
+        ]) {
+          const result = await nx(workspace, ["run", task, `--profile=${profile}`]);
+          expect({ task, profile, status: result.status }).toEqual({ task, profile, status: 1 });
+          expect(result.output).toContain(
+            `${task}: the profile ${profile} puts cargo's artifacts in the folder of another profile`,
+          );
+          expect(result.output).toContain(instead);
+        }
+        expect(taskCalls(workspace)).toEqual([]);
+        expect((await nx(workspace, ["run", "cli:build", "--profile=release"])).status).toBe(0);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "runs build every time where Cargo's configuration chooses the triple",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "rust/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
+      });
+      try {
+        expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
+        const second = await nx(workspace, ["run", "cli:build"]);
+        expect(second.status).toBe(0);
+        expect(second.output).not.toMatch(new RegExp(hit));
+        expect(second.output).toContain("sets build.target");
+        expect(taskCalls(workspace)).toEqual(["build -p cli", "build -p cli"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
 });
+
+/** The triple that the installed toolchain builds for by default. */
+function hostTriple(): string {
+  const { stdout } = spawnSync("rustc", ["-vV"], { env: testEnvironment(), encoding: "utf8" });
+  const host = /^host: (.+)$/m.exec(stdout)?.[1];
+  if (host === undefined) {
+    throw new Error(`rustc -vV named no host triple:\n${stdout}`);
+  }
+  return host;
+}

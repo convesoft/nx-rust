@@ -1,7 +1,7 @@
 import type { TargetConfiguration } from "@nx/devkit";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { environmentVariables, hostTriples, toolchainCommand } from "../src/graph/inputs";
+import { environmentVariables, toolchainCommand } from "../src/graph/inputs";
 import { listsPackage } from "../src/graph/plugin-package";
 import {
   FileChanges,
@@ -78,11 +78,14 @@ describe("caching", () => {
       const graph = await loadFixtureGraph("subfolder-workspace");
       const { api } = graph.projects;
 
-      expect(api.namedInputs).toEqual({ default: ["{projectRoot}/**/*"] });
+      // The workspace's root manifest, whose fields the crate inherits,
+      // reaches the crates that depend on it through the named input.
+      expect(api.namedInputs).toEqual({
+        default: ["{projectRoot}/**/*", "{workspaceRoot}/rust/Cargo.toml"],
+      });
       const workspaceFiles = [
-        "{workspaceRoot}/rust/Cargo.toml",
         ...["rust/crates", "rust", ""].flatMap((folder) =>
-          ["rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml"].map(
+          ["rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml", ".cargo/config"].map(
             (file) => `{workspaceRoot}/${folder === "" ? "" : `${folder}/`}${file}`,
           ),
         ),
@@ -130,23 +133,16 @@ describe("caching", () => {
         expect(inputsOf(api.targets[name], "fileset")).toEqual([]);
       }
 
-      const triples = hostTriples().flatMap((triple) => {
-        const key = triple.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-        return ["LINKER", "RUSTFLAGS", "RUNNER"].map((setting) => `CARGO_TARGET_${key}_${setting}`);
-      });
-      expect(triples.length).toBeGreaterThan(0);
       expect(envInputs(api.targets.build)).toEqual([
         ...environmentVariables,
-        ...triples,
         "CARGO_BUILD_WARNINGS",
       ]);
       expect(envInputs(api.targets.lint)).toEqual([
         ...environmentVariables,
-        ...triples,
         "CARGO_BUILD_WARNINGS",
         "CLIPPY_CONF_DIR",
       ]);
-      expect(envInputs(api.targets["fmt-check"])).toEqual([...environmentVariables, ...triples]);
+      expect(envInputs(api.targets["fmt-check"])).toEqual([...environmentVariables]);
 
       for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt"]) {
         expect(inputsOf(api.targets[name], "runtime")).toEqual([
@@ -157,7 +153,7 @@ describe("caching", () => {
         ]);
       }
       expect(toolchainCommand("rust")).toBe(
-        "cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom",
+        "{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true",
       );
     },
     HARNESS_TIMEOUT,
@@ -213,12 +209,15 @@ describe("caching", () => {
       expect(graph.projects.lib.namedInputs).toEqual({
         default: [
           "{projectRoot}/**/*",
+          "{workspaceRoot}/rust/Cargo.toml",
           "{workspaceRoot}/vendor/parser/**/*",
           "{workspaceRoot}/vendor/lexer/**/*",
         ],
       });
       // app reaches them through lib, whose input it hashes with ^default.
-      expect(graph.projects.app.namedInputs).toEqual({ default: ["{projectRoot}/**/*"] });
+      expect(graph.projects.app.namedInputs).toEqual({
+        default: ["{projectRoot}/**/*", "{workspaceRoot}/rust/Cargo.toml"],
+      });
       expect(graph.projects.lib.metadata.cargo.warnings).toBeUndefined();
     },
     HARNESS_TIMEOUT,
@@ -242,7 +241,9 @@ describe("caching", () => {
       expect(fileInputs(graph.projects.util.targets.test)).toContain(model);
       expect(fileInputs(graph.projects.api.targets.test)).not.toContain(model);
       // plain has no registry or git dependency.
-      expect(graph.projects.plain.namedInputs).toEqual({ default: ["{projectRoot}/**/*"] });
+      expect(graph.projects.plain.namedInputs).toEqual({
+        default: ["{projectRoot}/**/*", "{workspaceRoot}/rust/Cargo.toml"],
+      });
       expect(fileInputs(graph.projects.plain.targets.test)).not.toContain(model);
     },
     HARNESS_TIMEOUT,
@@ -409,6 +410,11 @@ describe("caching", () => {
 
           expect(api.targets.build).toMatchObject({ cache: false, outputs: [] });
           expect(rust.targets.doc).toMatchObject({ cache: false, outputs: [] });
+          // The executor reads why, to fail a task that the configuration caches anyway.
+          for (const target of [api.targets.build, rust.targets.doc]) {
+            expect(target.metadata.cargo.uncached).toMatch(/artifact directory lies outside/);
+          }
+          expect(api.targets.check.metadata.cargo.uncached).toBeUndefined();
           for (const name of ["check", "lint", "test", "fmt-check"]) {
             expect(api.targets[name].cache).toBe(true);
           }
@@ -422,6 +428,32 @@ describe("caching", () => {
         } finally {
           workspace.remove();
         }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "leave build and doc uncached, and say so, where Cargo's configuration chooses the triple",
+      async () => {
+        const graph = await loadFixtureGraph("crate-shapes", {
+          files: { "rust/.cargo/config.toml": '[build]\ntarget = "x86_64-unknown-linux-gnu"\n' },
+        });
+        const { cli, rust } = graph.projects;
+
+        for (const target of [cli.targets.build, rust.targets.doc]) {
+          expect(target).toMatchObject({ cache: false, outputs: [] });
+          expect(target.metadata.cargo.uncached).toMatch(
+            /build.target in .*rust\/.cargo\/config.toml chooses the target triple/,
+          );
+        }
+        for (const name of ["check", "lint", "test", "fmt-check"]) {
+          expect(cli.targets[name].cache).toBe(true);
+        }
+        expect(cli.metadata.cargo.warnings).toEqual([
+          expect.stringMatching(
+            /rust\/.cargo\/config.toml sets build.target for the Cargo workspace in rust, .*targetTriple/,
+          ),
+        ]);
       },
       HARNESS_TIMEOUT,
     );

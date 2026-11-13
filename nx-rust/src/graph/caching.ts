@@ -3,17 +3,18 @@ import { dirname, isAbsolute, relative } from "node:path";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import {
   defaultInputSettings,
-  hostTriples,
+  Input,
   InputContext,
   InputSettings,
   InputSubject,
+  repositoryDefaultInputs,
   targetInputs,
 } from "./inputs";
-import { ArtifactDirectory, isCached, targetOutputs } from "./outputs";
-import { findCrateFolders, unseenPathDependencyWarning } from "./path-dependencies";
+import { ArtifactDirectory, targetOutputs, uncachedByDesign, uncachedReason } from "./outputs";
+import { crateInputs, findCrateFolders, unseenPathDependencyWarning } from "./path-dependencies";
 import { pluginInput } from "./plugin-package";
 import { redirectedUses } from "./redirected-uses";
-import type { InferredTargetName } from "./targets";
+import { InferredTargetName, TargetCargoMetadata, targetCargoMetadataKey } from "./targets";
 
 /** What the caching of every project of one graph computation shares. */
 export interface CacheContext extends InputContext {
@@ -51,14 +52,17 @@ export async function cacheContext(
   const warn = (key: string, message: string) => {
     warnings.set(key, [...(warnings.get(key) ?? []), message]);
   };
-  const pathDependencyFolders = new Map<string, string[]>();
+  const pathDependencyInputs = new Map<string, Input[]>();
+  const redirectedInputs = new Map<string, Input[]>();
   for (const workspace of discovery.workspaces) {
     for (const crate of workspace.members) {
       const dependencies = folders.withoutProject.get(crate.manifest_path) ?? [];
-      pathDependencyFolders.set(
-        crate.manifest_path,
-        dependencies.filter((dependency) => dependency.seen).map((dependency) => dependency.folder),
-      );
+      pathDependencyInputs.set(crate.manifest_path, [
+        ...new Set(dependencies.flatMap(crateInputs)),
+      ]);
+      redirectedInputs.set(crate.manifest_path, [
+        ...new Set((folders.leftOutEdges.get(crate.manifest_path) ?? []).flatMap(crateInputs)),
+      ]);
       for (const dependency of dependencies.filter((dependency) => !dependency.seen)) {
         warn(
           crate.manifest_path,
@@ -73,8 +77,11 @@ export async function cacheContext(
   }
   const artifactDirectories = locateArtifactDirectories(discovery);
   for (const workspace of discovery.workspaces) {
-    const message = artifactDirectoryWarning(workspace, discovery, artifactDirectories);
-    if (message !== undefined) {
+    const messages = [
+      artifactDirectoryWarning(workspace, discovery, artifactDirectories),
+      buildTargetWarning(workspace, workspaceRoot),
+    ];
+    for (const message of messages.filter((message) => message !== undefined)) {
       for (const manifest of workspaceManifests(workspace)) {
         warn(manifest, message);
       }
@@ -86,9 +93,9 @@ export async function cacheContext(
   return {
     repositoryRoot: workspaceRoot,
     plugin,
-    hostTriples: hostTriples(),
-    pathDependencyFolders,
-    redirectedFolders: folders.leftOutEdges,
+    repositoryDefault: repositoryDefaultInputs(nxJson?.namedInputs),
+    pathDependencyInputs,
+    redirectedInputs,
     artifactDirectories,
     warnings,
   };
@@ -101,9 +108,13 @@ export type CacheSubject = InputSubject;
  * Gives each of a project's inferred targets its caching: whether it is
  * cached, its inputs and its outputs (`DES-INPUTS`, `DES-OUTPUTS`), and the
  * plugin's version as the option `pluginVersion` where no npm node carries
- * it. Every inferred target gets `cache` and `outputs`; the targets that
- * `DES-INPUTS` covers get their inputs, and `audit`, `deny` and `update`
- * keep the inputs that `inferTargets` gave them.
+ * it. A target arrives cached where `cachedTargets` names it, and stays so
+ * unless {@link uncachedReason} gives a reason for this project. Every
+ * inferred target gets `cache` and `outputs`, and an uncached one the
+ * reason in `metadata.cargo.uncached`, from which the executor fails a task
+ * that the configuration caches anyway. The targets that `DES-INPUTS`
+ * covers get their inputs, and `audit`, `deny` and `update` keep the inputs
+ * that `inferTargets` gave them.
  */
 // @mara implements DES-INPUTS
 // @mara implements DES-OUTPUTS
@@ -114,13 +125,22 @@ export function configureCaching(
   settings: InputSettings = defaultInputSettings,
 ): void {
   const artifacts = context.artifactDirectories.get(subject.workspace.root) ?? { inside: false };
+  const place = { artifacts, buildTargetFiles: subject.workspace.buildTargetFiles ?? [] };
   for (const [name, target] of targets) {
-    target.cache = isCached(name, artifacts);
-    const inputs = targetInputs(name, subject, context, configuredTriples(target), settings);
+    const reason =
+      target.cache === true
+        ? uncachedReason(name, place, configuredTriples(target).length > 0)
+        : (uncachedByDesign[name] ?? "the plugin does not cache this target");
+    target.cache = reason === undefined;
+    const metadata = target.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
+    if (metadata !== undefined && reason !== undefined) {
+      metadata.uncached = reason;
+    }
+    const inputs = targetInputs(name, subject, context, settings);
     if (inputs !== undefined) {
       target.inputs = inputs;
     }
-    target.outputs = targetOutputs(name, subject.pkg, artifacts);
+    target.outputs = targetOutputs(name, subject.pkg, artifacts, target.cache);
     if (context.plugin.kind === "option") {
       target.options = { ...target.options, pluginVersion: context.plugin.version };
     }
@@ -146,6 +166,24 @@ function projectRoots(discovery: CargoDiscovery): string[] {
       ]),
     ),
   ];
+}
+
+// The warning of `DES-OUTPUTS` for a workspace whose Cargo configuration
+// chooses the target triple, which leaves `build` and `doc` uncached unless
+// their options name a triple.
+// @mara implements DES-DIAGNOSTICS
+function buildTargetWarning(workspace: CargoWorkspace, workspaceRoot: string): string | undefined {
+  const [file] = workspace.buildTargetFiles ?? [];
+  if (file === undefined) {
+    return undefined;
+  }
+  const shown = relative(workspaceRoot, file);
+  const where = shown.startsWith("..") || isAbsolute(shown) ? file : shown;
+  return [
+    `nx-rust: ${where} sets build.target for ${describeWorkspace(workspace)}, so cargo puts the artifacts of its build and doc targets in a folder that the plugin cannot name.`,
+    `Those targets run uncached, and its other targets stay cached.`,
+    `To cache them, give the triple as the targetTriple option of build and doc, in the crate's or the workspace's configuration, or on the command line as --targetTriple=<triple>.`,
+  ].join(" ");
 }
 
 // The target triples that a target's options and configurations name.

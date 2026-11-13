@@ -5,14 +5,15 @@ import type { CargoWorkspace } from "./discovery";
 import type { InferredTargetName } from "./targets";
 
 /**
- * The name of the crate's own named input: its files, the folders of the
- * path dependencies without a project that it reaches, and what the
- * repository adds to its key (`DES-INPUTS`). Dependents hash it through
- * `^default`.
+ * The name of the crate's own named input: the files that decide what the
+ * crate is when another crate builds it, the folders of the crates without a
+ * project that it reaches, what the repository adds to its key, and the
+ * repository's own `default` apart from its patterns under the project's
+ * folder (`DES-INPUTS`). Dependents hash it through `^default`.
  *
  * It is `default` because a `^` input fails the hash of a task when a project
  * that the task's project depends on has no named input of that name
- * (`EVD-NX-24-NAMED-INPUTS`), and a crate can depend on a project of another
+ * (`EVD-NX-24-INPUTS-OUTPUTS`), and a crate can depend on a project of another
  * plugin, such as a JS project. Every project has a `default`: Nx's own,
  * `{projectRoot}/**\/*`, or the one in `nx.json`.
  */
@@ -101,20 +102,23 @@ export interface InputContext {
   repositoryRoot: string;
   /** How the plugin's version reaches the keys. */
   plugin: PluginInput;
-  /** The host's target triples, whose `CARGO_TARGET_<TRIPLE>_*` variables count ({@link hostTriples}). */
-  hostTriples: readonly string[];
   /**
-   * The folders of the path dependencies without a project that each crate
-   * reaches, by the crate's manifest path, relative to the repository root
-   * and inside it (`findPathDependencies` in `path-dependencies.ts`).
+   * The entries of the repository's `default` named input that the crate's
+   * own keeps ({@link repositoryDefaultInputs}).
    */
-  pathDependencyFolders: ReadonlyMap<string, readonly string[]>;
+  repositoryDefault: readonly Input[];
   /**
-   * The folders of the redirected crates with a project that each crate may
-   * use but has no edge to, by the crate's manifest path, relative to the
-   * repository root (`findCrateFolders` in `path-dependencies.ts`).
+   * The inputs for the crates without a project that each crate reaches, by
+   * the crate's manifest path: each one's folder and the root manifest of its
+   * workspace (`findCrateFolders` in `path-dependencies.ts`).
    */
-  redirectedFolders: ReadonlyMap<string, readonly string[]>;
+  pathDependencyInputs: ReadonlyMap<string, readonly Input[]>;
+  /**
+   * The inputs for the redirected crates with a project that each crate may
+   * use but has no edge to, by the crate's manifest path: each one's folder
+   * and the root manifest of its workspace.
+   */
+  redirectedInputs: ReadonlyMap<string, readonly Input[]>;
 }
 
 /**
@@ -129,6 +133,7 @@ export const environmentVariables = [
   "RUSTC",
   "RUSTC_WRAPPER",
   "RUSTC_WORKSPACE_WRAPPER",
+  "RUSTDOC",
   "RUSTC_BOOTSTRAP",
   "CARGO_BUILD_TARGET",
   "CARGO_BUILD_RUSTFLAGS",
@@ -136,6 +141,7 @@ export const environmentVariables = [
   "CARGO_BUILD_RUSTC",
   "CARGO_BUILD_RUSTC_WRAPPER",
   "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+  "CARGO_BUILD_RUSTDOC",
   "CC",
   "CXX",
   "AR",
@@ -149,9 +155,6 @@ export const environmentVariables = [
   "OPENSSL_STATIC",
   "OPENSSL_NO_VENDOR",
 ] as const;
-
-/** The settings of Cargo's `[target.<triple>]` table whose variables count, for each triple. */
-const tripleSettings = ["LINKER", "RUSTFLAGS", "RUNNER"] as const;
 
 /** The targets that compile, which hash `CARGO_BUILD_WARNINGS` (`DES-INPUTS`). */
 const compilingTargets: ReadonlySet<InferredTargetName> = new Set([
@@ -181,8 +184,17 @@ export const crateInputTargets: ReadonlySet<InferredTargetName> = new Set([
   "doc",
 ]);
 
-/** The files of the toolchain and of Cargo's configuration that apply in a folder and below it. */
-const workspaceFileNames = ["rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml"];
+/**
+ * The files of the toolchain and of Cargo's configuration that apply in a
+ * folder and below it. Cargo reads `.cargo/config`, the older name, where it
+ * exists, in place of `.cargo/config.toml`.
+ */
+const workspaceFileNames = [
+  "rust-toolchain.toml",
+  "rust-toolchain",
+  ".cargo/config.toml",
+  ".cargo/config",
+];
 
 /** The configuration files of the tool that a target runs, looked up from the crate up to the root. */
 const toolFileNames: Partial<Record<InferredTargetName, readonly string[]>> = {
@@ -198,10 +210,14 @@ const toolFileNames: Partial<Record<InferredTargetName, readonly string[]>> = {
  * It holds every file of the project's folder that belongs to no nested
  * project, except the workspace's `Cargo.lock` where the folder is the
  * workspace root, which reaches the keys of the workspace's own targets
- * only ({@link externalDependencyInputs}); the folder of every path
- * dependency without a project that the crate reaches; and what the
- * repository adds. A pattern that the repository negates in a target's own
- * `inputs` takes files out of it, on the repository's responsibility.
+ * only ({@link externalDependencyInputs}); the root manifest of the crate's
+ * workspace, whose fields the crate can inherit, also when another
+ * workspace builds it (`EVD-CARGO-DEPENDENCY-SIDE`); the folder and
+ * workspace manifest of every crate without a project that the crate
+ * reaches; what the repository adds; and the repository's own `default`
+ * without its patterns under the project's folder. A pattern that the
+ * repository negates in a target's own `inputs` takes files out of it, on
+ * the repository's responsibility.
  */
 // @mara implements DES-INPUTS
 // @mara implements REQ-INPUT-FILES
@@ -214,30 +230,61 @@ export function namedInputs(
   if (subject.isWorkspaceProject) {
     crateFiles.push("!{projectRoot}/Cargo.lock");
   }
+  const workspaceRoot = workspaceFolder(subject, context);
+  if (workspaceRoot !== subject.root) {
+    crateFiles.push(fromRoot(workspaceRoot, "Cargo.toml"));
+  }
   const pathDependencies = subject.pkg
-    ? (context.pathDependencyFolders.get(subject.pkg.manifest_path) ?? [])
+    ? (context.pathDependencyInputs.get(subject.pkg.manifest_path) ?? [])
     : [];
   return {
     [crateInputName]: [
       ...crateFiles,
-      ...pathDependencies.map((folder) => `{workspaceRoot}/${folder}/**/*`),
+      ...pathDependencies,
       ...settings.added.fileInputs,
       ...settings.added.envInputs.map((env) => ({ env })),
       ...settings.added.runtimeInputs.map((runtime) => ({ runtime })),
+      ...context.repositoryDefault,
     ],
   };
 }
 
 /**
+ * The entries of the repository's `default` named input, from `nx.json`,
+ * that a crate's own `default` keeps: every entry but a file set under
+ * `{projectRoot}`, negated or not, and a reference to `default` itself.
+ * Named inputs such as `sharedGlobals`, `env`, `runtime` and
+ * `externalDependencies` entries and file sets under `{workspaceRoot}` thus
+ * still reach a crate's key, while what the crate hashes of its own folder
+ * is the plugin's to say (`DES-INPUTS`). Nx's own `default`, where `nx.json`
+ * has none, holds nothing else.
+ */
+// @mara implements DES-INPUTS
+export function repositoryDefaultInputs(namedInputs: unknown): Input[] {
+  const entries = (namedInputs as Record<string, unknown> | undefined)?.[crateInputName];
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries.filter((entry): entry is Input => {
+    if (typeof entry === "string") {
+      return entry !== crateInputName && !/^!?\{projectRoot\}/.test(entry);
+    }
+    if (typeof entry !== "object" || entry === null) {
+      return false;
+    }
+    const fileset = (entry as { fileset?: unknown }).fileset;
+    return typeof fileset !== "string" || !/^!?\{projectRoot\}/.test(fileset);
+  });
+}
+
+/**
  * The inputs of one of the project's targets, in the order of the table in
  * `DES-INPUTS`: the crate's files and those of its dependencies, the
- * workspace files, the folders of the redirected crates that the crate may
- * use without an edge, the members' manifests, the tool's configuration,
- * the lockfile, the environment, the toolchain and the plugin.
+ * workspace files, the redirected crates that the crate may use without an
+ * edge, the members' manifests, the tool's configuration, the lockfile, the
+ * environment, the toolchain with Cargo's profile and target variables, and
+ * the plugin.
  *
- * @param triples The target triples that the target's options and
- *   configurations name, whose `CARGO_TARGET_<TRIPLE>_*` variables count
- *   beside the host's.
  * @returns `undefined` for a target that `DES-INPUTS` gives no such inputs:
  *   `audit`, `deny` and `update` keep theirs from `DES-WORKSPACE-TARGETS`.
  */
@@ -249,7 +296,6 @@ export function targetInputs(
   target: InferredTargetName,
   subject: InputSubject,
   context: InputContext,
-  triples: readonly string[] = [],
   settings: InputSettings = defaultInputSettings,
 ): Input[] | undefined {
   if (!crateInputTargets.has(target)) {
@@ -259,35 +305,40 @@ export function targetInputs(
   return [
     crateInputName,
     `^${crateInputName}`,
-    ...workspaceFiles(subject, workspaceRoot),
+    ...workspaceFiles(subject, context.repositoryRoot),
     ...(subject.pkg === undefined
       ? []
-      : (context.redirectedFolders.get(subject.pkg.manifest_path) ?? []).map((folder) =>
-          fromRoot(folder, "**/*"),
-        )),
+      : (context.redirectedInputs.get(subject.pkg.manifest_path) ?? [])),
     ...(settings.featureUnification === "hakari" ? [] : memberManifestInputs(subject, context)),
     ...toolConfigurationInputs(target, subject, workspaceRoot, settings),
     ...(target === "fmt" || target === "fmt-check"
       ? []
       : externalDependencyInputs(subject, workspaceRoot)),
-    ...environmentInputs(target, [...context.hostTriples, ...triples]),
+    ...environmentInputs(target),
     { runtime: toolchainCommand(workspaceRoot) },
     pluginInput(context.plugin),
   ];
 }
 
 /**
- * The files that apply to every crate of the workspace: the root
- * `Cargo.toml`, and each `rust-toolchain.toml`, `rust-toolchain` and
- * `.cargo/config.toml` in the folders above the project's, up to the
- * repository root. Those in the project's own folder are among its files.
- * Each is named by its path, whether or not it exists, so that adding one
- * changes the key.
+ * The files of the context that cargo runs in: each `rust-toolchain.toml`,
+ * `rust-toolchain`, `.cargo/config.toml` and `.cargo/config` in the folders
+ * above the project's, up to the repository root. Those in the project's own
+ * folder are among its files, and the workspace's root manifest is in its
+ * named input. The files that a configuration's `include` adds count too.
+ * Each is named by its path, whether or not it exists, so that
+ * adding one changes the key. They stay out of the named input: cargo takes
+ * them from the folder it starts in, not from a dependency's
+ * (`EVD-CARGO-DEPENDENCY-SIDE`).
  */
-function workspaceFiles(subject: InputSubject, workspaceRoot: string): string[] {
+function workspaceFiles(subject: InputSubject, repositoryRoot: string): string[] {
   const files: string[] = [];
-  if (workspaceRoot !== subject.root) {
-    files.push(fromRoot(workspaceRoot, "Cargo.toml"));
+  // The files that a configuration's `include` adds, inside the repository.
+  for (const included of subject.workspace.configIncludes ?? []) {
+    const path = repositoryPath(repositoryRoot, included);
+    if (path !== undefined && path !== "") {
+      files.push(`{workspaceRoot}/${path}`);
+    }
   }
   for (const folder of foldersAbove(subject.root)) {
     files.push(...workspaceFileNames.map((name) => fromRoot(folder, name)));
@@ -365,19 +416,13 @@ export function externalDependencyInputs(
 
 /**
  * One `env` input per variable of `DES-INPUTS` that applies to the target:
- * the fixed list, `CARGO_TARGET_<TRIPLE>_LINKER`, `_RUSTFLAGS` and
- * `_RUNNER` for each of `triples`, `CARGO_BUILD_WARNINGS` on the targets
- * that compile, and `CLIPPY_CONF_DIR` on `lint`.
+ * the fixed list, `CARGO_BUILD_WARNINGS` on the targets that compile, and
+ * `CLIPPY_CONF_DIR` on `lint`. The variables whose names start with
+ * `CARGO_PROFILE_` or `CARGO_TARGET_` are in the toolchain command instead
+ * ({@link toolchainCommand}).
  */
-export function environmentInputs(
-  target: InferredTargetName,
-  triples: readonly string[],
-): InputDefinition[] {
+export function environmentInputs(target: InferredTargetName): InputDefinition[] {
   const names: string[] = [...environmentVariables];
-  for (const triple of new Set(triples)) {
-    const key = triple.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-    names.push(...tripleSettings.map((setting) => `CARGO_TARGET_${key}_${setting}`));
-  }
   if (compilingTargets.has(target)) {
     names.push("CARGO_BUILD_WARNINGS");
   }
@@ -388,64 +433,42 @@ export function environmentInputs(
 }
 
 /**
- * The command of the toolchain input: `rustc -Vv` in the workspace root,
- * where the plugin's cargo commands run, as cargo will resolve it there with
- * the task's environment (`DES-INPUTS`, `REQ-TOOLCHAIN-KEY`). Nx runs it
- * through `sh -c` in the repository root (`EVD-NX-24-INPUT-SEMANTICS`).
+ * The command of the toolchain input, one process per task's key: first
+ * `rustc -Vv` in the workspace root, where the plugin's cargo commands run,
+ * as cargo will resolve it there with the task's environment (`DES-INPUTS`,
+ * `REQ-TOOLCHAIN-KEY`); then every variable of the task's environment whose
+ * name starts with `CARGO_PROFILE_` or `CARGO_TARGET_`, with its value,
+ * sorted, apart from `CARGO_TARGET_DIR`, which says where the artifacts go
+ * and not what they are (`REQ-ENV-ALLOWLIST`). Those two families are open
+ * ended, with a profile's or a triple's name in each variable, so no list of
+ * `env` inputs can name them. Nx runs the command through `sh -c` in the
+ * repository root, with the task's dotenv files loaded
+ * (`EVD-NX-24-INPUT-SEMANTICS`).
  *
  * rustup may not install a toolchain for it (`ADR-GRAPH-NO-TOOLCHAIN-INSTALL`).
  * When `rustc -Vv` fails, as for a pinned toolchain that is not installed,
- * the command prints a random value instead, new at each evaluation, so that
- * no result stored under the key is ever restored and the task runs as plain
- * cargo would (`EVD-RUSTUP-MISSING-TOOLCHAIN`).
+ * or the folder is missing, the command prints a random value in its place,
+ * new at each evaluation, so that no result stored under the key is ever
+ * restored and the task runs as plain cargo would
+ * (`EVD-RUSTUP-MISSING-TOOLCHAIN`). The command always ends with status 0;
+ * Nx keys a task on what a runtime input prints whatever its status.
  *
  * @param workspaceRoot The workspace's root folder, relative to the repository root.
  */
 // @mara implements REQ-TOOLCHAIN-KEY
+// @mara implements REQ-ENV-ALLOWLIST
 export function toolchainCommand(workspaceRoot: string): string {
   const folder = workspaceRoot === "." ? "." : `./${workspaceRoot}`;
-  return `cd ${shellQuote(folder)} && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom`;
+  return [
+    `{ cd ${shellQuote(folder)} && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
+    `env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort`,
+    "true",
+  ].join("; ");
 }
 
 /** The input that carries the plugin's own version into the key. */
 function pluginInput(plugin: PluginInput): InputDefinition {
   return { externalDependencies: plugin.kind === "node" ? [plugin.packageName] : [] };
-}
-
-/** The node architectures that rustup's host triples name differently. */
-const rustArchitectures: Readonly<Record<string, string>> = {
-  x64: "x86_64",
-  arm64: "aarch64",
-  ia32: "i686",
-  riscv64: "riscv64gc",
-  s390x: "s390x",
-  ppc64: "powerpc64le",
-  loong64: "loongarch64",
-};
-
-/**
- * The triples that a Rust toolchain on this host can have as its host, from
- * Node's platform and architecture, without running a toolchain. On Linux
- * both the GNU and the musl triple count, because which C library the
- * toolchain uses cannot be read without it; a variable of a triple that does
- * not apply costs nothing. Empty on a platform or architecture that the
- * plugin does not know.
- */
-export function hostTriples(
-  platform: NodeJS.Platform = process.platform,
-  architecture: string = process.arch,
-): string[] {
-  const arch = rustArchitectures[architecture];
-  if (arch === undefined) {
-    return [];
-  }
-  if (platform === "darwin") {
-    return arch === "x86_64" || arch === "aarch64" ? [`${arch}-apple-darwin`] : [];
-  }
-  if (platform === "linux") {
-    return [`${arch}-unknown-linux-gnu`, `${arch}-unknown-linux-musl`];
-  }
-  return [];
 }
 
 /** The workspace's root folder relative to the repository root, `.` for the root itself. */

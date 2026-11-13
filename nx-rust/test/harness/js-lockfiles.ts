@@ -16,6 +16,12 @@ export function pnpmLockfile(
     integrity.leftPad ??
     "sha512-2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222==";
   const plugin = version === null ? [] : [`'@convesoft/nx-rust@${version}'`];
+  // Each published version has an integrity of its own, which Nx hashes for
+  // the package's node.
+  const pluginIntegrity = `sha512-${Buffer.from(version ?? "")
+    .toString("base64")
+    .replace(/=/g, "")
+    .padEnd(86, "3")}==`;
   return [
     "lockfileVersion: '9.0'",
     "",
@@ -42,7 +48,7 @@ export function pnpmLockfile(
     "",
     ...plugin.flatMap((key) => [
       `  ${key}:`,
-      "    resolution: {integrity: sha512-3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333==}",
+      `    resolution: {integrity: ${pluginIntegrity}}`,
       "",
     ]),
     "  left-pad@1.3.0:",

@@ -492,7 +492,7 @@ describe("a target that the plugin leaves uncached and the configuration caches"
 
           expect(result.status).toBe(1);
           expect(result.output).toContain(
-            `${task}: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves \`${task.split(":")[1]}\` uncached, because`,
+            `${task}: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves \`${task.split(":")[1]}\` uncached in this project, because`,
           );
           expect(result.output).toContain(reason);
           expect(result.output).toContain(`run \`nx show target ${task} --json\``);

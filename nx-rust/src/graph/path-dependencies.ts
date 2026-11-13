@@ -15,6 +15,13 @@ export interface PathDependency {
   seen: boolean;
   /** How the crate reaches it: by a path, or by a `[patch]`, `[replace]` or `paths` entry. */
   via: "path" | "redirection";
+  /**
+   * The root manifest of the workspace it belongs to, where that is not its
+   * own manifest, relative to the repository root and inside it: cargo
+   * applies the fields that the crate inherits from there, also when
+   * another workspace builds it (`EVD-CARGO-DEPENDENCY-SIDE`).
+   */
+  workspaceManifest?: string;
 }
 
 /** The crates whose files a crate's inputs name beyond its edges, by the crate's manifest path. */
@@ -29,9 +36,9 @@ export interface CrateFolders {
   /**
    * The crates with a project that a redirection may put in place of a
    * dependency of the crate, but whose edge from it `redirectedUses` leaves
-   * out. Their folders go onto the crate's targets.
+   * out. Their folders and workspace manifests go onto the crate's targets.
    */
-  leftOutEdges: Map<string, string[]>;
+  leftOutEdges: Map<string, PathDependency[]>;
 }
 
 /**
@@ -64,6 +71,8 @@ export async function findCrateFolders(
   );
   const known = new Map<string, CargoPackage>();
   const byRealFolder = new Map<string, CargoPackage>();
+  // The root manifest of each known crate's workspace, by the crate's real folder.
+  const workspaceManifests = new Map<string, string>();
   for (const report of [
     ...discovery.workspaces.map((workspace) => workspace.report),
     ...discovery.pathDependencyReports.map((entry) => entry.report),
@@ -71,6 +80,10 @@ export async function findCrateFolders(
     for (const pkg of report.packages) {
       if (!known.has(pkg.manifest_path)) {
         known.set(pkg.manifest_path, pkg);
+      }
+      const real = realPath(dirname(pkg.manifest_path));
+      if (!workspaceManifests.has(real)) {
+        workspaceManifests.set(real, join(report.workspace_root, "Cargo.toml"));
       }
       const folder = realPath(dirname(pkg.manifest_path));
       if (!byRealFolder.has(folder)) {
@@ -81,7 +94,7 @@ export async function findCrateFolders(
 
   type Reached = { name: string; folder: string; via: PathDependency["via"] };
   const reached = new Map<string, Reached[]>();
-  const leftOutEdges = new Map<string, string[]>();
+  const leftOutEdges = new Map<string, PathDependency[]>();
   for (const workspace of discovery.workspaces) {
     for (const crate of workspace.members) {
       reached.set(
@@ -97,7 +110,17 @@ export async function findCrateFolders(
   for (const use of uses.filter((use) => !use.edge)) {
     const member = use.member.manifest_path;
     if (use.projectRoot !== undefined) {
-      leftOutEdges.set(member, [...(leftOutEdges.get(member) ?? []), use.projectRoot]);
+      const crate = byRealFolder.get(use.folder);
+      leftOutEdges.set(member, [
+        ...(leftOutEdges.get(member) ?? []),
+        {
+          name: crate?.name ?? basename(use.folder),
+          folder: use.projectRoot,
+          seen: true,
+          via: "redirection",
+          workspaceManifest: ownWorkspaceManifest(use.folder),
+        },
+      ]);
       continue;
     }
     const pkg = use.reported ? byRealFolder.get(use.folder) : undefined;
@@ -147,13 +170,46 @@ export async function findCrateFolders(
         folder: crate.inside ?? crate.folder,
         seen: crate.inside !== undefined && seen.has(crate.inside),
         via: crate.via,
+        workspaceManifest: ownWorkspaceManifest(crate.folder),
       })),
     );
   }
-  for (const [manifest, folders] of leftOutEdges) {
-    leftOutEdges.set(manifest, [...new Set(folders)].sort());
+  for (const [manifest, crates] of leftOutEdges) {
+    const folders = new Set<string>();
+    leftOutEdges.set(
+      manifest,
+      crates.filter((crate) => !folders.has(crate.folder) && folders.add(crate.folder)),
+    );
   }
   return { withoutProject, leftOutEdges };
+
+  // The root manifest of the workspace of the crate in `folder`, a real
+  // path, where it is not the crate's own and lies inside the repository.
+  function ownWorkspaceManifest(folder: string): string | undefined {
+    const manifest = workspaceManifests.get(folder);
+    if (manifest === undefined || realPath(dirname(manifest)) === folder) {
+      return undefined;
+    }
+    const path = inside(repositoryRoot, realPath(manifest));
+    return path === "." ? undefined : path;
+  }
+}
+
+/**
+ * The inputs for a crate without an edge: its folder and the root manifest
+ * of its workspace, where Nx can see them.
+ */
+export function crateInputs(crate: PathDependency): string[] {
+  if (!crate.seen) {
+    return [];
+  }
+  const folder = crate.folder === "." ? "{workspaceRoot}" : `{workspaceRoot}/${crate.folder}`;
+  return [
+    `${folder}/**/*`,
+    ...(crate.workspaceManifest === undefined
+      ? []
+      : [`{workspaceRoot}/${crate.workspaceManifest}`]),
+  ];
 }
 
 /**

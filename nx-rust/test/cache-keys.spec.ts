@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { environmentVariables, hostTriples } from "../src/graph/inputs";
+import { environmentVariables } from "../src/graph/inputs";
 import {
   CacheKeyRow,
   describeCacheKeyMatrix,
@@ -111,6 +111,45 @@ describeCacheKeyMatrix("keys must differ after", [
       "must differ",
     ),
   })),
+  ...(
+    [
+      [
+        "[replace]",
+        {
+          "rust/Cargo.toml": appended('\n[replace]\n"itoa:1.0.18" = { path = "../vendor/itoa" }\n'),
+        },
+      ],
+      ["paths", { "rust/.cargo/config.toml": 'paths = ["../vendor/itoa"]\n' }],
+    ] as const
+  ).map(([table, redirection]): CacheKeyRow => ({
+    change: `a change in a crate without a project that ${table} redirects to, for the members with a registry dependency and no other`,
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        ...redirection,
+        // api depends on itoa from crates.io; the plugin's entry excludes vendor.
+        "rust/crates/api/Cargo.toml": (manifest) =>
+          manifest.replace("[dependencies]\n", '[dependencies]\nitoa = "=1.0.18"\n'),
+        "vendor/itoa/Cargo.toml":
+          '[package]\nname = "itoa"\nversion = "1.0.18"\nedition = "2024"\n\n[workspace]\n',
+        "vendor/itoa/src/lib.rs": "pub fn review() {}\n",
+        "nx.json": (text) =>
+          JSON.stringify({
+            ...JSON.parse(text),
+            plugins: JSON.parse(text).plugins.map((plugin: string) => ({
+              plugin,
+              exclude: ["vendor/**"],
+            })),
+          }),
+      },
+    },
+    after: { files: { "vendor/itoa/src/lib.rs": changed } },
+    keys: {
+      "api:check": "must differ",
+      "api:build": "must differ",
+      "testkit:check": "must not differ",
+    },
+  })),
   {
     change: "a change in the root Cargo.toml",
     fixture: "subfolder-workspace",
@@ -140,6 +179,18 @@ describeCacheKeyMatrix("keys must differ after", [
     after: { files: { [path]: "# changed\n" } },
     keys: all(apiTasks, "must differ"),
   })),
+  {
+    change: "a change in a configuration file that the workspace's .cargo/config.toml includes",
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        "rust/.cargo/config.toml": 'include = ["extra.toml"]\n',
+        "rust/.cargo/extra.toml": "[build]\nrustflags = []\n",
+      },
+    },
+    after: { files: { "rust/.cargo/extra.toml": '[build]\nrustflags = ["--cfg", "extra"]\n' } },
+    keys: all(apiTasks, "must differ"),
+  },
   {
     change: "a change in a clippy.toml, for lint",
     fixture: "subfolder-workspace",
@@ -346,10 +397,14 @@ function registryPackage(version: string, checksum: string): string {
 }
 
 describe("keys with the environment", () => {
-  const triples = hostTriples().flatMap((triple) => {
-    const key = triple.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-    return ["LINKER", "RUSTFLAGS", "RUNNER"].map((setting) => `CARGO_TARGET_${key}_${setting}`);
-  });
+  // Cargo's variables for a profile or a triple, of any name; not CARGO_TARGET_DIR.
+  const families = [
+    "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS",
+    "CARGO_PROFILE_CUSTOM_OPT_LEVEL",
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+    "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER",
+  ];
 
   it(
     "differ after a change of each variable in the list, CARGO_BUILD_WARNINGS on the targets that compile and CLIPPY_CONF_DIR on lint",
@@ -360,7 +415,7 @@ describe("keys with the environment", () => {
         const base = await workspace.hashTasks(tasks);
         const failures: string[] = [];
         const expectations: [string, string[]][] = [
-          ...[...environmentVariables, ...triples].map((variable): [string, string[]] => [
+          ...[...environmentVariables, ...families].map((variable): [string, string[]] => [
             variable,
             tasks,
           ]),
@@ -387,7 +442,115 @@ describe("keys with the environment", () => {
     },
     HARNESS_TIMEOUT * 4,
   );
+  it(
+    "differ after a profile or target variable in a crate's .env, for that crate only, and not after CARGO_TARGET_DIR there",
+    async () => {
+      // A .env that Git ignores, so that only the environment changes for Nx.
+      const workspace = FixtureWorkspace.create("subfolder-workspace", {
+        ".gitignore": appended(".env\n"),
+      });
+      try {
+        const tasks = ["api:build", "api:test", "model:build"];
+        const base = await workspace.hashTasks(tasks);
+        const differs = async (dotenv: string) => {
+          writeFileSync(join(workspace.root, "rust/crates/api/.env"), dotenv);
+          const hashes = await workspace.hashTasks(tasks);
+          return Object.fromEntries(
+            tasks.map((task) => [task, hashes[task].value !== base[task].value]),
+          );
+        };
+
+        expect(await differs("CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false\n")).toEqual({
+          "api:build": true,
+          "api:test": true,
+          "model:build": false,
+        });
+        expect(await differs("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=--cfg=a\n")).toEqual({
+          "api:build": true,
+          "api:test": true,
+          "model:build": false,
+        });
+        expect(
+          await differs(`CARGO_TARGET_DIR=${join(workspace.root, "..", "elsewhere")}\n`),
+        ).toEqual({
+          "api:build": false,
+          "api:test": false,
+          "model:build": false,
+        });
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
 });
+
+/** `nx.json` with `namedInputs` of the repository's own. */
+const repositoryInputs =
+  (namedInputs: object) =>
+  (text: string | undefined): string =>
+    JSON.stringify({ ...JSON.parse(text ?? "{}"), namedInputs });
+
+describeCacheKeyMatrix("keys with the repository's own default named input", [
+  ...(
+    [
+      ["an environment variable", { env: { REVIEW_SHARED: "b" } }, {}],
+      ["the output of a command", { env: { REVIEW_RUNTIME: "b" } }, {}],
+      ["a file under {workspaceRoot}", {}, { "shared/global.txt": "b\n" }],
+    ] as const
+  ).map(([what, after, files]): CacheKeyRow => ({
+    change: `a change of ${what} that sharedGlobals in the repository's default names`,
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        "nx.json": repositoryInputs({
+          default: ["{projectRoot}/**/*", "sharedGlobals"],
+          sharedGlobals: [
+            { env: "REVIEW_SHARED" },
+            { runtime: "echo $REVIEW_RUNTIME" },
+            "{workspaceRoot}/shared/global.txt",
+          ],
+          production: ["default"],
+        }),
+        "shared/global.txt": "a\n",
+      },
+      env: { REVIEW_SHARED: "a", REVIEW_RUNTIME: "a" },
+    },
+    after: { ...after, files },
+    keys: { "api:build": "must differ", "api:test": "must differ", "rust:doc": "must differ" },
+  })),
+  {
+    change: "a change in a file of the crate that the repository's default leaves out",
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        "nx.json": repositoryInputs({ default: ["{projectRoot}/**/*", "!{projectRoot}/**/*.md"] }),
+        "rust/crates/api/README.md": "a\n",
+      },
+    },
+    after: { files: { "rust/crates/api/README.md": "b\n" } },
+    keys: { "api:build": "must differ", "api:test": "must differ" },
+  },
+  {
+    change: "a change of a variable that only the repository's production names",
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        "nx.json": repositoryInputs({
+          default: ["{projectRoot}/**/*"],
+          production: ["default", { env: "REVIEW_PRODUCTION" }],
+        }),
+      },
+    },
+    before: { env: { REVIEW_PRODUCTION: "a" } },
+    after: { env: { REVIEW_PRODUCTION: "b" } },
+    keys: {
+      "api:build": "must not differ",
+      "api:test": "must not differ",
+      "rust:doc": "must not differ",
+    },
+  },
+]);
 
 describe("keys with the toolchain", () => {
   /**
@@ -567,17 +730,27 @@ describe("keys with the plugin's version", () => {
 
   // A root package.json and a pnpm lockfile that lists the plugin, as an
   // installed plugin has them.
-  const installed = (integrity: { tslib?: string; leftPad?: string } = {}): FileChanges => ({
+  const installed = (
+    integrity: { tslib?: string; leftPad?: string } = {},
+    version = "0.0.1",
+  ): FileChanges => ({
     "package.json": JSON.stringify({
       name: "repo",
       private: true,
-      devDependencies: { "@convesoft/nx-rust": "0.0.1", "left-pad": "1.3.0" },
+      devDependencies: { "@convesoft/nx-rust": version, "left-pad": "1.3.0" },
     }),
-    "pnpm-lock.yaml": pnpmLockfile("0.0.1", integrity),
+    "pnpm-lock.yaml": pnpmLockfile(version, integrity),
     "node_modules/.modules.yaml": "{}\n",
   });
 
   describeCacheKeyMatrix("where the Rust targets name the plugin's package", [
+    {
+      change: "a new version of the installed plugin package",
+      fixture: "subfolder-workspace",
+      before: { files: installed() },
+      after: { files: installed({}, "0.0.2") },
+      keys: { "api:test": "must differ", "api:build": "must differ", "rust:doc": "must differ" },
+    },
     {
       change: "a change in the JS lockfile to a package that the plugin depends on",
       fixture: "subfolder-workspace",

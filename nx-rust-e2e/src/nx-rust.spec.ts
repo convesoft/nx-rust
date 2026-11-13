@@ -283,7 +283,7 @@ describe("@convesoft/nx-rust", () => {
           expect.arrayContaining(["RUSTFLAGS", "CARGO_BUILD_WARNINGS"]),
         );
         expect(inputs.runtime).toEqual([
-          "cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom",
+          "{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true",
         ]);
         expect(inputs.files).toEqual(
           expect.arrayContaining([
