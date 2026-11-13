@@ -703,6 +703,351 @@ describe("graph-creation errors", () => {
   );
 });
 
+// Checks the part of VER-UNKNOWN-OPTIONS about Cargo metadata
+// (REQ-UNKNOWN-METADATA-OPTIONS): each key under a target table's `options`
+// or configurations that the target does not take fails graph creation.
+describe("options in the target tables", () => {
+  const testOptions =
+    'The options that "test" takes are "features", "allFeatures", "noDefaultFeatures", "profile" and "affectedTests".';
+  const cargoOptions =
+    'The options that @convesoft/nx-rust:cargo knows are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple", "allTargets", "noDeps" and "affectedTests".';
+
+  it.each<[string, FixtureName, FileChanges, string[]]>([
+    [
+      "a key that the executor does not know in a package table's options",
+      "subfolder-workspace",
+      {
+        "rust/crates/model/Cargo.toml": appendTo(
+          "[package.metadata.nx.targets.test.options]\ncoverage = true",
+        ),
+      },
+      [
+        `rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.options] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the inferred target "test", does not know. ${testOptions}`,
+      ],
+    ],
+    [
+      "a key that the executor does not know in a workspace table's options",
+      "subfolder-workspace",
+      {
+        "rust/Cargo.toml": appendTo(
+          "[workspace.metadata.nx.targets.test.options]\ncoverage = true",
+        ),
+      },
+      [
+        `rust/Cargo.toml: [workspace.metadata.nx.targets.test.options] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the inferred target "test", does not know. ${testOptions}`,
+      ],
+    ],
+    [
+      "a key that the executor does not know in a configuration of a package table",
+      "subfolder-workspace",
+      {
+        "rust/crates/model/Cargo.toml": appendTo(
+          "[package.metadata.nx.targets.test.configurations.ci]\ncoverage = true",
+        ),
+      },
+      [
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.configurations.ci] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the inferred target "test", does not know.',
+      ],
+    ],
+    [
+      "a key that the executor does not know in a configuration of a workspace table",
+      "subfolder-workspace",
+      {
+        "rust/Cargo.toml": appendTo(
+          "[workspace.metadata.nx.targets.test.configurations.ci]\ncoverage = true",
+        ),
+      },
+      [
+        'rust/Cargo.toml: [workspace.metadata.nx.targets.test.configurations.ci] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the inferred target "test", does not know.',
+      ],
+    ],
+    [
+      "keys that the executor does not know in the project table of a root manifest without a crate",
+      "subfolder-workspace",
+      {
+        "rust/Cargo.toml": appendTo(
+          "[workspace.metadata.nx.project.targets.doc.options]\nopen = true\n\n[workspace.metadata.nx.project.targets.doc.configurations.ci]\ndocumentPrivateItems = true",
+        ),
+      },
+      [
+        'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc.options] sets the option "open", which @convesoft/nx-rust:cargo, the executor of the inferred target "doc", does not know. The options that "doc" takes are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple" and "noDeps".',
+        'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc.configurations.ci] sets the option "documentPrivateItems", which @convesoft/nx-rust:cargo, the executor of the inferred target "doc", does not know.',
+      ],
+    ],
+    [
+      "options that the executor knows and the target does not take",
+      "subfolder-workspace",
+      {
+        "rust/crates/model/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.test.options]\ntargetTriple = "x86_64-unknown-linux-gnu"',
+        ),
+        "rust/Cargo.toml": appendTo(
+          "[workspace.metadata.nx.targets.build.configurations.all]\nallTargets = true",
+        ),
+      },
+      [
+        `rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.options] sets the option "targetTriple", which the inferred target "test" does not take. ${testOptions}`,
+        'rust/Cargo.toml: [workspace.metadata.nx.targets.build.configurations.all] sets the option "allTargets", which the inferred target "build" does not take. The options that "build" takes are "features", "allFeatures", "noDefaultFeatures", "profile" and "targetTriple".',
+      ],
+    ],
+    [
+      "options of an inferred target that targetNames renames",
+      "subfolder-workspace",
+      {
+        "nx.json": pluginOptions({ targetNames: { check: "typecheck" } }),
+        "rust/crates/model/Cargo.toml": appendTo(
+          "[package.metadata.nx.targets.typecheck.options]\nworkspace = true\n\n[package.metadata.nx.targets.typecheck.configurations.docs]\nnoDeps = true",
+        ),
+      },
+      [
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.typecheck.options] sets the option "workspace", which @convesoft/nx-rust:cargo, the executor of the inferred target "check", named "typecheck" by targetNames, does not know. The options that "typecheck" takes are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple" and "allTargets".',
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.typecheck.configurations.docs] sets the option "noDeps", which the inferred target "check", named "typecheck" by targetNames, does not take.',
+      ],
+    ],
+    [
+      "a misspelt option",
+      "subfolder-workspace",
+      {
+        "rust/crates/model/Cargo.toml": appendTo(
+          "[package.metadata.nx.targets.build.options]\nno-default-features = true",
+        ),
+      },
+      [
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build.options] sets the option "no-default-features", which @convesoft/nx-rust:cargo, the executor of the inferred target "build", does not know. Did you mean "noDefaultFeatures"?',
+      ],
+    ],
+    [
+      "an option of the cargo executor on run, whose executor does not know it",
+      "crate-shapes",
+      {
+        "rust/crates/server/Cargo.toml": appendTo(
+          "[package.metadata.nx.targets.run.options]\nallTargets = true",
+        ),
+      },
+      [
+        'rust/crates/server/Cargo.toml: [package.metadata.nx.targets.run.options] sets the option "allTargets", which @convesoft/nx-rust:run, the executor of the inferred target "run", does not know.',
+      ],
+    ],
+    [
+      "a workspace table under an inferred name, for the members that have the target",
+      "crate-shapes",
+      { "rust/Cargo.toml": appendTo("[workspace.metadata.nx.targets.bench.options]\nwarmUp = 3") },
+      [
+        'rust/Cargo.toml: [workspace.metadata.nx.targets.bench.options] sets the option "warmUp", which @convesoft/nx-rust:cargo, the executor of the inferred target "bench", does not know.',
+      ],
+    ],
+    [
+      "pluginVersion, which only the plugin sets, in options and in a configuration",
+      "subfolder-workspace",
+      {
+        "rust/crates/model/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.build.options]\npluginVersion = "0.0.0"',
+        ),
+        "rust/Cargo.toml": appendTo(
+          '[workspace.metadata.nx.targets.test.configurations.ci]\npluginVersion = "0.0.0"',
+        ),
+      },
+      [
+        `rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build.options] sets the option "pluginVersion", which only the plugin sets: it carries the plugin's version into the cache key, and a value set by hand would replace it, so that Nx could restore results of another version of the plugin. Remove it.`,
+        'rust/Cargo.toml: [workspace.metadata.nx.targets.test.configurations.ci] sets the option "pluginVersion", which only the plugin sets',
+      ],
+    ],
+    [
+      "an extra target whose executor the workspace table gives, with options in the crate's table",
+      "crate-shapes",
+      {
+        "rust/Cargo.toml": appendTo(
+          `[workspace.metadata.nx.targets.extra]\nexecutor = "${cargoExecutor}"`,
+        ),
+        "rust/crates/core/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.extra.options]\ncoverage = true\npluginVersion = "0.0.0"',
+        ),
+      },
+      [
+        'rust/crates/core/Cargo.toml: [package.metadata.nx.targets.extra.options] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the target "extra", does not know.',
+        'rust/crates/core/Cargo.toml: [package.metadata.nx.targets.extra.options] sets the option "pluginVersion", which only the plugin sets',
+      ],
+    ],
+    [
+      "an extra target whose executor the workspace table gives, with a configuration in the crate's table",
+      "crate-shapes",
+      {
+        "rust/Cargo.toml": appendTo(
+          `[workspace.metadata.nx.targets.extra]\nexecutor = "${cargoExecutor}"`,
+        ),
+        "rust/crates/core/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.extra.configurations.ci]\ncoverage = true\npluginVersion = "0.0.0"',
+        ),
+      },
+      [
+        'rust/crates/core/Cargo.toml: [package.metadata.nx.targets.extra.configurations.ci] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the target "extra", does not know.',
+        'rust/crates/core/Cargo.toml: [package.metadata.nx.targets.extra.configurations.ci] sets the option "pluginVersion", which only the plugin sets',
+      ],
+    ],
+    [
+      "an extra target whose executor the crate's table gives, with options in the workspace table",
+      "crate-shapes",
+      {
+        "rust/Cargo.toml": appendTo(
+          "[workspace.metadata.nx.targets.extra.options]\ncoverage = true",
+        ),
+        "rust/crates/core/Cargo.toml": appendTo(
+          `[package.metadata.nx.targets.extra]\nexecutor = "${cargoExecutor}"`,
+        ),
+      },
+      [
+        'rust/Cargo.toml: [workspace.metadata.nx.targets.extra.options] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the target "extra", does not know.',
+      ],
+    ],
+    [
+      "an extra target that names the plugin's executor",
+      "subfolder-workspace",
+      {
+        "rust/crates/model/Cargo.toml": appendTo(
+          `[package.metadata.nx.targets.release-build]\nexecutor = "${cargoExecutor}"\noptions = { release = true }`,
+        ),
+      },
+      [
+        `rust/crates/model/Cargo.toml: [package.metadata.nx.targets.release-build.options] sets the option "release", which @convesoft/nx-rust:cargo, the executor of the target "release-build", does not know. ${cargoOptions} @convesoft/nx-rust:cargo runs only the targets that nx-rust infers; to run another cargo command, define a target with a "command" instead.`,
+      ],
+    ],
+  ])(
+    "fails graph creation for %s",
+    async (_case, fixture, files, expected) => {
+      const message = await graphError(fixture, files);
+
+      for (const text of expected) {
+        expect(message).toContain(text);
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "names a workspace table's unknown option once, though every member has the table",
+    async () => {
+      const message = await graphError("subfolder-workspace", {
+        "rust/Cargo.toml": appendTo(
+          "[workspace.metadata.nx.targets.test.options]\ncoverage = true",
+        ),
+      });
+
+      // Nx repeats a plugin's error once in its summary; four members would give eight.
+      expect(message.split('sets the option "coverage"').length - 1).toBe(2);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "leaves the options of an inferred target that the table gives another executor to that error",
+    async () => {
+      const message = await graphError("subfolder-workspace", {
+        "rust/crates/model/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.build]\nexecutor = "nx:run-commands"\noptions = { commands = ["true"] }',
+        ),
+      });
+
+      expect(message).toContain(
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build] sets "executor" to "nx:run-commands" on the inferred target "build"',
+      );
+      expect(message).not.toContain("sets the option");
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "accepts the options that each target takes, and leaves other executors' options to Nx",
+    async () => {
+      const graph = await loadFixtureGraph("crate-shapes", {
+        files: {
+          "nx.json": pluginOptions({ targetNames: { check: "typecheck" } }),
+          "rust/Cargo.toml": appendTo(
+            [
+              "[workspace.metadata.nx.targets.build.options]",
+              'features = ["fast"]',
+              "allFeatures = false",
+              "noDefaultFeatures = true",
+              'profile = "release"',
+              'targetTriple = "x86_64-unknown-linux-gnu"',
+              "",
+              "[workspace.metadata.nx.targets.typecheck.configurations.quick]",
+              "allTargets = false",
+              "",
+              "[workspace.metadata.nx.project.targets.doc.options]",
+              "noDeps = false",
+              "",
+              "[workspace.metadata.nx.targets.serve]",
+              'executor = "nx:run-commands"',
+              'options = { commands = ["true"], parallel = false }',
+            ].join("\n"),
+          ),
+          "rust/crates/core/Cargo.toml": appendTo(
+            [
+              "[package.metadata.nx.targets.test.options]",
+              "affectedTests = false",
+              "",
+              "[package.metadata.nx.targets.lint.configurations.ci]",
+              "allTargets = true",
+              "",
+              "[package.metadata.nx.targets.release-build]",
+              `executor = "${cargoExecutor}"`,
+              "options = { allTargets = true }",
+              "",
+              "[package.metadata.nx.targets.sqlx-prepare]",
+              'command = "cargo sqlx prepare"',
+              'options = { cwd = "rust", release = true }',
+              "",
+              // Replaces the workspace's serve, whose options Nx drops with it.
+              "[package.metadata.nx.targets.serve]",
+              `executor = "${cargoExecutor}"`,
+            ].join("\n"),
+          ),
+          "rust/crates/server/Cargo.toml": appendTo(
+            '[package.metadata.nx.targets.run.options]\nbin = "migrate"\nprofile = "release"\nargs = "--port 3000"',
+          ),
+          "rust/crates/perf/Cargo.toml": appendTo(
+            '[package.metadata.nx.targets.bench.options]\nfeatures = ["fast"]',
+          ),
+        },
+      });
+      const { projects } = graph;
+
+      expect(projects["core-lib"].targets.build.options).toMatchObject({
+        features: ["fast"],
+        allFeatures: false,
+        noDefaultFeatures: true,
+        profile: "release",
+        targetTriple: "x86_64-unknown-linux-gnu",
+      });
+      expect(projects.cli.targets.typecheck.configurations).toMatchObject({
+        quick: { allTargets: false },
+      });
+      expect(projects.rust.targets.doc.options).toMatchObject({ noDeps: false });
+      expect(projects["core-lib"].targets.test.options).toMatchObject({ affectedTests: false });
+      expect(projects["core-lib"].targets.lint.configurations).toMatchObject({
+        ci: { allTargets: true },
+      });
+      expect(projects["core-lib"].targets["release-build"]).toMatchObject({
+        executor: cargoExecutor,
+        options: { allTargets: true },
+      });
+      expect(projects["core-lib"].targets["sqlx-prepare"].options).toMatchObject({
+        release: true,
+      });
+      expect(projects.cli.targets.serve.options).toMatchObject({ parallel: false });
+      expect(projects["core-lib"].targets.serve.executor).toBe(cargoExecutor);
+      expect(projects["core-lib"].targets.serve.options).toEqual({});
+      expect(projects.server.targets.run.options).toMatchObject({
+        bin: "migrate",
+        profile: "release",
+        args: "--port 3000",
+      });
+      expect(projects.perf.targets.bench.options).toMatchObject({ features: ["fast"] });
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
 describe("settings that take effect later, as the plugin places them", () => {
   let workspace: FixtureWorkspace | undefined;
   let savedEnvironment: NodeJS.ProcessEnv;

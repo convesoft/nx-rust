@@ -1,16 +1,15 @@
 import type { ExecutorContext } from "@nx/devkit";
-import { join } from "node:path";
 import { runExecutor } from "../../graph/targets";
 import type { CargoTargetOptions } from "../command";
 import { type PluginExecutor, runTask } from "../task";
-import { declaredOptions } from "../task-options";
+import { declaredOptionsOf } from "../declared-options";
 
-// The executor, with the options of its schema, which lies beside this file
-// in the source tree and in the built package alike.
+// The executor, with the options of its schema, read where graph creation
+// reads them (`declaredExecutorOptions`).
 const executor: PluginExecutor = {
   name: runExecutor,
   shortName: "run",
-  declared: declaredOptions(join(__dirname, "schema.json")),
+  declared: declaredOptionsOf(runExecutor),
   serves: (target) => target === "run",
 };
 
