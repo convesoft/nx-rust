@@ -17,5 +17,6 @@ Implements `REQ-BATCHING` and `DES-BATCH` (`nx-rust/docs/execution.mara.md`). Ch
 - [ ] Grouping by kind of task, workspace, feature set, profile and target triple; groups run one after another
 - [ ] One cargo call per group; cargo's output mapped to a result and terminal output per task
 - [ ] `--keep-going` and `--no-fail-fast`; a task fails through its own crate or a crate it depends on, and a failure outside the selection is a warning
+- [ ] Each task of a batch ignores the options that its target does not take, with its lines, as a single task does: call `taskOptions` (`nx-rust/src/executors/task-options.ts`) once per task, with `taskGraph.tasks[id]` as its graph task, its target's options and active configuration as `configured`, and `recordedNxCommand()` as the record; pass only `options` to the grouping, so that an ignored option splits no group, and put `warnings` at the top of the task's own terminal output. Covers the group case and `--batch=false` of `VER-UNKNOWN-OPTIONS` (two crates whose `project.json` files give an unknown option different values share one cargo call)
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
