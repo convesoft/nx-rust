@@ -1,6 +1,6 @@
 ---
 title: Decide the name of the workspace project
-status: todo
+status: in-progress
 type: task
 priority: high
 tags:
@@ -16,8 +16,8 @@ Goal: settle the first open point of the draft item `DES-WORKSPACE-TARGETS` (`nx
 
 The answer depends on how Nx merges two projects at one root, which the spike that blocks this issue establishes (`RISK-MIXED-PROJECT-MERGE`).
 
-- [ ] Propose a name rule to the user from the spike's evidence item: the default name, the override in `[workspace.metadata.nx]`, and the case of an existing project at the same root
+- [x] Propose a name rule to the user from the spike's evidence item: the default name, the override in `[workspace.metadata.nx]`, and the case of an existing project at the same root
 - [ ] Record the agreed rule in `DES-PROJECT-GRAPH` and take the point out of the `Open:` paragraph of `DES-WORKSPACE-TARGETS`
-- [ ] Extend `VER-GRAPH` with the name and with the case of a workspace at the repository root
+- [x] Extend `VER-GRAPH` with the name and with the case of a workspace at the repository root
 
 Done when: the user has agreed to the rule, and `mara schema validate` and `mara project validate` report `valid: true`.
