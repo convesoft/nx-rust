@@ -112,7 +112,9 @@ are those at the workspace root and above it.
   although a change to it still changes the cache key.
 - The toolchain in the key is whatever `rustc -Vv` reports in the workspace
   root. `RUSTUP_TOOLCHAIN`, `rustup override` and a toolchain installed without
-  rustup are all respected.
+  rustup are all respected. If that toolchain is not installed, computing the
+  key does not install it: the task gets a key that matches no stored result
+  and runs, and its cargo installs the toolchain as plain `cargo` would.
 - Cargo may create or update `Cargo.lock` during a task, as it does for plain
   `cargo`. With the `locked` option, or `NX_RUST_LOCKED=true` for one run,
   every cargo command of a task passes `--locked` and fails instead. Three
@@ -287,6 +289,8 @@ Every cached target declares its inputs as Nx inputs. The plugin has no custom h
 | Toolchain             | A `runtime` input that runs `rustc -Vv` in the root folder of the crate's workspace, where its cargo commands run ([[DES-INVOCATION]]). The toolchain is thereby resolved as cargo will resolve it: through rustup's toolchain files, overrides and `RUSTUP_TOOLCHAIN` where rustup is installed, and through `PATH` where it is not. The folder is part of the command, so workspaces with different toolchains never share one evaluation.                                                     |
 | Options               | Features, profile and target triple are target options, which Nx hashes.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Extra                 | Runtime commands the repository adds.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+
+The toolchain command prints what `rustc -Vv` writes to standard output, run with `RUSTUP_AUTO_INSTALL=0` and with its standard error discarded, and when `rustc -Vv` fails, as for a pinned toolchain that is not installed, it prints a random value instead, new at each evaluation, so that no result stored under that key is ever restored and the task runs as plain cargo does ([[ADR-GRAPH-NO-TOOLCHAIN-INSTALL]]).
 
 The environment list:
 
