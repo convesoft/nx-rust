@@ -3,7 +3,11 @@
 > **Status:** the plugin infers the targets of this page, apart from the
 > artifact and release targets, and `targetNames` renames them. They do not run
 > yet, because the plugin's executors are still missing (nxr-kmdpgj), and none
-> of them is cached until its inputs are declared (nxr-fy4t4k).
+> of them is cached until its inputs are declared (nxr-fy4t4k). A
+> `targetDefaults` entry in `nx.json` that sets `cache: true`, keyed by a
+> target's name or by its executor, overrides that: once the executors exist
+> and until the inputs are declared, such a target would be cached with Nx's
+> default inputs, which miss `Cargo.lock`, the toolchain and the environment.
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.
@@ -329,7 +333,7 @@ Only `clippy` is renamed, to `lint`: `lint`, `test` and `build` are the target n
 
 Targets come from the `cargo metadata` report ([[DES-METADATA-REPORT]]): `run` exists when the crate has a binary target, `bench` when it has a bench target, an [[TERM-ARTIFACT-TARGET]] when the crate produces that artifact ([[DES-ARTIFACT-STEPS]]), and the release targets unless the manifest sets `publish = false`. The last four rows are targets of the [[TERM-WORKSPACE-PROJECT]]; `deny` exists only where a cargo-deny configuration file is in the workspace root. Whether a tool is installed never decides whether a target exists.
 
-**Executors.** Every inferred target runs the plugin's cargo executor, `@convesoft/nx-rust:cargo`, which has the batch implementation of [[DES-BATCH]], apart from `run`, which runs `@convesoft/nx-rust:run`, an executor without one ([[DES-TARGET-COMMANDS]]). Each target carries its default name from the table under `cargo` in its metadata, so that the executor runs the same command whatever name `targetNames` gives the target.
+**Executors.** Every inferred target runs the plugin's cargo executor, `@convesoft/nx-rust:cargo`, which has the batch implementation of [[DES-BATCH]], apart from `run`, which runs `@convesoft/nx-rust:run`, an executor without one ([[DES-TARGET-COMMANDS]]). Each target carries its default name from the table in its metadata, as `metadata.cargo.target`, so that the executor runs the same command whatever name `targetNames` gives the target.
 
 No inferred target has a `dependsOn` entry that names another Rust crate's target, and none uses `^build` ([[ADR-NO-RUST-BUILD-DEPS]]). Dependencies reach a target through `^` inputs ([[DES-INPUTS]]). The plugin adds no `dependsOn` entry to a JS project. A JS target's own `^build` reaches the `build` of the crates its project depends on directly, which is how Nx defines `^build`, and ends there.
 :::

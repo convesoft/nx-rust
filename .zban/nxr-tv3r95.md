@@ -18,7 +18,7 @@ Implements `REQ-ARTIFACT-TARGETS`, `REQ-ARTIFACT-CACHE`, `DES-ARTIFACT-STEPS` an
 - [ ] The napi CLI step: `.node` file, JS and type definitions
 - [ ] Run the check of `REQ-BUILD-INPUT-CHECK` and `DES-BUILD-INPUT-CHECK` after the compile step, as `build` does
 - [ ] The napi CLI version and target triple in the key; generated files as outputs, not inputs
-- [ ] Add the target to `inferredTargetNames` and `inferTargets` (`nx-rust/src/graph/targets.ts`), so that `targetNames` renames it with the collision check, and check the parts of `VER-TARGETS` (only on crates that produce a Node addon) and `VER-CONFIGURATION` (renaming) that cover it
+- [ ] Add the target to `inferredTargetNames` and `inferTargets` (`nx-rust/src/graph/targets.ts`), so that `targetNames` renames it with the collision check, and check the parts of `VER-TARGETS` (only on crates that produce a Node addon) and `VER-CONFIGURATION` (renaming) that cover it. `inferredTargetNames` is also the list of keys that `targetNames` accepts, so `napi-build` becomes a valid key there only when the target is added
 - [ ] Count the napi CLI as needed in `init`'s table of tools (`nx-rust/src/tools/optional-tools.ts`) where a crate has a `napi-build` target, with the fixture for that row that `VER-SETUP` asks for
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.

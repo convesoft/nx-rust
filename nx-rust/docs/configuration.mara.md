@@ -184,8 +184,11 @@ elsewhere too, rename targets in the plugin options:
 ```
 
 Two targets may not end up with one name: `{ "test": "build" }` fails graph
-creation and names the project, both targets and the name. A `targets` table in
-`Cargo.toml` uses a target's name after renaming.
+creation and names the project, both targets and the name. A key has to be the
+default name of an inferred target, such as `bench`, also in a repository
+without benches; `{ "clippy": "lint" }` fails graph creation and lists the names
+that can be renamed. A `targets` table in `Cargo.toml` uses a target's name
+after renaming.
 
 The full list of targets is on the [Targets](targets.mara.md) page.
 
@@ -406,7 +409,7 @@ Three environment variables act on a run and are no options: `NX_RUST_TEST_MODE`
 
 **Precedence.** A setting takes its default, then the value in the plugin options, then the one in the workspace table, then the one in the package table, each replacing the one before. `tags`, `implicitDependencies`, `fileInputs`, `envInputs` and `runtimeInputs` add up instead: a crate has the values of every level, and no level removes what another set. This order is the plugin's own, applied to the projects it returns. Nx then applies `targetDefaults` from `nx.json`, and after them the `project.json` and `package.json` in the project's folder, so a value that either sets for a target, an option such as `features` included, replaces the one that the plugin gave it ([[EVD-NX-TARGET-DEFAULTS]], [[EVD-NX-PROJECT-MERGE]]).
 
-**Target names.** When `targetNames` gives two inferred targets of one project the same name, graph creation fails with an error that names the project, the two inferred targets and the resulting name, and says to change `targetNames`. Neither target replaces the other, because [[DES-TARGETS]] gives the project both. The rule for a `targets.<name>` table in Cargo metadata stands: under the name of an inferred target, which is its name after `targetNames`, it overrides that target, and under any other name it defines an extra target ([[DES-METADATA-TABLES]]).
+**Target names.** When `targetNames` gives two inferred targets of one project the same name, graph creation fails with an error that names the project, the two inferred targets and the resulting name, and says to change `targetNames`. Neither target replaces the other, because [[DES-TARGETS]] gives the project both. A key of `targetNames` has to be the default name of an inferred target that this version of the plugin knows, whether or not a project of the repository has that target; any other key fails graph creation, as an unknown key does (**Unknown keys**), with a message that names the key and lists the names that can be renamed. A `targetNames` that is no object, or a value in it that is no non-empty string, fails graph creation with a message that names the key. Later milestones add the names of the targets they add. The rule for a `targets.<name>` table in Cargo metadata stands: under the name of an inferred target, which is its name after `targetNames`, it overrides that target, and under any other name it defines an extra target ([[DES-METADATA-TABLES]]).
 
 **Several entries.** `testRunner`, `affectedTests` and `featureUnification` are settings of a whole workspace. When entries of the plugin that receive manifests of one workspace give different values for one of them, an entry without the option counting as giving its default, and the workspace table does not set it, graph creation fails with a message that names the workspace, the setting and the entries by their place in the `plugins` of `nx.json`. An entry learns of the others from the `plugins` of `nx.json` in the context Nx passes to its `createNodes`, which holds every entry, also under plugin isolation. It takes the manifests that another entry receives by applying that entry's `include` and `exclude` to the `Cargo.toml` files of Nx's workspace context, as Nx does ([[EVD-NX-24-ENTRY-CONTEXT]]).
 

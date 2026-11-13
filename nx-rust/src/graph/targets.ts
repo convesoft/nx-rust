@@ -21,7 +21,9 @@ export const runExecutor = "@convesoft/nx-rust:run";
 /**
  * The inferred targets by their default names, in the order of the table in
  * `DES-TARGETS`: first those of a crate, then those of the workspace project.
- * The artifact targets and the release targets are not inferred yet.
+ * They are also the keys that `targetNames` accepts (`readTargetNames` in
+ * `options.ts`). The artifact targets and the release targets are not
+ * inferred yet; each joins the list when it is.
  */
 export const inferredTargetNames = [
   "build",

@@ -1,3 +1,5 @@
+import { inferredTargetNames } from "./targets";
+
 /**
  * The names that the plugin options' `targetNames` gives inferred targets:
  * from the default name of a target to the name to use, such as
@@ -8,11 +10,15 @@ export type TargetNames = Readonly<Record<string, string>>;
 /**
  * Reads `targetNames` from the options of the plugin's entry in `nx.json`.
  *
- * The other settings of the option reference are read where they take
- * effect (nxr-xyq7c8); unknown keys are not checked here.
+ * Each key has to be the default name of an inferred target that this
+ * version of the plugin knows ({@link inferredTargetNames}), whether or not
+ * a project has that target, and each value a target name. The other
+ * settings of the option reference are read where they take effect
+ * (nxr-xyq7c8).
  *
  * @param options The `options` of the entry, as Nx passes them to `createNodes`.
- * @throws {Error} When `targetNames` is no object of names, naming the key.
+ * @throws {Error} When `targetNames` is no object, has a key that names no
+ *   inferred target or a value that is no name, naming the keys.
  */
 // @mara implements DES-PLUGIN-OPTIONS
 export function readTargetNames(options: unknown): TargetNames {
@@ -24,6 +30,16 @@ export function readTargetNames(options: unknown): TargetNames {
   if (!isObject(value)) {
     throw new Error(
       `${where} has to be an object that maps the default name of an inferred target to the name to use, such as { "lint": "clippy" }.`,
+    );
+  }
+  const known = new Set<string>(inferredTargetNames);
+  const unknown = Object.keys(value).filter((target) => !known.has(target));
+  if (unknown.length > 0) {
+    throw new Error(
+      [
+        `${where} names ${list(unknown.map((target) => `"${target}"`))}, which ${unknown.length === 1 ? "is not the default name of an inferred target" : "are not default names of inferred targets"}.`,
+        `The targets that can be renamed are ${list(inferredTargetNames.map((target) => `"${target}"`))}.`,
+      ].join(" "),
     );
   }
   for (const [target, name] of Object.entries(value)) {
@@ -38,4 +54,11 @@ export function readTargetNames(options: unknown): TargetNames {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// `"a"`, `"a" and "b"`, `"a", "b" and "c"`
+function list(items: readonly string[]): string {
+  return items.length <= 1
+    ? items.join("")
+    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }

@@ -562,6 +562,52 @@ describe("targetNames", () => {
     HARNESS_TIMEOUT,
   );
 
+  it(
+    "fails graph creation for a key that names no inferred target, listing those that can be renamed",
+    async () => {
+      const message = await graphError("crate-shapes", {
+        "nx.json": pluginOptions({ targetNames: { clippy: "lint", lint: "clippy" } }),
+      });
+
+      expect(message).toContain(
+        '"targetNames" in the options of the @convesoft/nx-rust entry in nx.json names "clippy", which is not the default name of an inferred target. The targets that can be renamed are "build", "check", "lint", "test", "fmt-check", "fmt", "bench", "run", "doc", "audit", "deny" and "update".',
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails graph creation naming every such key",
+    async () => {
+      const message = await graphError("crate-shapes", {
+        "nx.json": pluginOptions({ targetNames: { clippy: "lint", "napi-build": "addon" } }),
+      });
+
+      expect(message).toContain(
+        'names "clippy" and "napi-build", which are not default names of inferred targets.',
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "accepts the name of an inferred target that no project has",
+    async () => {
+      // subfolder-workspace has no bench target, no binary and no cargo-deny configuration.
+      const graph = await loadFixtureGraph("subfolder-workspace", {
+        files: {
+          "nx.json": pluginOptions({
+            targetNames: { bench: "benchmark", run: "start", deny: "licenses" },
+          }),
+        },
+      });
+
+      expect(targetNames(graph).api).toEqual(crateTargets);
+      expect(targetNames(graph).rust).toEqual(workspaceTargets);
+    },
+    HARNESS_TIMEOUT,
+  );
+
   it.each<[string, unknown, string]>([
     ["a list", ["lint"], "has to be an object"],
     ["a number for a name", { lint: 1 }, 'gives the target "lint" 1'],
