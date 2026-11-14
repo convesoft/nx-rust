@@ -785,14 +785,26 @@ function checkArtifactDirectory(
 }
 
 // The warnings that graph creation recorded for the task's project, whose
-// digest the task's key holds.
+// digest the task's key holds, then those that `createDependencies` found
+// for the task's target, each once (`DES-DIAGNOSTICS`, "Warnings where they
+// are seen").
 // @mara implements DES-DIAGNOSTICS
 function projectWarnings(context: ExecutorContext): string[] {
   const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];
-  const warnings = project === undefined ? undefined : cargoMetadataOf(project)?.warnings;
-  return Array.isArray(warnings)
-    ? warnings.filter((warning): warning is string => typeof warning === "string")
+  const cargo = project === undefined ? undefined : cargoMetadataOf(project);
+  const warnings: unknown[] = Array.isArray(cargo?.warnings) ? cargo.warnings : [];
+  const targetWarnings: unknown[] = Array.isArray(cargo?.targetWarnings)
+    ? cargo.targetWarnings
     : [];
+  return [
+    ...new Set([
+      ...warnings.filter((warning): warning is string => typeof warning === "string"),
+      ...targetWarnings.flatMap((entry) => {
+        const { target, warning } = (entry ?? {}) as { target?: unknown; warning?: unknown };
+        return target === context.targetName && typeof warning === "string" ? [warning] : [];
+      }),
+    ]),
+  ];
 }
 
 // The target's metadata from the plugin, or undefined where it is missing.

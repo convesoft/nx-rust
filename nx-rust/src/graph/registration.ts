@@ -4,8 +4,10 @@ import { cacheContext } from "./caching";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
 import { checkEntries } from "./entries";
-import { CargoGraph, inferProjects, projectNodes } from "./projects";
+import type { TargetWarning } from "./collisions";
+import { CargoGraph, inferProjects, projectNodes, withWarningsInputs } from "./projects";
 import { readPluginOptions, readSettings } from "./settings";
+import { type PlacedWarning, targetDefaultCauses } from "./target-defaults";
 
 /** What the `createNodes` call that started last found. */
 interface Outcome {
@@ -14,6 +16,11 @@ interface Outcome {
   workspaceRoot: string;
   /** Absent when the call failed, which has already failed graph creation. */
   graph?: CargoGraph;
+  /**
+   * The warnings that `createDependencies` found for targets of the
+   * projects, for `createMetadata` ({@link Registration.recordTargetWarnings}).
+   */
+  targetWarnings?: readonly PlacedWarning[];
 }
 
 /**
@@ -109,7 +116,9 @@ export class Registration {
         nxJson,
         nxWarning === undefined ? [] : [nxWarning],
       );
-      graph = { discovery, projects: inferProjects(discovery, settings, context) };
+      const projects = inferProjects(discovery, settings, context);
+      const causes = await targetDefaultCauses(projects, nxJson, workspaceRoot);
+      graph = { discovery, projects: withWarningsInputs(projects, workspaceRoot, causes) };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {
@@ -133,6 +142,33 @@ export class Registration {
       );
     }
     return this.latest.graph;
+  }
+
+  /**
+   * Keeps the warnings that `createDependencies` found for targets of this
+   * entry's projects with the graph computation they belong to, for
+   * `createMetadata`, which Nx calls after it in the same process.
+   */
+  recordTargetWarnings(workspaceRoot: string, warnings: readonly PlacedWarning[]): void {
+    if (this.latest?.workspaceRoot === workspaceRoot) {
+      this.latest.targetWarnings = warnings;
+    }
+  }
+
+  /**
+   * The warnings that `createDependencies` found in the graph computation
+   * that `createMetadata` belongs to, by project name, each with its target;
+   * none where it found none or did not run.
+   */
+  targetWarnings(workspaceRoot: string): Map<string, TargetWarning[]> {
+    const byProject = new Map<string, TargetWarning[]>();
+    if (this.latest?.workspaceRoot !== workspaceRoot) {
+      return byProject;
+    }
+    for (const { project, target, warning } of this.latest.targetWarnings ?? []) {
+      byProject.set(project, [...(byProject.get(project) ?? []), { target, warning }]);
+    }
+    return byProject;
   }
 }
 

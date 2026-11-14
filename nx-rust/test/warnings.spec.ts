@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { cargoMetadataOf } from "../src/graph/collisions";
@@ -70,6 +70,63 @@ function changedInputs(before: TaskHash, after: TaskHash): string[] {
   const keys = new Set([...Object.keys(nodes(before)), ...Object.keys(nodes(after))]);
   return [...keys].filter((key) => nodes(before)[key] !== nodes(after)[key]).sort();
 }
+
+/** Runs api:fmt-check and says whether it ran cargo and printed `warning`. */
+async function fmtCheck(workspace: FixtureWorkspace, env: Env, warning: string) {
+  const calls = taskCalls(workspace).length;
+  const { status, output } = await runNx(workspace, ["run", "api:fmt-check"], env);
+  expect({ status, output }).toEqual({ status: 0, output });
+  return { ran: taskCalls(workspace).length > calls, warned: output.includes(warning) };
+}
+
+/**
+ * Runs api:fmt-check in the states of one cause and returns what the task
+ * did in each ({@link followsTheCause}).
+ */
+async function stepsOfCause(
+  workspace: FixtureWorkspace,
+  env: Env,
+  warning: string,
+  cause: { add: () => void; remove: () => void },
+): Promise<{ ran: boolean; warned: boolean }[]> {
+  const steps: { ran: boolean; warned: boolean }[] = [];
+  const step = async (change?: () => void) => {
+    change?.();
+    steps.push(await fmtCheck(workspace, env, warning));
+  };
+  await step(cause.remove);
+  await step(cause.add);
+  await step();
+  await step(cause.remove);
+  const reset = await runNx(workspace, ["reset"], env);
+  if (reset.status !== 0) {
+    throw new Error(`nx reset failed:\n${reset.output}`);
+  }
+  await step(cause.add);
+  await step(cause.remove);
+  await step();
+  await step(cause.add);
+  return steps;
+}
+
+/**
+ * What the task does in the states of {@link stepsOfCause}: cached without
+ * the warning, adding the cause makes it run and warn, and a hit replays
+ * the warning; removing the cause gives the key without the warning again,
+ * whose result from before comes back without it. After `nx reset`, with
+ * the cause there from the start, removing it makes the task run without
+ * the warning, and adding it again restores the result with the warning.
+ */
+const followsTheCause = [
+  { ran: true, warned: false },
+  { ran: true, warned: true },
+  { ran: false, warned: true },
+  { ran: false, warned: false },
+  { ran: true, warned: true },
+  { ran: true, warned: false },
+  { ran: false, warned: false },
+  { ran: false, warned: true },
+];
 
 describe("the digest of a project's warnings", () => {
   it("writes the paths inside the repository relative to its root, so that two checkouts get one digest", () => {
@@ -286,63 +343,6 @@ describe("the keys of a project's tasks", () => {
 });
 
 describe("a task's output", () => {
-  /** Runs api:fmt-check and says whether it ran cargo and printed `warning`. */
-  async function fmtCheck(workspace: FixtureWorkspace, env: Env, warning: string) {
-    const calls = taskCalls(workspace).length;
-    const { status, output } = await runNx(workspace, ["run", "api:fmt-check"], env);
-    expect({ status, output }).toEqual({ status: 0, output });
-    return { ran: taskCalls(workspace).length > calls, warned: output.includes(warning) };
-  }
-
-  /**
-   * Runs api:fmt-check in the states of one cause and returns what the task
-   * did in each ({@link followsTheCause}).
-   */
-  async function stepsOfCause(
-    workspace: FixtureWorkspace,
-    env: Env,
-    warning: string,
-    cause: { add: () => void; remove: () => void },
-  ): Promise<{ ran: boolean; warned: boolean }[]> {
-    const steps: { ran: boolean; warned: boolean }[] = [];
-    const step = async (change?: () => void) => {
-      change?.();
-      steps.push(await fmtCheck(workspace, env, warning));
-    };
-    await step(cause.remove);
-    await step(cause.add);
-    await step();
-    await step(cause.remove);
-    const reset = await runNx(workspace, ["reset"], env);
-    if (reset.status !== 0) {
-      throw new Error(`nx reset failed:\n${reset.output}`);
-    }
-    await step(cause.add);
-    await step(cause.remove);
-    await step();
-    await step(cause.add);
-    return steps;
-  }
-
-  /**
-   * What the task does in the states of {@link stepsOfCause}: cached without
-   * the warning, adding the cause makes it run and warn, and a hit replays
-   * the warning; removing the cause gives the key without the warning again,
-   * whose result from before comes back without it. After `nx reset`, with
-   * the cause there from the start, removing it makes the task run without
-   * the warning, and adding it again restores the result with the warning.
-   */
-  const followsTheCause = [
-    { ran: true, warned: false },
-    { ran: true, warned: true },
-    { ran: false, warned: true },
-    { ran: false, warned: false },
-    { ran: true, warned: true },
-    { ran: true, warned: false },
-    { ran: false, warned: false },
-    { ran: false, warned: true },
-  ];
-
   it(
     "shows the warning about a [patch] in the Cargo home's configuration when the graph has it, whether the task runs or is restored, without the daemon",
     async () => {
@@ -452,5 +452,199 @@ describe("a task's output", () => {
       }
     },
     HARNESS_TIMEOUT * 3,
+  );
+});
+
+// The warnings that createDependencies finds, once Nx has merged the
+// projects (DES-TARGET-DEFAULT-GUARD): createMetadata gives them to the
+// targets they concern, and the key follows their cause. Checks the last
+// paragraph of VER-TARGET-DEFAULT-GUARD and its part of VER-SETUP.
+describe("a task's output of the warnings about targetDefaults", () => {
+  /** The start of the warning for the entry keyed fmt-check. */
+  const entryWarning =
+    'The targetDefaults entry "fmt-check" in nx.json changes targets that nx-rust infers:';
+
+  /** An entry keyed fmt-check that adds the fmt-check tasks of the crates' dependencies. */
+  const addsDependencies = { "fmt-check": { dependsOn: ["...", "^fmt-check"] } };
+
+  /** nx.json with `targetDefaults`, or without any for `undefined`. */
+  const nxJsonWith =
+    (targetDefaults: object | undefined, extra: object = {}) =>
+    (current: string | undefined) => {
+      const { targetDefaults: _dropped, ...config } = JSON.parse(current ?? "{}");
+      return JSON.stringify({
+        ...config,
+        ...extra,
+        ...(targetDefaults === undefined ? {} : { targetDefaults }),
+      });
+    };
+
+  /** The paragraph of a warning in `output`: the line that starts it and its lines of items. */
+  function paragraph(output: string, start: string): string {
+    const lines = output.split("\n");
+    const first = lines.findIndex((line) => line.startsWith(start));
+    expect(first).toBeGreaterThanOrEqual(0);
+    let last = first + 1;
+    while (last < lines.length && /^( {2}- |To narrow the entry)/.test(lines[last])) {
+      last++;
+    }
+    return lines.slice(first, last).join("\n");
+  }
+
+  /** How often `text` occurs in `output`. */
+  const occurrences = (output: string, text: string) => output.split(text).length - 1;
+
+  it(
+    "repeats the warning for an entry that adds other projects' tasks once at the start of each task of a target it changes, with the text that graph creation prints, also with the daemon on",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", {
+        ...withoutModelPatch,
+        "nx.json": nxJsonWith(addsDependencies),
+      });
+      const daemon: Env = { NX_DAEMON: "true" };
+      try {
+        const shown = await runNx(workspace, ["show", "projects"]);
+        expect(shown.status).toBe(0);
+        const warning = paragraph(shown.output, entryWarning);
+        expect(warning).toContain("api (rust/crates/api/Cargo.toml)");
+
+        const task = await runNx(
+          workspace,
+          ["run", "api:fmt-check", "--exclude-task-dependencies"],
+          daemon,
+        );
+        const other = await runNx(workspace, ["run", "api:fmt"], daemon);
+
+        expect({ status: task.status, count: occurrences(task.output, warning) }).toEqual({
+          status: 0,
+          count: 1,
+        });
+        expect({ status: other.status, warned: other.output.includes(entryWarning) }).toEqual({
+          status: 0,
+          warned: false,
+        });
+        expect(workspace.daemonLog()).toContain(warning);
+      } finally {
+        await workspace.nx(["daemon", "--stop"], daemon);
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
+
+  it(
+    "makes a cached task of the target run again and print the warning when the entry appears, and run or come back without it once the entry is gone",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", withoutModelPatch);
+      const nxJson = join(workspace.root, "nx.json");
+      const original = readFileSync(nxJson, "utf8");
+      try {
+        const steps = await stepsOfCause(workspace, {}, entryWarning, {
+          add: () => writeFileSync(nxJson, nxJsonWith(addsDependencies)(original)),
+          remove: () => writeFileSync(nxJson, original),
+        });
+
+        expect(steps).toEqual(followsTheCause);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 3,
+  );
+
+  it.each<[string, object, "must differ" | "must not differ"]>([
+    ["one that adds other projects' tasks", addsDependencies, "must differ"],
+    [
+      "one that adds only the project's own tasks, which draws no warning",
+      { "fmt-check": { dependsOn: ["...", "check"] } },
+      "must not differ",
+    ],
+  ])(
+    "follow an entry from a file that nx.json extends, which Nx does not hash, through the projects' configuration: %s",
+    async (_case, targetDefaults, verdict) => {
+      const outcomes = await compareCacheKeys({
+        change: "an entry in base.json, which nx.json extends",
+        fixture: "patched-workspaces",
+        base: {
+          files: {
+            ...withoutModelPatch,
+            "nx.json": nxJsonWith(undefined, { extends: "./base.json" }),
+          },
+        },
+        before: { files: { "base.json": "{}\n" } },
+        after: { files: { "base.json": JSON.stringify({ targetDefaults }) } },
+        keys: { "api:fmt-check": verdict, "plain:fmt-check": verdict },
+      });
+
+      for (const { task, holds, before, after } of outcomes) {
+        const changed = changedInputs(before, after);
+        expect({ task, holds }).toEqual({ task, holds: true });
+        expect({
+          task,
+          other: changed.filter((input) => !input.endsWith(":ProjectConfiguration")),
+        }).toEqual({
+          task,
+          other: [],
+        });
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "repeats the warning for a target that changed where the plugin cannot tell why at the start of the target's tasks, also with the daemon on",
+    async () => {
+      // Another plugin tags api, and an entry filtered to the tag adds
+      // dependencies to its fmt-check: the plugin's rebuild of the target,
+      // which does not see the tag, does not give what Nx merged.
+      const workspace = FixtureWorkspace.create("patched-workspaces", {
+        ...withoutModelPatch,
+        "tagger.cjs": `exports.name = "tagger";
+exports.createNodes = [
+  "**/Cargo.toml",
+  async (files) =>
+    files
+      .filter((file) => file === "rust/crates/api/Cargo.toml")
+      .map((file) => [file, { projects: { "rust/crates/api": { tags: ["extra"] } } }]),
+];
+`,
+        "nx.json": (current) => {
+          const config = JSON.parse(
+            nxJsonWith({
+              "fmt-check": [
+                { filter: { projects: ["tag:extra"] }, dependsOn: ["...", "^fmt-check"] },
+              ],
+            })(current),
+          );
+          return JSON.stringify({ ...config, plugins: [...config.plugins, "./tagger.cjs"] });
+        },
+      });
+      const warning = [
+        'The target "fmt-check" of the Rust project api (rust/crates/api/Cargo.toml) differs from what nx-rust infers in "dependsOn", and nx-rust cannot tell which configuration changed it',
+        'Run `nx show target api:fmt-check --json` and look under "sourceMap"',
+      ];
+      const daemon: Env = { NX_DAEMON: "true" };
+      try {
+        const shown = await runNx(workspace, ["show", "projects"]);
+        const task = await runNx(
+          workspace,
+          ["run", "api:fmt-check", "--exclude-task-dependencies"],
+          daemon,
+        );
+        const other = await runNx(workspace, ["run", "plain:fmt-check"], daemon);
+
+        expect(shown.status).toBe(0);
+        for (const part of warning) {
+          expect({ part, shown: occurrences(shown.output, part) }).toEqual({ part, shown: 1 });
+          expect({ part, task: occurrences(task.output, part) }).toEqual({ part, task: 1 });
+          expect({ part, other: occurrences(other.output, part) }).toEqual({ part, other: 0 });
+        }
+        expect([task.status, other.status]).toEqual([0, 0]);
+      } finally {
+        await workspace.nx(["daemon", "--stop"], daemon);
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
   );
 });

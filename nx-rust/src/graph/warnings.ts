@@ -15,43 +15,60 @@ export const warningsInputName = "nx-rust-warnings";
  * executor prints at the start of each of the project's tasks, so that the
  * tasks' keys change with them and a cache hit replays the warnings of the
  * graph that the command uses (`DES-DIAGNOSTICS`, "Warnings where they are
- * seen"). A project without warnings gets none, so that its keys are the
- * keys it has without the plugin's warnings.
+ * seen"). A project without warnings and without such causes gets none, so
+ * that its keys are the keys it has without the plugin's warnings.
  *
  * The digest is the value of the input's only entry, a command that prints
  * it: Nx hashes the entries of named inputs, not their names. Since no
  * target names the input, Nx never runs the command.
  *
  * @param repositoryRoot The absolute path of the repository root.
+ * @param causes What decides warnings that only `createDependencies` finds,
+ *   the `dependsOn` entries that `targetDefaults` adds to the project's
+ *   targets (`targetDefaultCauses` in `target-defaults.ts`).
  */
 // @mara implements DES-DIAGNOSTICS
 export function warningsInput(
   warnings: readonly string[],
   repositoryRoot: string,
+  causes: readonly string[] = [],
 ): Record<string, Input[]> {
-  return warnings.length === 0
+  return warnings.length === 0 && causes.length === 0
     ? {}
-    : { [warningsInputName]: [{ runtime: `echo ${warningsDigest(warnings, repositoryRoot)}` }] };
+    : {
+        [warningsInputName]: [
+          { runtime: `echo ${warningsDigest(warnings, repositoryRoot, causes)}` },
+        ],
+      };
 }
 
 /**
  * The digest of a project's warnings: SHA-256 over the warnings, each once
  * and sorted, with the paths inside the repository written relative to its
  * root, so that checkouts of one repository in different folders get one
- * digest. A path outside the repository, such as the Cargo home's, stays as
- * it is: it names the cause.
+ * digest, and over the causes of the warnings that only `createDependencies`
+ * finds, sorted, where there are any. A path outside the repository, such
+ * as the Cargo home's, stays as it is: it names the cause.
  *
  * @param repositoryRoot The absolute path of the repository root; its real
  *   path counts too, as cargo reports paths through symbolic links resolved.
  */
-export function warningsDigest(warnings: readonly string[], repositoryRoot: string): string {
+export function warningsDigest(
+  warnings: readonly string[],
+  repositoryRoot: string,
+  causes: readonly string[] = [],
+): string {
   const roots = [...new Set([repositoryRoot, realPath(repositoryRoot)])].sort(
     (a, b) => b.length - a.length,
   );
   const relative = (warning: string) =>
     roots.reduce((text, root) => withRelativePaths(text, root), warning);
   const normalised = [...new Set(warnings.map(relative))].sort(compare);
-  return createHash("sha256").update(JSON.stringify(normalised)).digest("hex");
+  const hashed =
+    causes.length === 0
+      ? normalised
+      : { warnings: normalised, targetDefaults: [...new Set(causes)].sort(compare) };
+  return createHash("sha256").update(JSON.stringify(hashed)).digest("hex");
 }
 
 // The text with every path below `root` written relative to it, and `root`

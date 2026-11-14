@@ -55,8 +55,9 @@ export interface CargoProject {
   settings: ProjectSettings;
   /**
    * The project's named inputs, which its targets and its dependents hash
-   * (`DES-INPUTS`), with the one that holds the digest of its warnings where
-   * it has any (`warningsInput` in `warnings.ts`).
+   * (`DES-INPUTS`), and, once {@link withWarningsInputs} has added it, the
+   * one that holds the digest of its warnings where it has any
+   * (`warningsInput` in `warnings.ts`).
    */
   namedInputs: Record<string, Input[]>;
   /**
@@ -166,18 +167,39 @@ export function inferProjects(
     discovery.workspaceRoot,
     settings.options.targetNames,
   );
-  return projects.map((project, index) => {
-    const warnings = projectWarnings(project, context);
-    return {
-      ...project,
-      targets: targets[index],
-      namedInputs: {
-        ...namedInputs(project, context, inputSettings(project.settings, fileInputs(project))),
-        ...warningsInput(warnings, discovery.workspaceRoot),
-      },
-      warnings,
-    };
-  });
+  return projects.map((project, index) => ({
+    ...project,
+    targets: targets[index],
+    namedInputs: namedInputs(
+      project,
+      context,
+      inputSettings(project.settings, fileInputs(project)),
+    ),
+    warnings: projectWarnings(project, context),
+  }));
+}
+
+/**
+ * The projects, each with the named input that holds the digest of its
+ * warnings and of the `targetDefaults` causes of the warnings that only
+ * `createDependencies` finds, where it has any (`DES-DIAGNOSTICS`,
+ * "Warnings where they are seen").
+ *
+ * @param repositoryRoot The absolute path of the repository root.
+ * @param causes By project root (`targetDefaultCauses` in `target-defaults.ts`).
+ */
+export function withWarningsInputs(
+  projects: readonly CargoProject[],
+  repositoryRoot: string,
+  causes: ReadonlyMap<string, readonly string[]>,
+): CargoProject[] {
+  return projects.map((project) => ({
+    ...project,
+    namedInputs: {
+      ...project.namedInputs,
+      ...warningsInput(project.warnings, repositoryRoot, causes.get(project.root)),
+    },
+  }));
 }
 
 /**

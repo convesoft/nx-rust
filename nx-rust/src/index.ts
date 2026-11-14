@@ -1,7 +1,14 @@
-import type { CreateDependenciesContext, CreateNodes, RawProjectGraphDependency } from "@nx/devkit";
+import type {
+  CreateDependenciesContext,
+  CreateMetadataContext,
+  CreateNodes,
+  ProjectGraph,
+  ProjectsMetadata,
+  RawProjectGraphDependency,
+} from "@nx/devkit";
 import { checkNxOnLoad } from "./compatibility/nx-version";
 import { postTasksExecution, preTasksExecution } from "./executors/nx-command";
-import { failOnNameCollisions } from "./graph/collisions";
+import { cargoMetadataKey, failOnNameCollisions } from "./graph/collisions";
 import { projectEdges } from "./graph/edges";
 import { failOnPluginVersionOption } from "./graph/plugin-version";
 import { Registration, registrationOf } from "./graph/registration";
@@ -20,7 +27,8 @@ import { failOnAffectedTestsOption } from "./graph/target-tables";
  * not use selection, and when it gives an inferred target a `pluginVersion`
  * that the plugin did not set (`DES-PLUGIN-OPTIONS`). It then reports the
  * `targetDefaults` entries of `nx.json` that change the inferred targets,
- * which only the merged projects show (`DES-TARGET-DEFAULT-GUARD`).
+ * which only the merged projects show (`DES-TARGET-DEFAULT-GUARD`), and keeps
+ * their warnings for {@link createMetadata}.
  *
  * Nx calls it as a method of its copy of the plugin for the entry, which is
  * `this`.
@@ -30,7 +38,8 @@ function createDependencies(
   _options: unknown,
   context: CreateDependenciesContext,
 ): RawProjectGraphDependency[] | Promise<RawProjectGraphDependency[]> {
-  const graph = registrationOf(this).graphForDependencies(context.workspaceRoot);
+  const registration = registrationOf(this);
+  const graph = registration.graphForDependencies(context.workspaceRoot);
   if (graph === undefined) {
     return [];
   }
@@ -39,7 +48,40 @@ function createDependencies(
   const edges = projectEdges(graph, context.projects);
   return failOnPluginVersionOption(graph, context, this)
     .then(() => failOnTargetDefaults(graph, context, this))
-    .then(() => edges);
+    .then((warnings) => {
+      registration.recordTargetWarnings(context.workspaceRoot, warnings);
+      return edges;
+    });
+}
+
+/**
+ * Gives each project whose targets `createDependencies` found warnings for
+ * those warnings in its metadata, under `cargo.targetWarnings`, each with
+ * its target, so that the executor prints each at the start of a task of
+ * its target, where the Nx daemon keeps graph creation's output from the
+ * terminal (`DES-DIAGNOSTICS`, "Warnings where they are seen"). Nx merges
+ * the metadata into the project's own and keeps it out of task keys.
+ *
+ * Nx calls it after `createDependencies`, in the same process, as a method
+ * of its copy of the plugin for the entry, which is `this`.
+ */
+// @mara implements DES-DIAGNOSTICS
+// @mara implements DES-TARGET-DEFAULT-GUARD
+function createMetadata(
+  this: unknown,
+  _graph: ProjectGraph,
+  _options: unknown,
+  context: CreateMetadataContext,
+): ProjectsMetadata {
+  const metadata: ProjectsMetadata = {};
+  for (const [project, targetWarnings] of registrationOf(this).targetWarnings(
+    context.workspaceRoot,
+  )) {
+    metadata[project] = {
+      metadata: { [cargoMetadataKey]: { targetWarnings } } as ProjectsMetadata[string]["metadata"],
+    };
+  }
+  return metadata;
 }
 
 /**
@@ -69,6 +111,7 @@ const plugin = {
     return new Registration().createNodes;
   },
   createDependencies,
+  createMetadata,
   preTasksExecution,
   postTasksExecution,
 };
