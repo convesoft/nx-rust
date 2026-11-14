@@ -3,6 +3,17 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { PackageVersion } from "../cargo/lockfile";
+import {
+  configuredTriples,
+  describeFolders,
+  describeTriples,
+  type PickedTriples,
+  pickedTriples,
+  pickText,
+  samePick,
+  tripleSource,
+  unnamedTripleProblem,
+} from "../cargo/target-triples";
 import type { BuildRecordSource } from "../graph/build-records";
 import { nxVerdictFor } from "../compatibility/nx-version";
 import { cargoMetadataOf } from "../graph/collisions";
@@ -215,9 +226,10 @@ async function checksAfterCargo(
  * @throws {TaskError} When the target is no inferred target of this
  *   executor, when its configuration caches a target that the plugin leaves
  *   uncached in this project, when `build` or `doc` gets the profile `dev`,
- *   `test` or `bench`, or is cached while `CARGO_BUILD_TARGET` or
- *   `build.target` in Cargo's configuration chooses its triple and the
- *   task's options name none (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
+ *   `test` or `bench`, or is cached while its options name no triple and
+ *   the task's environment and Cargo's configuration pick a triple whose
+ *   folder the plugin cannot name or other triples than its outputs name
+ *   (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
  *   `false`, when `args` does not split into words, when the run gives
  *   `pluginVersion` another value than the target's (`DES-PLUGIN-OPTIONS`),
  *   when a task whose target hashes digests does not depend on its
@@ -269,19 +281,16 @@ export function taskInvocation(
         `${task}: the profile ${options.profile} puts cargo's artifacts in the folder of another profile, which @convesoft/nx-rust cannot name for the cache. Build with ${replacement}.`,
       );
     }
-    // The outputs name the triple's folder only through the option; where
-    // the environment or Cargo's configuration chooses the triple instead,
-    // cargo writes elsewhere and Nx would store no artifact.
-    const namesTriple = typeof options.targetTriple === "string" && options.targetTriple !== "";
-    const triple = env.CARGO_BUILD_TARGET;
-    if (context.target?.cache === true && !namesTriple && triple !== undefined && triple !== "") {
+    // The outputs name the folder of the triple in the option, and else of
+    // what the configuration and the graph's environment picked, unless
+    // the plugin cannot name that (`DES-OUTPUTS`).
+    if (
+      context.target?.cache === true &&
+      !namesTriple(options) &&
+      metadata.tripleProblem !== undefined
+    ) {
       throw new TaskError(
-        `${task}: CARGO_BUILD_TARGET is ${JSON.stringify(triple)}, and @convesoft/nx-rust cannot cache ${metadata.target} for a target triple that comes from the environment, because it cannot name the folder where cargo puts the artifacts. Give the triple as the targetTriple option instead: --targetTriple=${triple} on the command line, or in the crate's or the workspace's configuration. The task does not run, so that Nx stores no result for it.`,
-      );
-    }
-    if (context.target?.cache === true && !namesTriple && metadata.buildTargetFile !== undefined) {
-      throw new TaskError(
-        `${task}: build.target in ${metadata.buildTargetFile} chooses the target triple, and this run of the cached ${metadata.target} names none in the targetTriple option, so @convesoft/nx-rust cannot name the folder where cargo puts the artifacts. Run it with the triple that the target's options give, and remove what clears the option for this run, such as a configuration, a project.json, a targetDefaults entry or a value on the command line; \`nx show target ${task} --json\` shows where each option comes from. The task does not run, so that Nx stores no result for it.`,
+        `${task}: ${metadata.tripleProblem}, and this run of the cached ${metadata.target} names no triple in the targetTriple option. Run it with the triple that the target's options give, and remove what clears the option for this run, such as a configuration, a project.json, a targetDefaults entry or a value on the command line; \`nx show target ${task} --json\` shows where each option comes from. The task does not run, so that Nx stores no result for it.`,
       );
     }
   }
@@ -321,6 +330,13 @@ export function taskInvocation(
   // checks after cargo's call; a key without them fails the task here.
   const workspaceRoot = dirname(cargo.workspaceManifest);
   const cwd = join(context.root, workspaceRoot);
+  if (
+    (metadata.target === "build" || metadata.target === "doc") &&
+    context.target?.cache === true &&
+    !namesTriple(options)
+  ) {
+    checkPickedTriples(task, metadata, cwd, context.root, env);
+  }
   const lockfile = join(cwd, "Cargo.lock");
   const folder = join(context.root, digestFolder(workspaceRoot));
   // The private copies of this nx command's lockfile tasks.
@@ -539,6 +555,67 @@ function nxWarnings(workspaceRoot: string): string[] {
   return verdict.kind === "warning" ? [verdict.message] : [];
 }
 
+// Whether a task's options name a triple, which `--target` then gives cargo
+// in place of what the configuration and the environment pick.
+function namesTriple(options: CargoTargetOptions): boolean {
+  return typeof options.targetTriple === "string" && options.targetTriple !== "";
+}
+
+// Fails a cached `build` or `doc` whose run names no triple when the task's
+// environment and Cargo's configuration, as they are now, pick other
+// triples than those whose folders its outputs name, which graph creation
+// recorded: cargo would write elsewhere, and Nx would store no artifact
+// (`DES-OUTPUTS`). Where the configuration alone picks other triples than
+// at graph creation, the graph is out of date, as when a file that Nx does
+// not watch changed under the Nx daemon; otherwise the task's environment
+// differs from the graph's, as through a dotenv file of the task.
+// @mara implements DES-OUTPUTS
+// @mara implements DES-DIAGNOSTICS
+function checkPickedTriples(
+  task: string,
+  metadata: TargetCargoMetadata,
+  cwd: string,
+  root: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  const now = pickedTriples(cwd, env);
+  const named: PickedTriples =
+    metadata.triples === undefined
+      ? { kind: "none" }
+      : { kind: "triples", triples: metadata.triples, files: [], fromEnv: false };
+  if (samePick(now, named)) {
+    return;
+  }
+  const end = "The task does not run, so that Nx stores no result for it.";
+  const configured = configuredTriples(cwd, env);
+  if (pickText(configured) !== (metadata.configuredPick ?? "none")) {
+    const source =
+      configured.kind === "none"
+        ? "no file sets build.target any more"
+        : `${tripleSource(configured, root)} now ${configured.kind === "unnamed" ? `picks ${JSON.stringify(configured.value)}` : `picks ${describeTriples(configured)}`}`;
+    throw new TaskError(
+      [
+        `${task}: Cargo's configuration has changed since Nx created the project graph: ${source}, while the outputs of the cached ${metadata.target} name ${describeFolders(named)}.`,
+        `Nx does not watch a configuration file outside the repository, such as the Cargo home's, so the graph that the Nx daemon keeps is out of date. Run \`nx reset\`, or stop the daemon with \`nx daemon --stop\`, and run the task again. ${end}`,
+      ].join("\n"),
+    );
+  }
+  if (now.kind === "unnamed") {
+    throw new TaskError(
+      `${task}: ${unnamedTripleProblem(now, root)}, and this run of the cached ${metadata.target} names no triple in the targetTriple option. Give the triple as the targetTriple option instead. ${end}`,
+    );
+  }
+  const source = now.kind === "none" ? "" : `, as ${tripleSource(now, root)} picks`;
+  const option =
+    now.kind === "triples" && now.triples.length === 1 ? `, --targetTriple=${now.triples[0]}` : "";
+  throw new TaskError(
+    [
+      `${task}: cargo builds this run of the cached ${metadata.target} for ${describeTriples(now)}${source}, but its outputs name ${describeFolders(named)}, as Cargo's configuration and the environment picked them when Nx created the graph.`,
+      `A CARGO_BUILD_TARGET that only a dotenv file of the task sets, such as a .env file in the crate's folder, is unknown when Nx creates the graph. Set it in the environment of the nx command or in the repository's root .env file, or give the triple as the targetTriple option${option}. ${end}`,
+    ].join("\n"),
+  );
+}
+
 // The warnings that graph creation recorded for the task's project.
 // @mara implements DES-DIAGNOSTICS
 function projectWarnings(context: ExecutorContext): string[] {
@@ -554,15 +631,27 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
-  const { target, locked, uncached, buildTargetFile, members, digests, records } = value as Partial<
-    Record<keyof TargetCargoMetadata, unknown>
-  >;
+  const {
+    target,
+    locked,
+    uncached,
+    triples,
+    tripleProblem,
+    configuredPick,
+    members,
+    digests,
+    records,
+  } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
   return (inferredTargetNames as readonly unknown[]).includes(target)
     ? {
         target: target as InferredTargetName,
         locked: locked === true,
         ...(typeof uncached === "string" ? { uncached } : {}),
-        ...(typeof buildTargetFile === "string" ? { buildTargetFile } : {}),
+        ...(Array.isArray(triples) && triples.every((triple) => typeof triple === "string")
+          ? { triples: triples as string[] }
+          : {}),
+        ...(typeof tripleProblem === "string" ? { tripleProblem } : {}),
+        ...(typeof configuredPick === "string" ? { configuredPick } : {}),
         ...(isPackageList(members) ? { members } : {}),
         ...(isPackageList(digests) ? { digests } : {}),
         ...(isRecordSource(records) ? { records } : {}),

@@ -581,7 +581,14 @@ describe("the check of a build's dependency files", () => {
             env: testEnvironment(),
             stdio: "pipe",
           });
-          const named = nameRecords(records, "plain", { profile }, {}, artifacts);
+          const named = nameRecords(
+            records,
+            "plain",
+            { profile },
+            {},
+            artifacts,
+            join(workspace.root, "rust"),
+          );
           expect(named).toEqual([
             { path: join(artifacts, folder, "libplain.d"), kind: "library", target: "plain" },
           ]);
@@ -627,19 +634,24 @@ describe("the check of a build's dependency files", () => {
     HARNESS_TIMEOUT,
   );
 
-  it(
-    "reads the triple's folder that CARGO_BUILD_TARGET names, and skips records that build.target may have sent there",
-    async () => {
+  it.each<[string, FileChanges, Record<string, string>]>([
+    ["CARGO_BUILD_TARGET in the environment of the nx command", {}, { CARGO_BUILD_TARGET: "HOST" }],
+    ["build.target in Cargo's configuration", { "rust/.cargo/config.toml": "HOST" }, {}],
+  ])(
+    "fails a cached build whose record in the folder of the triple that %s picks names an undeclared file",
+    async (_case, files, variables) => {
       const host = hostTriple();
-      // CARGO_BUILD_TARGET fails a cached build before cargo runs.
-      const uncached: FileChanges = {
-        "rust/crates/plain/Cargo.toml": (manifest = "") =>
-          `${manifest}\n[package.metadata.nx.targets.build]\ncache = false\n`,
-      };
-      await inFixture("undeclared-files", uncached, async (workspace) => {
-        const { status, output } = await nx(workspace, ["run", "plain:build"], {
-          CARGO_BUILD_TARGET: host,
-        });
+      const changes: FileChanges = Object.fromEntries(
+        Object.entries(files).map(([path]) => [
+          path,
+          `[build]\ntarget = ${JSON.stringify(host)}\n`,
+        ]),
+      );
+      const env = Object.fromEntries(Object.entries(variables).map(([name]) => [name, host]));
+      await inFixture("undeclared-files", changes, async (workspace) => {
+        const graph = await workspace.graph(env);
+        expect(graph.projects.plain.targets?.build?.cache).toBe(true);
+        const { status, output } = await nx(workspace, ["run", "plain:build"], env);
         expect(status).not.toBe(0);
         expect(listedFiles(output, "plain")).toEqual(["shared/plain.txt"]);
         expect(
@@ -649,13 +661,24 @@ describe("the check of a build's dependency files", () => {
           false,
         );
       });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "skips records that a triple without a name may have sent to a triple's folder",
+    async () => {
+      const host = hostTriple();
       await inFixture(
         "undeclared-files",
-        { "rust/.cargo/config.toml": `[build]\ntarget = ${JSON.stringify(host)}\n` },
+        { "rust/.cargo/config.toml": '[build]\ntarget = "host-tuple"\n' },
         async (workspace) => {
           const configured = await nx(workspace, ["run", "plain:build"]);
           expect(configured.output).not.toContain(failure);
           expect(configured.status).toBe(0);
+          expect(
+            existsSync(join(workspace.root, "rust", "target", host, "debug", "libplain.d")),
+          ).toBe(true);
           rmSync(join(workspace.root, "rust", ".cargo"), { recursive: true });
           rmSync(join(workspace.root, "rust", "target", host), { recursive: true });
           const plain = await nx(workspace, ["run", "plain:build"]);

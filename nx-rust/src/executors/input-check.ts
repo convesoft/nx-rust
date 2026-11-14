@@ -76,6 +76,7 @@ export async function checkBuildInputs(
     check.selection,
     check.env,
     artifactDirectory,
+    check.cwd,
   );
   const found = new Map<string, ReadFile>();
   const folders: string[] = [];

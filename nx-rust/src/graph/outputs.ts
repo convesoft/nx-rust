@@ -1,4 +1,5 @@
 import type { CargoPackage } from "../cargo/metadata";
+import type { PickedTriples } from "../cargo/target-triples";
 import type { InferredTargetName } from "./targets";
 
 /**
@@ -13,16 +14,37 @@ export type ArtifactDirectory =
   | { inside: false };
 
 /**
- * The folder of a build's final artifacts below the artifact directory, as
- * Nx interpolates it from the task's options: the triple's folder when the
- * task names a triple, then the profile's folder, `debug` without a profile.
+ * The folders of a build's final artifacts below the artifact directory up
+ * to the triple, as Nx interpolates them from the task's options
+ * (`DES-OUTPUTS`, "Paths"): the folder of the triple that the task names,
+ * else of each triple that Cargo's configuration and the graph's
+ * environment pick, else the artifact directory itself. Where they pick an
+ * empty list, cargo builds nothing, and where they pick a triple that the
+ * plugin cannot name, the target is left uncached unless every run names a
+ * triple ({@link uncachedReason}); there an output without a triple keeps
+ * no value, and Nx drops it. The executor fails a cached task whose
+ * environment then picks other triples (`taskInvocation` in `task.ts`).
+ */
+function tripleFolders(triples: PickedTriples): string[] {
+  switch (triples.kind) {
+    case "none":
+      return ["{options.targetTriple ?? .}"];
+    case "triples":
+      return triples.triples.length === 0
+        ? ["{options.targetTriple}"]
+        : triples.triples.map((triple) => `{options.targetTriple ?? ${triple}}`);
+    case "unnamed":
+      return ["{options.targetTriple}"];
+  }
+}
+
+/**
+ * The profile's folder below a triple's folder, `debug` without a profile.
  * The executor rejects the profiles `dev`, `test` and `bench` on `build` and
  * `doc`, whose folders Cargo names `debug` and `release`, which this
- * expression cannot map; and a triple that `CARGO_BUILD_TARGET` or Cargo's
- * configuration chooses leaves the target uncached or failed
- * ({@link uncachedReason}).
+ * expression cannot map.
  */
-const artifactFolder = "{options.targetTriple ?? .}/{options.profile ?? debug}";
+const profileFolder = "{options.profile ?? debug}";
 
 /**
  * Why `DES-TARGETS` and `DES-WORKSPACE-TARGETS` leave a target uncached in
@@ -45,17 +67,23 @@ export const uncachedByDesign: Partial<Record<InferredTargetName, string>> = {
 export interface CachePlace {
   /** Where the workspace's artifact directory lies. */
   artifacts: ArtifactDirectory;
-  /** The configuration files that set `build.target` for the workspace. */
-  buildTargetFiles: readonly string[];
+  /**
+   * Where Cargo's configuration or the graph's environment picks a triple
+   * whose folder the plugin cannot name, what picks it and why, as in "build.target
+   * in rust/.cargo/config.toml picks the target triple "host-tuple", whose
+   * folder the plugin cannot name: …".
+   */
+  tripleProblem?: string;
 }
 
 /**
  * Why the plugin leaves a target that `DES-TARGETS` caches uncached in one
  * project, or `undefined` where it caches it (`DES-OUTPUTS`): `build` and
  * `doc` where the artifact directory lies outside the repository, or where
- * Cargo's configuration chooses the triple and the target's options name
- * none, and `doc` where another workspace shares the artifact directory.
- * The plugin cannot name or store the artifacts of such a task.
+ * Cargo's configuration or the graph's environment picks a triple whose
+ * folder the plugin cannot name and the target's options name none, and
+ * `doc` where another workspace shares the artifact directory. The plugin
+ * cannot name or store the artifacts of such a task.
  *
  * @param namesTriple Whether the target's options or configurations name a triple.
  */
@@ -74,8 +102,8 @@ export function uncachedReason(
   if (target === "doc" && place.artifacts.shared) {
     return "another workspace shares its artifact directory, and restoring one workspace's doc folder from the cache would delete the pages of the others";
   }
-  if (place.buildTargetFiles.length > 0 && !namesTriple) {
-    return `build.target in ${place.buildTargetFiles[0]} chooses the target triple, so the plugin cannot name the folder where cargo puts the artifacts; give the triple as the targetTriple option instead`;
+  if (place.tripleProblem !== undefined && !namesTriple) {
+    return `${place.tripleProblem}; give the triple as the targetTriple option instead`;
   }
   return undefined;
 }
@@ -86,10 +114,11 @@ export function uncachedReason(
  *
  * - `build`: the executable of each binary target, and the `cdylib` and
  *   `staticlib` files of the library, in the artifact directory's folder
- *   for the task's triple and profile. A library's file is named for both
- *   Linux and macOS, and Nx stores what exists.
- * - `doc`: the whole `doc` folder of the artifact directory, or of its
- *   triple's folder when the task names a triple.
+ *   for each triple that the task builds for and its profile
+ *   ({@link tripleFolders}). A library's file is named for both Linux and
+ *   macOS, and Nx stores what exists.
+ * - `doc`: the whole `doc` folder of the artifact directory, or of each
+ *   triple's folder where the task builds for a triple.
  *
  * Other targets store their result only and have no outputs, and neither
  * do targets that are not cached. The list is empty rather than absent,
@@ -104,13 +133,16 @@ export function targetOutputs(
   pkg: CargoPackage | undefined,
   artifacts: ArtifactDirectory,
   cached: boolean,
+  triples: PickedTriples = { kind: "none" },
 ): string[] {
   if (!artifacts.inside || !cached) {
     return [];
   }
-  const directory = `{workspaceRoot}/${artifacts.path}`;
+  const folders = tripleFolders(triples).map(
+    (folder) => `{workspaceRoot}/${artifacts.path}/${folder}`,
+  );
   if (target === "doc") {
-    return [`${directory}/{options.targetTriple ?? .}/doc`];
+    return folders.map((folder) => `${folder}/doc`);
   }
   if (target !== "build" || pkg === undefined) {
     return [];
@@ -128,5 +160,5 @@ export function targetOutputs(
       files.push(`lib${library}.a`);
     }
   }
-  return files.map((file) => `${directory}/${artifactFolder}/${file}`);
+  return folders.flatMap((folder) => files.map((file) => `${folder}/${profileFolder}/${file}`));
 }
