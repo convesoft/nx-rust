@@ -91,6 +91,19 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
   "declared-files": {
     workspaces: { rust: ["rust/crates/api", "rust/crates/app", "rust/crates/other"] },
   },
+  "undeclared-files": {
+    workspaces: {
+      rust: [
+        "rust/crates/base",
+        "rust/crates/cola",
+        "rust/crates/colb",
+        "rust/crates/macros",
+        "rust/crates/multi",
+        "rust/crates/plain",
+        "rust/crates/reader",
+      ],
+    },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.
