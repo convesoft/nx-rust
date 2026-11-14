@@ -118,7 +118,14 @@ export class Registration {
       );
       const projects = inferProjects(discovery, settings, context);
       const causes = await targetDefaultCauses(projects, nxJson, workspaceRoot);
-      graph = { discovery, projects: withWarningsInputs(projects, workspaceRoot, causes) };
+      graph = {
+        discovery,
+        projects: withWarningsInputs(projects, workspaceRoot, causes),
+        declaredPatterns: [
+          ...projects.flatMap((project) => project.declaredPatterns),
+          ...(context.declaredPatterns ?? []),
+        ],
+      };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {
