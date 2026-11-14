@@ -6,6 +6,7 @@ priority: high
 parent: nxr-9y4eh8
 blocked_by:
   - nxr-3nv4tn
+  - nxr-1q1f0n
 created_at: 2026-11-12T18:20:01Z
 ---
 
@@ -21,3 +22,5 @@ Implements `REQ-BATCHING` and `DES-BATCH` (`nx-rust/docs/execution.mara.md`). Ch
 - [ ] Each task of a batch ignores the options that its target does not take, with its lines, as a single task does: call `taskOptions` (`nx-rust/src/executors/task-options.ts`) once per task, with `taskGraph.tasks[id]` as its graph task, its target's options and active configuration as `configured`, and `recordedNxCommand()` as the record; pass only `options` to the grouping, so that an ignored option splits no group, and put `warnings` at the top of the task's own terminal output. Covers the group case and `--batch=false` of `VER-UNKNOWN-OPTIONS` (two crates whose `project.json` files give an unknown option different values share their cargo commands)
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
+
+Note: `EVD-NX-24-BATCHES` records how Nx 24.0.6 treats a batch's results, terminal output, environment and cache entries; the implementation follows it.
