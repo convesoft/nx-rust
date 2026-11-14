@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, extname, join } from "node:path";
+import { type PickedTriples, pickedTriples } from "../cargo/target-triples";
 import {
   binaryRecordName,
   type BuildRecordSource,
@@ -115,20 +116,22 @@ function turnedOnFeature(entry: string, optional: ReadonlySet<string>): string |
 }
 
 /**
- * The target triple that the call builds for, as far as the plugin can
- * know it: the task's triple, or else `CARGO_BUILD_TARGET` in the task's
- * environment; `undefined` where neither names one.
+ * The triples that the call builds for (`DES-BUILD-INPUT-CHECK`, point 1):
+ * the task's own triple, or else those that `build.target` in the
+ * configuration files that cargo reads in `workspaceRoot` and
+ * `CARGO_BUILD_TARGET` in the task's environment pick, read as for the
+ * outputs of `build` ({@link pickedTriples}, `DES-OUTPUTS`).
  */
-export function namedTriple(
+export function callTriples(
   selection: BuildSelection,
   env: Readonly<Record<string, string | undefined>>,
-): string | undefined {
-  for (const triple of [selection.targetTriple, env.CARGO_BUILD_TARGET]) {
-    if (typeof triple === "string" && triple !== "") {
-      return triple;
-    }
+  workspaceRoot: string,
+): PickedTriples {
+  const triple = selection.targetTriple;
+  if (typeof triple === "string" && triple !== "") {
+    return { kind: "triples", triples: [triple], files: [], fromEnv: false };
   }
-  return undefined;
+  return pickedTriples(workspaceRoot, env);
 }
 
 /**
@@ -137,18 +140,21 @@ export function namedTriple(
  * (`DES-BUILD-INPUT-CHECK`, point 1): `lib<name>.d` for the library and
  * `<name>.d` for each binary whose required features are all features of the
  * crate that the selection turns on ({@link enabledFeatures}), in `<artifact directory>/<profile folder>`,
- * or in `<artifact directory>/<triple>/<profile folder>` where the call
- * builds for a named triple; a proc macro's library record stays in the
- * profile folder whatever the triple.
+ * or in `<artifact directory>/<triple>/<profile folder>` for each triple that
+ * the call builds for ({@link callTriples}); a proc macro's library record
+ * stays in the profile folder whatever the triple. For an empty list of
+ * triples, cargo builds nothing, and no record is named.
  *
  * Left out are the records it cannot name with certainty (point 2): one whose
  * name a target of another crate with the same artifact directory shares,
- * and, where the call names no triple, one whose folder depends on the
- * triple while a record of the same name lies in any
- * `<artifact directory>/<folder>/<profile folder>`, since Cargo's
- * configuration may then have sent the call's records there.
+ * and, where the configuration or the environment picks a triple whose
+ * folder the plugin cannot name, one whose folder depends on the triple
+ * while a record of the same name lies in any
+ * `<artifact directory>/<folder>/<profile folder>`, since the call's records
+ * may then lie there.
  *
  * @param artifactDirectory The absolute path of Cargo's artifact directory.
+ * @param workspaceRoot The absolute path of the workspace root, where cargo ran.
  */
 // @mara implements DES-BUILD-INPUT-CHECK
 export function nameRecords(
@@ -157,12 +163,18 @@ export function nameRecords(
   selection: BuildSelection,
   env: Readonly<Record<string, string | undefined>>,
   artifactDirectory: string,
+  workspaceRoot: string,
 ): NamedRecord[] {
   const profile = profileFolder(selection.profile);
-  const triple = namedTriple(selection, env);
+  const picked = callTriples(selection, env, workspaceRoot);
+  if (picked.kind === "triples" && picked.triples.length === 0) {
+    return [];
+  }
   const hostFolder = join(artifactDirectory, profile);
-  const tripleFolder =
-    triple === undefined ? hostFolder : join(artifactDirectory, tripleFolderName(triple), profile);
+  const tripleFolders =
+    picked.kind === "triples"
+      ? picked.triples.map((triple) => join(artifactDirectory, tripleFolderName(triple), profile))
+      : [hostFolder];
   const shared = new Set(source.shared);
   const records: NamedRecord[] = [];
   const add = (kind: NamedRecord["kind"], target: string, name: string, followsTriple: boolean) => {
@@ -171,12 +183,14 @@ export function nameRecords(
     }
     if (
       followsTriple &&
-      triple === undefined &&
+      picked.kind === "unnamed" &&
       inAnyTripleFolder(artifactDirectory, profile, name)
     ) {
       return;
     }
-    records.push({ path: join(followsTriple ? tripleFolder : hostFolder, name), kind, target });
+    for (const folder of followsTriple ? tripleFolders : [hostFolder]) {
+      records.push({ path: join(folder, name), kind, target });
+    }
   };
   if (source.library !== undefined) {
     const { name, procMacro } = source.library;

@@ -1,6 +1,7 @@
 import type { NxJsonConfiguration, TargetConfiguration } from "@nx/devkit";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { PackageVersion } from "../cargo/lockfile";
+import { type PickedTriples, pickText, unnamedTripleProblem } from "../cargo/target-triples";
 import type { CargoPackage } from "../cargo/metadata";
 import { buildRecordSource, sharedRecordNames } from "./build-records";
 import type { DeclaredPattern } from "./declared-files";
@@ -16,6 +17,7 @@ import {
   pluginVersionInput,
   repositoryDefaultInputs,
   targetInputs,
+  tripleCommand,
 } from "./inputs";
 import { digestFolder, lockfileDependency } from "./lockfile-task";
 import { ArtifactDirectory, targetOutputs, uncachedByDesign, uncachedReason } from "./outputs";
@@ -139,7 +141,7 @@ export async function cacheContext(
     const messages = [
       ...workspace.warnings,
       artifactDirectoryWarning(workspace, artifactDirectories, reached, sharers),
-      buildTargetWarning(workspace, workspaceRoot),
+      tripleWarning(workspace, workspaceRoot),
       ...(directoryWarnings.get(workspace) ?? []),
       withoutLockfileTask.has(workspace.root) ? noLockfileTaskWarning(workspace) : undefined,
     ];
@@ -267,8 +269,10 @@ export function configureCaching(
 ): void {
   const { settings } = options;
   const artifacts = context.artifactDirectories.get(subject.workspace.root) ?? { inside: false };
-  const place = { artifacts, buildTargetFiles: subject.workspace.buildTargetFiles ?? [] };
-  const [buildTargetFile] = place.buildTargetFiles;
+  const triples: PickedTriples = subject.workspace.triples ?? { kind: "none" };
+  const tripleProblem =
+    triples.kind === "unnamed" ? unnamedTripleProblem(triples, context.repositoryRoot) : undefined;
+  const place = { artifacts, tripleProblem };
   const workspaceRoot = workspaceFolder(subject, context);
   const members = workspaceMembers(subject);
   for (const [name, target] of targets) {
@@ -285,12 +289,17 @@ export function configureCaching(
     if (metadata !== undefined && reason !== undefined) {
       metadata.uncached = reason;
     }
-    if (
-      metadata !== undefined &&
-      buildTargetFile !== undefined &&
-      (name === "build" || name === "doc")
-    ) {
-      metadata.buildTargetFile = shownPath(buildTargetFile, context.repositoryRoot);
+    if (metadata !== undefined && (name === "build" || name === "doc")) {
+      if (triples.kind === "triples") {
+        metadata.triples = triples.triples;
+      }
+      if (tripleProblem !== undefined) {
+        metadata.tripleProblem = tripleProblem;
+      }
+      const configuredPick = pickText(subject.workspace.configuredTriples ?? { kind: "none" });
+      if (configuredPick !== "none") {
+        metadata.configuredPick = configuredPick;
+      }
     }
     if (metadata !== undefined && name === "build" && subject.pkg !== undefined) {
       metadata.records = buildRecordSource(
@@ -313,13 +322,16 @@ export function configureCaching(
         ? lockfileInputs(subject, context)
         : targetInputs(name, subject, context, settings, readsDigest);
     target.inputs = inputs ?? [...(target.inputs ?? []), pluginVersionInput(context.plugin)];
+    if (target.cache && (name === "build" || name === "doc")) {
+      target.inputs = [...target.inputs, { runtime: tripleCommand(workspaceRoot) }];
+    }
     if (name === "lockfile") {
       target.outputs = [`{workspaceRoot}/${digestFolder(workspaceRoot)}`];
       if (metadata !== undefined) {
         metadata.members = members;
       }
     } else {
-      target.outputs = targetOutputs(name, subject.pkg, artifacts, target.cache);
+      target.outputs = targetOutputs(name, subject.pkg, artifacts, target.cache, triples);
     }
     if (context.plugin.kind === "option") {
       target.options = { ...target.options, pluginVersion: context.plugin.version };
@@ -430,20 +442,19 @@ function projectRoots(discovery: CargoDiscovery): string[] {
   ];
 }
 
-// The warning of `DES-OUTPUTS` for a workspace whose Cargo configuration
-// chooses the target triple, which leaves `build` and `doc` uncached unless
-// their options name a triple.
+// The warning of `DES-OUTPUTS` for a workspace whose Cargo configuration or
+// graph environment picks a triple whose folder the plugin cannot name,
+// which leaves `build` and `doc` uncached unless their options name a
+// triple.
 // @mara implements DES-DIAGNOSTICS
-function buildTargetWarning(workspace: CargoWorkspace, workspaceRoot: string): string | undefined {
-  const [file] = workspace.buildTargetFiles ?? [];
-  if (file === undefined) {
+function tripleWarning(workspace: CargoWorkspace, repositoryRoot: string): string | undefined {
+  const triples = workspace.triples ?? { kind: "none" };
+  if (triples.kind !== "unnamed") {
     return undefined;
   }
-  const shown = relative(workspaceRoot, file);
-  const where = shown.startsWith("..") || isAbsolute(shown) ? file : shown;
   return [
-    `nx-rust: ${where} sets build.target for ${describeWorkspace(workspace)}, so cargo puts the artifacts of its build and doc targets in a folder that the plugin cannot name unless the target's options name the triple.`,
-    `Those targets run uncached where their options name none, and its other targets stay cached.`,
+    `nx-rust: ${unnamedTripleProblem(triples, repositoryRoot)}.`,
+    `The build and doc targets of ${describeWorkspace(workspace)} run uncached where their options name no triple, and its other targets stay cached.`,
     `To cache them, give the triple as the targetTriple option in the options of their target tables, in the crate's or the workspace's Cargo metadata; a triple only in a configuration or on the command line leaves them uncached.`,
   ].join(" ");
 }
@@ -469,12 +480,6 @@ function alwaysNamesTriple(layers: readonly TargetConfiguration[]): boolean {
     }
   }
   return isTriple(triple) && [...configured.values()].every(isTriple);
-}
-
-// A file's path relative to the repository root, or as it is outside it.
-function shownPath(file: string, repositoryRoot: string): string {
-  const shown = relative(repositoryRoot, file);
-  return shown === "" || shown.startsWith("..") || isAbsolute(shown) ? file : shown;
 }
 
 // The folder that each workspace's artifact directory is, as the system

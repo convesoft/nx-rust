@@ -4,11 +4,12 @@ import { testRunFolder } from "./test-run";
 
 /**
  * Variables that the developer's shell must not pass to a test, because they
- * change which toolchain or which directories cargo uses. A test that needs
- * one sets it itself.
+ * change which toolchain, which triples or which directories cargo uses. A
+ * test that needs one sets it itself.
  */
 const unsetVariables = [
   "RUSTUP_TOOLCHAIN",
+  "CARGO_BUILD_TARGET",
   "CARGO_TARGET_DIR",
   "CARGO_BUILD_TARGET_DIR",
   "CARGO_BUILD_BUILD_DIR",
