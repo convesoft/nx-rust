@@ -51,45 +51,67 @@ export function profileFolder(profile: string | undefined): string {
 }
 
 /**
- * The features of the crate that a selection turns on, directly or through
- * other features of the crate: all of them with `--all-features`, otherwise
- * `default` unless `--no-default-features`, and those that `--features` names
- * for the crate itself. An entry that names a feature of a dependency turns
- * on none that the rule counts, so a binary that only it would turn on stays
- * unnamed and unchecked rather than read from a record that cargo may not
- * have written.
+ * The features of the crate that a selection turns on, as cargo resolves
+ * them: all of them with `--all-features`, otherwise `default` unless
+ * `--no-default-features`, and those that `--features` names, a
+ * `<package>/<feature>` entry for the crate itself included; then, to any
+ * depth, what each turned-on feature turns on. A plain entry turns on the
+ * feature it names. A `<dependency>/<feature>` entry also turns on the
+ * crate's feature of the dependency's name where the dependency is
+ * optional, as cargo does for the implicit feature of an optional
+ * dependency; `dep:<name>` and the weak `<dependency>?/<feature>` turn on
+ * no feature of the crate. An optional dependency that a platform limits
+ * counts as required, since cargo matches it only on that platform: a binary
+ * that only it would turn on then stays unnamed and unchecked rather than
+ * read from a record that cargo may not have written.
+ *
+ * @param optionalDependencies The names under which the crate lists its
+ *   optional dependencies that no platform limits.
  */
 export function enabledFeatures(
   packageName: string,
   table: Readonly<Record<string, readonly string[]>>,
   selection: BuildSelection,
+  optionalDependencies: readonly string[] = [],
 ): Set<string> {
   const features = new Map(Object.entries(table));
+  const optional = new Set(optionalDependencies);
   const queue: string[] = [];
   if (selection.allFeatures === true) {
     queue.push(...features.keys());
   } else if (selection.noDefaultFeatures !== true) {
     queue.push("default");
   }
+  const own = `${packageName}/`;
   for (const entry of (selection.features ?? []).flatMap((value) => value.split(/[\s,]+/))) {
-    const slash = entry.indexOf("/");
-    if (slash === -1) {
-      queue.push(entry);
-    } else if (entry.slice(0, slash) === packageName) {
-      queue.push(entry.slice(slash + 1));
-    }
+    queue.push(entry.startsWith(own) ? entry.slice(own.length) : entry);
   }
   const enabled = new Set<string>();
   while (queue.length > 0) {
-    const feature = queue.pop() as string;
-    const enables = features.get(feature);
-    if (feature === "" || enabled.has(feature) || enables === undefined) {
+    const feature = turnedOnFeature(queue.pop() as string, optional);
+    const enables = feature === undefined ? undefined : features.get(feature);
+    if (feature === undefined || enables === undefined || enabled.has(feature)) {
       continue;
     }
     enabled.add(feature);
-    queue.push(...enables.filter((entry) => !entry.includes("/") && !entry.startsWith("dep:")));
+    queue.push(...enables);
   }
   return enabled;
+}
+
+// The feature of the crate that a feature entry turns on, if any: the one
+// it names, or for `<dependency>/<feature>` that of an optional dependency's
+// name; none for `dep:<name>` and the weak `<dependency>?/<feature>`.
+function turnedOnFeature(entry: string, optional: ReadonlySet<string>): string | undefined {
+  if (entry === "" || entry.startsWith("dep:")) {
+    return undefined;
+  }
+  const slash = entry.indexOf("/");
+  if (slash === -1) {
+    return entry;
+  }
+  const dependency = entry.slice(0, slash);
+  return optional.has(dependency) ? dependency : undefined;
 }
 
 /**
@@ -114,7 +136,7 @@ export function namedTriple(
  * selection, named from what graph creation reported, without asking cargo
  * (`DES-BUILD-INPUT-CHECK`, point 1): `lib<name>.d` for the library and
  * `<name>.d` for each binary whose required features are all features of the
- * crate that the selection turns on, in `<artifact directory>/<profile folder>`,
+ * crate that the selection turns on ({@link enabledFeatures}), in `<artifact directory>/<profile folder>`,
  * or in `<artifact directory>/<triple>/<profile folder>` where the call
  * builds for a named triple; a proc macro's library record stays in the
  * profile folder whatever the triple.
@@ -160,7 +182,12 @@ export function nameRecords(
     const { name, procMacro } = source.library;
     add("library", name, libraryRecordName(name), !procMacro);
   }
-  const enabled = enabledFeatures(packageName, source.features, selection);
+  const enabled = enabledFeatures(
+    packageName,
+    source.features,
+    selection,
+    source.optionalDependencies ?? [],
+  );
   for (const binary of source.binaries) {
     if (binary.requiredFeatures.every((feature) => enabled.has(feature))) {
       add("binary", binary.name, binaryRecordName(binary.name), true);

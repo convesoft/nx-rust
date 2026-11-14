@@ -1,7 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
-import { nameRecords } from "../src/executors/build-records";
+import { enabledFeatures, nameRecords } from "../src/executors/build-records";
 import type { BuildRecordSource } from "../src/graph/build-records";
 import {
   applyFileChanges,
@@ -12,6 +19,7 @@ import {
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   inFixture,
+  linesWith,
   loadFixtureGraph,
   LocalRegistry,
   pinnedToolchainAvailable,
@@ -30,6 +38,11 @@ import {
 // feature extra, shared/extra.txt; macros (a proc macro) includes
 // shared/macro.txt, plain (an rlib) shared/plain.txt, and the binaries cli
 // of cola and colb shared/cli.txt. Nothing declares them.
+
+/** The version of this repository's Nx. */
+const nxVersion: string = JSON.parse(
+  readFileSync(require.resolve("nx/package.json"), "utf8"),
+).version;
 
 /** The first line of the check's failure message, without the task. */
 const failure = "cargo build read files in the repository that none of the task's inputs covers";
@@ -164,6 +177,7 @@ describe("the check of a build's dependency files", () => {
           { name: "two", requiredFeatures: [] },
         ],
         features: { extra: [], full: ["extra"] },
+        optionalDependencies: [],
         shared: [],
       });
       expect(records("macros")).toEqual({
@@ -171,6 +185,7 @@ describe("the check of a build's dependency files", () => {
         library: { name: "macros", procMacro: true },
         binaries: [],
         features: {},
+        optionalDependencies: [],
         shared: [],
       });
       // The binaries of cola and colb share the name cli.
@@ -408,6 +423,107 @@ describe("the check of a build's dependency files", () => {
     },
     HARNESS_TIMEOUT,
   );
+
+  it(
+    "checks a binary whose required feature names an optional dependency that a feature entry of it turns on, and no stale record where the weak form leaves it off",
+    async () => {
+      // The review's case: plain's binary requires the implicit feature of
+      // its optional dependency base, and reads an undeclared file.
+      const files: FileChanges = {
+        "rust/crates/base/Cargo.toml": (manifest = "") => `${manifest}\n[features]\nx = []\n`,
+        "rust/crates/plain/Cargo.toml": [
+          "[package]",
+          'name = "plain"',
+          'version = "0.1.0"',
+          'edition = "2024"',
+          "",
+          "[dependencies]",
+          'base = { path = "../base", optional = true }',
+          "",
+          "[features]",
+          'full = ["base/x"]',
+          'weak = ["base?/x"]',
+          "",
+          "[[bin]]",
+          'name = "feature-bin"',
+          'path = "src/main.rs"',
+          'required-features = ["base"]',
+          "",
+        ].join("\n"),
+        "rust/crates/plain/src/lib.rs": "pub fn ok() {}\n",
+        "rust/crates/plain/src/main.rs":
+          'fn main() {\n    println!("{}", include_str!("../../../../shared/plain.txt"));\n}\n',
+      };
+      await inFixture("undeclared-files", files, async (workspace) => {
+        for (const features of ["--features=full", "--features=base/x", "--features=base"]) {
+          const { status, output } = await nx(workspace, [
+            "run",
+            "plain:build",
+            features,
+            "--skip-nx-cache",
+          ]);
+          expect({ features, status }).toEqual({ features, status: 1 });
+          expect({ features, files: listedFiles(output, "plain") }).toEqual({
+            features,
+            files: ["shared/plain.txt"],
+          });
+        }
+        // The record of the binary that cargo built before is still there.
+        const weak = await nx(workspace, [
+          "run",
+          "plain:build",
+          "--features=weak",
+          "--skip-nx-cache",
+        ]);
+        expect(weak.output).not.toContain(failure);
+        expect(weak.status).toBe(0);
+        expect(read(workspace, "rust/target/debug/feature-bin.d")).toContain("shared/plain.txt");
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it("turns on the crate's features as cargo resolves them", () => {
+    // What cargo 1.100.0 and 1.91.0 built of p's binaries need-a (requires
+    // a), need-b (b), need-chain3 (chain3) and need-full (full), with a, b
+    // and c optional and only c hidden by dep:c, on 14 November 2026.
+    const table = {
+      a: ["dep:a"],
+      b: ["dep:b"],
+      chain1: ["chain2"],
+      chain2: ["chain3"],
+      chain3: [],
+      deep: ["full"],
+      default: ["chain1"],
+      full: ["a/x"],
+      viadep: ["dep:c"],
+      weak: ["b?/x"],
+    };
+    const optional = ["a", "b", "c"];
+    const binaries = ["a", "b", "chain3", "full"];
+    const built = (selection: Parameters<typeof enabledFeatures>[2]) => {
+      const enabled = enabledFeatures("p", table, selection, optional);
+      return binaries.filter((required) => enabled.has(required));
+    };
+    expect(built({})).toEqual(["chain3"]);
+    expect(built({ noDefaultFeatures: true })).toEqual([]);
+    expect(built({ allFeatures: true })).toEqual(["a", "b", "chain3", "full"]);
+    expect(built({ features: ["full"] })).toEqual(["a", "chain3", "full"]);
+    expect(built({ features: ["a/x"] })).toEqual(["a", "chain3"]);
+    expect(built({ features: ["a"] })).toEqual(["a", "chain3"]);
+    expect(built({ features: ["weak"] })).toEqual(["chain3"]);
+    expect(built({ features: ["b?/x"] })).toEqual(["chain3"]);
+    expect(built({ features: ["weak,b"] })).toEqual(["b", "chain3"]);
+    expect(built({ features: ["viadep"] })).toEqual(["chain3"]);
+    expect(built({ features: ["deep"], noDefaultFeatures: true })).toEqual(["a", "full"]);
+    expect(built({ features: ["p/full"] })).toEqual(["a", "chain3", "full"]);
+    expect(built({ features: ["a?/x", "b"] })).toEqual(["b", "chain3"]);
+    // A feature named after a dependency that is not optional stays off,
+    // as cargo leaves it.
+    expect(
+      [...enabledFeatures("p", { a: [], full: ["a/x"] }, { features: ["full"] }, [])].sort(),
+    ).toEqual(["full"]);
+  });
 
   it(
     "fails for a proc macro without a triple, with the host triple, and with build.target in Cargo's configuration",
@@ -668,6 +784,38 @@ describe("the check of a build's dependency files", () => {
           expect(notes.output).toContain('A pattern for the folder rust, "../../**"');
         },
       );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "skips the check with one warning line where the installed Nx lacks HashPlanInspector, and caches the result",
+    async () => {
+      await inFixture("undeclared-files", undefined, async (workspace) => {
+        // A copy of this repository's Nx whose module of the class exports
+        // nothing; nx run itself does not load it.
+        workspace.useNx(nxVersion);
+        const copy = realpathSync(join(workspace.root, "node_modules", "nx"));
+        const module = join(copy, "dist", "src", "hasher", "hash-plan-inspector.js");
+        // The file is a hard link to the real one: replace it, never write through it.
+        rmSync(module);
+        writeFileSync(
+          module,
+          '"use strict";\nObject.defineProperty(exports, "__esModule", { value: true });\n',
+        );
+        const first = await nx(workspace, ["run", "reader:build"]);
+        expect(first.output).not.toContain(failure);
+        expect(first.status).toBe(0);
+        expect(
+          linesWith(first.output, "the build input check did not run").map((line) => line.trim()),
+        ).toEqual([
+          "nx-rust: reader:build: the build input check did not run, because the installed Nx lacks HashPlanInspector in nx/src/hasher/hash-plan-inspector, so Nx caches the result without it.",
+        ]);
+        const next = await nx(workspace, ["run", "reader:build"]);
+        expect(next.status).toBe(0);
+        expect(restored(next.output, "reader:build")).toBe(true);
+        expect(cargoCalls(workspace)).toEqual([]);
+      });
     },
     HARNESS_TIMEOUT,
   );

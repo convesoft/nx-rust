@@ -72,6 +72,12 @@ export interface CargoDependency {
   source: string | null;
   /** The folder of a path dependency; absent for any other dependency. */
   path?: string;
+  /** Whether the dependency is optional, so that a feature turns it on. */
+  optional?: boolean;
+  /** The name under which the manifest lists the dependency, where it renames it. */
+  rename?: string | null;
+  /** The platform that the dependency is limited to, such as `cfg(windows)`; `null` for none. */
+  target?: string | null;
 }
 
 /** The arguments after `cargo` that request the report for `manifest`. */

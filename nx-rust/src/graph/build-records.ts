@@ -30,6 +30,12 @@ export interface BuildRecordSource {
   /** The crate's features, each with what it turns on, as the report lists them. */
   features: Record<string, string[]>;
   /**
+   * The names under which the crate lists its optional dependencies that
+   * no platform limits, sorted: a `<dependency>/<feature>` entry for one of
+   * them also turns on the crate's feature of the dependency's name.
+   */
+  optionalDependencies?: string[];
+  /**
    * The names of the crate's records that a target of another crate with
    * the same artifact directory shares, such as `cli.d` for two binaries
    * called `cli`. Cargo keeps one record for such a name, that of the crate
@@ -131,6 +137,13 @@ export function buildRecordSource(
     features: Object.fromEntries(
       Object.entries(pkg.features ?? {}).map(([name, enables]) => [name, [...enables]]),
     ),
+    optionalDependencies: [
+      ...new Set(
+        pkg.dependencies
+          .filter((dependency) => dependency.optional === true && !dependency.target)
+          .map((dependency) => dependency.rename ?? dependency.name),
+      ),
+    ].sort(),
     shared: shared.filter((name) => own.has(name)),
   };
 }

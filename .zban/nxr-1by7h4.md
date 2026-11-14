@@ -2,6 +2,8 @@
 title: Find out which fileInputs patterns Nx matches against the files of other projects
 status: todo
 type: bug
+priority: high
+parent: nxr-w9qa5f
 discovered_from: nxr-agyqmz
 created_at: 2026-11-13T22:17:22Z
 ---

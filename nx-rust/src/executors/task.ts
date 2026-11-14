@@ -29,7 +29,12 @@ import {
 import { cargoArguments, type CargoTargetOptions, pluginVersionOption } from "./command";
 import { checkDigests, DigestCheck, DigestWrite, writeDigests } from "./digests";
 import { type BuildInputCheck, checkBuildInputs } from "./input-check";
-import { NxTaskFilesError, nxTaskFiles } from "./nx-task-files";
+import {
+  NxTaskFilesError,
+  nxTaskFileParts,
+  nxTaskFiles,
+  skippedCheckWarning,
+} from "./nx-task-files";
 import { recordedNxCommand } from "./nx-command";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
 
@@ -176,10 +181,15 @@ async function checksAfterCargo(
   if (digestFailure !== undefined) {
     failures.push(digestFailure);
   }
-  if (invocation.inputCheck !== undefined) {
+  const check = invocation.inputCheck;
+  if (check !== undefined) {
+    // Where the installed Nx lacks a part that the check needs, which only
+    // an Nx that the plugin does not support can, the task warns and the
+    // check does not run (`DES-DIAGNOSTICS`).
     try {
-      const inputFailure = await checkBuildInputs(invocation.inputCheck, context.root, () =>
-        nxTaskFiles(context),
+      const parts = nxTaskFileParts(context.root);
+      const inputFailure = await checkBuildInputs(check, context.root, () =>
+        nxTaskFiles(parts, context),
       );
       if (inputFailure !== undefined) {
         failures.push(inputFailure);
@@ -188,7 +198,7 @@ async function checksAfterCargo(
       if (!(error instanceof NxTaskFilesError)) {
         throw error;
       }
-      failures.push(error.message);
+      console.warn(skippedCheckWarning(check.task, error));
     }
   }
   return failures;
@@ -566,8 +576,15 @@ function isRecordSource(value: unknown): value is BuildRecordSource {
   if (typeof value !== "object" || value === null) {
     return false;
   }
-  const { artifactDirectory, buildDirectory, library, binaries, features, shared } =
-    value as Partial<Record<keyof BuildRecordSource, unknown>>;
+  const {
+    artifactDirectory,
+    buildDirectory,
+    library,
+    binaries,
+    features,
+    optionalDependencies,
+    shared,
+  } = value as Partial<Record<keyof BuildRecordSource, unknown>>;
   const isStrings = (list: unknown): list is string[] =>
     Array.isArray(list) && list.every((item) => typeof item === "string");
   return (
@@ -589,6 +606,7 @@ function isRecordSource(value: unknown): value is BuildRecordSource {
     typeof features === "object" &&
     features !== null &&
     Object.values(features).every(isStrings) &&
+    (optionalDependencies === undefined || isStrings(optionalDependencies)) &&
     isStrings(shared)
   );
 }
