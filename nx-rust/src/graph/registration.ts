@@ -105,7 +105,15 @@ export class Registration {
       const settings = readSettings(discovery, pluginOptions);
       await checkEntries(discovery, settings, nxJson);
       const context = await cacheContext(discovery, nxJson);
-      graph = { discovery, projects: inferProjects(discovery, settings, context) };
+      const projects = inferProjects(discovery, settings, context);
+      graph = {
+        discovery,
+        projects,
+        declaredPatterns: [
+          ...projects.flatMap((project) => project.declaredPatterns),
+          ...(context.declaredPatterns ?? []),
+        ],
+      };
       return graph;
     } finally {
       if (this.latest === undefined || this.latest.sequence < sequence) {
