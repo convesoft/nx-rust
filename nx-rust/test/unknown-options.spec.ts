@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  type CargoCall,
   type Env,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
@@ -316,49 +317,58 @@ describe("an option passed on the command line", () => {
     }),
   });
 
-  it.each<[string, Env]>([
-    ["without the daemon", pluginWorkers],
-    ["with the daemon", { NX_DAEMON: "true" }],
-    ["without plugin isolation", { NX_ISOLATE_PLUGINS: "false" }],
+  // The words of the command line reach the executor through the record of
+  // the plugin's hook, which runs in another process in each of these modes,
+  // and the executor reads every shape of argument from that record in the
+  // same way. So each shape runs in one mode, and --coverage in every mode.
+  const test = rust(["test", "-p", "core-lib"]);
+  /** A command line, the lines that its run prints about ignored options, and its cargo call. */
+  type Run = [args: string[], lines: string[], call: CargoCall];
+  const coverage: Run = [
+    ["run", "core-lib:test", "--coverage"],
+    [fromCommandLine("core-lib:test", "coverage")],
+    test,
+  ];
+  const everyShape: Run[] = [
+    coverage,
+    [
+      ["run", "core-lib:test", "--", "--coverage"],
+      [fromCommandLine("core-lib:test", "coverage")],
+      test,
+    ],
+    [
+      ["run-many", "-t", "check", "-p", "core-lib", "--ci"],
+      [fromCommandLine("core-lib:check", "ci")],
+      rust(["check", "--all-targets", "-p", "core-lib"]),
+    ],
+    [
+      ["run", "core-lib:test", "--", "3000", "serve"],
+      [wordsFromCommandLine("core-lib:test", ["3000", "serve"])],
+      test,
+    ],
+  ];
+
+  it.each<[string, Env, Run[]]>([
+    ["without the daemon", pluginWorkers, [coverage]],
+    ["with the daemon", { NX_DAEMON: "true" }, everyShape],
+    ["without plugin isolation", { NX_ISOLATE_PLUGINS: "false" }, [coverage]],
     [
       "with the daemon and without plugin isolation",
       { NX_DAEMON: "true", NX_ISOLATE_PLUGINS: "false" },
+      [coverage],
     ],
   ])(
-    "is said to be, also after -- and as positional words, %s",
-    (_case, env) =>
+    "is said to be %s, also after -- and as positional words",
+    (_case, env, runs) =>
       inFixture("crate-shapes", undefined, async (workspace) => {
         try {
-          const runs: [string[], string[]][] = [
-            [
-              ["run", "core-lib:test", "--coverage"],
-              [fromCommandLine("core-lib:test", "coverage")],
-            ],
-            [
-              ["run", "core-lib:test", "--", "--coverage"],
-              [fromCommandLine("core-lib:test", "coverage")],
-            ],
-            [
-              ["run-many", "-t", "check", "-p", "core-lib", "--ci"],
-              [fromCommandLine("core-lib:check", "ci")],
-            ],
-            [
-              ["run", "core-lib:test", "--", "3000", "serve"],
-              [wordsFromCommandLine("core-lib:test", ["3000", "serve"])],
-            ],
-          ];
           for (const [args, lines] of runs) {
             const result = await runNx(workspace, args, env);
 
             expect({ args, status: result.status }).toEqual({ args, status: 0 });
             expect({ args, lines: linesWith(result.output, "ignoring") }).toEqual({ args, lines });
           }
-          expect(taskCalls(workspace)).toEqual([
-            rust(["test", "-p", "core-lib"]),
-            rust(["test", "-p", "core-lib"]),
-            rust(["check", "--all-targets", "-p", "core-lib"]),
-            rust(["test", "-p", "core-lib"]),
-          ]);
+          expect(taskCalls(workspace)).toEqual(runs.map(([, , call]) => call));
           // The daemon ran the hook where it was on.
           expect(workspace.daemonLog() !== "").toBe(env.NX_DAEMON === "true");
         } finally {

@@ -10,7 +10,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { environmentVariables } from "../src/graph/inputs";
 import {
   applyFileChanges,
   CacheKeyRow,
@@ -26,6 +25,7 @@ import {
   pluginSourceEntry,
   pnpmLockfile,
   programVersion,
+  TaskHash,
   testEnvironment,
   toolchainProgram,
 } from "./harness";
@@ -403,6 +403,38 @@ describeCacheKeyMatrix("keys must not differ after", [
 ]);
 
 describe("keys with the environment", () => {
+  // The environment list of DES-INPUTS, typed here rather than taken from
+  // the plugin, so that a variable missing from the plugin's list fails.
+  const listed = [
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "RUSTDOCFLAGS",
+    "CARGO_ENCODED_RUSTDOCFLAGS",
+    "RUSTC",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTDOC",
+    "RUSTC_BOOTSTRAP",
+    "CARGO_BUILD_TARGET",
+    "CARGO_BUILD_RUSTFLAGS",
+    "CARGO_BUILD_RUSTDOCFLAGS",
+    "CARGO_BUILD_RUSTC",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTDOC",
+    "CC",
+    "CXX",
+    "AR",
+    "CFLAGS",
+    "CXXFLAGS",
+    "PKG_CONFIG_PATH",
+    "MACOSX_DEPLOYMENT_TARGET",
+    "OPENSSL_DIR",
+    "OPENSSL_LIB_DIR",
+    "OPENSSL_INCLUDE_DIR",
+    "OPENSSL_STATIC",
+    "OPENSSL_NO_VENDOR",
+  ];
   // Cargo's variables for a profile or a triple, of any name; not CARGO_TARGET_DIR.
   const families = [
     "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS",
@@ -412,6 +444,9 @@ describe("keys with the environment", () => {
     "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER",
   ];
 
+  /** The hash of each input of a task's key, as Nx reports it. */
+  const inputHashes = (hash: TaskHash) => (hash.details.nodes ?? {}) as Record<string, string>;
+
   it(
     "differ after a change of each variable in the list, CARGO_BUILD_WARNINGS on the targets that compile and CLIPPY_CONF_DIR on lint",
     async () => {
@@ -420,11 +455,30 @@ describe("keys with the environment", () => {
         const tasks = [...apiTasks, "rust:doc"];
         const base = await workspace.hashTasks(tasks);
         const failures: string[] = [];
+
+        // Every listed variable at once: the key of each task changes, and
+        // so does the entry of each variable among its inputs, which Nx
+        // hashes from the variable's value alone.
+        const everyListed = await workspace.hashTasks(tasks, {
+          env: Object.fromEntries(listed.map((variable) => [variable, "changed"])),
+        });
+        for (const task of tasks) {
+          if (everyListed[task].value === base[task].value) {
+            failures.push(`every listed variable: the key of ${task} did not change`);
+          }
+          for (const variable of listed) {
+            const input = `env:${variable}`;
+            const after = inputHashes(everyListed[task])[input];
+            if (after === undefined || after === inputHashes(base[task])[input]) {
+              failures.push(`${variable}: no input of ${task} changed with it`);
+            }
+          }
+        }
+
+        // The families have no input of their own and need a run each, and
+        // so do the variables that only some targets hash.
         const expectations: [string, string[]][] = [
-          ...[...environmentVariables, ...families].map((variable): [string, string[]] => [
-            variable,
-            tasks,
-          ]),
+          ...families.map((variable): [string, string[]] => [variable, tasks]),
           ["CARGO_BUILD_WARNINGS", tasks.filter((task) => task !== "api:fmt-check")],
           ["CLIPPY_CONF_DIR", ["api:lint"]],
         ];
@@ -446,7 +500,7 @@ describe("keys with the environment", () => {
         workspace.remove();
       }
     },
-    HARNESS_TIMEOUT * 4,
+    HARNESS_TIMEOUT,
   );
   it(
     "differ after a profile or target variable in a crate's .env, for that crate only, and after CARGO_TARGET_DIR there for its build only",

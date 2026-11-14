@@ -2,6 +2,7 @@ import { symlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   applyFileChanges,
+  CargoCall,
   FileChanges,
   FixtureGraph,
   FixtureName,
@@ -13,10 +14,17 @@ import {
 } from "./harness";
 
 // Checks the parts of VER-GRAPH about projects, names and edges, with a real
-// cargo and Nx's own graph creation. The cargo calls that creating them
-// takes are checked in discovery.spec.ts.
+// cargo and Nx's own graph creation, together with the cargo calls that
+// creating each fixture's graph takes. How discovery reads workspaces in other
+// situations, and how it fails, is checked in discovery.spec.ts.
 
 interface ExpectedGraph {
+  /**
+   * The folder of each cargo call that creating the graph takes, sorted: one
+   * per workspace, in its root folder, and one for each path dependency
+   * without a project, from the workspace that uses it.
+   */
+  cargoFolders: string[];
   /** Each project's name with its folder. */
   projects: Record<string, string>;
   /** Each edge as source and target, sorted. */
@@ -48,6 +56,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   // api has a normal dependency on model, a build dependency on codegen and a
   // dev-dependency on testkit.
   "subfolder-workspace": {
+    cargoFolders: ["rust"],
     projects: {
       api: "rust/crates/api",
       codegen: "rust/crates/codegen",
@@ -69,6 +78,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   // one in tools/ whose root manifest is the crate tools, which therefore is
   // the workspace project.
   "two-workspaces": {
+    cargoFolders: [".", "tools"],
     projects: {
       app: "crates/app",
       "cargo-workspace": ".",
@@ -85,16 +95,19 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // xtask is a standalone crate: a workspace of one, without an extra project.
   "standalone-crate": {
+    cargoFolders: ["rust", "tools/xtask"],
     projects: { api: "rust/crates/api", rust: "rust", xtask: "tools/xtask" },
     edges: [["rust", "api"]],
   },
   // legacy is excluded from rust/ and so a standalone crate.
   "excluded-member": {
+    cargoFolders: ["rust", "rust/crates/legacy"],
     projects: { app: "rust/crates/app", legacy: "rust/crates/legacy", rust: "rust" },
     edges: [["rust", "app"]],
   },
   // model is one project, in shared/, with an edge from server in backend/.
   "cross-workspace-path": {
+    cargoFolders: ["backend", "shared"],
     projects: {
       backend: "backend",
       model: "shared/crates/model",
@@ -107,8 +120,10 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["shared", "model"],
     ],
   },
-  // The vendored crates are excluded, so lib has no edge to parser.
+  // The vendored crates are excluded, so lib has no edge to parser, and they
+  // are read as path dependencies, from the workspace that uses them.
   "vendored-crate": {
+    cargoFolders: ["rust", "rust", "rust"],
     projects: { app: "rust/crates/app", lib: "rust/crates/lib", rust: "rust" },
     edges: [
       ["app", "lib"],
@@ -118,6 +133,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // model dev-depends on testkit, which depends on model: both edges stay.
   "dev-dependency-cycle": {
+    cargoFolders: ["rust"],
     projects: { model: "rust/crates/model", rust: "rust", testkit: "rust/crates/testkit" },
     edges: [
       ["model", "testkit"],
@@ -127,6 +143,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
     ],
   },
   "different-toolchains": {
+    cargoFolders: ["pinned", "stable"],
     projects: {
       pinned: "pinned",
       "pinned-lib": "pinned/crates/pinned-lib",
@@ -144,6 +161,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   // plugin's names, which are not what Nx would derive from those folders.
   // Every edge names its ends as Nx does.
   "mixed-folders": {
+    cargoFolders: ["libs/rust"],
     projects: {
       "@mixed/napi-addon": "libs/rust/crates/addon",
       cli: "libs/rust/crates/cli",
@@ -164,6 +182,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // Workspace projects keep the punctuation and case of their folders.
   "nested-folders": {
+    cargoFolders: ["apps/Billing.API/rust_v2", "services/billing"],
     projects: {
       "apps-Billing.API-rust_v2": "apps/Billing.API/rust_v2",
       gateway: "apps/Billing.API/rust_v2/crates/gateway",
@@ -176,6 +195,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
     ],
   },
   "crate-shapes": {
+    cargoFolders: ["rust"],
     projects: {
       cli: "rust/crates/cli",
       "core-lib": "rust/crates/core",
@@ -199,8 +219,10 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   // dependency, gets an edge to model and types, apart from model itself,
   // plain, which has none, and util, which model reaches through a normal
   // dependency. model reaches harness only through a dev-dependency, so
-  // harness keeps its edge, which closes a cycle.
+  // harness keeps its edge, which closes a cycle. fork is read from rust,
+  // where the redirection applies.
   "patched-workspaces": {
+    cargoFolders: ["rust", "rust", "shared"],
     projects: {
       api: "rust/crates/api",
       harness: "rust/crates/harness",
@@ -216,6 +238,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // app depends on api, which reads files outside its folder.
   "declared-files": {
+    cargoFolders: ["rust"],
     projects: {
       api: "rust/crates/api",
       app: "rust/crates/app",
@@ -231,6 +254,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // reader depends on base; the others depend on nothing.
   "undeclared-files": {
+    cargoFolders: ["rust"],
     projects: {
       base: "rust/crates/base",
       cola: "rust/crates/cola",
@@ -277,9 +301,22 @@ function compare(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * The folder that each cargo call started in, in order, after checking that
+ * each asks for a `cargo metadata` report without dependencies: how many
+ * reports creating the graph takes and where cargo runs for each, not how
+ * the arguments are spelt.
+ */
+function metadataFolders(calls: CargoCall[]): string[] {
+  for (const call of calls) {
+    expect(call.args).toEqual(expect.arrayContaining(["metadata", "--no-deps"]));
+  }
+  return calls.map((call) => call.cwd);
+}
+
 describe("projects and edges of each fixture", () => {
   it.each(fixtures)(
-    "%s has a project per crate and per workspace, with an edge per path dependency",
+    "%s has a project per crate and per workspace, with an edge per path dependency, and reads each workspace with one cargo call",
     async (fixture) => {
       const workspace = FixtureWorkspace.create(fixture);
       try {
@@ -290,6 +327,9 @@ describe("projects and edges of each fixture", () => {
         expect(roots(graph)).toEqual(expected[fixture].projects);
         expect(edges(graph)).toEqual(expected[fixture].edges);
         expect(graph.externalNodes).toEqual({});
+        expect(metadataFolders(workspace.cargoCalls()).sort()).toEqual(
+          expected[fixture].cargoFolders,
+        );
         // The plugin writes no file, in a crate or anywhere else.
         expect(workspace.files()).toEqual(files);
       } finally {
@@ -324,13 +364,18 @@ describe("projects and edges of each fixture", () => {
   );
 
   it(
-    "gives edges to the vendored crates once they are no longer excluded",
+    "gives edges to the vendored crates, read as standalone crates, once they are no longer excluded",
     async () => {
       // The positive control for the exclude in vendored-crate's nx.json.
       const graph = await loadFixtureGraph("vendored-crate", {
         files: { "nx.json": pluginEntries({}) },
       });
 
+      expect(metadataFolders(graph.cargoCalls).sort()).toEqual([
+        "rust",
+        "vendor/lexer",
+        "vendor/parser",
+      ]);
       expect(edges(graph)).toEqual([
         ["app", "lib"],
         ["lib", "parser"],
@@ -343,12 +388,16 @@ describe("projects and edges of each fixture", () => {
   );
 
   it(
-    "gives no workspace project to a workspace whose root manifest is excluded",
+    "gives no workspace project to a workspace whose root manifest is excluded, and reads it once more in its root folder",
     async () => {
       const graph = await loadFixtureGraph("subfolder-workspace", {
         files: { "nx.json": pluginEntries({ exclude: ["rust/Cargo.toml"] }) },
       });
 
+      // The first call starts in the folder of the shallowest manifest that
+      // the plugin receives and names the workspace root, where the
+      // workspace's tasks run cargo.
+      expect(metadataFolders(graph.cargoCalls)).toEqual(["rust/crates/api", "rust"]);
       expect(Object.keys(graph.projects).sort()).toEqual(["api", "codegen", "model", "testkit"]);
       expect(edges(graph)).toEqual([
         ["api", "codegen"],
@@ -580,13 +629,15 @@ describe("name collisions", () => {
   it(
     "fail graph creation for two crates with one name, naming both manifests and the remedies",
     async () => {
-      const loading = loadFixtureGraph("name-collision");
-
-      await expect(loading).rejects.toThrow(GraphCreationError);
-      const message = await loading.then(
-        () => "",
-        (error: Error) => error.message,
+      const error = await loadFixtureGraph("name-collision").then(
+        () => undefined,
+        (failure: unknown) => failure,
       );
+
+      expect(error).toBeInstanceOf(GraphCreationError);
+      const { message, cargoCalls } = error as GraphCreationError;
+      // Both workspaces are read before the names collide.
+      expect(metadataFolders(cargoCalls).sort()).toEqual(["rust", "tools/api"]);
       expect(message).toContain(
         'nx-rust would give 2 projects the name "api", and Nx needs every project name to be unique',
       );
@@ -626,41 +677,45 @@ describe("name collisions", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each<[string, FixtureName, string, string, string]>([
-    [
-      "a workspace in services/billing/ and one in services-billing/",
-      "nested-folders",
-      "services-billing",
-      "services/billing/Cargo.toml",
-      "services-billing/Cargo.toml",
-    ],
-    // DES-PROJECT-GRAPH promises the plugin's message here only as best
-    // effort, because one project is at the root; this guards today's message.
-    [
-      "a workspace at the root and one in cargo-workspace/",
-      "two-workspaces",
-      "cargo-workspace",
-      "Cargo.toml",
-      "cargo-workspace/Cargo.toml",
-    ],
-  ])(
-    "fail graph creation for two workspace projects with one name: %s",
-    async (_situation, fixture, name, first, second) => {
-      const folder = second.replace(/\/Cargo\.toml$/, "");
-      const loading = loadFixtureGraph(fixture, {
-        files: {
-          [second]: '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n',
-          [`${folder}/crates/ledger/Cargo.toml`]: crateManifest("ledger"),
-          [`${folder}/crates/ledger/src/lib.rs`]: "",
-        },
+  /** A second workspace, with the member ledger, whose root manifest is `manifest`. */
+  const secondWorkspace = (manifest: string): FileChanges => {
+    const folder = manifest.replace(/\/?Cargo\.toml$/, "");
+    return {
+      [manifest]: '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n',
+      [`${folder}/crates/ledger/Cargo.toml`]: crateManifest("ledger"),
+      [`${folder}/crates/ledger/src/lib.rs`]: "",
+    };
+  };
+
+  it(
+    "fail graph creation for two workspace projects with one name, naming both manifests and the remedy",
+    async () => {
+      const loading = loadFixtureGraph("nested-folders", {
+        files: secondWorkspace("services-billing/Cargo.toml"),
       });
 
-      await expect(loading).rejects.toThrow(`would give 2 projects the name "${name}"`);
-      for (const manifest of [first, second]) {
+      await expect(loading).rejects.toThrow('would give 2 projects the name "services-billing"');
+      for (const manifest of ["services/billing/Cargo.toml", "services-billing/Cargo.toml"]) {
         await expect(loading).rejects.toThrow(
           `- the workspace project of the Cargo workspace in ${manifest}: set \`name\` under [workspace.metadata.nx.project] in that manifest.`,
         );
       }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fail graph creation with Nx's error for a workspace at the root and one in cargo-workspace/",
+    async () => {
+      // DES-PROJECT-GRAPH promises the plugin's message here only as best
+      // effort, because one project is at the root.
+      const loading = loadFixtureGraph("two-workspaces", {
+        files: secondWorkspace("cargo-workspace/Cargo.toml"),
+      });
+
+      await expect(loading).rejects.toThrow(GraphCreationError);
+      await expect(loading).rejects.toThrow(/defined in multiple locations/);
+      await expect(loading).rejects.toThrow("  - cargo-workspace\n");
     },
     HARNESS_TIMEOUT,
   );
@@ -786,41 +841,38 @@ describe.each([
     );
   }
 
-  /** The folders that Nx's duplicate-name error names, and whether the plugin's message follows. */
-  function duplicateNameError(result: string[] | string): {
-    folders: string[];
-    pluginMessage: boolean;
-  } {
+  /**
+   * The folders that Nx's duplicate-name error names. In these cases
+   * DES-PROJECT-GRAPH promises only that graph creation fails with Nx's
+   * error, so whether the plugin's message follows is left open.
+   */
+  function duplicateNameFolders(result: string[] | string): string[] {
     const message = typeof result === "string" ? result : "";
     const lines = message.split("\n");
     const start = lines.findIndex((line) =>
       line.includes("The following projects are defined in multiple locations"),
     );
     const end = lines.findIndex((line, index) => index > start && line === "");
-    const folders =
-      start < 0
-        ? []
-        : lines
-            .slice(start + 1, end < 0 ? undefined : end)
-            .filter((line) => line.startsWith("  - "))
-            .map((line) => line.slice(4))
-            .sort();
-    return { folders, pluginMessage: message.includes("nx-rust would give") };
+    return start < 0
+      ? []
+      : lines
+          .slice(start + 1, end < 0 ? undefined : end)
+          .filter((line) => line.startsWith("  - "))
+          .map((line) => line.slice(4))
+          .sort();
   }
 
-  /**
-   * Nx's error alone, naming `folders`. In these cases DES-PROJECT-GRAPH
-   * promises only that graph creation fails with Nx's error; that the
-   * plugin's message is absent guards today's behaviour.
-   */
-  function nxErrorAlone(...folders: string[]) {
-    return { folders: folders.sort(), pluginMessage: false };
-  }
+  // With one entry, the plugin runs in one process in either mode, so the
+  // cases of one entry run in one mode only.
+  const entries: [string, (nxJson: string) => string][] =
+    isolation === "false"
+      ? [
+          ["in one entry", oneEntry],
+          ["in two entries", twoEntries],
+        ]
+      : [["in two entries", twoEntries]];
 
-  it.each([
-    ["in one entry", oneEntry],
-    ["in two entries", twoEntries],
-  ])(
+  it.each(entries)(
     "follow a name that a project.json gives, %s, and fail again once both crates are called api",
     async (_where, nxJson) => {
       const workspace = FixtureWorkspace.create("name-collision", { "nx.json": nxJson });
@@ -848,20 +900,19 @@ describe.each([
     HARNESS_TIMEOUT,
   );
 
-  it.each([
-    ["in one entry", oneEntry],
-    ["in two entries", twoEntries],
-  ])(
-    "leave a name that a project which is not the plugin's holds too to Nx's error alone, %s",
+  it.each(entries)(
+    "leave a name that a project which is not the plugin's holds too to Nx's error, %s",
     async (_where, nxJson) => {
       const workspace = FixtureWorkspace.create("name-collision", {
         "nx.json": nxJson,
         "web/project.json": '{ "name": "api" }',
       });
       try {
-        expect(duplicateNameError(await outcome(workspace))).toEqual(
-          nxErrorAlone("rust/crates/api", "tools/api", "web"),
-        );
+        expect(duplicateNameFolders(await outcome(workspace))).toEqual([
+          "rust/crates/api",
+          "tools/api",
+          "web",
+        ]);
 
         // The plugin's message appears once the other project gives up the name.
         applyFileChanges(workspace.root, { "web/project.json": '{ "name": "web" }' });
@@ -874,7 +925,7 @@ describe.each([
   );
 
   it(
-    "leave two crates that project.json files give one new name to Nx's error alone",
+    "leave two crates that project.json files give one new name to Nx's error",
     async () => {
       const workspace = FixtureWorkspace.create("name-collision", {
         "nx.json": twoEntries,
@@ -882,9 +933,10 @@ describe.each([
         "tools/api/project.json": '{ "name": "shared" }',
       });
       try {
-        expect(duplicateNameError(await outcome(workspace))).toEqual(
-          nxErrorAlone("rust/crates/api", "tools/api"),
-        );
+        expect(duplicateNameFolders(await outcome(workspace))).toEqual([
+          "rust/crates/api",
+          "tools/api",
+        ]);
       } finally {
         workspace.remove();
       }
@@ -893,7 +945,7 @@ describe.each([
   );
 
   it(
-    "leave three crates with one name from three entries to Nx's error alone",
+    "leave three crates with one name from three entries to Nx's error",
     async () => {
       const workspace = FixtureWorkspace.create("name-collision", {
         "nx.json": pluginEntries(
@@ -905,9 +957,11 @@ describe.each([
         "other/api/src/lib.rs": "",
       });
       try {
-        expect(duplicateNameError(await outcome(workspace))).toEqual(
-          nxErrorAlone("rust/crates/api", "tools/api", "other/api"),
-        );
+        expect(duplicateNameFolders(await outcome(workspace))).toEqual([
+          "other/api",
+          "rust/crates/api",
+          "tools/api",
+        ]);
       } finally {
         workspace.remove();
       }
@@ -925,9 +979,11 @@ describe.each([
         "other/api/src/lib.rs": "",
       });
       try {
-        expect(duplicateNameError(await outcome(workspace))).toEqual(
-          nxErrorAlone("rust/crates/api", "tools/api", "other/api"),
-        );
+        expect(duplicateNameFolders(await outcome(workspace))).toEqual([
+          "other/api",
+          "rust/crates/api",
+          "tools/api",
+        ]);
 
         applyFileChanges(workspace.root, { "other/api/project.json": '{ "name": "other-api" }' });
         const two = await outcome(workspace);
@@ -936,9 +992,11 @@ describe.each([
         expect(two).toContain("- the crate api in tools/api/Cargo.toml");
 
         applyFileChanges(workspace.root, { "other/api/project.json": null });
-        expect(duplicateNameError(await outcome(workspace))).toEqual(
-          nxErrorAlone("rust/crates/api", "tools/api", "other/api"),
-        );
+        expect(duplicateNameFolders(await outcome(workspace))).toEqual([
+          "other/api",
+          "rust/crates/api",
+          "tools/api",
+        ]);
       } finally {
         workspace.remove();
       }

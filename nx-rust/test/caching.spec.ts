@@ -1,9 +1,9 @@
 import type { TargetConfiguration } from "@nx/devkit";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { noConfiguredTools } from "../src/cargo/configured-tools";
-import { environmentVariables, toolchainCommand } from "../src/graph/inputs";
+import { toolchainCommand } from "../src/graph/inputs";
 import { listsPackage } from "../src/graph/plugin-package";
 import {
   FileChanges,
@@ -142,105 +142,89 @@ describe("caching", () => {
       expect(api.namedInputs).toEqual({
         default: ["{projectRoot}/**/*", "{workspaceRoot}/rust/Cargo.toml"],
       });
-      const workspaceFiles = ["rust/crates", "rust", ""].flatMap((folder) =>
-        ["rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml", ".cargo/config"].map(
-          (file) => `{workspaceRoot}/${folder === "" ? "" : `${folder}/`}${file}`,
-        ),
-      );
-      // The other members' manifests, under the workspace-build strategy.
-      const members = ["codegen", "model", "testkit"].map(
-        (crate) => `{workspaceRoot}/rust/crates/${crate}/Cargo.toml`,
-      );
-      expect(fileInputs(api.targets.test)).toEqual([
+      // Files of these names in each folder above the crate.
+      const above = (...names: string[]) =>
+        ["rust/crates", "rust", ""].flatMap((folder) =>
+          names.map((name) => `{workspaceRoot}/${folder === "" ? "" : `${folder}/`}${name}`),
+        );
+      const shared = [
         "default",
         "^default",
-        ...workspaceFiles,
-        ...members,
-      ]);
-      expect(fileInputs(api.targets.lint)).toEqual([
-        "default",
-        "^default",
-        ...workspaceFiles,
-        ...members,
-        ...["rust/crates", "rust", ""].flatMap((folder) =>
-          ["clippy.toml", ".clippy.toml"].map(
-            (file) => `{workspaceRoot}/${folder === "" ? "" : `${folder}/`}${file}`,
-          ),
+        ...above("rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml", ".cargo/config"),
+        // The other members' manifests, under the workspace-build strategy.
+        ...["codegen", "model", "testkit"].map(
+          (crate) => `{workspaceRoot}/rust/crates/${crate}/Cargo.toml`,
         ),
-      ]);
-      for (const name of ["fmt-check", "fmt"]) {
-        expect(fileInputs(api.targets[name])).toEqual([
-          "default",
-          "^default",
-          ...workspaceFiles,
-          ...members,
-          ...["rust/crates", "rust", ""].flatMap((folder) =>
-            ["rustfmt.toml", ".rustfmt.toml"].map(
-              (file) => `{workspaceRoot}/${folder === "" ? "" : `${folder}/`}${file}`,
-            ),
-          ),
-        ]);
+      ];
+      const files: Record<string, string[]> = {
+        build: shared,
+        check: shared,
+        test: shared,
+        lint: [...shared, ...above("clippy.toml", ".clippy.toml")],
+        "fmt-check": [...shared, ...above("rustfmt.toml", ".rustfmt.toml")],
+        fmt: [...shared, ...above("rustfmt.toml", ".rustfmt.toml")],
+      };
+      for (const [name, expected] of Object.entries(files)) {
+        expect({ name, files: fileInputs(api.targets[name]).sort() }).toEqual({
+          name,
+          files: [...expected].sort(),
+        });
       }
 
       // The crate's digest from the workspace's lockfile task, on which the
       // target depends, and no Cargo.lock as a file (DES-LOCKFILE-HASHING).
       for (const name of ["build", "check", "lint", "test"]) {
-        expect(inputsOf(api.targets[name], "fileset")).toEqual([]);
         expect(inputsOf(api.targets[name], "dependentTasksOutputFiles")).toEqual([
           { dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/rust/api.digest" },
         ]);
         expect(api.targets[name].dependsOn).toEqual([lockfileDependency("rust")]);
-        expect(api.targets[name].metadata?.cargo.digests).toEqual([
-          { name: "api", version: "0.1.0" },
-        ]);
       }
       for (const name of ["fmt-check", "fmt"]) {
-        expect(inputsOf(api.targets[name], "fileset")).toEqual([]);
         expect(inputsOf(api.targets[name], "dependentTasksOutputFiles")).toEqual([]);
         expect(api.targets[name].dependsOn).toBeUndefined();
-        expect(api.targets[name].metadata?.cargo.digests).toBeUndefined();
       }
-
-      expect(envInputs(api.targets.build)).toEqual([
-        "NX_RUST_RUN_ID",
-        ...environmentVariables,
-        "CARGO_BUILD_WARNINGS",
-      ]);
-      expect(envInputs(api.targets.lint)).toEqual([
-        "NX_RUST_RUN_ID",
-        ...environmentVariables,
-        "CARGO_BUILD_WARNINGS",
-        "CLIPPY_CONF_DIR",
-      ]);
-      expect(envInputs(api.targets["fmt-check"])).toEqual([...environmentVariables]);
-
-      // build, whose outputs depend on the triple and the artifact
-      // directory, also has the artifact input.
-      const tripleInput = {
-        runtime: expect.stringMatching(/\/src\/cargo\/print-artifact-folders\.js' 'rust'/),
-      };
-      // test, which runs rustdoc for doctests, also asks the rustdoc that a setting names.
-      for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt"]) {
-        expect(inputsOf(api.targets[name], "runtime")).toEqual([
-          { runtime: toolchainCommand("rust", noConfiguredTools, name === "test") },
-          ...(name === "build" ? [tripleInput] : []),
-        ]);
-        expect(inputsOf(api.targets[name], "externalDependencies")).toEqual([
-          { externalDependencies: [] },
-        ]);
+      for (const name of Object.keys(files)) {
+        expect({ name, inputs: JSON.stringify(api.targets[name].inputs) }).not.toEqual({
+          name,
+          inputs: expect.stringContaining("Cargo.lock"),
+        });
       }
-      expect(inputsOf(graph.projects.rust.targets.doc, "runtime")).toEqual([
-        { runtime: toolchainCommand("rust", noConfiguredTools, true) },
-        tripleInput,
-      ]);
-      expect(toolchainCommand("rust")).toBe(
-        `{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null && if [ -n "\${RUSTC+x}\${CARGO_BUILD_RUSTC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTC-$CARGO_BUILD_RUSTC}" -Vv 2>/dev/null; fi || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true`,
-      );
-      expect(
-        toolchainCommand("rust", { rustc: ["/a b/it's rustc", "rustc-91"], rustdoc: [] }, true),
-      ).toBe(
-        `{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null && if [ -n "\${RUSTC+x}\${CARGO_BUILD_RUSTC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTC-$CARGO_BUILD_RUSTC}" -Vv 2>/dev/null; else RUSTUP_AUTO_INSTALL=0 '/a b/it'"'"'s rustc' -Vv 2>/dev/null && RUSTUP_AUTO_INSTALL=0 'rustc-91' -Vv 2>/dev/null; fi && if [ -n "\${RUSTDOC+x}\${CARGO_BUILD_RUSTDOC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTDOC-$CARGO_BUILD_RUSTDOC}" -Vv 2>/dev/null; fi || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true`,
-      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "asks the compiler that Cargo's configuration names by a path with a space and a quote, in the toolchain input",
+    async () => {
+      // A compiler that prints what rustc prints and a line of its own.
+      const compiler = "tools/a b/it's rustc";
+      const workspace = FixtureWorkspace.create("subfolder-workspace", {
+        [compiler]: '#!/bin/sh\nrustc "$@" && echo "nx-rust-test: the named compiler"\n',
+        "rust/.cargo/config.toml": `[build]\nrustc = ${JSON.stringify(join("..", compiler))}\n`,
+      });
+      try {
+        chmodSync(join(workspace.root, compiler), 0o755);
+        const graph = await workspace.graph();
+
+        for (const name of ["build", "test"]) {
+          const printed = inputsOf(graph.projects.api.targets[name], "runtime").map(
+            (input) =>
+              spawnSync("sh", ["-c", (input as { runtime: string }).runtime], {
+                cwd: workspace.root,
+                env: testEnvironment(),
+                encoding: "utf8",
+              }).stdout,
+          );
+          expect({ name, printed }).toEqual({
+            name,
+            printed: expect.arrayContaining([
+              expect.stringContaining("nx-rust-test: the named compiler"),
+            ]),
+          });
+        }
+      } finally {
+        workspace.remove();
+      }
     },
     HARNESS_TIMEOUT,
   );
@@ -824,12 +808,13 @@ describe("caching", () => {
       HARNESS_TIMEOUT,
     );
 
-    it.each<[string, FileChanges, Record<string, string>, string[], string[]]>([
+    // How the executor uses what graph creation found about the triples is
+    // checked in real runs in artifact-folders.spec.ts and caching-runs.spec.ts.
+    it.each<[string, FileChanges, Record<string, string>, string[]]>([
       [
         "a string in Cargo's configuration",
         { "rust/.cargo/config.toml": '[build]\ntarget = "x86_64-unknown-linux-gnu"\n' },
         {},
-        ["x86_64-unknown-linux-gnu"],
         ["x86_64-unknown-linux-gnu"],
       ],
       [
@@ -840,10 +825,9 @@ describe("caching", () => {
         },
         {},
         ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
-        ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
       ],
       [
-        // Its folder once.
+        // Its folder once in the outputs.
         "a list in Cargo's configuration that names one triple twice",
         {
           "rust/.cargo/config.toml":
@@ -851,30 +835,24 @@ describe("caching", () => {
         },
         {},
         ["x86_64-unknown-linux-gnu"],
-        ["x86_64-unknown-linux-gnu"],
       ],
       [
         "CARGO_BUILD_TARGET in the graph's environment, over a string",
         { "rust/.cargo/config.toml": '[build]\ntarget = "x86_64-unknown-linux-gnu"\n' },
         { CARGO_BUILD_TARGET: "aarch64-unknown-linux-gnu" },
         ["aarch64-unknown-linux-gnu"],
-        ["x86_64-unknown-linux-gnu"],
       ],
       [
         "CARGO_BUILD_TARGET in the graph's environment, beside a list",
         { "rust/.cargo/config.toml": '[build]\ntarget = ["x86_64-unknown-linux-gnu"]\n' },
         { CARGO_BUILD_TARGET: "aarch64-unknown-linux-gnu" },
         ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
-        ["x86_64-unknown-linux-gnu"],
       ],
     ])(
       "name the folder of each triple that %s picks in the outputs of build and doc, behind the targetTriple option",
-      async (_case, files, env, triples, configured) => {
+      async (_case, files, env, triples) => {
         const graph = await loadFixtureGraph("crate-shapes", { files, env });
         const { cli, rust } = graph.projects;
-        const tripleInput = expect.stringMatching(
-          /^\{ '[^']+' '[^']+\/src\/cargo\/print-artifact-folders\.js' 'rust' 2>\/dev\/null \|\| od -An -N16 -tx1 \/dev\/urandom; \}; true$/,
-        );
         const folders = triples.map(
           (triple) => `{workspaceRoot}/rust/target/{options.targetTriple ?? ${triple}}`,
         );
@@ -887,23 +865,6 @@ describe("caching", () => {
           cache: true,
           outputs: folders.map((folder) => `${folder}/doc`),
         });
-        for (const target of [cli.targets.build, rust.targets.doc]) {
-          expect(target.metadata.cargo.triples).toEqual(triples);
-          expect(target.metadata.cargo.tripleProblem).toBeUndefined();
-          expect(target.inputs).toContainEqual({ runtime: tripleInput });
-        }
-        // What the configuration alone picks, without CARGO_BUILD_TARGET.
-        expect(cli.targets.build.metadata.cargo.configuredPick).toBe(
-          `triples ${[...configured].sort().join(" ")}`,
-        );
-        expect(cli.targets.check.metadata.cargo.triples).toBeUndefined();
-        for (const name of ["check", "lint", "test", "fmt-check", "run"]) {
-          expect({ name, inputs: cli.targets[name].inputs }).not.toEqual({
-            name,
-            inputs: expect.arrayContaining([{ runtime: tripleInput }]),
-          });
-        }
-        expect(cli.metadata.cargo.warnings ?? []).toEqual([]);
       },
       HARNESS_TIMEOUT,
     );
@@ -937,25 +898,20 @@ describe("caching", () => {
           files: { "rust/.cargo/config.toml": '[build]\ntarget = "host-tuple"\n' },
         });
         const { cli, rust } = graph.projects;
-        const problem =
-          'build.target in rust/.cargo/config.toml picks the target triple "host-tuple", whose folder @convesoft/nx-rust cannot name: cargo replaces it with the host\'s triple';
-
         for (const target of [cli.targets.build, rust.targets.doc]) {
           expect(target).toMatchObject({ cache: false, outputs: [] });
-          expect(target.metadata.cargo.uncached).toBe(
-            `${problem}; give the triple as the targetTriple option instead`,
-          );
-          // An uncached target has no artifact input.
-          expect(JSON.stringify(target.inputs)).not.toContain("print-artifact-folders");
         }
         for (const name of ["check", "lint", "test", "fmt-check"]) {
           expect(cli.targets[name].cache).toBe(true);
         }
-        expect(cli.metadata.cargo.warnings).toEqual([
-          expect.stringMatching(
-            /^nx-rust: build.target in rust\/.cargo\/config.toml picks the target triple "host-tuple", .* The build and doc targets of the Cargo workspace in rust run uncached where their options name no triple, .* To cache them, give the triple as the targetTriple option in the options of their target tables, in the crate's or the workspace's Cargo metadata;/,
-          ),
-        ]);
+        // The warning names the cause and says how to cache the targets.
+        const [warning] = cli.metadata.cargo.warnings;
+        expect(warning).toContain(
+          'build.target in rust/.cargo/config.toml picks the target triple "host-tuple"',
+        );
+        expect(warning).toContain(
+          "To cache them, give the triple as the targetTriple option in the options of their target tables, in the crate's or the workspace's Cargo metadata",
+        );
 
         // A triple in the crate's table names the folder again.
         const named = await loadFixtureGraph("crate-shapes", {
@@ -973,15 +929,6 @@ describe("caching", () => {
           ],
         });
         expect(named.projects["core-lib"].targets.build.cache).toBe(false);
-        // The executor reads the problem from the metadata, cached or not.
-        for (const target of [
-          named.projects.cli.targets.build,
-          named.projects["core-lib"].targets.build,
-          named.projects.rust.targets.doc,
-        ]) {
-          expect(target.metadata.cargo.tripleProblem).toBe(problem);
-        }
-        expect(named.projects.cli.targets.check.metadata.cargo.tripleProblem).toBeUndefined();
       },
       HARNESS_TIMEOUT,
     );

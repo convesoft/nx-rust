@@ -586,28 +586,6 @@ describe("locked mode", () => {
       .sort();
   }
 
-  const unlocked = [
-    "audit",
-    "bench -p perf",
-    "build -p cli",
-    "build -p perf",
-    "check --all-targets -p cli",
-    "check --all-targets -p perf",
-    "clippy --all-targets -p cli",
-    "clippy --all-targets -p perf",
-    "deny check",
-    "doc --no-deps --workspace",
-    "fmt --check -p cli",
-    "fmt --check -p perf",
-    "fmt -p cli",
-    "fmt -p perf",
-    "run -p cli",
-    "test -p cli",
-    "test -p perf",
-    "update",
-    // The lockfile task, once in the run.
-    "update --workspace",
-  ];
   const locked = [
     "audit",
     "bench -p perf --locked",
@@ -630,27 +608,41 @@ describe("locked mode", () => {
     "update --workspace --locked",
   ];
 
-  it.each<[string, object, Env, string[]]>([
-    ["by default", {}, {}, unlocked],
-    ["with the locked option", { locked: true }, {}, locked],
-    ["with NX_RUST_LOCKED=true", {}, { NX_RUST_LOCKED: "true" }, locked],
+  it(
+    "passes --locked with the locked option to every command but update and fmt",
+    () =>
+      inFixture(
+        "crate-shapes",
+        { "nx.json": pluginOptions({ locked: true }), "rust/deny.toml": "" },
+        async (workspace) => {
+          expect(await runAll(workspace, {})).toEqual(locked);
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  // Every executor reads the variable the same way, so one task shows the
+  // order of the variable and the option. Without either, every test of the
+  // executors above runs its commands without --locked.
+  it.each<[string, object, Env, boolean]>([
+    ["with NX_RUST_LOCKED=true", {}, { NX_RUST_LOCKED: "true" }, true],
     [
       "with NX_RUST_LOCKED=false over the option",
       { locked: true },
       { NX_RUST_LOCKED: "false" },
-      unlocked,
+      false,
     ],
-    ["with an empty NX_RUST_LOCKED", { locked: true }, { NX_RUST_LOCKED: "" }, locked],
+    ["with an empty NX_RUST_LOCKED", { locked: true }, { NX_RUST_LOCKED: "" }, true],
   ])(
     "passes --locked as it says %s",
-    (_case, options, env, expected) =>
-      inFixture(
-        "crate-shapes",
-        { "nx.json": pluginOptions(options), "rust/deny.toml": "" },
-        async (workspace) => {
-          expect(await runAll(workspace, env)).toEqual(expected);
-        },
-      ),
+    (_case, options, env, passed) =>
+      inFixture("crate-shapes", { "nx.json": pluginOptions(options) }, async (workspace) => {
+        expect((await nx(workspace, ["run", "perf:build"], env)).status).toBe(0);
+
+        const flag = passed ? ["--locked"] : [];
+        expect(lockfileCalls(workspace)).toEqual([rust(["update", "--workspace", ...flag])]);
+        expect(taskCalls(workspace)).toEqual([rust(["build", "-p", "perf", ...flag])]);
+      }),
     HARNESS_TIMEOUT,
   );
 

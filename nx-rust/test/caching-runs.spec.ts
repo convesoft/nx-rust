@@ -283,9 +283,13 @@ describe("a run with the plugin's executor", () => {
 
         expect(result.status).toBe(1);
         expect(result.output).toContain(
-          'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:\n  - It turns on caching for "build", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ',
+          'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
+        );
+        expect(result.output).toContain(
+          'It turns on caching for "build", which nx-rust leaves uncached',
         );
         expect(result.output).toContain("cli (rust/crates/cli/Cargo.toml)");
+        expect(result.output).toContain('"@convesoft/nx-rust:cargo": {}');
         expect(taskCalls(workspace)).toEqual([]);
         // Where the plugin caches build, the same entry fails nothing.
         expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
@@ -501,7 +505,7 @@ describe("a run with the plugin's executor", () => {
   );
 
   it(
-    "runs build every time where Cargo's configuration picks a triple whose folder the plugin cannot name",
+    "runs build every time where Cargo's configuration picks a triple whose folder the plugin cannot name, and fails a task that a project.json caches",
     async () => {
       const workspace = FixtureWorkspace.create("crate-shapes", {
         "rust/.cargo/config.toml": '[build]\ntarget = "host-tuple"\n',
@@ -515,6 +519,20 @@ describe("a run with the plugin's executor", () => {
           'build.target in rust/.cargo/config.toml picks the target triple "host-tuple"',
         );
         expect(taskCalls(workspace)).toEqual(["build -p cli", "build -p cli"]);
+
+        // A project.json that caches build anyway fails the task before
+        // cargo runs, saying why and what to do instead.
+        writeFileSync(
+          join(workspace.root, "rust/crates/cli/project.json"),
+          JSON.stringify({ targets: { build: { cache: true } } }),
+        );
+        const cached = await nx(workspace, ["run", "cli:build"]);
+        expect(cached.status).toBe(1);
+        expect(cached.output).toContain(
+          'leaves `build` uncached in this project, because build.target in rust/.cargo/config.toml picks the target triple "host-tuple"',
+        );
+        expect(cached.output).toContain("give the triple as the targetTriple option instead");
+        expect(taskCalls(workspace)).toHaveLength(2);
       } finally {
         workspace.remove();
       }

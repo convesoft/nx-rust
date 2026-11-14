@@ -29,6 +29,24 @@ export interface CargoCallWithEnv extends CargoCall {
 }
 
 /**
+ * The `cargo metadata` call with which graph creation reads the report of
+ * `manifest`, started in `cwd`. A manifest inside the repository is named
+ * from `{workspaceRoot}`, one outside it by its absolute path.
+ */
+export function metadataCall(cwd: string, manifest: string): CargoCall {
+  const path = manifest.startsWith("/") ? manifest : `{workspaceRoot}/${manifest}`;
+  return {
+    cwd,
+    args: ["metadata", "--format-version", "1", "--no-deps", "--manifest-path", path],
+  };
+}
+
+/** The `cargo metadata` call that reads the workspace whose root manifest lies in `root`. */
+export function workspaceCall(root: string): CargoCall {
+  return metadataCall(root, root === "." ? "Cargo.toml" : `${root}/Cargo.toml`);
+}
+
+/**
  * A `cargo` executable that logs every invocation and then runs the real
  * cargo found on `PATH` in the same folder, with the real cargo's folder
  * first on `PATH` so that it runs the matching `rustc`. Rustup's proxies

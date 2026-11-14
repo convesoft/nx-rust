@@ -9,7 +9,8 @@
 // { "command": "files", "tasks": [...] } or { "command": "glob", "globs": [...] }.
 // The result is { "ok": true, "graph": ... }, { "ok": true, "hashes": { [task]: { value, details } } },
 // { "ok": true, "files": { [task]: [path] } }, { "ok": true, "globbed": [path] }
-// or { "ok": false, "error": "..." }. Only "glob" creates no project graph.
+// or { "ok": false, "error": "...", "errors": ["..."] }. Only "glob" creates
+// no project graph.
 //
 // Graph and hashes come from the functions that `nx graph` and `nx run` call,
 // so a hash is the one a real run of the task would compute. These are
@@ -51,7 +52,7 @@ async function main() {
           ? { ok: true, files: await taskFiles(graph, request.tasks) }
           : { ok: true, graph };
   } catch (error) {
-    result = { ok: false, error: describeError(error) };
+    result = { ok: false, error: describeError(error), errors: ownErrors(error) };
   }
   writeFileSync(resultFile, JSON.stringify(result));
 }
@@ -171,6 +172,37 @@ function describeError(error) {
   };
   visit(error);
   return [...new Set(messages)].join("\n");
+}
+
+// The message of each error in what Nx reports that wraps no other error:
+// the errors that a plugin or Nx raised, without Nx's headings around them.
+function ownErrors(error) {
+  const messages = [];
+  const seen = new Set();
+  const visit = (value) => {
+    if (value === null || typeof value !== "object" || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    const inner = [
+      ...(typeof value.getErrors === "function" ? value.getErrors() : []),
+      ...(Array.isArray(value.errors) ? value.errors : []),
+      ...(value.cause === undefined || value.cause === null ? [] : [value.cause]),
+    ];
+    if (inner.length === 0) {
+      if (typeof value.message === "string") {
+        messages.push(value.message);
+      }
+      return;
+    }
+    inner.forEach(visit);
+  };
+  visit(error);
+  return [...new Set(messages)];
 }
 
 main().then(

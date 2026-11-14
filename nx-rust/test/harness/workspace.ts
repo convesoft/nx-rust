@@ -56,6 +56,12 @@ export class GraphCreationError extends Error {
     message: string,
     /** The cargo invocations up to the failure, relative to the workspace root. */
     readonly cargoCalls: CargoCall[],
+    /**
+     * The message of each error that Nx or a plugin raised, without the
+     * errors that Nx wraps around it, such as the heading of a plugin whose
+     * `createNodes` failed.
+     */
+    readonly errors: string[] = [],
   ) {
     super(message);
     this.name = "GraphCreationError";
@@ -72,6 +78,7 @@ const nxBin: string = JSON.parse(readFileSync(join(nxPackage, "package.json"), "
 interface InspectResult {
   ok: boolean;
   error?: string;
+  errors?: string[];
   graph?: ProjectGraph;
   hashes?: Record<string, TaskHash>;
   files?: Record<string, string[]>;
@@ -219,7 +226,7 @@ export class FixtureWorkspace {
   async graph(env: Record<string, string | undefined> = {}): Promise<FixtureGraph> {
     const result = await this.inspect({ command: "graph" }, env);
     if (!result.ok) {
-      throw new GraphCreationError(result.error, this.cargoCalls());
+      throw new GraphCreationError(result.error, this.cargoCalls(), result.errors);
     }
     const graph = result.graph;
     return {

@@ -56,7 +56,9 @@ temporary folder, has Nx build the project graph there with the plugin
 (see `compilePlugin()` below), and returns the projects by name, the edges and
 the external nodes, together with `cargoCalls`, the cargo invocations it
 took. A failed graph creation throws a `GraphCreationError` whose message
-holds every error that Nx and the plugin reported.
+holds every error that Nx and the plugin reported, and whose `errors` holds
+the message of each error that Nx or a plugin raised, without the errors that
+Nx wraps around it.
 
 ```ts
 const graph = await loadFixtureGraph("two-workspaces");
