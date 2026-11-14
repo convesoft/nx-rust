@@ -111,6 +111,16 @@ export function redirectedUses(
   realPaths = new Map();
   const { workspaceRoot } = graph.discovery;
   const known = knownPackages(graph, realPath);
+  // The root folders whose report shows a virtual manifest: no crate lies
+  // there, although a workspace project may.
+  const virtualRoots = new Set(
+    [
+      ...graph.discovery.workspaces.map((workspace) => workspace.report),
+      ...graph.discovery.pathDependencyReports.map((entry) => entry.report),
+    ]
+      .map((report) => realPath(report.workspace_root))
+      .filter((folder) => !known.has(folder)),
+  );
   const rootByFolder = new Map<string, string>();
   for (const root of projectRoots) {
     const folder = realPath(join(workspaceRoot, root));
@@ -123,7 +133,7 @@ export function redirectedUses(
   const resolvers = new Map<CargoWorkspace, Resolver>();
   for (const workspace of graph.discovery.workspaces) {
     if (workspace.redirections.length > 0) {
-      const found = workspaceUses(workspace, known, rootByFolder);
+      const found = workspaceUses(workspace, known, rootByFolder, virtualRoots);
       uses.push(...found.uses);
       resolvers.set(workspace, found.resolved);
     }
@@ -247,8 +257,9 @@ function workspaceUses(
   workspace: CargoWorkspace,
   known: Map<string, CargoPackage>,
   rootByFolder: Map<string, string>,
+  virtualRoots: ReadonlySet<string>,
 ): { uses: RedirectedUse[]; resolved: Resolver } {
-  const targets = redirectedCrates(workspace, known, rootByFolder);
+  const targets = redirectedCrates(workspace, known, rootByFolder, virtualRoots);
   const byName = new Map<string, Target[]>();
   for (const target of targets.values()) {
     if (target.pkg) {
@@ -330,12 +341,19 @@ function workspaceUses(
 }
 
 // The crates that the workspace's entries name, by real folder: the crate
-// of a `[patch]` or `[replace]` entry, and every crate at or below the
-// folder of a `paths` entry, or that folder itself where it holds none.
+// of a `[patch]` or `[replace]` entry; for a `paths` entry, every crate at
+// or below its folder that a report describes or that has a project, but
+// no folder whose report shows a virtual manifest (`virtualRoots`), whose
+// project is a workspace project, and every crate that discovery says the
+// entry can redirect to (`CargoWorkspace.pathsCrates`): those that cargo
+// finds below the folder and their path dependencies of every kind, inside
+// or outside the folder, with or without a report; or that folder itself
+// where it holds none.
 function redirectedCrates(
   workspace: CargoWorkspace,
   known: Map<string, CargoPackage>,
   rootByFolder: Map<string, string>,
+  virtualRoots: ReadonlySet<string>,
 ): Map<string, Target> {
   const targets = new Map<string, Target>();
   const add = (folder: string, redirection: Redirection) => {
@@ -359,11 +377,17 @@ function redirectedCrates(
     if (!existsSync(folder)) {
       continue;
     }
-    const crates = [...new Set([...known.keys(), ...rootByFolder.keys()])].filter(
-      (candidate) =>
-        (candidate === folder || candidate.startsWith(folder + sep)) &&
-        existsSync(join(candidate, "Cargo.toml")),
-    );
+    const crates = [
+      ...new Set([
+        ...[...new Set([...known.keys(), ...rootByFolder.keys()])].filter(
+          (candidate) =>
+            (candidate === folder || candidate.startsWith(folder + sep)) &&
+            !virtualRoots.has(candidate) &&
+            existsSync(join(candidate, "Cargo.toml")),
+        ),
+        ...(workspace.pathsCrates?.get(redirection.folder) ?? []),
+      ]),
+    ];
     for (const crate of crates.length > 0 ? crates : [folder]) {
       add(crate, redirection);
     }
