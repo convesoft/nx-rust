@@ -10,7 +10,12 @@
       "!{projectRoot}/src/test-setup.[jt]s",
       "!{projectRoot}/test-setup.[jt]s"
     ],
-    "sharedGlobals": []
+    "sharedGlobals": [],
+    "rustToolchains": [
+      {
+        "runtime": "export RUSTUP_AUTO_INSTALL=0; cargo --version; env -u RUSTUP_TOOLCHAIN cargo --version; rustup toolchain list"
+      }
+    ]
   },
   "analytics": false,
   "targetDefaults": {
@@ -18,6 +23,12 @@
       "cache": true,
       "dependsOn": ["^build"],
       "inputs": ["production", "^production"]
+    },
+    "test": {
+      "inputs": ["...", "rustToolchains"]
+    },
+    "e2e": {
+      "inputs": ["...", "rustToolchains"]
     }
   },
   "release": {

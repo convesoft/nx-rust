@@ -7,6 +7,12 @@
   "targets": {
     "e2e": {
       "dependsOn": ["^build"],
+      "inputs": [
+        "...",
+        "{workspaceRoot}/tools/scripts/**/*",
+        "{workspaceRoot}/.verdaccio/**/*",
+        "{workspaceRoot}/project.json"
+      ],
       "options": {
         "runInBand": true
       }
