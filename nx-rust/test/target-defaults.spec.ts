@@ -1186,6 +1186,32 @@ describe("the check on a dependency on the lockfile task", () => {
     expect(warnings).toHaveLength(1);
   });
 
+  it("places each warning once on each target it concerns, for the tasks of that target to print", () => {
+    const finding = (project: string, target: string) => ({
+      change: "adds-dependencies" as const,
+      severity: "warning" as const,
+      key: "build",
+      target,
+      executor: "@convesoft/nx-rust:cargo",
+      project,
+      manifest: `rust/crates/${project}/Cargo.toml`,
+      added: ["^build"],
+    });
+    const unattributed = { target: "fmt", project: "api", manifest: crates.api, fields: ["cache"] };
+
+    const { warnings, placed } = describeTargetDefaultChanges(
+      [finding("api", "build"), finding("model", "build"), finding("api", "build")],
+      [unattributed],
+    );
+
+    expect(warnings).toHaveLength(2);
+    expect(placed).toEqual([
+      { project: "api", target: "build", warning: warnings[0] },
+      { project: "model", target: "build", warning: warnings[0] },
+      { project: "api", target: "fmt", warning: warnings[1] },
+    ]);
+  });
+
   it("keeps the lockfile task with ... and only warns about ^build", async () => {
     const found = await findings(
       { build: { dependsOn: ["...", "^build"] } },

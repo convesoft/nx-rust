@@ -5,8 +5,8 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cargoMetadataOf } from "../src/graph/collisions";
 import {
+  compareCacheKeys,
   Env,
-  expectCacheKeys,
   FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
@@ -23,7 +23,9 @@ import {
 // an ignore file or a folder that Nx always ignores leaves the directory out,
 // its presence where only a git excludes file outside the repository does,
 // its repetition at the start of a task, its place among the other warnings
-// that a project records, and that recording it changes no cache key.
+// that a project records, and that recording it changes the keys of those
+// projects' tasks through their configuration alone (DES-DIAGNOSTICS,
+// "Warnings where they are seen").
 // init.spec.ts checks that `init` prints it.
 
 /**
@@ -479,7 +481,7 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
   );
 
   it(
-    "changes no cache key when it joins a project's metadata",
+    "changes the keys of the tasks of the projects it concerns, through their configuration alone, when it joins their metadata",
     async () => {
       // Both states put Cargo's directory into cache/cargo. In the first,
       // cache/.gitignore ignores it and itself, so no file that Nx reads
@@ -505,21 +507,38 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
 
       expect(await recorded(base, ignored)).toEqual([undefined, undefined]);
       expect(await recorded(base)).toEqual([[cacheCargo], [cacheCargo]]);
-      await expectCacheKeys({
+      const outcomes = await compareCacheKeys({
         change: "the warning about cache/cargo in the metadata of api and rust",
         fixture: "subfolder-workspace",
         base: { files: base },
         before: { files: ignored },
         after: {},
         keys: {
-          "api:build": "must not differ",
-          "api:check": "must not differ",
-          "api:lint": "must not differ",
-          "api:test": "must not differ",
-          "api:fmt-check": "must not differ",
-          "rust:doc": "must not differ",
+          "api:build": "must differ",
+          "api:check": "must differ",
+          "api:lint": "must differ",
+          "api:test": "must differ",
+          "api:fmt-check": "must differ",
+          "rust:doc": "must differ",
         },
       });
+
+      for (const { task, holds, before, after } of outcomes) {
+        const nodes = (details: Record<string, unknown>) =>
+          (details.nodes ?? {}) as Record<string, string>;
+        const changed = Object.keys({ ...nodes(before.details), ...nodes(after.details) }).filter(
+          (input) => nodes(before.details)[input] !== nodes(after.details)[input],
+        );
+        expect({ task, holds }).toEqual({ task, holds: true });
+        expect({
+          task,
+          changed: changed.filter((input) => !input.endsWith(":ProjectConfiguration")),
+        }).toEqual({
+          task,
+          changed: [],
+        });
+        expect(changed).toContain(`${task.split(":")[0]}:ProjectConfiguration`);
+      }
     },
     HARNESS_TIMEOUT,
   );

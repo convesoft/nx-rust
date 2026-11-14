@@ -85,10 +85,15 @@ export interface CacheContext extends InputContext {
  * the projects of this entry, so a crate that another entry gives a project
  * counts as one without a project, and its folder joins the inputs beside
  * the edge that `createDependencies` adds.
+ *
+ * @param everyProject Warnings that concern every project and have been
+ *   printed already, such as the one for an Nx major newer than the
+ *   supported ones (`checkNxForGraph` in `nx-version.ts`); they come first.
  */
 export async function cacheContext(
   discovery: CargoDiscovery,
   nxJson: NxJsonConfiguration | undefined,
+  everyProject: readonly string[] = [],
 ): Promise<CacheContext> {
   const { workspaceRoot } = discovery;
   const uses = redirectedUses({ discovery, projects: [] }, projectRoots(discovery));
@@ -100,6 +105,13 @@ export async function cacheContext(
   const warn = (key: string, message: string) => {
     warnings.set(key, [...(warnings.get(key) ?? []), message]);
   };
+  for (const workspace of discovery.workspaces) {
+    for (const manifest of workspaceManifests(workspace)) {
+      for (const message of everyProject) {
+        warn(manifest, message);
+      }
+    }
+  }
   const pathDependencyInputs = new Map<string, Input[]>();
   const redirectedInputs = new Map<string, Input[]>();
   const repositoryRoot = realPath(workspaceRoot);
@@ -154,7 +166,7 @@ export async function cacheContext(
       }
     }
   }
-  const printed = new Set(discovery.warnings);
+  const printed = new Set([...everyProject, ...discovery.warnings]);
   for (const message of new Set([...warnings.values()].flat())) {
     if (!printed.has(message)) {
       console.warn(message);

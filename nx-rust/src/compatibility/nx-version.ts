@@ -249,18 +249,26 @@ const warnedComputations = new WeakSet<object>();
  * `computation`, which every entry of the plugin in this process shares.
  *
  * @param computation An object that stands for the graph computation.
+ * @returns The warning, for every entry, which gives it to each of its
+ *   projects, so that their tasks print it and their keys hold it
+ *   (`DES-DIAGNOSTICS`, "Warnings where they are seen"); `undefined` for a
+ *   supported Nx.
  * @throws {Error} With the message of an error.
  */
 // @mara implements DES-DIAGNOSTICS
-export function checkNxForGraph(workspaceRoot: string, computation: object): void {
+export function checkNxForGraph(workspaceRoot: string, computation: object): string | undefined {
   const verdict = nxVerdictFor(workspaceRoot, process.env);
   if (verdict.kind === "error") {
     throw new Error(verdict.message);
   }
-  if (verdict.kind === "warning" && !warnedComputations.has(computation)) {
+  if (verdict.kind !== "warning") {
+    return undefined;
+  }
+  if (!warnedComputations.has(computation)) {
     warnedComputations.add(computation);
     console.warn(verdict.message);
   }
+  return verdict.message;
 }
 
 /**
