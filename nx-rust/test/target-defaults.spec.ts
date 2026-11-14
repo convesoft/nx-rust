@@ -11,10 +11,12 @@ import {
 } from "../src/graph/target-defaults";
 import {
   changedFiles,
+  type Env,
   FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
-  pluginSourceEntry,
+  pluginEntry,
+  pluginWorkers,
   repositoryFiles,
   withoutColours,
 } from "./harness";
@@ -78,8 +80,16 @@ function targetDefaults(defaults: object): FileChanges {
 async function showProjects(
   ...files: FileChanges[]
 ): Promise<{ status: number | null; output: string; workspace: FixtureWorkspace }> {
+  return showProjectsWith({}, ...files);
+}
+
+/** {@link showProjects} with the variables `env`. */
+async function showProjectsWith(
+  env: Env,
+  ...files: FileChanges[]
+): Promise<{ status: number | null; output: string; workspace: FixtureWorkspace }> {
   const workspace = FixtureWorkspace.create("subfolder-workspace", web, ...files);
-  const { status, output } = await workspace.nx(["show", "projects"]);
+  const { status, output } = await workspace.nx(["show", "projects"], env);
   return { status, output: withoutColours(output), workspace };
 }
 
@@ -98,9 +108,13 @@ async function created(
   }
 }
 
-/** Graph creation with `defaults` fails; returns Nx's output. */
-async function failed(defaults: object, files: FileChanges = {}): Promise<string> {
-  const { status, output, workspace } = await showProjects(targetDefaults(defaults), files);
+/** Graph creation with `defaults` and the variables `env` fails; returns Nx's output. */
+async function failed(defaults: object, files: FileChanges = {}, env: Env = {}): Promise<string> {
+  const { status, output, workspace } = await showProjectsWith(
+    env,
+    targetDefaults(defaults),
+    files,
+  );
   workspace.remove();
   expect(status).not.toBe(0);
   expect(output).toContain("threw an error while creating dependencies");
@@ -140,7 +154,13 @@ describe("a target default that fails graph creation", () => {
   it(
     "turns on caching for build, keyed by the target's name, where the plugin leaves build uncached because Cargo's configuration picks a triple that it cannot name",
     async () => {
-      const output = await failed({ build: { cache: true } }, tripleFromConfiguration);
+      // With the plugin in a worker, as in Nx's default mode: the check in
+      // createDependencies reads what createNodes recorded.
+      const output = await failed(
+        { build: { cache: true } },
+        tripleFromConfiguration,
+        pluginWorkers,
+      );
 
       expect(output).toContain(
         [
@@ -358,9 +378,9 @@ describe("a target default that fails graph creation", () => {
   it(
     "is filtered to the plugin by the name Nx knows it by",
     async () => {
-      // The harness loads the plugin from its source, so Nx knows it by that path.
+      // The harness loads the plugin by the path of its entry point, so Nx knows it by that path.
       const output = await failed({
-        fmt: [{ filter: { plugin: pluginSourceEntry }, cache: true }],
+        fmt: [{ filter: { plugin: pluginEntry() }, cache: true }],
       });
 
       expect(output).toContain(
@@ -482,7 +502,7 @@ describe("the layer that made a change", () => {
     async () => {
       const output = await failed(
         {
-          [cargoExecutor]: [{ filter: { plugin: pluginSourceEntry }, options: {} }],
+          [cargoExecutor]: [{ filter: { plugin: pluginEntry() }, options: {} }],
           fmt: { cache: true },
         },
         {

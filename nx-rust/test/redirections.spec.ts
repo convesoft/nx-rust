@@ -682,6 +682,67 @@ describe("edges to redirected crates", () => {
     HARNESS_TIMEOUT,
   );
 
+  it(
+    "leave out an assumed use whose opposite is an edge through a crate without a project, and turn it into an input",
+    async () => {
+      // backend redirects server to itself. b's only dependency, leaf, is a
+      // crate of a directory source without a report, so b's use of server
+      // is assumed. server dev-depends on tools/bridge, which nx.json
+      // excludes and which depends on b: cargo builds b for server's tests,
+      // so server has an edge to b.
+      const crate = (name: string) =>
+        `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n`;
+      const workspace = FixtureWorkspace.create("cross-workspace-path", {
+        "backend/Cargo.toml":
+          '[workspace]\nmembers = ["crates/server", "crates/b"]\nresolver = "3"\n\n[patch.crates-io]\nserver = { path = "crates/server" }\n',
+        "backend/crates/server/Cargo.toml": `${crate("server")}\n[dev-dependencies]\nbridge = { path = "../../../tools/bridge" }\n`,
+        "backend/crates/b/Cargo.toml": `${crate("b")}\n[dependencies]\nleaf = { path = "../../../vendor/leaf" }\n`,
+        "backend/crates/b/src/lib.rs": "",
+        "tools/bridge/Cargo.toml": `${crate("bridge")}\n[workspace]\n\n[dependencies]\nb = { path = "../../backend/crates/b" }\n`,
+        "tools/bridge/src/lib.rs": "",
+        "vendor/leaf/Cargo.toml": crate("leaf"),
+        "vendor/leaf/src/lib.rs": "",
+        "vendor/leaf/.cargo-checksum.json": '{"files":{},"package":null}\n',
+        ".nxignore": "shared/\n",
+        "nx.json": (text) =>
+          JSON.stringify({
+            ...JSON.parse(text),
+            plugins: JSON.parse(text).plugins.map((plugin: string) => ({
+              plugin,
+              exclude: ["tools/**"],
+            })),
+          }),
+      });
+      try {
+        const graph = await workspace.graph();
+        const affected = await workspace.nx([
+          "show",
+          "projects",
+          "--affected",
+          "--files=backend/crates/b/src/lib.rs",
+          // Nx prints JSON by itself only where it detects an AI agent.
+          "--json",
+        ]);
+
+        expect(edges(graph).filter(([source]) => source !== "backend")).toEqual([["server", "b"]]);
+        expect(affected.status).toBe(0);
+        // The JSON is the last line, after any warning of graph creation.
+        expect(JSON.parse(affected.output.trim().split("\n").pop()).sort()).toEqual([
+          "b",
+          "backend",
+          "server",
+        ]);
+        // What the left-out use would have brought.
+        expect(graph.projects.b.targets.check.inputs).toContain(
+          "{workspaceRoot}/backend/crates/server/**/*",
+        );
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
   // Cargo 1.91 ignores include, so only that version accepts a broken
   // included file; 1.100 fails on it, and so does graph creation.
   if (pinnedToolchainAvailable()) {

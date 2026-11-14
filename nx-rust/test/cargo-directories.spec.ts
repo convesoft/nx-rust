@@ -7,6 +7,7 @@ import {
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   inFixture,
+  pluginWorkers,
   runNx,
   withoutColours,
 } from "./harness";
@@ -174,7 +175,7 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
 
   it.each<[string, Env, number]>([
     // Graph creation prints it in the terminal, and the task again.
-    ["without the daemon", {}, 2],
+    ["without the daemon", pluginWorkers, 2],
     // The daemon writes graph creation's warning to its log.
     ["with the daemon", { NX_DAEMON: "true" }, 1],
   ])(
