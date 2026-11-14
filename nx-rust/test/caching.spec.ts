@@ -160,13 +160,12 @@ describe("caching", () => {
       ]);
       expect(envInputs(api.targets["fmt-check"])).toEqual([...environmentVariables]);
 
+      // build, whose outputs depend on the triple, also has the triple input.
+      const tripleInput = { runtime: expect.stringMatching(/\/src\/cargo\/print-triples\.js'/) };
       for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt"]) {
-        // build, whose outputs depend on the triple, also has the triple input.
         expect(inputsOf(api.targets[name], "runtime")).toEqual([
           { runtime: toolchainCommand("rust") },
-          ...(name === "build"
-            ? [{ runtime: expect.stringMatching(/\/src\/cargo\/print-triples\.js'/) }]
-            : []),
+          ...(name === "build" ? [tripleInput] : []),
         ]);
         expect(inputsOf(api.targets[name], "externalDependencies")).toEqual([
           { externalDependencies: [] },
