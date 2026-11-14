@@ -18,7 +18,6 @@ import {
   GraphCreationError,
   HARNESS_TIMEOUT,
   inFixture,
-  SharedWorkspace,
   testEnvironment,
   withoutColours,
 } from "./harness";
@@ -33,13 +32,6 @@ import {
 // In declared-files, the workspace table declares proto/**/*.proto for every
 // member, and api's own table declares docs/banner.txt. app depends on api;
 // other depends on neither. rust is the folder of the workspace project rust.
-
-// The tests ask Nx for graphs, keys and files in a workspace that they
-// share, with its Nx session (SharedWorkspace); `nx affected` and the
-// daemon's commands run in fresh processes all the same. The test that
-// writes beside the repository has a workspace of its own.
-const shared = new SharedWorkspace();
-afterAll(() => shared.remove());
 
 /** The cached targets of a crate and the workspace project's `doc`. */
 const cachedTargets = ["build", "check", "lint", "test", "fmt-check", "doc"];
@@ -155,8 +147,8 @@ async function changeDeclaredFile(options: {
   tasks?: string[];
 }): Promise<DeclaredFileOutcome> {
   const { tasks = ["api:test", "app:test"] } = options;
-  const workspace = shared.reset("declared-files", options.files);
-  {
+  const workspace = FixtureWorkspace.create("declared-files", options.files);
+  try {
     for (const [link, target] of Object.entries(options.links ?? {})) {
       symlinkSync(target, join(workspace.root, link));
       // Nx reads a link that changed within the last moment again at the
@@ -175,6 +167,8 @@ async function changeDeclaredFile(options: {
       afterCommit: await affectedTasks(workspace, ["--base=HEAD~1", "--head=HEAD"]),
       withFiles: await affectedTasks(workspace, [`--files=${options.changed}`]),
     };
+  } finally {
+    workspace.remove();
   }
 }
 
@@ -197,8 +191,8 @@ async function changeFilesInTurn(options: {
   changed: string[];
   tasks: string[];
 }): Promise<FileChangeOutcome[]> {
-  const workspace = shared.reset(options.fixture ?? "declared-files", options.files);
-  {
+  const workspace = FixtureWorkspace.create(options.fixture ?? "declared-files", options.files);
+  try {
     commitWorkspace(workspace);
     const outcomes: FileChangeOutcome[] = [];
     for (const changed of options.changed) {
@@ -215,6 +209,8 @@ async function changeFilesInTurn(options: {
       });
     }
     return outcomes;
+  } finally {
+    workspace.remove();
   }
 }
 
@@ -222,7 +218,7 @@ describe("declared files", () => {
   it(
     "join the crate's named input after its path dependencies, as filesets that include ignored files",
     () =>
-      shared.inFixture(
+      inFixture(
         "declared-files",
         {
           // The last pattern names the repository root.
@@ -282,7 +278,7 @@ describe("declared files", () => {
   it(
     "resolve an absolute pattern, links to a file or a folder inside the repository and a path below a file to the links they pass and their real paths",
     () =>
-      shared.inFixture("declared-files", { "shared/real/schema.sql": "" }, async (workspace) => {
+      inFixture("declared-files", { "shared/real/schema.sql": "" }, async (workspace) => {
         symlinkSync("real", join(workspace.root, "shared", "linked"));
         symlinkSync("banner.txt", join(workspace.root, "docs", "alias.txt"));
         // A ".." after this link leaves nested/inner, as the system reads it.
@@ -522,7 +518,7 @@ describe("declared files", () => {
     it.each([["../../**"], ["../../.."]])(
       "leave it out of the key, so that a build changes no key, for %s",
       (pattern) =>
-        shared.inFixture("declared-files", apiDeclares(pattern), async (workspace) => {
+        inFixture("declared-files", apiDeclares(pattern), async (workspace) => {
           const graph = await workspace.graph();
           expect(graph.projects.api.namedInputs.default).toContainEqual({
             fileset: "!{workspaceRoot}/rust/target",
@@ -565,10 +561,10 @@ describe("declared files", () => {
       changed: string,
     ) {
       const tasks = ["api:build", "api:check", "api:lint", "api:test", "rust:doc"];
-      const workspace = shared.reset("declared-files", files);
+      const workspace = FixtureWorkspace.create("declared-files", files);
       const differ = (before: Record<string, { value: string }>, after: typeof before) =>
         Object.fromEntries(tasks.map((task) => [task, before[task].value !== after[task].value]));
-      {
+      try {
         symlinkSync(first, join(workspace.root, link));
         const minuteAgo = Date.now() / 1000 - 60;
         lutimesSync(join(workspace.root, link), minuteAgo, minuteAgo);
@@ -591,6 +587,8 @@ describe("declared files", () => {
           afterCommit: await affectedTasks(workspace, ["--base=HEAD~1", "--head=HEAD"]),
         };
         return { linkChange, targetChange };
+      } finally {
+        workspace.remove();
       }
     }
 
@@ -697,7 +695,7 @@ describe("declared files", () => {
     it(
       "fail graph creation for a pattern that Nx cannot hash, naming its manifest",
       () =>
-        shared.inFixture(
+        inFixture(
           "declared-files",
           withLexer(`${lexer}\n[package.metadata.nx]\nfileInputs = ["../../../outside.txt"]\n`),
           async (workspace) => {
@@ -892,7 +890,7 @@ describe("declared files", () => {
     it(
       "fail graph creation for patterns with a .. segment after a glob character",
       () =>
-        shared.inFixture(
+        inFixture(
           "declared-files",
           apiDeclares("../../../proto/*/../greeting.proto", "../../../{docs,..}/banner.txt"),
           async (workspace) => {
@@ -911,7 +909,7 @@ describe("declared files", () => {
     it(
       "fail graph creation for patterns that resolve into the workspace's build or artifact directory",
       () =>
-        shared.inFixture(
+        inFixture(
           "declared-files",
           {
             "rust/.cargo/config.toml": '[build]\nbuild-dir = "build-cache"\n',
@@ -944,7 +942,7 @@ describe("declared files", () => {
     it(
       "name a directory that is both Cargo's build and artifact directory as such",
       () =>
-        shared.inFixture("declared-files", apiDeclares("../../target/**/*.rs"), async (workspace) => {
+        inFixture("declared-files", apiDeclares("../../target/**/*.rs"), async (workspace) => {
           expect(await graphErrors(workspace)).toEqual([
             'rust/crates/api/Cargo.toml: the fileInputs pattern "../../target/**/*.rs" resolves into rust/target, Cargo\'s build and artifact directory of the Cargo workspace in rust. Cargo writes the files there; declare the files that they are made from instead.',
           ]);
@@ -978,7 +976,7 @@ describe("declared files", () => {
     it(
       "give a fileset for each folder of the plugin's projects below where a pattern starts, unless it starts at the repository root",
       () =>
-        shared.inFixture(
+        inFixture(
           "declared-files",
           {
             ...workspaceDeclares("crates/*/templates/**"),
@@ -1132,7 +1130,7 @@ describe("declared files", () => {
     it(
       "fail graph creation for a pattern that names files of another plugin's project in a folder below where it starts, naming the crates and the pattern to add",
       () =>
-        shared.inFixture(
+        inFixture(
           "declared-files",
           {
             ...withWeb,
@@ -1371,7 +1369,7 @@ describe("declared files", () => {
     it(
       "name the alternative of braces whose files of another plugin's project Nx would leave out",
       () =>
-        shared.inFixture(
+        inFixture(
           "declared-files",
           { ...withWeb, ...apiDeclares("../{other,app}/w*/**") },
           async (workspace) => {
@@ -1429,7 +1427,7 @@ describe("declared files", () => {
     ])(
       "hash every file that Nx's own glob finds for %s, and fail graph creation only where it reaches a project folder that the crate's filesets leave out",
       (pattern) =>
-        shared.inFixture(
+        inFixture(
           "declared-files",
           { ...withNested, ...withWebBeside, ...withNestedAndWebBeside, ...apiDeclares(pattern) },
           async (workspace) => {

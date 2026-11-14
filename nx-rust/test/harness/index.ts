@@ -8,7 +8,6 @@ export * from "./fixtures";
 export * from "./js-lockfiles";
 export * from "./local-registry";
 export * from "./nx-package";
-export * from "./nx-session";
 export * from "./task-runs";
 export * from "./test-run";
 export * from "./tool-folders";

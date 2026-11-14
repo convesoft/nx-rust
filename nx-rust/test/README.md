@@ -148,6 +148,16 @@ default of a worker per entry. Commands with the daemon keep Nx's default too,
 and the end-to-end tests, which do not use the copy, run as a repository that
 installs the plugin does.
 
+Each graph, hash, file and glob call starts a process of its own. Nx 24 keeps
+state in its modules that only a new process resets, such as each task's
+environment by task id, so a process that stayed up would answer differently
+after a change, unless it loaded Nx afresh for each call. One that did, and
+put the process's environment, folder and globals back between calls, gave
+the answers of fresh processes in every test of `cache-keys.spec.ts` and
+`declared-files.spec.ts` and took about a fifth less time there, but a test
+file's peak memory rose by 130 to 220 MB with it, and it depended on how Nx 24
+loads itself, so it was left out (`EVD-NX-24-PROCESS-STATE`).
+
 **`useNx(version)`** links the copy's `node_modules/nx` to a copy of this
 repository's Nx whose `package.json` gives `version`, written by
 **`fakeNxPackage(directory, version)`**, until `reset`. The plugin reads the

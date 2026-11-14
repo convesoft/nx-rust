@@ -1,6 +1,6 @@
 import { HARNESS_TIMEOUT } from "./environment";
 import { FileChanges, FixtureName } from "./fixtures";
-import { FixtureWorkspace, SharedWorkspace, TaskHash } from "./workspace";
+import { FixtureWorkspace, TaskHash } from "./workspace";
 
 /** What must happen to a task's cache key between two states. */
 export type Verdict = "must differ" | "must not differ";
@@ -55,21 +55,15 @@ export interface CacheKeyOutcome {
 /**
  * Hashes the row's tasks in both states with Nx's own task hasher and
  * compares the hashes with the verdicts. Both states are built in the same
- * folder, from a fresh copy of the fixture each: a workspace of the row's
- * own, or `shared`.
+ * folder, from a fresh copy of the fixture each.
  */
-export async function compareCacheKeys(
-  row: CacheKeyRow,
-  shared?: SharedWorkspace,
-): Promise<CacheKeyOutcome[]> {
+export async function compareCacheKeys(row: CacheKeyRow): Promise<CacheKeyOutcome[]> {
   const tasks = Object.keys(row.keys);
   const state = (part: WorkspaceState | undefined) => ({
     env: { ...row.base?.env, ...part?.env },
     overrides: { ...row.base?.overrides, ...part?.overrides },
   });
-  const workspace =
-    shared?.reset(row.fixture, row.base?.files, row.before?.files) ??
-    FixtureWorkspace.create(row.fixture, row.base?.files, row.before?.files);
+  const workspace = FixtureWorkspace.create(row.fixture, row.base?.files, row.before?.files);
   const prepared = async (part: WorkspaceState | undefined) => {
     const { env } = state(part);
     await row.base?.prepare?.(workspace, env);
@@ -95,9 +89,7 @@ export async function compareCacheKeys(
       };
     });
   } finally {
-    if (shared === undefined) {
-      workspace.remove();
-    }
+    workspace.remove();
   }
 }
 
@@ -124,25 +116,17 @@ export async function runLockfileTasks(
  * Checks a row and fails with every task whose key does not behave as its
  * verdict says, naming the inputs whose hashes changed.
  */
-export async function expectCacheKeys(row: CacheKeyRow, shared?: SharedWorkspace): Promise<void> {
-  const failures = (await compareCacheKeys(row, shared)).filter((outcome) => !outcome.holds);
+export async function expectCacheKeys(row: CacheKeyRow): Promise<void> {
+  const failures = (await compareCacheKeys(row)).filter((outcome) => !outcome.holds);
   if (failures.length > 0) {
     throw new Error(failures.map((outcome) => explain(row, outcome)).join("\n\n"));
   }
 }
 
-/**
- * Defines one test per row, named after the row's change. With `shared`,
- * the rows use that workspace and its session, one after another, instead
- * of a workspace each.
- */
-export function describeCacheKeyMatrix(
-  title: string,
-  rows: CacheKeyRow[],
-  shared?: SharedWorkspace,
-): void {
+/** Defines one test per row, named after the row's change. */
+export function describeCacheKeyMatrix(title: string, rows: CacheKeyRow[]): void {
   describe(title, () => {
-    it.each(rows)("$change", (row) => expectCacheKeys(row, shared), HARNESS_TIMEOUT);
+    it.each(rows)("$change", (row) => expectCacheKeys(row), HARNESS_TIMEOUT);
   });
 }
 

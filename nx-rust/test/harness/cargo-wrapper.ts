@@ -154,16 +154,6 @@ export class CargoWrapper {
   clear(): void {
     writeFileSync(this.logFile, "");
   }
-
-  /** Runs `action` and then puts the log back as it was before, without the invocations of `action`. */
-  async keepingLog<T>(action: () => Promise<T>): Promise<T> {
-    const log = existsSync(this.logFile) ? readFileSync(this.logFile, "utf8") : "";
-    try {
-      return await action();
-    } finally {
-      writeFileSync(this.logFile, log);
-    }
-  }
 }
 
 /**
