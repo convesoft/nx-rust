@@ -40,3 +40,7 @@ Recorded:
 Four rows in `nx-rust/test/cache-keys.spec.ts` ("keys of a project at the repository root") pin this behaviour for both layouts, with the JS lockfile and with the root `package.json`.
 
 Checks: `cache-keys.spec.ts` passes (76 tests, the four new rows included), `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all`, `mara schema validate`, `mara project validate` (`valid: true`, evaluation complete) and `zban check` pass. The end-to-end suite was not run, because no plugin code changed.
+
+## Review corrections
+
+The control plane's review of PR #62 found that the claim "the crates in subfolders keep their keys" was too broad. A crate that depends on the crate at the repository root, directly or through other crates, hashes that crate's folder through `^default`, so its keys follow the JS lockfile and the root `package.json` too. `DES-INPUTS`, the guide, `VER-CACHE-KEYS` and `DES-LOCKFILE-HASHING` now say that the keys that follow these files are those of the project at the repository root and of every crate that depends on it. A fifth row in `nx-rust/test/cache-keys.spec.ts` checks this: `app` depends on `rootpkg`, and after a change of `left-pad`'s integrity `app:test` and `app:build` change while `util`, `tools` and the root lockfile task keep their keys. The same case is a sentence in `EVD-NX-24-PLUGIN-VERSION`.

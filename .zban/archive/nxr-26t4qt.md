@@ -25,3 +25,7 @@ Decision, taken by the control plane under `GOAL-TRUSTED-CACHE` ("running more t
 - `VER-CACHE-KEYS`: the policies required no new row. The "Keys must not differ after" row about "a file outside the crate's folder that none of the task's inputs covers" contradicted the paragraph for `nx.json`. A sentence now restricts those rows to states in which `nx.json` and the configuration of the projects a key holds stay the same. No test row was added.
 
 Checks: `mara schema validate` and `mara project validate` (`valid: true`, evaluation complete, no errors or warnings), `pnpm nx format:check --all`, `pnpm nx run-many -t build lint test` and `zban check` pass.
+
+## Review corrections
+
+The control plane's review of PR #62 found that the sentence "a change to a target's `metadata`, `cache` or `dependsOn` changes no key" was too broad. `DES-INPUTS` now limits it to what the evidence shows: Nx's hash of the project's configuration leaves those fields out, so such a change reaches a key only through the file it is written in, where that file is among the task's inputs. A check with the hasher confirmed this. Changing only `targets.test.metadata.description` in `crates/app/project.json` changed `app:test` and `app:build` through the project's fileset alone, and that is now recorded in `EVD-NX-24-PLUGIN-VERSION`. The short version in the guide made no such claim and is unchanged.

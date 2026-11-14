@@ -1042,10 +1042,25 @@ describe("keys of a project at the repository root", () => {
       "",
     ].join("\n"),
     "src/lib.rs": "pub fn root() {}\n",
+    "Cargo.lock": (lockfile) => withRootPackage(lockfile ?? ""),
+  };
+
+  function withRootPackage(lockfile: string) {
+    return lockfile.replace(
+      '[[package]]\nname = "util"',
+      '[[package]]\nname = "rootpkg"\nversion = "0.1.0"\n\n[[package]]\nname = "util"',
+    );
+  }
+
+  // The same, with app in crates/ depending on the crate at the root, whose
+  // folder its ^default then holds.
+  const appOnRootPackage: FileChanges = {
+    ...rootPackage,
+    "crates/app/Cargo.toml": appended('rootpkg = { path = "../.." }\n'),
     "Cargo.lock": (lockfile) =>
-      (lockfile ?? "").replace(
-        '[[package]]\nname = "util"',
-        '[[package]]\nname = "rootpkg"\nversion = "0.1.0"\n\n[[package]]\nname = "util"',
+      withRootPackage(lockfile ?? "").replace(
+        'name = "app"\nversion = "0.1.0"\ndependencies = [\n "util",\n]',
+        'name = "app"\nversion = "0.1.0"\ndependencies = [\n "rootpkg",\n "util",\n]',
       ),
   };
 
@@ -1099,6 +1114,21 @@ describe("keys of a project at the repository root", () => {
       before: { files: installed({}, null) },
       after: { files: installed({}, null, { description: "changed" }) },
       keys: rootPackageKeys,
+    },
+    {
+      change:
+        "a change in the JS lockfile outside the plugin's package, for a crate that depends on the crate at the repository root",
+      fixture: "two-workspaces",
+      base: { files: appOnRootPackage },
+      before: { files: installed() },
+      after: { files: installed({ leftPad: newLeftPad }) },
+      keys: {
+        "rootpkg:test": "must differ",
+        "app:test": "must differ",
+        "app:build": "must differ",
+        "rootpkg:lockfile": "must not differ",
+        ...all(["util:test", "tools:test", "tools:doc"], "must not differ"),
+      },
     },
   ]);
 });
