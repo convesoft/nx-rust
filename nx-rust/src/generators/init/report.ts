@@ -1,5 +1,5 @@
-import { isAbsolute, relative } from "node:path";
 import type { CargoWorkspace } from "../../graph/discovery";
+import { folderInside } from "../../graph/real-path";
 import {
   describeFolder,
   missingToolMessage,
@@ -88,16 +88,20 @@ export function initReport(
   return report;
 }
 
-// The build directory relative to the repository root, if it lies inside.
+// The build directory, if the folder that cargo writes to lies inside the
+// repository: that folder relative to the repository root, with the path that
+// cargo reports where symbolic links make the two differ (`folderInside`).
 // Cargo reports it from 1.91 on.
 function buildDirectoryInside(
   workspace: CargoWorkspace,
   workspaceRoot: string,
 ): string | undefined {
   const directory = workspace.report.build_directory;
-  if (typeof directory !== "string") {
+  const folder = typeof directory === "string" ? folderInside(directory, workspaceRoot) : undefined;
+  if (folder === undefined) {
     return undefined;
   }
-  const path = relative(workspaceRoot, directory);
-  return path === ".." || path.startsWith("../") || isAbsolute(path) ? undefined : path || ".";
+  return folder.written === undefined
+    ? folder.path
+    : `${folder.path} (reached through ${folder.written})`;
 }

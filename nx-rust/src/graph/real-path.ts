@@ -1,5 +1,5 @@
 import { readlinkSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
 /**
  * The path with every symbolic link resolved, so that two spellings of one
@@ -45,6 +45,43 @@ export function repositoryFolder(
   return path === "" || path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)
     ? { inside: false, path: reached }
     : { inside: true, path };
+}
+
+/**
+ * One of Cargo's directories as the messages about a directory inside the
+ * repository name it (`DES-DIAGNOSTICS`, paragraph "Directories that Nx does
+ * not ignore"), or `undefined` where it lies outside the repository.
+ *
+ * `path` is the folder that the system reaches through `directory`
+ * ({@link physicalPath}), relative to the real path of `repositoryRoot`, and
+ * `.` for the root itself. Where symbolic links make that folder differ from
+ * the one that `directory` names as text, `written` gives `directory` so that
+ * a message can show the path through which the folder is reached: as cargo
+ * reports it, `..` segments included, relative to the repository root where
+ * it starts there and stays inside it as text, and otherwise as an absolute
+ * path with `.` and `..` taken as text.
+ */
+export function folderInside(
+  directory: string,
+  repositoryRoot: string,
+): { path: string; written?: string } | undefined {
+  const realRoot = realPath(repositoryRoot);
+  const path = relative(realRoot, physicalPath(directory)) || ".";
+  if (leaves(path)) {
+    return undefined;
+  }
+  const trimmed = directory.length > 1 ? directory.replace(/\/+$/, "") : directory;
+  const root = [repositoryRoot, realRoot]
+    .map((folder) => (folder.endsWith(sep) ? folder : `${folder}${sep}`))
+    .find((prefix) => trimmed.startsWith(prefix));
+  const inside = root === undefined ? undefined : trimmed.slice(root.length) || ".";
+  const written = inside === undefined || leaves(normalize(inside)) ? resolve(trimmed) : inside;
+  return normalize(written) === path ? { path } : { path, written };
+}
+
+// Whether a path relative to a folder leaves that folder.
+function leaves(path: string): boolean {
+  return path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path);
 }
 
 // Linux's MAXSYMLINKS.

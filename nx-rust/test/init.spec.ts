@@ -1,7 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { CargoWorkspace } from "../src/graph/discovery";
 import type { GraphCheck } from "../src/generators/init/graph-check";
 import { initReport, suggestedBuildDirSetting } from "../src/generators/init/report";
@@ -871,6 +879,19 @@ describe("init", () => {
         "outside.txt, outside the repository, whose files Nx does not track. To key the crate's tasks on such files, add a command to runtimeInputs",
       ],
       [
+        "a fileInputs pattern that names files in the folder of another plugin's project below where it starts",
+        {
+          "rust/crates/api/web/project.json": JSON.stringify({ name: "web" }),
+          "rust/crates/api/web/index.js": "export {};\n",
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx]\nfileInputs = ["../api/**"]\n`,
+        },
+        [
+          'rust/crates/model/Cargo.toml: the fileInputs pattern "../api/**" of the crate model names files in rust/crates/api/web, the folder of the project "web", which Nx would leave out of the cache keys.',
+          'Add "../api/web/**" beside it in the fileInputs of rust/crates/model/Cargo.toml, or narrow the pattern so that it does not reach rust/crates/api/web.',
+        ],
+      ],
+      [
         "a fileInputs pattern with a .. segment after a glob character",
         {
           "rust/crates/model/Cargo.toml": (manifest) =>
@@ -1067,6 +1088,62 @@ describe("init's report of tools", () => {
     tools.install(tools.path, "rustc", sysroot);
 
     expect(report(["rust/deny.toml"])).toEqual({ warnings: [], info: [] });
+  });
+});
+
+describe("init's list of build directories inside the repository", () => {
+  // Cargo writes to the folder that the system reaches through the path that
+  // it reports, which decides and names the directory (DES-DIAGNOSTICS).
+  let tools: ToolFolders;
+  let root: string;
+
+  beforeEach(() => {
+    tools = new ToolFolders();
+    root = join(realpathSync(tools.base), "repo");
+    mkdirSync(join(root, "rust"), { recursive: true });
+  });
+
+  afterEach(() => tools.remove());
+
+  /** The lines that list a build directory for the workspace in rust, whose report gives `directory`. */
+  function listed(directory: string): string[] {
+    const workspace = {
+      root: "rust",
+      report: { build_directory: directory },
+      members: [],
+    } as unknown as CargoWorkspace;
+    const check: GraphCheck = { manifests: ["rust/Cargo.toml"], workspaces: [workspace] };
+    return initReport(check, root, tools.env())
+      .info.flatMap((text) => text.split("\n"))
+      .filter((line) => line.startsWith("  rust: "));
+  }
+
+  it("lists the folder as the path names it where no link is on the way", () => {
+    expect(listed(`${root}/rust/target`)).toEqual(["  rust: rust/target"]);
+  });
+
+  it("does not list a directory that a link inside the repository leads outside", () => {
+    symlinkSync("../../outside", join(root, "rust", "out"));
+
+    expect(listed(`${root}/rust/out`)).toEqual([]);
+  });
+
+  it("lists the folder inside the repository that a link outside it leads to", () => {
+    const link = join(dirname(root), "outside-link");
+    symlinkSync(join(root, "rust", "out"), link);
+
+    expect(listed(`${root}/rust/../../outside-link`)).toEqual([
+      `  rust: rust/out (reached through ${link})`,
+    ]);
+  });
+
+  it("lists the folder inside the repository that a link leads to, not the one that the path names as text", () => {
+    mkdirSync(join(root, "deep", "child"), { recursive: true });
+    symlinkSync("../deep/child", join(root, "rust", "link"));
+
+    expect(listed(`${root}/rust/link/../target`)).toEqual([
+      "  rust: deep/target (reached through rust/link/../target)",
+    ]);
   });
 });
 
