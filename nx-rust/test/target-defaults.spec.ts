@@ -1249,12 +1249,20 @@ describe("the check on a dependency on the lockfile task", () => {
 describe("an Nx without the parts that the check runs", () => {
   const repositoryRoot = join(__dirname, "..", "..");
 
-  it("fails with a message that names the installed Nx", () => {
+  /** What the message says to do. */
+  const remedy =
+    "Use a supported Nx version, or a version of @convesoft/nx-rust that supports the installed one.";
+
+  it("fails with a message that names the installed Nx, the supported one and what to do", () => {
     const load = (path: string) => (path.endsWith("package.json") ? { version: "24.9.0" } : {});
 
     expect(() => loadTargetDefaultsInternals(repositoryRoot, load)).toThrow(
       "nx-rust cannot check what the targetDefaults in nx.json do to Rust targets with the installed Nx 24.9.0: createTargetDefaultsResults from nx/src/devkit-internals is not a function.",
     );
+    expect(() => loadTargetDefaultsInternals(repositoryRoot, load)).toThrow(
+      "This version of @convesoft/nx-rust supports Nx 24.",
+    );
+    expect(() => loadTargetDefaultsInternals(repositoryRoot, load)).toThrow(remedy);
   });
 
   it("fails graph creation where an entry changes a Rust target, naming the installed Nx", async () => {
@@ -1284,6 +1292,7 @@ describe("an Nx without the parts that the check runs", () => {
       expect(withoutColours(output)).toContain(
         `nx-rust cannot check what the targetDefaults in nx.json do to Rust targets with the installed Nx ${nxVersion}: createTargetDefaultsResults from nx/src/devkit-internals is not a function.`,
       );
+      expect(withoutColours(output)).toContain(remedy);
     } finally {
       workspace.remove();
     }

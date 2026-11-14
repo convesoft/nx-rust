@@ -1,6 +1,6 @@
 ---
 title: Decide whether .git/info/exclude and the global git excludes file silence the Cargo directory warning
-status: todo
+status: in-progress
 type: task
 parent: nxr-w9qa5f
 related:

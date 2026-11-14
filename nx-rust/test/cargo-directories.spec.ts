@@ -1,5 +1,8 @@
 import type { ProjectConfiguration } from "@nx/devkit";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { cargoMetadataOf } from "../src/graph/collisions";
 import {
   Env,
@@ -18,6 +21,7 @@ import {
 // directories inside the repository that Nx does not ignore
 // (DES-DIAGNOSTICS): the warning when the graph is created, its absence where
 // an ignore file or a folder that Nx always ignores leaves the directory out,
+// its presence where only a git excludes file outside the repository does,
 // its repetition at the start of a task, its place among the other warnings
 // that a project records, and that recording it changes no cache key.
 // init.spec.ts checks that `init` prints it.
@@ -154,6 +158,61 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
 
       expect(output).not.toContain("lies inside the repository");
       expect(output).toContain("api");
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // Nx reads .git/info/exclude and the user's global git excludes file on
+  // the machine where it runs (EVD-NX-24-SETUP), but neither is part of the
+  // repository, so other clones and CI do not leave the directory out
+  // (DES-DIAGNOSTICS). A project.json in the directory shows whether Nx read
+  // it. A home folder of the test's own keeps git's and Nx's view of the
+  // global excludes file away from the user's configuration.
+  it.each<[string, (root: string, home: string) => void, boolean]>([
+    ["no git excludes file covers it", () => {}, true],
+    [
+      "only .git/info/exclude covers it",
+      (root) => writeFileSync(join(root, ".git", "info", "exclude"), "/rust/target/\n"),
+      false,
+    ],
+    [
+      "only the user's global git excludes file covers it",
+      (_root, home) => {
+        mkdirSync(join(home, ".config", "git"), { recursive: true });
+        writeFileSync(join(home, ".config", "git", "ignore"), "rust/target/\n");
+      },
+      false,
+    ],
+  ])(
+    "still draws a warning in a git repository where %s, whether or not Nx reads the directory there",
+    async (_case, cover, readByNx) => {
+      const workspace = FixtureWorkspace.create("subfolder-workspace", unignored, {
+        "rust/target/probe/project.json": `${JSON.stringify({ name: "probe-in-target" })}\n`,
+      });
+      const home = mkdtempSync(join(tmpdir(), "nx-rust-home-"));
+      try {
+        const env = {
+          HOME: home,
+          XDG_CONFIG_HOME: join(home, ".config"),
+          GIT_CONFIG_GLOBAL: undefined,
+          GIT_CONFIG_NOSYSTEM: "1",
+          // The toolchains stay where they were.
+          RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(homedir(), ".rustup"),
+          CARGO_HOME: process.env.CARGO_HOME ?? join(homedir(), ".cargo"),
+        };
+        execFileSync("git", ["init", "-q"], { cwd: workspace.root, env: testEnvironment(env) });
+        cover(workspace.root, home);
+
+        const { status, output } = await workspace.nx(["show", "projects"], env);
+
+        expect(status).toBe(0);
+        const shown = withoutColours(output);
+        expect(occurrences(shown, rustTarget)).toBe(1);
+        expect(shown.includes("probe-in-target")).toBe(readByNx);
+      } finally {
+        workspace.remove();
+        rmSync(home, { recursive: true, force: true });
+      }
     },
     HARNESS_TIMEOUT,
   );

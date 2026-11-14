@@ -1,6 +1,6 @@
 ---
 title: Say what to do in the warning about an included Cargo configuration file that is no valid TOML
-status: todo
+status: in-progress
 type: bug
 parent: nxr-w9qa5f
 discovered_from: nxr-carr7v

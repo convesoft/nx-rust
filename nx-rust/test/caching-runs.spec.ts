@@ -294,6 +294,9 @@ describe("a run with the plugin's executor", () => {
         expect(result.output).toContain(
           'cli:build: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves `build` uncached in this project, because its workspace\'s artifact directory lies outside the repository',
         );
+        expect(result.output).toContain(
+          "The setting comes from the workspace's configuration: run `nx show target cli:build --json` and look under `sourceMap` for the file and entry.",
+        );
         expect(taskCalls(workspace)).toEqual([]);
         // Where the plugin caches build, the same file fails nothing.
         expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
@@ -445,6 +448,9 @@ describe("a run with the plugin's executor", () => {
         expect(cleared.status).toBe(1);
         expect(cleared.output).toContain(
           "cli:build: build.target in rust/.cargo/config.toml chooses the target triple, and this run of the cached build names none in the targetTriple option",
+        );
+        expect(cleared.output).toContain(
+          "Run it with the triple that the target's options give, and remove what clears the option for this run",
         );
         expect(taskCalls(workspace)).toHaveLength(1);
       } finally {

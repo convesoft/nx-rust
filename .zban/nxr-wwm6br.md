@@ -1,6 +1,6 @@
 ---
 title: Check the remedy of the diagnostics that only verification items other than VER-SETUP name
-status: todo
+status: in-progress
 type: task
 priority: low
 tags:

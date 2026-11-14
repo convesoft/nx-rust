@@ -706,7 +706,7 @@ describe("caching", () => {
         }
         expect(cli.metadata.cargo.warnings).toEqual([
           expect.stringMatching(
-            /rust\/.cargo\/config.toml sets build.target for the Cargo workspace in rust, .*targetTriple/,
+            /rust\/.cargo\/config.toml sets build.target for the Cargo workspace in rust, .* To cache them, give the triple as the targetTriple option in the options of their target tables, in the crate's or the workspace's Cargo metadata;/,
           ),
         ]);
 

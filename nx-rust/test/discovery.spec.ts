@@ -461,6 +461,9 @@ describe("failed discovery", () => {
           );
           expect(warning).toContain("believes it's in a workspace when it's not");
           expect(warning).toContain("it does not follow the path dependencies behind that crate");
+          expect(warning).toContain(
+            "To have them followed, fix what cargo reports, so that `cargo metadata --no-deps --manifest-path shared/crates/model/Cargo.toml` succeeds in backend.",
+          );
           expect(graph.projects.backend.metadata.cargo.warnings ?? []).not.toContain(warning);
           // Graph creation prints it once.
           expect(shown.status).toBe(0);
@@ -489,6 +492,9 @@ describe("failed discovery", () => {
           /`cargo metadata` failed for shared\/crates\/model\/Cargo\.toml, a path dependency of backend\/crates\/server\/Cargo\.toml that has no project of its own/,
         );
         await expect(loading).rejects.toThrow(/extra\/lexer\/Cargo\.toml/);
+        await expect(loading).rejects.toThrow(
+          "Fix what cargo reports, so that `cargo metadata --no-deps --manifest-path shared/crates/model/Cargo.toml` succeeds in backend.",
+        );
       },
       HARNESS_TIMEOUT,
     );
