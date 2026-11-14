@@ -53,6 +53,12 @@ import {
   pluginVersionOption,
   selectsBySpecification,
 } from "./command";
+import {
+  type CargoInvocation,
+  cargoEnvironment,
+  commandBlock,
+  taskRunsVerbosely,
+} from "./cargo-invocation";
 import { checkDigests, DigestCheck, DigestWrite, writeDigests } from "./digests";
 import { type BuildInputCheck, checkBuildInputs } from "./input-check";
 import {
@@ -102,14 +108,6 @@ export interface PluginExecutor extends ExecutorOptions {
   serves(target: InferredTargetName): boolean;
 }
 
-/** The cargo command of one task. */
-export interface CargoInvocation {
-  /** The arguments after `cargo`. */
-  args: string[];
-  /** The absolute path of the workspace root, where cargo starts. */
-  cwd: string;
-}
-
 /** The cargo command of one task and the lines it prints before cargo starts. */
 export interface TaskInvocation extends CargoInvocation {
   /** One warning line per option that the task ignores (`DES-UNKNOWN-OPTIONS`). */
@@ -147,11 +145,15 @@ export type DigestStep = ({ kind: "write" } & DigestWrite) | ({ kind: "check" } 
  * The project's keys hold a digest of them, so that a cache hit replays the
  * warnings of the graph that the command uses (`DES-DIAGNOSTICS`, "Warnings
  * where they are seen"), apart from those about Cargo configuration that Nx
- * does not hash, which no key holds.
+ * does not hash, which no key holds. When the executor's context says that
+ * Nx runs verbosely, the task prints its cargo command right before cargo
+ * starts, after every warning (`DES-INVOCATION`, "Printing the command");
+ * otherwise it prints nothing of it.
  */
 // @mara implements DES-INVOCATION
 // @mara implements REQ-CARGO-UNCHANGED
 // @mara implements REQ-NO-MANIFEST-WRITES
+// @mara implements REQ-VERBOSE-COMMAND
 export async function runTask(
   executor: PluginExecutor,
   options: CargoTargetOptions,
@@ -173,7 +175,9 @@ export async function runTask(
   for (const warning of invocation.warnings) {
     console.warn(warning);
   }
-  if (!(await runCargo(invocation))) {
+  const task = `${context.projectName ?? ""}:${context.targetName ?? ""}`;
+  const shownFor = taskRunsVerbosely(context) ? task : undefined;
+  if (!(await runCargo(invocation, shownFor))) {
     return { success: false };
   }
   const failures = await checksAfterCargo(invocation, context);
@@ -660,17 +664,32 @@ export function lockedMode(option: boolean, variable: string | undefined): boole
 }
 
 /**
- * Runs cargo for a task with the task's environment, unchanged, and its
+ * Runs cargo for a task with the task's environment and the variables of the
+ * invocation, which no command of this version has, and with the task's
  * standard streams. Signals that stop the executor reach cargo too.
  *
  * Unlike graph creation (`runCargoForGraph`), a task sets no
  * `RUSTUP_AUTO_INSTALL`, so rustup behaves as for plain cargo.
  *
+ * @param shownFor In a verbose run, the task whose command it is: the
+ *   command's lines ({@link commandBlock}), built from the same invocation,
+ *   go to standard error before cargo starts (`DES-INVOCATION`, "Printing the
+ *   command"). Undefined in every other run, which prints nothing of it.
  * @returns Whether cargo exited with status 0.
  */
-export function runCargo({ args, cwd }: CargoInvocation): Promise<boolean> {
+// @mara implements DES-INVOCATION
+export async function runCargo(invocation: CargoInvocation, shownFor?: string): Promise<boolean> {
+  if (shownFor !== undefined) {
+    const block = commandBlock(shownFor, invocation);
+    // Written out before cargo starts, whose output goes to the same streams.
+    await new Promise<void>((resolve) => process.stderr.write(block, () => resolve()));
+  }
   return new Promise((resolve) => {
-    const child = spawn("cargo", args, { cwd, stdio: "inherit" });
+    const child = spawn("cargo", invocation.args, {
+      cwd: invocation.cwd,
+      env: cargoEnvironment(invocation, process.env),
+      stdio: "inherit",
+    });
     const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
     const forward = (signal: NodeJS.Signals) => child.kill(signal);
     for (const signal of signals) {

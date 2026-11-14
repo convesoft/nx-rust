@@ -32,7 +32,9 @@ workspace. Nothing is declared per crate.
 A crate's targets select it with `-p` and its package ID specification, which
 cargo gives each task, and `fmt` and `fmt-check` with its package name. Every
 command starts in the root folder of the crate's workspace
-([Caching](caching.mara.md#where-cargo-runs)).
+([Caching](caching.mara.md#where-cargo-runs)). With `--verbose`, each task
+prints its exact command before it runs
+([Seeing the command](caching.mara.md#seeing-the-command)).
 
 ```sh
 nx test api                     # one crate

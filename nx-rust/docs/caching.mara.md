@@ -314,6 +314,41 @@ are those at the workspace root and above it.
   that, see
   [Continuous integration](ci.mara.md#cache-two-things-in-two-places).
 
+### Seeing the command
+
+Run Nx with `--verbose`, or with `NX_VERBOSE_LOGGING=true` in the shell or the
+repository's root `.env`, to see the cargo command of each task. Right before cargo starts, the task prints where cargo
+runs and the command, as lines that you can paste into a shell:
+
+```text
+good:test: @convesoft/nx-rust runs cargo as these lines do in a POSIX shell:
+  cd /home/me/repo/rust
+  cargo test -p 'path+file:///home/me/repo/rust/crates/good#0.1.0'
+```
+
+```sh
+nx test good --verbose
+nx affected -t test --verbose --skip-nx-cache   # tasks with a cached result too
+```
+
+- Without the flag, nothing of this is printed. Cargo's own hints, such as
+  ``to rerun pass `-p good --lib` ``, use the package name, which is ambiguous
+  where a dependency has the crate's name; the printed line is not.
+- cargo runs with the environment that Nx gives the task: the shell's, with
+  the `.env` files that Nx loads for the task, such as one in the crate's
+  folder. The lines name only the variables that the plugin sets itself, none
+  at present, so set a variable that only such a file gives by hand.
+- A task that Nx restores from the cache runs no cargo and prints what it
+  printed when its result was stored. A verbose run stores the lines with the
+  result, so a later hit, also without the flag and on another machine that
+  shares the cache, shows them with that run's folder, as cargo's own
+  `Compiling` lines show it. `--skip-nx-cache` runs the task, shows its
+  command and stores nothing.
+- `--verbose` changes no cache key.
+- The `lockfile` task prints its own `cargo update --workspace`. The lookups
+  that a task makes first, such as the `cargo metadata` call that gives the
+  package ID specification, are not printed.
+
 ### Cargo configuration that Nx does not hash
 
 Nx hashes no file outside the repository and no file that `.gitignore` or
@@ -501,6 +536,16 @@ The Nx cache holds task results and final artifacts. It never stores a file from
 :satisfies: NEED-CARGO-UNCHANGED
 
 A cargo command that the plugin runs uses the same build directory, the same artifact directory and the same default flags as the equivalent plain `cargo` command in that workspace, so that builds through Nx and builds through plain cargo or rust-analyzer reuse each other's work. The plugin generates no files inside crates. Nx's own data folder, `.nx/workspace-data`, which Nx and git ignore, belongs to no crate and to neither of Cargo's directories, also where it lies in the folder of a crate at the repository root.
+:::
+
+:::mara requirement REQ-VERBOSE-COMMAND
+:mid: 01M7DPAR45N7ZNQ7JRNAWTWPTQ
+:title: Show the cargo command of a task when Nx runs verbosely
+:status: accepted
+:satisfies: NEED-CARGO-UNCHANGED
+:satisfies: NEED-CLEAR-FAILURES
+
+When Nx runs verbosely, through its `--verbose` flag or `NX_VERBOSE_LOGGING=true`, each task of the plugin prints, before each cargo command that does its work, the folder where the command starts and the command, with its arguments as passed and the environment variables that the plugin sets for it, as lines that a POSIX shell runs as the same command. A run that is not verbose prints nothing of it, and verbose mode changes no task's cache key.
 :::
 
 :::mara requirement REQ-BUILD-SCRIPT-INPUTS
@@ -716,6 +761,7 @@ The split does not remove lock contention: there is one lock per build directory
 :status: accepted
 :satisfies: REQ-CARGO-UNCHANGED
 :satisfies: REQ-NO-MANIFEST-WRITES
+:satisfies: REQ-VERBOSE-COMMAND
 
 Every cargo command of a task starts in the root folder of the crate's workspace and selects its crates as **Selecting a crate** says. rustup and Cargo choose the toolchain file and the configuration files by the folder a command starts in and its parents, so the same toolchain and configuration files apply to all tasks of a workspace, which a single invocation for a group needs ([[DES-BATCH]]). A task's environment can still choose another toolchain, for example through `RUSTUP_TOOLCHAIN` in a crate's `.env`: the task then runs and is keyed with that toolchain ([[DES-INPUTS]]) and shares no cargo call with tasks whose environment differs. A `rust-toolchain.toml` or `.cargo/config.toml` inside a member crate applies only to a cargo that the user starts in that folder, not to the plugin's commands ([[ADR-WORKSPACE-ROOT]]).
 
@@ -723,7 +769,13 @@ Every cargo command of a task starts in the root folder of the crate's workspace
 
 Before its command, a task asks cargo for the specifications with `cargo metadata --format-version 1 --no-deps`, started in the workspace root with the task's environment and without `--manifest-path`, as the command starts, and takes the `id` of the member with the crate's package name, which is its specification. The specification holds the path through which cargo reached the workspace, which depends on the folder that cargo starts in: one asked through a symbolic link matches no package in the folder it leads to. `cargo pkgid` would need a `Cargo.lock`, and `cargo metadata --no-deps` neither needs nor writes one. Where cargo cannot give the report, the task fails before its command with cargo's message, and where the report has no member of that name, with a message that the project graph is out of date ([[DES-DIAGNOSTICS]]). `cargo fmt` takes package names only and matches them against the members alone, so `fmt` and `fmt-check` select the crate by its name ([[DES-TARGET-COMMANDS]]).
 
-The specification holds the absolute path of the crate's folder. The task computes it when it runs and passes it to cargo only: no project graph, option, input or output holds it, so it reaches no cache key, and checkouts in different folders keep the same keys. The plugin prints no cargo command of its own. What cargo prints still names the crate by its package name, the hints for running a failed test again included, such as `` `-p good --lib` `` ([[EVD-CARGO-PACKAGE-SPECS]]).
+The specification holds the absolute path of the crate's folder. The task computes it when it runs and passes it to cargo only: no project graph, option, input or output holds it, so it reaches no cache key, and checkouts in different folders keep the same keys. What cargo prints still names the crate by its package name, the hints for running a failed test again included, such as `` `-p good --lib` ``, which cannot be pasted where the name is ambiguous ([[EVD-CARGO-PACKAGE-SPECS]]). The command that the task ran is printed in a verbose run only (**Printing the command**).
+
+**Printing the command.** A task prints its cargo command only when Nx runs verbosely, and then for each cargo command that does the task's work, right before it starts and after every warning of the task ([[REQ-VERBOSE-COMMAND]], [[ADR-VERBOSE-COMMAND]]). Verbose means what it means to Nx: `--verbose` on `nx run`, `nx run-many` or `nx affected`, or `NX_VERBOSE_LOGGING=true` without the flag, where `--verbose=false` wins over the variable. A single task takes it from `isVerbose` in its executor's context alone (`taskRunsVerbosely` in `nx-rust/src/executors/cargo-invocation.ts`), never from its environment: Nx deletes from a task's environment each variable whose value a root `.env` file repeats and then loads the task's own dotenv files, so a crate's `.env` can give the task an `NX_VERBOSE_LOGGING` that differs from the run's. A batch implementation, whose context always says `isVerbose: false`, calls another function, `batchRunsVerbosely`, with its own process's environment: Nx copies that from the `nx` process after the flag has set `NX_VERBOSE_LOGGING` there, and loads no task's dotenv file into it ([[EVD-NX-24-VERBOSE]]). Neither reads a variable from a task's environment that the batch rebuilds, so a variable that only a task's dotenv file sets counts for no task, as it counts for nothing in Nx. Three lines go to the task's standard error. The first names the task: `<project>:<target>: @convesoft/nx-rust runs cargo as these lines do in a POSIX shell:`. The second, indented by two spaces as the third, is `cd` and the folder where cargo starts. The third is the command: `NAME=value` for each environment variable that the plugin sets for the command over the task's environment, which no command of this version does, then `cargo` and its arguments exactly as passed. A word that holds only letters, digits and `_ - . / : @ % + , =`, and does not start with `=`, which zsh expands, stays as it is; every other word is put in single quotes, a single quote written `'\''`. So a specification is quoted for its `#`, a folder for a space, and `%20` in a specification stays as it is, and the two lines run the same command where they are pasted into sh, bash or zsh. The lines are built from the same invocation that cargo is started with, in one place (`commandBlock` in `nx-rust/src/executors/cargo-invocation.ts`), so that they cannot differ from what runs.
+
+The task's own environment is not printed, neither what the `nx` command inherits nor what Nx loads for the task from dotenv files: the plugin passes it on unchanged, and it can hold secrets. A value that the plugin sets is its own choice, holds no secret and is printed in full. To reproduce a task whose dotenv files set a variable, such as a crate's `.env`, the user sets that variable as well. The lookups that a task makes before its command are not printed: the `cargo metadata` reports for the specification and for Cargo's directories, and the checks for a tool. They read and change nothing, a failure of one fails the task with a message that names it ([[DES-DIAGNOSTICS]]), and their lines would come before the command that a user reproduces. The lockfile task's `cargo update --workspace` is that task's own command, which it prints under its own name. In a batch, one cargo command serves several tasks: the batch process prints its lines itself, once per command and before it starts, with a first line that names the tasks of the command. They then belong to no task's terminal output, and Nx neither stores nor replays them ([[EVD-NX-24-BATCHES]]).
+
+Nx stores a task's terminal output with its result and replays it on a cache hit, and Nx 24.0.6 gives an executor no way to the terminal that it does not store ([[EVD-NX-24-VERBOSE]]). A verbose run of a single task therefore stores the lines with the result, and a later hit, verbose or not, also on another machine that shares the cache, shows them with the folders of the run that stored the result, as it shows cargo's own lines, which name the crates' folders too ([[ADR-VERBOSE-COMMAND]]). A hit shows no lines where the run that stored the result was not verbose, because no cargo runs. `--skip-nx-cache --verbose` shows the command of a task whose result is stored, and Nx stores nothing of such a run ([[EVD-NX-24-WARNING-CHANNELS]]). Verbose mode is no input of any key: Nx hashes neither the flag nor the variable into the plugin's tasks, and the plugin declares neither as an input ([[EVD-NX-24-VERBOSE]]).
 
 The plugin adds no flag that changes what Cargo builds or where. It sets no build or artifact directory ([[DES-BUILD-DIRS]]) and passes only what the target's options ask for.
 
