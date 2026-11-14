@@ -33,6 +33,7 @@ export const fixtureNames = [
   "undeclared-files",
   "shared-names",
   "binary-tests",
+  "release-crates",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

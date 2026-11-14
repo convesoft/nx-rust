@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+core = { path = "crates/core", version = "0.1.0" }
+base = { path = "crates/base", version = "0.1.0" }
+
+[patch.crates-io]
+base = { path = "crates/base" }
+fork = { path = "../third_party/fork" }

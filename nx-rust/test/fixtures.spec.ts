@@ -125,6 +125,31 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       ],
     },
   },
+  "release-crates": {
+    workspaces: {
+      rust: [
+        "rust/crates/api",
+        "rust/crates/base",
+        "rust/crates/build-user",
+        "rust/crates/cli",
+        "rust/crates/core",
+        "rust/crates/dev-user",
+        "rust/crates/hidden",
+        "rust/crates/inherit-user",
+        "rust/crates/normal-user",
+        "rust/crates/path-user",
+        "rust/crates/private",
+        "rust/crates/registry-user",
+        "rust/crates/renamed-user",
+        "rust/crates/star-user",
+        "rust/crates/target-user",
+        "rust/crates/unreleased",
+        "rust/crates/via-hidden",
+      ],
+      tools: ["tools"],
+    },
+    others: ["third_party/fork"],
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.

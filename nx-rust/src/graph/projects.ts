@@ -12,6 +12,7 @@ import {
 } from "./declared-files";
 import { Input, InputDefinition, InputSettings, namedInputs } from "./inputs";
 import { projectName } from "./names";
+import { pluginPackageName } from "./plugin-package";
 import type { GraphSettings, ProjectSettings } from "./settings";
 import { applyTargetTables } from "./target-tables";
 import { inferTargets, nameTargets } from "./targets";
@@ -261,14 +262,24 @@ function targetTables(settings: ProjectSettings, name: string): TargetConfigurat
 }
 
 /**
+ * The module that Nx release loads as a crate's version actions
+ * (`DES-RELEASE`, "Registration"), named through the plugin's package, so
+ * that Nx resolves it from the repository root and every checkout gives the
+ * project the same configuration.
+ */
+export const versionActionsModule = `${pluginPackageName}/src/release/version-actions`;
+
+/**
  * The result of `createNodes` for the projects: each project under the
  * manifest it comes from, with its name, its tags, its implicit
- * dependencies, its named inputs, its targets and, in its metadata, what
+ * dependencies, its named inputs, its targets, for a crate the version
+ * actions that Nx release runs for it, and, in its metadata, what
  * another entry of the plugin needs to recognise it ({@link cargoMetadata})
  * and the warnings that concern it, among them, apart from the others, those
  * about its workspace's Cargo configuration that Nx does not hash, which stay
  * out of every key, as project metadata does (`EVD-NX-24-WARNING-CHANNELS`).
  */
+// @mara implements DES-RELEASE
 export function projectNodes(projects: readonly CargoProject[]): CreateNodesResultArray {
   return projects.map((project) => [
     project.manifest,
@@ -282,6 +293,9 @@ export function projectNodes(projects: readonly CargoProject[]): CreateNodesResu
             : {}),
           namedInputs: project.namedInputs,
           targets: project.targets,
+          ...(project.pkg === undefined
+            ? {}
+            : { release: { version: { versionActions: versionActionsModule } } }),
           metadata: {
             [cargoMetadataKey]: {
               ...cargoMetadata(project),

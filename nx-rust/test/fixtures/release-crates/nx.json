@@ -1,0 +1,30 @@
+{
+  "plugins": [
+    { "plugin": "@convesoft/nx-rust", "exclude": ["rust/crates/hidden/**", "third_party/**"] }
+  ],
+  "release": {
+    "groups": {
+      "crates": { "projects": ["core", "api"], "projectsRelationship": "fixed" },
+      "others": {
+        "projects": [
+          "base",
+          "build-user",
+          "cli",
+          "dev-user",
+          "inherit-user",
+          "normal-user",
+          "path-user",
+          "private",
+          "registry-user",
+          "renamed-user",
+          "star-user",
+          "target-user",
+          "via-hidden",
+          "xtask"
+        ],
+        "projectsRelationship": "independent"
+      }
+    },
+    "version": { "git": { "commit": true, "tag": true } }
+  }
+}

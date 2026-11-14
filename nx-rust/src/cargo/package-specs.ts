@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { CargoMetadata } from "./metadata";
 
-/** Cargo could not list the members of a workspace with their package ID specifications. */
+/** Cargo could not report the members of a workspace, such as with their package ID specifications. */
 export class PackageSpecReportError extends Error {
   constructor(
     message: string,
@@ -37,6 +37,26 @@ export class PackageSpecReportError extends Error {
  */
 // @mara implements DES-INVOCATION
 export function memberSpecs(workspaceRoot: string, env: NodeJS.ProcessEnv): Map<string, string> {
+  const specs = new Map<string, string>();
+  for (const pkg of workspaceReport(workspaceRoot, env).packages) {
+    if (typeof pkg?.name === "string" && typeof pkg.id === "string") {
+      specs.set(pkg.name, pkg.id);
+    }
+  }
+  return specs;
+}
+
+/**
+ * The `cargo metadata --format-version 1 --no-deps` report of the Cargo
+ * workspace whose root folder is `workspaceRoot`, from a cargo started in
+ * that folder with `env`, as a task's own command starts there
+ * (`DES-INVOCATION`). With `--no-deps` cargo needs no network and neither
+ * needs nor writes `Cargo.lock`.
+ *
+ * @throws {PackageSpecReportError} When cargo cannot be started, fails or
+ *   prints no report with packages.
+ */
+export function workspaceReport(workspaceRoot: string, env: NodeJS.ProcessEnv): CargoMetadata {
   const run = spawnSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], {
     cwd: workspaceRoot,
     env,
@@ -67,11 +87,5 @@ export function memberSpecs(workspaceRoot: string, env: NodeJS.ProcessEnv): Map<
   if (!Array.isArray(report?.packages)) {
     throw new PackageSpecReportError("cargo printed no report with packages", run.stderr);
   }
-  const specs = new Map<string, string>();
-  for (const pkg of report.packages) {
-    if (typeof pkg?.name === "string" && typeof pkg.id === "string") {
-      specs.set(pkg.name, pkg.id);
-    }
-  }
-  return specs;
+  return report as CargoMetadata;
 }

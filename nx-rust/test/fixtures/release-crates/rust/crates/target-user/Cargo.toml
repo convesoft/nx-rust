@@ -1,0 +1,7 @@
+[package]
+name = "target-user"
+version = "0.1.0"
+edition = "2024"
+
+[target.'cfg(unix)'.dependencies]
+base = { path = "../base", version = "=0.1.0" }

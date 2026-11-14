@@ -1,0 +1,7 @@
+[package]
+name = "api"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+core = { workspace = true }

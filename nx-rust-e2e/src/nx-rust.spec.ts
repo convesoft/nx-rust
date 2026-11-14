@@ -842,6 +842,78 @@ describe("@convesoft/nx-rust", () => {
     });
   });
 
+  // Nx resolves the version actions that each crate's project names through
+  // the installed package (DES-RELEASE, "Registration");
+  // release-version.spec.ts checks what they do (VER-RELEASE).
+  describe("with crates configured for Nx release", () => {
+    const gitConfig = join(process.cwd(), "tmp", "release-gitconfig");
+    // Also for the commit and the tag that Nx makes.
+    const gitVariables = {
+      GIT_AUTHOR_NAME: "nx-rust e2e",
+      GIT_AUTHOR_EMAIL: "e2e@example.invalid",
+      GIT_COMMITTER_NAME: "nx-rust e2e",
+      GIT_COMMITTER_EMAIL: "e2e@example.invalid",
+      GIT_CONFIG_GLOBAL: gitConfig,
+      GIT_CONFIG_NOSYSTEM: "1",
+    };
+    const git = (...args: string[]) =>
+      execFileSync("git", args, {
+        cwd: projectDirectory,
+        env: testEnvironment(gitVariables),
+        encoding: "utf8",
+      });
+
+    beforeAll(() => {
+      writeFileSync(gitConfig, "");
+      installFixture(projectDirectory, "release-crates");
+      cargo.placeIn(join(projectDirectory, "node_modules", ".bin"));
+      git("init", "--quiet", "--initial-branch=main");
+      git("add", "--all");
+      git("commit", "--quiet", "--message", "The fixture");
+    });
+
+    afterAll(() => {
+      rmSync(join(projectDirectory, ".git"), { recursive: true, force: true });
+      rmSync(gitConfig, { force: true });
+    });
+
+    it(
+      "versions a crate and its dependents with the installed version actions, and Nx commits and tags them",
+      () => {
+        const result = spawnSync(
+          "pnpm",
+          ["exec", "nx", "release", "version", "patch", "--projects", "base"],
+          {
+            cwd: projectDirectory,
+            env: cargo.environment(testEnvironment(gitVariables)),
+            encoding: "utf8",
+          },
+        );
+        const output = withoutColours(`${result.stdout}${result.stderr}`);
+
+        expect({ status: result.status, output }).toEqual({
+          status: 0,
+          output: expect.any(String),
+        });
+        expect(output).toContain(
+          "base ✍️  New version 0.1.1 written to manifest: rust/crates/base/Cargo.toml",
+        );
+        expect(output).toContain(
+          'normal-user ❓ Applied semver relative bump "patch", because a dependency was bumped, to get new version 0.1.1',
+        );
+        expect(
+          readFileSync(
+            join(projectDirectory, "rust", "crates", "normal-user", "Cargo.toml"),
+            "utf8",
+          ),
+        ).toContain('name = "normal-user"\nversion = "0.1.1"\n');
+        expect(git("status", "--porcelain").trim()).toBe("");
+        expect(git("tag", "--list", "base@*").trim()).toBe("base@0.1.1");
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
   // The installed package lays target tables over the inferred targets and
   // compares its entries in nx.json through parts of the installed Nx.
   describe("with settings in Cargo.toml and nx.json", () => {
