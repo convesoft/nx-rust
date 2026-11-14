@@ -230,6 +230,8 @@ The check reads the records that `cargo build -p <crate>` exports for the task's
 A file that the build script generates in `OUT_DIR`, a path outside the repository that it names with `rerun-if-changed`, and the files of a registry dependency fail nothing. A build script that names a parent folder with `rerun-if-changed`, such as the workspace folder that holds `target`, fails nothing for the files in Cargo's directories or in folders that Nx ignores, such as `node_modules`, and fails for an undeclared file elsewhere under that folder. `check`, `lint` and `test` of the crate succeed while the files are undeclared. With an installed Nx that lacks `HashPlanInspector`, `build` of a crate that reads an undeclared file succeeds and prints one warning line that the check did not run, and the next run is a cache hit.
 
 With the batch executor, `nx run-many -t build` over a workspace where one crate reads an undeclared file and two others do not runs the group as one cargo call: the task of that crate fails, and the other two succeed and are restored from the cache on the next run. When two crates of one group depend on a path dependency whose build script reads a file outside every crate, and only one of the two declares that file, the task of the other fails and the first succeeds. When another crate of the group turns on the feature that a binary of the crate requires, an undeclared file read only by that binary fails nothing.
+
+Each message of [[DES-DIAGNOSTICS]] that this verification names also says what the user can do.
 :::
 
 :::mara verification VER-CARGO-UNCHANGED
