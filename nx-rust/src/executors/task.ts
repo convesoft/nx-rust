@@ -255,13 +255,16 @@ async function checksAfterCargo(
  *   `pluginVersion` another value than the target's (`DES-PLUGIN-OPTIONS`),
  *   when a task whose target hashes digests does not depend on its
  *   workspace's lockfile task in a run that does not exclude task
- *   dependencies (`DES-LOCKFILE-HASHING`), when the tool that the target
- *   runs besides cargo is not installed where `env` and the workspace root
- *   say (`DES-DIAGNOSTICS`), or when cargo cannot give the crate's package ID
+ *   dependencies (`DES-LOCKFILE-HASHING`), when the run holds the `build` of
+ *   a crate whose `test` replaces its executables without an order between
+ *   the two (`DES-TARGETS`), when the tool that the target runs besides
+ *   cargo is not installed where `env` and the workspace root say
+ *   (`DES-DIAGNOSTICS`), or when cargo cannot give the crate's package ID
  *   specification (`DES-INVOCATION`). The checks of what reaches the task's
- *   key, the cache guard, `pluginVersion` and the lockfile dependency, all
- *   run before the cargo command is built, and the check for the tool and
- *   the specification after them.
+ *   key, the cache guard, `pluginVersion` and the lockfile dependency, and
+ *   the check of the order of `test` and `build` all run before the cargo
+ *   command is built, and the check for the tool and the specification
+ *   after them.
  */
 // @mara implements DES-OUTPUTS
 // @mara implements DES-PLUGIN-OPTIONS
@@ -353,6 +356,9 @@ export function taskInvocation(
     throw new TaskError(
       `${task}: this run gives the option "pluginVersion" the value ${JSON.stringify(given)}, but only @convesoft/nx-rust sets that option, to carry its version into the cache key. The value comes from the command line, such as --pluginVersion, or from a task that forwards its options to this one: leave it out. The task does not run, so that Nx stores no result for it.`,
     );
+  }
+  if (metadata.target === "test" && metadata.waitsForBuild === true) {
+    checkBuildOrder(task, context);
   }
   // Whether the key holds the lockfile task's digests, which the task then
   // checks after cargo's call; a key without them fails the task here.
@@ -508,6 +514,99 @@ function keyHoldsDigests(
     );
   }
   return true;
+}
+
+/**
+ * Fails a crate's `test` before cargo runs where `cargo test` replaces the
+ * executables that the crate's `build` declares, and the task graph holds
+ * a task of that `build` that Nx neither finishes before the `test` starts
+ * nor starts only after the `test` has finished ({@link finishesBefore}),
+ * as where a `project.json`, a target table or a `targetDefaults` entry
+ * replaces the `dependsOn` that the plugin infers for `test` (`DES-TARGETS`).
+ * Nx could then run them at the same time, store the test's executable
+ * under the key of `build`, or let the tests run the executable of `build`
+ * and store their result (`DES-OUTPUTS`). A run whose graph holds no such
+ * `build`, such as `nx test <crate>` with the dependency removed, or one
+ * without `build` under `--exclude-task-dependencies`, has nothing to order
+ * and passes. A task invoked outside a task graph that holds it is not
+ * checked.
+ *
+ * @throws {TaskError} Naming the `build` tasks, the reason and the fix.
+ */
+// @mara implements DES-TARGETS
+// @mara implements DES-DIAGNOSTICS
+function checkBuildOrder(task: string, context: ExecutorContext): void {
+  const graphTask = graphTaskOf(context);
+  const graph = context.taskGraph;
+  if (graphTask === undefined || graph === undefined) {
+    return;
+  }
+  const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];
+  const unordered = Object.values(graph.tasks ?? {}).filter(
+    ({ id, target }) =>
+      target.project === context.projectName &&
+      targetMetadata(project?.targets?.[target.target]?.metadata?.[targetCargoMetadataKey])
+        ?.target === "build" &&
+      !finishesBefore(graph, id, graphTask.id) &&
+      !finishesBefore(graph, graphTask.id, id),
+  );
+  if (unordered.length === 0) {
+    return;
+  }
+  const builds = unordered.map(({ id }) => id).join(" and ");
+  throw new TaskError(
+    [
+      `${task}: cargo test replaces the executables that ${builds} declares as its outputs, because the crate has a binary and an integration test or a bench that cargo test builds, and this run holds ${builds} without the dependency of ${task} on it that @convesoft/nx-rust infers. Nx could run the two at the same time, store this task's executables under the key of ${builds}, or let the tests run the executables of ${builds} and store their result. The task does not run, so that Nx stores no result for it.`,
+      `Make sure that no configuration replaces the dependsOn of ${task}: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry, and keep the plugin's entries with "...", as in "dependsOn": ["...", "^codegen"]. A dependency on a continuous task orders the two only where that task, or a task it depends on, depends on ${builds} itself.`,
+    ].join("\n"),
+  );
+}
+
+/**
+ * Whether Nx finishes and stores the task `earlier` before it starts the task
+ * `later`, as its task graph decides (`DES-TARGETS`, "Guard"). Nx starts a
+ * task once its ordinary dependencies have completed, which comes after
+ * their outputs are stored, and once its continuous dependencies have been
+ * started, or have reported ready where the edge waits for that; a continuous
+ * task is itself started only once its own ordinary dependencies have
+ * completed (`EVD-CARGO-ARTIFACT-WRITERS`). So no task of a path of
+ * dependencies starts before the task that it depends on has started, and
+ * `earlier` has finished before `later` starts where a path leads from
+ * `later` to `earlier`, through ordinary and continuous dependencies alike,
+ * and its last edge, the one into `earlier`, is an ordinary dependency. A
+ * path that reaches `earlier` only as a continuous dependency, which is how
+ * Nx records every edge into a continuous task, guarantees no more than that
+ * `earlier` has started.
+ */
+function finishesBefore(
+  graph: {
+    dependencies?: Record<string, unknown[]>;
+    continuousDependencies?: Record<string, unknown[]>;
+  },
+  earlier: string,
+  later: string,
+): boolean {
+  // An edge is an object with the task's id; older task graphs held the id itself.
+  const ids = (edges: unknown[] | undefined): string[] =>
+    (edges ?? []).flatMap((edge) => {
+      const id = typeof edge === "string" ? edge : (edge as { id?: string } | null)?.id;
+      return id === undefined ? [] : [id];
+    });
+  const seen = new Set<string>();
+  const queue = [later];
+  while (queue.length > 0) {
+    const id = queue.pop() as string;
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const ordinary = ids(graph.dependencies?.[id]);
+    if (ordinary.includes(earlier)) {
+      return true;
+    }
+    queue.push(...ordinary, ...ids(graph.continuousDependencies?.[id]));
+  }
+  return false;
 }
 
 /**
@@ -890,6 +989,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
     members,
     digests,
     records,
+    waitsForBuild,
   } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
   return (inferredTargetNames as readonly unknown[]).includes(target)
     ? {
@@ -910,6 +1010,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
         ...(isPackageList(members) ? { members } : {}),
         ...(isPackageList(digests) ? { digests } : {}),
         ...(isRecordSource(records) ? { records } : {}),
+        ...(waitsForBuild === true ? { waitsForBuild } : {}),
       }
     : undefined;
 }

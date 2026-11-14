@@ -108,6 +108,23 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
     workspaces: { rust: ["rust/crates/good", "rust/crates/toolkit"] },
     others: ["third_party/good"],
   },
+  "binary-tests": {
+    workspaces: {
+      rust: [
+        "rust/crates/addon",
+        "rust/crates/app",
+        "rust/crates/benched",
+        "rust/crates/flavour",
+        "rust/crates/gated",
+        "rust/crates/harnessless",
+        "rust/crates/library",
+        "rust/crates/showcase",
+        "rust/crates/timed",
+        "rust/crates/unit",
+        "rust/crates/untested",
+      ],
+    },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.

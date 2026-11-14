@@ -54,6 +54,12 @@ export interface CargoTarget {
   kind: string[];
   /** The features that cargo needs on to build the target, from its `required-features`. */
   "required-features"?: string[];
+  /**
+   * Whether `cargo test` builds and runs the target, from its `test` flag:
+   * on by default for libraries, binaries and tests, off for examples and
+   * benches. Cargo 1.91 and later report it for every target.
+   */
+  test?: boolean;
 }
 
 /** A declared dependency of a {@link CargoPackage}. */

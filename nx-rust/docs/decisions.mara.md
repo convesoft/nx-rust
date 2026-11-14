@@ -204,7 +204,7 @@ For files the choice goes the other way. The whole folder of a crate is an input
 :justifies: DES-BATCH
 :accepts: RISK-BATCH-BEHAVIOUR
 
-Nx decides what runs and what is cached, per crate. Cargo should still be invoked as few times as possible, because each invocation takes the build lock and resolves the workspace again. An executor with `batchImplementation` and `preferBatch: true` gets both: Nx hashes, restores and caches each task, and the plugin serves each group of tasks with one cargo call for each step of their target, not one per crate. The known cost is that Nx starts no other task while a batch runs.
+Nx decides what runs and what is cached, per crate. Cargo should still be invoked as few times as possible, because each invocation takes the build lock and resolves the workspace again. An executor with `batchImplementation` and `preferBatch: true` gets both: Nx hashes, restores and caches each task, and the plugin serves each group of tasks with one cargo call for each step of their target, not one per crate. `build` and `doc` run through a second such executor, because Nx stores a batch's outputs only when the whole batch has ended and would otherwise store what a later `cargo test` of the same batch wrote ([[ADR-TEST-AFTER-BUILD]]). The known cost is that Nx starts no other task while a batch runs.
 :::
 
 :::mara decision ADR-WORKSPACE-FEATURES
@@ -562,6 +562,31 @@ The control plane's decision of 14 November 2026 under [[GOAL-TRUSTED-CACHE]], o
 Rejected: keeping the items as they were, which promised that Nx stores nothing for a failed task whatever its settings.
 :::
 
+:::mara decision ADR-TEST-AFTER-BUILD
+:mid: 01M7DJ8QGMASKGT057YS8Z9QBY
+:title: Run a crate's test after its own build where cargo test replaces the executables of that build
+:status: accepted
+:justifies: DES-TARGETS
+:justifies: DES-OUTPUTS
+:justifies: DES-BATCH
+:justifies: REQ-NO-RUST-TASK-DEPS
+:accepts: RISK-ARTIFACT-DIR-WRITERS
+
+For a crate with a binary and an integration test, `cargo test` replaces the executable that the crate's `build` declares as an output with one built with what dev-dependencies turn on and with the `test` profile, also when nothing needs compiling, and `CARGO_BIN_EXE_<name>`, which the tests run after cargo has released its build lock, names that same file. Nx copies a task's outputs into the cache some milliseconds after its process has ended, and a batch's when the whole batch has ended ([[EVD-CARGO-ARTIFACT-WRITERS]], [[EVD-NX-24-BATCHES]]). Where Nx ran a crate's `build` and `test` at the same time, as it did on `main` in milestone 0.1, it could store the executable of `cargo test` under the key of `build`, and the integration tests could run the executable of `build` and Nx store their result, against [[GOAL-TRUSTED-CACHE]]. A batch that ran a `build` group and then a `test` group stored the executable of `cargo test` every time.
+
+On 14 November 2026 the maintainer chose, word for word, "`test` waits for own `build` (Recommended)". In the crates where `cargo test` replaces the executables of `build`, `test` depends on the same crate's `build`, so that the two never run at the same time and Nx stores `build` before `test` starts. The `test` executor fails a task whose run holds that `build` without the dependency, as where a configuration replaced it. In milestone 0.2, `build` and `doc`, the targets whose files Nx stores, run through a batch executor of their own, so that Nx stores their batch before it starts the batch of the tasks that depend on them ([[DES-TARGETS]], [[DES-BATCH]]). On 14 November 2026 the control plane settled its name, `@convesoft/nx-rust:cargo-outputs`.
+
+Told to the maintainer with the choice, and accepted with it ([[RISK-ARTIFACT-DIR-WRITERS]]): after a command that runs both, the artifact directory holds what cargo wrote last, the executable of `cargo test`, as plain `cargo build && cargo test` leaves it, while the cache entries are right; two `nx` commands started at once can still overlap; and `run` with options that differ from those of `build` is not ordered.
+
+Rejected:
+
+- **A plugin lock and a copy of the artifacts that the plugin owns.** Every cargo call of the plugin that can write executables would hold a lock per artifact directory for its whole run, and `build` would link its artifacts into a folder of the plugin while it holds the lock and declare that folder as its outputs. It closes both cases, also across `nx` commands that run at once, but builds wait for running test suites, the artifacts move out of the artifact directory, and a cache hit no longer puts a binary there, against [[ADR-RESULTS-ONLY-CACHE]] and [[DES-OUTPUTS]]. A lock alone leaves the wrong entries, because Nx copies the outputs after cargo has exited and released it.
+- **A build directory of its own for tests.** A private artifact folder over the shared build directory fails beside plain cargo: `env!("CARGO_BIN_EXE_…")` is fixed when the test target is compiled, and the test target's fingerprint does not cover the folder, so after plain `cargo test` the tests ran a stale executable from the other folder, and the other way round. What remains, a whole build directory of their own for `test`, `bench` and `run`, compiles every crate and dependency twice, takes twice the disk and shares no work with plain `cargo test`, against [[REQ-CARGO-UNCHANGED]]; a variant that gives the crate's test profile an identity of its own through a profile setting per package changes how the crate is compiled and clashes with the repository's own profiles.
+- **Not caching those builds.** The `build` of every crate with a binary and an integration test, which is most binary crates, would run uncached, a full compile in a cold CI each time, and the tests running the executable of `build` would still need a lock.
+
+The costs: a command that runs `test` without `build`, such as `nx test api` or `nx affected -t test`, also runs or restores the crate's `build`, one more task, and on a cold build directory, where dev-dependencies or `[profile.test]` make the two executables differ, the plain build of what differs, which plain `cargo build` compiles as well. A dependency between two targets of one crate is not the dependency between crates that [[ADR-NO-RUST-BUILD-DEPS]] rejects: it orders two tasks that write the same files, and it compiles nothing twice.
+:::
+
 ## Risks
 
 Several risks below are assumptions that the design rests on and that nobody
@@ -660,7 +685,7 @@ Task-based affected selects tasks by changed files, never by environment variabl
 On Nx 24.0.6, an executor with `preferBatch` is batched without `--batch`, and Nx hashes each task of a batch with that task's environment, restores a task on its own and then leaves it out of the batch, and stores and replays each task's own result and terminal output ([[EVD-NX-24-BATCHES]], [[EVD-NX-24-INPUT-SEMANTICS]]). Per-task results and per-task caching hold. Three things are worse than the design needs:
 
 - While a batch runs, Nx starts no other task, whatever `--parallel` allows. Tasks that started before the batch run on, and a task that depends on any task of the batch waits for the whole batch, so in a mixed repository JS tasks wait for the Rust batch. [[ADR-BATCH-EXECUTOR]] accepts this.
-- Nx stores the results and declared outputs of a batch's tasks only when the whole batch has ended. A later group of the batch that writes the declared outputs of an earlier task changes what Nx stores under that task's key, as `cargo test` does with the executable of a crate's `build` when a dev-dependency enables other features. This refutes an assumption of [[DES-BATCH]], that the groups of a batch can run one after another while Nx stores each task's result as it would for the task run alone. How the design changes is open (nxr-1q1f0n).
+- Nx stores the results and declared outputs of a batch's tasks only when the whole batch has ended. A later group of the batch that writes the declared outputs of an earlier task changes what Nx stores under that task's key, as `cargo test` does with the executable of a crate's `build` when a dev-dependency enables other features. This refutes an assumption of [[DES-BATCH]], that the groups of a batch can run one after another while Nx stores each task's result as it would for the task run alone. [[DES-BATCH]] therefore runs `build` and `doc`, the targets whose files Nx stores, through a batch executor of their own, so that Nx stores their batch before it starts the batch of the tasks that depend on them, such as the `test` that waits for a crate's `build` ([[ADR-TEST-AFTER-BUILD]], [[EVD-CARGO-ARTIFACT-WRITERS]]).
 - Nx takes results in one shape only. A throw or an exit of the batch fails each of its tasks and stores nothing, unless `NX_CACHE_FAILURES=true`, under which Nx stores a failure for each of them that later runs replay without starting a batch. A task left out runs again in a new batch process. Storing a result without terminal output fails and ends the run, while with `--skip-nx-cache` the same results pass. Without `NX_CACHE_FAILURES=true`, Nx stores a task only with the status `success`; with it, a reported failure is stored and replayed as well. Any other status than `success`, `failure` and `skipped` stops Nx with an error, storing nothing, when a generator streams it, and leaves the task unstored in a successful run when it comes in one object of results. A line that the batch process prints itself belongs to no task.
 
 On 14 November 2026 the control plane of the work decided that the text, likelihood and consequence of this risk follow these experiments, without asking the maintainer again.
@@ -764,6 +789,25 @@ A napi or wasm crate usually has `Cargo.toml` and `package.json` side by side, s
 :threatens: REQ-COMPATIBILITY
 
 While CI runs on Linux only, nothing runs the plugin on macOS. A change that works on Linux can fail there, for example through a case-insensitive file system, a different linker and library naming for Node addons, or different toolchain paths, and the failure reaches users first. Until macOS runs exist, the claim that macOS is supported rests on the design and not on test runs. [[ADR-CI-LINUX-ONLY]] accepts this for the moment.
+:::
+
+:::mara risk RISK-ARTIFACT-DIR-WRITERS
+:mid: 01M7DJ8QGM2WH33TJ7HBG7XRD0
+:title: Cargo calls that Nx does not order write the files that build stores
+:status: accepted
+:likelihood: possible
+:consequence: major
+:threatens: GOAL-TRUSTED-CACHE
+:threatens: NEED-CORRECT-CACHE
+
+The artifact directory is shared: `cargo build`, `cargo test`, `cargo bench` and `cargo run` all put a crate's executables at the same paths, and Nx stores what lies at the paths that `build` declares when its task ends ([[EVD-CARGO-ARTIFACT-WRITERS]]). [[ADR-TEST-AFTER-BUILD]] orders `test` after `build` within one command, and `bench` runs alone ([[DES-TARGETS]]). Four cases remain:
+
+- **The files after a run.** After a command that ran `build` and then `test`, or restored `build` and ran `test`, the artifact directory holds the executables of `cargo test`, as plain `cargo build && cargo test` leaves them, until the next `build`, run or restored, puts its own back. The cache entries are right; a script that runs the binary from the artifact directory after such a command runs the test build. The same holds for `bench` and a `build` in the release profile.
+- **Two `nx` commands at once.** A task graph orders tasks of one command only. A `cargo test` or `cargo run` of another `nx` command, or plain cargo, that writes a crate's executable while a `build` of the same crate ends can put its file under the key of `build`, and a `build` of another command can replace the executable that a running test is about to run. Neither the executor nor the guard can see another command.
+- **`run` with other options.** `cargo run` writes the executable of `build` byte for byte where its options are those of `build`. With other features or another profile, a `run` beside a `build` or a `test` of the same crate in one command can change what Nx stores for `build` or what the tests run. `run` is not cached, and nothing orders it.
+- **Executables with one file name.** Two crates of one artifact directory whose binaries have the same name write one file; cargo warns of an output filename collision when one call builds both, and the file is that of the crate it built last. The `build` of one crate can then store the other's executable, whatever the order of tasks. Only a rule when the graph is created can catch it. On 14 November 2026 the control plane decided the rule: the `build` targets of crates whose executables share a file name in one artifact directory run uncached, with a project warning that the keys hold, which names the crates and the file and says to rename one binary; graph creation does not fail, because cargo builds such a workspace, with a warning of its own, and the plugin must not make a valid Cargo workspace unusable ([[REQ-CARGO-UNCHANGED]]), while an uncached `build` stores no wrong entry ([[GOAL-TRUSTED-CACHE]]). Until nxr-ew8kb3 implements it, this case stands.
+
+The likelihood is that of the last three cases, which need a habit, such as building in one terminal while testing in another, or a layout, such as two binaries called `cli`; the consequence is a wrong executable restored from the cache. The control plane kept this rating on 14 November 2026. [[ADR-TEST-AFTER-BUILD]] accepts this.
 :::
 
 :::mara risk RISK-NX-RELEASE
@@ -1972,6 +2016,59 @@ Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0, the central 
 - **The selection decides the features.** In a workspace where the member `b` asks for the feature `x` of the member `shared` and `a` does not, `cargo test --doc -p a` compiled `shared` and `a` again after `cargo test --no-run --workspace`. After another `cargo test --no-run --workspace`, `cargo test --doc --workspace` compiled nothing.
 
 So with `--keep-going`, which `cargo test` does not have, cargo builds as much as it can. Its JSON messages show what it built, but not every failure. The list of failed targets that `--no-fail-fast` prints identifies the package of a failing test, and the block headers do not. A further step that selects other crates resolves other features. That nextest builds every test binary before it runs one was read in its documentation, not run.
+:::
+
+:::mara evidence EVD-CARGO-ARTIFACT-WRITERS
+:mid: 01M7DJ8QGMBPJSJHQ2BVBCHA1R
+:title: Which cargo calls replace the executables that build stores, and what Nx stores when they run beside it
+:status: accepted
+:supports: ADR-TEST-AFTER-BUILD
+:supports: DES-TARGETS
+:supports: DES-OUTPUTS
+:supports: DES-BATCH
+:supports: RISK-ARTIFACT-DIR-WRITERS
+
+Two sets of experiments on 14 November 2026, on Linux x86-64 with 32 cores, `nx` 24.0.6, Node.js 26.12.0, cargo 1.100.0 and, where named, 1.91.0, `RUSTUP_AUTO_INSTALL=0`, the Nx daemon off, a private `NX_CACHE_DIRECTORY` and the variables by which Nx detects an AI agent removed, in throwaway workspaces outside the repository. The research for nxr-1q1f0n (the research below) used the plugin compiled from `main` at 3445ae7 and stand-ins for the edge, a lock, a copy and batch executors. The work on nxr-621hvq (mine below) used the plugin compiled from `main` at 96ba5f0, without the edge, and from the change that adds the edge and its guard, on a machine whose load average was about 4 from other work. In each workspace, crate `a` has a binary that prints `FLAVOUR-EXTRA` where the feature `extra` of its path dependency `f` is on and `FLAVOUR-PLAIN` otherwise, and turns `extra` on through a dev-dependency on `f`.
+
+**What writes the executables of `build`.** Mine, on 1.100.0 and 1.91.0 alike, with a binary crate of each shape, `cargo build -p` and then `cargo test -p`, comparing the inode of `target/debug/<bin>`:
+
+| The crate has, besides its binary                                                     | `cargo test -p` replaces the executable |
+| ------------------------------------------------------------------------------------- | --------------------------------------- |
+| An integration test in `tests/`, also one that names no `CARGO_BIN_EXE_`              | Yes, with `FLAVOUR-EXTRA`               |
+| A `[[test]]` with `harness = false`                                                   | Yes                                     |
+| A `[[bench]]` with `test = true`                                                      | Yes                                     |
+| A `[[bin]]` with `test = false`, and an integration test                              | Yes                                     |
+| An example, also one with `test = true`                                               | No                                      |
+| Unit tests only, or a library with doctests                                           | No                                      |
+| A `[[test]]` with `test = false`                                                      | No                                      |
+| A `[[bench]]` without `test`                                                          | No                                      |
+| `autotests = false` and a file in `tests/`                                            | No                                      |
+| A binary with `required-features`, or an integration test with them, the features off | No; with `--features` on, yes           |
+
+The `--no-deps` report gives each target its `kind` and a `test` flag on both versions, and no `bench` flag: the replacing crates are exactly those with a target of kind `bin` and a target of kind `test` or `bench` whose `test` flag is on, apart from the `required-features` cases, which depend on the features of the run. A `cargo build -p` afterwards put back the executable that prints `FLAVOUR-PLAIN`, a new inode, although its unit was fresh; a second `cargo test -p` left a file that already was its own alone. `cargo test` left the binary's dependency file `<bin>.d` as `cargo build` wrote it. The research found the same for the shapes it tried, and that `cargo bench` replaces `target/release/<bin>` for a `[[bench]]`; that `[profile.test] opt-level = 1` alone makes the executables differ; that `cdylib` and `staticlib` files, `check`, `clippy` with and without `--all-targets` and `doc` leave the files of `build` alone, that only `doc` writes the `doc` folder, and that `cargo run` writes the bytes of `build` where its options match; that `CARGO_BIN_EXE_<bin>` is the uplifted path itself, and that `cargo test` releases the build lock before it runs the test executables, so that a `cargo build -p` started then replaced the file the tests were about to run; and that two crates whose binaries have one name write one file, cargo warning of an output filename collision where one call builds both.
+
+**When Nx stores.** The research: Nx copies a task's outputs in `postRunSteps` after its process has ended (`tasks-runner/task-orchestrator.js`, lines 1132 to 1221, `cache.put` at line 1850); the copy was born 21 to 27 ms after the cargo process of `build` exited. It awaits the copy before it completes the task and schedules the tasks that depend on it (lines 1850 and 1873 to 1874). Every wrong entry had the crate's `cargo test` replace the file within that gap.
+
+**Without the edge, then with it.** The research, with six such crates, a warm build directory and an empty Nx cache, `nx run-many -t build test` at the default parallelism: 16 of 36, 8 of 24 and 13 of 29 `build` entries held `FLAVOUR-EXTRA` in three series; 4 of 18 with `--parallel=6`; none with `--parallel=1`, after `cargo clean`, after an edit of one crate, or for one crate alone. With the edge simulated by a `project.json`, none of 30. With one crate whose integration test waits 1.5 s and then runs its executable, `nx run-many -t build test -p a` failed `a:test` in 5 of 5 and 4 of 4 runs where `cargo test -p a` passes, and passed 4 of 4 with the edge.
+
+Mine, with the real implementation: six such crates whose integration tests run the executable at once and expect `FLAVOUR-EXTRA`, the build directory warmed by plain `cargo build` and `cargo test --no-run`, and before each run an empty Nx cache and no `.nx` folder, as in a fresh CI checkout; `nx run-many -t build test` at the default parallelism, three series of six runs:
+
+| Plugin                        | `build` entries with `FLAVOUR-EXTRA` | Failed `test` tasks |
+| ----------------------------- | ------------------------------------ | ------------------- |
+| From `main`, without the edge | 12, 8 and 12 of 36: 32 of 108        | 1 of 108            |
+| With the edge and its guard   | 0 of 108                             | 0 of 108            |
+
+With the edge, the `cargo test` of each crate started 93 to 461 ms after the `cargo build` of the same crate had exited, in 116 of 116 calls of these runs and of the next ones; without it, 32 of 116 started before. With one crate whose test waits 1.5 s, `nx run-many -t build test -p a1` failed `a1:test` in 8 of 8 runs without the edge and in none of 8 with it. Over all projects of that workspace instead of `-p a1`, none of 4 failed either way: Nx happened to start `a1:build` first. With the `.nx` folder kept from earlier runs and integration tests that wait 1 s, 2 of 108 entries were wrong without the edge: Nx orders runnable tasks by the timings that it recorded (`tasks-runner/tasks-schedule.js`, `sortScheduledTasks`) and ran the slow tests before the builds. How often the wrong case happens therefore depends on Nx's history and the machine's load; with the edge it did not happen at all.
+
+**Batches.** The research, with stand-in batch executors that ran one cargo call per kind of task over the six crates and the edge in place: with one executor for both targets, Nx put each crate's `build` and `test` into one batch, because it adds a task's dependents of the same executor (`tasks-runner/tasks-schedule.js`, lines 180 to 188), stored at its end, and 12 of 12 `build` entries were wrong for `-t build test` and for `-t test`; with `build` on one executor and `test` on another, the `build` batch ran and was stored before the `test` batch started, because the coordinator awaits a batch, storing included (`task-orchestrator.js`, lines 329 to 339 and 739 to 780), and none of 12 was wrong.
+
+**`bench` and other orderings.** `bench` has `parallelism: false`. Nx's `canBeScheduled` starts such a task only when no other task runs and starts no task while it runs (`tasks-schedule.js`). Mine: six runs of `nx run-many -t build test bench check lint fmt-check` over seven crates, one of them with a bench that takes 3 s, three with `--parallel=3` and three with `--parallel=8`: none of the 58 other cargo calls of a run overlapped the one of `cargo bench`. Read, not run: `canBatchTaskBeScheduled` does not look at running tasks, but the coordinator runs a batch before it dispatches single tasks, and while a `parallelism: false` task runs it schedules again only when a task completes or a continuous task's readiness is settled, so a batch can start beside such a task only through a readiness verdict. Nx gives a dependency the configuration of the command where its target has it, and its target's default configuration otherwise (`tasks-runner/create-task-graph.js`, `resolveConfiguration`), so the `build` that the edge reaches is the `build` that the same command names. Continuous dependencies, read and tried by me: Nx keeps them apart from the ordinary ones, records every edge into a continuous task as continuous (`addContinuousEdge`), and schedules a task, continuous ones included, only when its ordinary dependencies have completed, which `complete()` records after their outputs are stored, and its continuous dependencies are running, or ready where a probe or `waitFor: "ready"` asks for it (`tasks-schedule.js`, `canBeScheduled` and `areContinuousDependenciesReady`). With the edge's guard taken out and the `cargo build` of `app:build` held, a `test` that depended on a continuous helper without dependencies started its `cargo test` while the build was held, and one whose helper depended on `build` started it only after the build; with the guard in, the second passed and the first failed, and so did a `test` whose `build` was itself continuous, in three of three runs. The research found that `--exclude-task-dependencies` keeps the edges between the tasks that a command names (lines 53 to 66), and that a `test` cache hit still waits for `build` to run or be restored.
+
+**What the edge costs.** The research, toy crates: `nx run a:test` alone took 520 to 550 ms without the edge and 670 to 680 ms with it on a warm build directory and an empty cache, 450 to 470 against 490 to 500 ms on a cache hit, and 631 against 887 ms on a cold build directory, where `f` and `a` were each compiled twice; for a crate whose dev-dependencies change nothing, `cargo test` reused the unit of `build` (`fresh: true` in its messages), and the edge cost one task and no compilation.
+
+**The alternatives.** The research: a lock held by every `build` and `test` cargo call for its whole duration left 10 of 30 entries wrong, since Nx copies after cargo exits, and let all 4 test runs pass. A copy that `build` links into a folder of the plugin right after cargo exits left 1 of 30 wrong, none while the lock is held, and a cache hit restored only that folder. A private artifact folder over the shared build directory, `CARGO_BUILD_BUILD_DIR` shared and `CARGO_TARGET_DIR` private, failed beside plain cargo on 1.91.0 and 1.100.0: after plain `cargo test -p a`, the private call, an edit of the binary from `V1` to `V2` and the private call again, cargo compiled only the binary, the test executable stayed fresh, `env!("CARGO_BIN_EXE_a")` still named the shared folder and the test ran the old `V1`; and the other way round after the private call first.
+
+So within one command, ordering `test` after the crate's own `build` keeps every stored `build` entry and every `test` result right on this workload, and a batch keeps them right only where `build` runs in a batch of its own. The experiments used small path crates on one machine; macOS, other Nx versions, nextest and real dependency trees were not tried.
 :::
 
 :::mara evidence EVD-CARGO-PACKAGE-SPECS

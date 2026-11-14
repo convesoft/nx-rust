@@ -177,12 +177,18 @@ export function inferProjects(
   const named = nameTargets(
     projects.map((project) => ({
       project,
-      targets: inferTargets(project, context, settings.options.locked, {
-        settings: inputSettings(project.settings, fileInputs(project)),
-        targetTables: (target) =>
-          targetTables(project.settings, settings.options.targetNames[target] ?? target),
-        lockfileTarget: settings.options.targetNames.lockfile ?? "lockfile",
-      }),
+      targets: inferTargets(
+        project,
+        context,
+        settings.options.locked,
+        {
+          settings: inputSettings(project.settings, fileInputs(project)),
+          targetTables: (target) =>
+            targetTables(project.settings, settings.options.targetNames[target] ?? target),
+          lockfileTarget: settings.options.targetNames.lockfile ?? "lockfile",
+        },
+        settings.options.targetNames,
+      ),
     })),
     settings.options.targetNames,
   );

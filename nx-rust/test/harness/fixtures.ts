@@ -32,6 +32,7 @@ export const fixtureNames = [
   "declared-files",
   "undeclared-files",
   "shared-names",
+  "binary-tests",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

@@ -1,0 +1,14 @@
+[package]
+name = "harnessless"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flavour = { path = "../flavour" }
+
+[dev-dependencies]
+flavour = { path = "../flavour", features = ["extra"] }
+
+[[test]]
+name = "check"
+harness = false

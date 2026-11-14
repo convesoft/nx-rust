@@ -1,0 +1,18 @@
+[package]
+name = "gated"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flavour = { path = "../flavour" }
+
+[dev-dependencies]
+flavour = { path = "../flavour", features = ["extra"] }
+
+[features]
+tool = []
+
+[[bin]]
+name = "gated"
+path = "src/main.rs"
+required-features = ["tool"]

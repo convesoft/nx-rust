@@ -139,6 +139,39 @@ export interface TargetCargoMetadata {
    * task's inputs after cargo's call (`DES-BUILD-INPUT-CHECK`).
    */
   records?: BuildRecordSource;
+  /**
+   * On a crate's `test`: `true` where `cargo test` replaces the executables
+   * that the crate's `build` declares ({@link testReplacesExecutables}), so
+   * that the target depends on that `build`. The executor fails a task
+   * whose run holds that `build` without an order between the two
+   * (`DES-TARGETS`).
+   */
+  waitsForBuild?: boolean;
+}
+
+/**
+ * Whether `cargo test` for the crate replaces the executables in the
+ * artifact directory that its `build` declares as outputs (`DES-OUTPUTS`),
+ * read from the crate's report: the crate has a target of kind `bin`, and a
+ * target of kind `test` or `bench` whose `test` flag is on. Cargo builds the
+ * crate's binaries for such a target, with what dev-dependencies turn on and
+ * with the `test` profile, and replaces the uplifted files even when their
+ * units are fresh (`EVD-CARGO-ARTIFACT-WRITERS`). The `required-features` of
+ * either target do not count: whether cargo builds them depends on the
+ * features of the run, and a crate counted without need only orders two
+ * tasks. A flag that the report lacks counts as on. Examples, unit tests,
+ * doctests and `cdylib` and `staticlib` files never make cargo replace them.
+ */
+// @mara implements DES-TARGETS
+// @mara implements DES-OUTPUTS
+export function testReplacesExecutables(pkg: CargoPackage): boolean {
+  return (
+    pkg.targets.some((target) => target.kind.includes("bin")) &&
+    pkg.targets.some(
+      (target) =>
+        (target.kind.includes("test") || target.kind.includes("bench")) && target.test !== false,
+    )
+  );
 }
 
 /**
@@ -188,13 +221,18 @@ export interface TargetSubject {
  * Only the targets in {@link cachedTargets} are cached; their inputs and
  * outputs, the exceptions for the artifact directory, and the dependency of
  * every cached target but `fmt-check` on the lockfile task of its workspace,
- * which is the one task dependency of a crate's target
+ * the one task dependency of a crate's target on another project
  * (`REQ-NO-RUST-TASK-DEPS`), come from `configureCaching` in `caching.ts`.
+ * Where `cargo test` replaces the executables of the crate's `build`
+ * ({@link testReplacesExecutables}), `test` also depends on that `build`,
+ * cached or not, so that the two never run at the same time (`DES-TARGETS`).
  *
  * @param context What the caching of the graph's projects shares.
  * @param caching What the project's settings change in its caching.
  * @param locked The `locked` option of the plugin entry, which each target
  *   carries in its metadata for the executor ({@link TargetCargoMetadata}).
+ * @param targetNames The names that the plugin options give the inferred
+ *   targets, under which `test` names the `build` it depends on.
  */
 // @mara implements DES-TARGETS
 // @mara implements DES-TARGET-COMMANDS
@@ -204,6 +242,7 @@ export function inferTargets(
   context: CacheContext,
   locked = false,
   caching?: CacheOptions,
+  targetNames: TargetNames = {},
 ): Map<InferredTargetName, TargetConfiguration> {
   const targets = new Map<InferredTargetName, TargetConfiguration>();
   const { pkg, workspace } = subject;
@@ -277,6 +316,14 @@ export function inferTargets(
     });
   }
   configureCaching(targets, subject, context, caching);
+  const test = targets.get("test");
+  if (pkg !== undefined && test !== undefined && testReplacesExecutables(pkg)) {
+    test.dependsOn = [...(test.dependsOn ?? []), { target: targetNames.build ?? "build" }];
+    const metadata = test.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
+    if (metadata !== undefined) {
+      metadata.waitsForBuild = true;
+    }
+  }
   return targets;
 }
 

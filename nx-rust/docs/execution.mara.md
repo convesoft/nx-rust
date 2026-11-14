@@ -57,6 +57,23 @@ result never depends on what else runs.
 Known limit: while a batch runs, Nx starts no other task. In a mixed repository
 JS tasks wait for the Rust batch ([[RISK-BATCH-BEHAVIOUR]]).
 
+## Two batches
+
+`build` and `doc`, whose files Nx stores, run through an executor of their own,
+`@convesoft/nx-rust:cargo-outputs`; the other batched targets run
+`@convesoft/nx-rust:cargo`. Nx batches each executor's tasks apart and stores a
+batch only when it ends, so the `build` batch is stored before a `test` batch
+that waits for it starts, and no `cargo test` can change what Nx stores for a
+`build` ([Targets](targets.mara.md#tests-that-build-a-crates-binaries)). A
+command that runs both kinds shows a batch for each. Each batch forms its own
+groups: a `build` that runs one crate per group still runs in the `build` batch.
+
+- A `targetDefaults` entry keyed by `@convesoft/nx-rust:cargo` does not reach
+  `build` and `doc`. Key it by `@convesoft/nx-rust:cargo-outputs` as well.
+- `nx add` adds an empty entry for each executor of the plugin's targets,
+  this one included, where `targetDefaults` has none
+  ([Setup](setup.mara.md#adding-the-plugin)).
+
 ## When something fails
 
 A task is reported successful only when cargo's output shows that its crate
@@ -185,7 +202,7 @@ workspace again ([Caching](caching.mara.md#lockfile-changes)).
 :status: accepted
 :satisfies: NEED-EFFICIENT-BUILDS
 
-Tasks of one [[TERM-GROUP]] that Nx runs in the same command are served together, without the user passing a flag: with one cargo command for each step of their target, so that the number of cargo commands depends on the target and not on how many tasks the group has. Each task still has its own result, its own terminal output and its own cache entry, and a task restored from the cache takes no part in the commands. A task fails only when its own crate fails in any step, or a crate it depends on fails; a failure elsewhere in the group does not fail it. Tasks whose commands would differ in more than the crates they select are never served together.
+Tasks of one [[TERM-GROUP]] that Nx runs in the same command are served together, without the user passing a flag: with one cargo command for each step of their target, so that the number of cargo commands depends on the target and not on how many tasks the group has. Each task still has its own result, its own terminal output and its own cache entry, and a task restored from the cache takes no part in the commands. A task fails only when its own crate fails in any step, or a crate it depends on fails; a failure elsewhere in the group does not fail it. Tasks whose commands would differ in more than the crates they select are never served together. Serving tasks together never lets Nx store, under one task's key, files that another task's cargo command wrote.
 :::
 
 :::mara requirement REQ-STABLE-FEATURES
@@ -208,6 +225,8 @@ A crate's result does not depend on which other crates run in the same Nx comman
 :mitigates: RISK-NX-INPUT-SEMANTICS
 
 The plugin's cargo executor declares a `batchImplementation` and `preferBatch: true` in `executors.json`. Nx then hands the executor all runnable tasks of that executor at once, without `--batch`, and still hashes, restores and caches each task individually ([[ADR-BATCH-EXECUTOR]]).
+
+**Two batch executors.** `build` and `doc`, the targets whose files Nx stores ([[DES-OUTPUTS]]), run `@convesoft/nx-rust:cargo-outputs`, a second entry of `executors.json` with the same implementation and schema; the other batched targets run `@convesoft/nx-rust:cargo` ([[DES-TARGETS]]). Nx forms a batch from the runnable tasks of one executor and adds to it the tasks of the same executor that depend on them, stores the results and outputs of a batch only when the whole batch has ended, and awaits a batch, storing included, before it starts anything else ([[EVD-NX-24-BATCHES]]). With one executor, a crate's `build` and the `test` that waits for it ([[DES-TARGETS]]) would form one batch, the `test` group would run after the `build` group, and Nx would store the executable of `cargo test` under the key of `build`, as it did for 12 of 12 entries in [[EVD-CARGO-ARTIFACT-WRITERS]]. With two, such a `test` becomes runnable only once the batch of its `build` has run and been stored, and none of 12 entries was wrong. The batch implementation forms its groups inside each batch, below: the `cargo-outputs` batch holds the groups of `build` and `doc`, groups of one crate among them (**Groups of one crate**), and the other batch the groups of every other kind. Inside each batch the groups run one after another, in an order that the dependencies between their tasks allow, and Nx stores the batch only when all its groups have run, so splitting a group into groups of one crate changes how many cargo commands run, not when Nx stores, and no group of a `test`, of one crate or of several, runs inside the batch of the `build` it waits for. The groups of `build` and `doc` write different files, since `cargo doc` leaves the executables alone and only `doc` writes the `doc` folder. A `build` that Nx restores from the cache before a `test` batch runs is replaced on disk by the `cargo test` of that batch, while its entry stays right, as after any command that runs both ([[RISK-ARTIFACT-DIR-WRITERS]]). The guard of [[DES-TARGETS]] reads the task graph of the command, which every batch receives whole. For users, the executor of `build` and `doc` is `@convesoft/nx-rust:cargo-outputs`: a `targetDefaults` entry keyed by `@convesoft/nx-rust:cargo` no longer reaches them, [[DES-TARGET-DEFAULT-GUARD]] judges each executor's entries for its own targets, and `init` adds an empty entry for each executor of the plugin's targets, this one included, where `targetDefaults` lacks one ([[DES-GENERATORS]]).
 
 The batch implementation splits its tasks into groups ([[TERM-GROUP]]): tasks share a group only when their cargo commands would differ in nothing but the crates they select. A group has one kind of task, Cargo workspace, feature set, profile, target triple and set of command options, and one environment, as the next paragraph describes. It runs the groups one after another, because each cargo call already uses every core and the groups of one workspace share a build lock.
 

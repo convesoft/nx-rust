@@ -409,6 +409,137 @@ describe("task dependencies", () => {
     HARNESS_TIMEOUT,
   );
 
+  describe("of a crate whose cargo test replaces the executables of its build", () => {
+    // One crate per shape of the rule in DES-TARGETS: these have a binary and
+    // a test or bench that cargo test builds, the others do not.
+    const waiting = ["app", "benched", "gated", "harnessless"];
+    const others = ["addon", "flavour", "library", "showcase", "timed", "unit", "untested"];
+
+    it(
+      "lead from test to the crate's own build for each shape of the rule, and from no other test",
+      async () => {
+        const workspace = FixtureWorkspace.create("binary-tests");
+        try {
+          const graph = await taskGraph(workspace, ["run-many", "-t", "build", "test"]);
+
+          expect(graph.dependencies).toEqual({
+            ...Object.fromEntries(
+              [...waiting, ...others].map((crate) => [`${crate}:build`, ["rust:lockfile"]]),
+            ),
+            ...Object.fromEntries(
+              waiting.map((crate) => [`${crate}:test`, [`${crate}:build`, "rust:lockfile"]]),
+            ),
+            ...Object.fromEntries(others.map((crate) => [`${crate}:test`, ["rust:lockfile"]])),
+            "rust:lockfile": [],
+          });
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it.each<[string, string[], Record<string, string[]>]>([
+      [
+        "nx run of test alone",
+        ["run", "app:test"],
+        { "app:test": ["app:build", "rust:lockfile"], "app:build": ["rust:lockfile"] },
+      ],
+      [
+        "nx affected -t test",
+        ["affected", "-t", "test", "--files=rust/crates/app/src/main.rs"],
+        { "app:test": ["app:build", "rust:lockfile"], "app:build": ["rust:lockfile"] },
+      ],
+      [
+        "a run that excludes task dependencies and names both targets",
+        ["run-many", "-t", "build", "test", "-p", "app", "--exclude-task-dependencies"],
+        { "app:test": ["app:build"], "app:build": [] },
+      ],
+      [
+        "a run that excludes task dependencies and names test alone",
+        ["run", "app:test", "--exclude-task-dependencies"],
+        { "app:test": [] },
+      ],
+    ])(
+      "hold in %s",
+      async (_case, args, expected) => {
+        const workspace = FixtureWorkspace.create("binary-tests");
+        try {
+          const graph = await taskGraph(workspace, args);
+
+          const lockfile = args.includes("--exclude-task-dependencies")
+            ? {}
+            : { "rust:lockfile": [] };
+          expect(graph.dependencies).toEqual({ ...expected, ...lockfile });
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    // Nx gives a dependency the configuration of the command where its
+    // target has it, and its default configuration otherwise.
+    it.each<[string, string, Record<string, string[]>]>([
+      [
+        "both targets have",
+        "build",
+        {
+          "app:test:release": ["app:build:release", "rust:lockfile"],
+          "app:build:release": ["rust:lockfile"],
+        },
+      ],
+      [
+        "only test has",
+        "check",
+        { "app:test:release": ["app:build", "rust:lockfile"], "app:build": ["rust:lockfile"] },
+      ],
+    ])(
+      "reach the build in a configuration that %s",
+      async (_case, other, expected) => {
+        const workspace = FixtureWorkspace.create("binary-tests", {
+          "rust/crates/app/Cargo.toml": (manifest) =>
+            [
+              manifest,
+              ...["test", other].map(
+                (target) =>
+                  `[package.metadata.nx.targets.${target}.configurations.release]\nprofile = "release"\n`,
+              ),
+            ].join("\n"),
+        });
+        try {
+          const graph = await taskGraph(workspace, ["run", "app:test", "-c", "release"]);
+
+          expect(graph.dependencies).toEqual({ ...expected, "rust:lockfile": [] });
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "keep the edge under the names that targetNames gives both targets",
+      async () => {
+        const workspace = FixtureWorkspace.create("binary-tests", {
+          "nx.json": pluginOptions({ targetNames: { build: "compile", test: "verify" } }),
+        });
+        try {
+          const graph = await taskGraph(workspace, ["run", "app:verify"]);
+
+          expect(graph.dependencies).toEqual({
+            "app:verify": ["app:compile", "rust:lockfile"],
+            "app:compile": ["rust:lockfile"],
+            "rust:lockfile": [],
+          });
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
   describe("with a JS project that depends on a crate", () => {
     // web depends on api, which depends on model, codegen and testkit.
     const web: FileChanges = {

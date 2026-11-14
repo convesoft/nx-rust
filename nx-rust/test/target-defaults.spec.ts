@@ -268,6 +268,57 @@ describe("a target default that fails graph creation", () => {
   );
 
   it(
+    "replaces the dependsOn of test that holds only the crate's own build, in exactly the crates whose test depends on it",
+    async () => {
+      // Without the workspace's lockfile task, test is uncached and depends
+      // on nothing but the crate's build, where it depends on that.
+      const workspace = FixtureWorkspace.create("binary-tests", {
+        "nx.json": (nxJson) => {
+          const config = JSON.parse(nxJson ?? "{}");
+          return JSON.stringify({
+            ...config,
+            plugins: config.plugins.map((entry: string | { plugin: string }) => ({
+              plugin: typeof entry === "string" ? entry : entry.plugin,
+              exclude: ["rust/Cargo.toml"],
+            })),
+            targetDefaults: { test: { dependsOn: [] } },
+          });
+        },
+      });
+      try {
+        const { status, output } = await workspace.nx(["show", "projects"]);
+
+        expect(status).not.toBe(0);
+        const shown = withoutColours(output);
+        // The crates with a binary and a test or bench that cargo test builds.
+        expect(
+          missingFromReport(
+            shown,
+            `It replaces the dependsOn that nx-rust declares for "test", so that the task no longer depends on a task that it needs: the lockfile task, whose output its cache key reads, or, for a test, the crate's own build, whose executables cargo test replaces.`,
+            ["app", "benched", "gated", "harnessless"].map(
+              (crate) => `${crate} (rust/crates/${crate}/Cargo.toml)`,
+            ),
+          ),
+        ).toEqual([]);
+        for (const crate of [
+          "addon",
+          "flavour",
+          "library",
+          "showcase",
+          "timed",
+          "unit",
+          "untested",
+        ]) {
+          expect(shown).not.toContain(`${crate} (rust/crates/${crate}/Cargo.toml)`);
+        }
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "turns on caching for the lockfile task",
     async () => {
       const output = await failed({ lockfile: { cache: true } });

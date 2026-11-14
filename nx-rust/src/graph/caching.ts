@@ -270,7 +270,9 @@ export interface CacheOptions {
  * lockfile task, such a target is left uncached instead; its metadata names the members
  * whose digests those are, for the executor's check after cargo's call
  * (`DES-LOCKFILE-HASHING`). It is the one dependency of a crate's target on
- * another task (`REQ-NO-RUST-TASK-DEPS`).
+ * a task of another project (`REQ-NO-RUST-TASK-DEPS`); the one on a task of
+ * the crate itself, of `test` on `build`, comes from `inferTargets` in
+ * `targets.ts`.
  */
 // @mara implements DES-INPUTS
 // @mara implements DES-OUTPUTS

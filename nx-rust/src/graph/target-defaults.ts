@@ -1171,7 +1171,7 @@ function describeChange(change: TargetDefaultChange, targets: string, added: str
     case "replaces-outputs":
       return `It replaces the outputs that nx-rust declares for ${targets}, so that a cache hit would not restore files that the task writes.`;
     case "replaces-dependsOn":
-      return `It replaces the dependsOn that nx-rust declares for ${targets}, so that the task no longer depends on a task whose output its cache key reads.`;
+      return `It replaces the dependsOn that nx-rust declares for ${targets}, so that the task no longer depends on a task that it needs: the lockfile task, whose output its cache key reads, or, for a test, the crate's own build, whose executables cargo test replaces.`;
     case "adds-dependencies":
       return `It adds ${added} to the dependsOn of ${targets}, so that the task waits for tasks of other projects. Cargo builds what a crate depends on itself, so these only queue more cargo processes behind its build lock.`;
   }
