@@ -9,6 +9,7 @@ import { CargoError } from "../cargo/run-cargo";
 import { UnsupportedCargoError } from "../compatibility/cargo-version";
 import { ComputationReports } from "./computation-reports";
 import { realPath } from "./real-path";
+import { filesNxSees } from "./visibility";
 
 /** A Cargo workspace, which may be a standalone crate: a workspace of one. */
 export interface CargoWorkspace {
@@ -71,9 +72,10 @@ export interface CargoWorkspace {
   /**
    * The warnings, also in {@link CargoDiscovery.warnings}, about the
    * workspace's redirections: an included file that is no valid TOML, a
-   * configuration file outside the repository with `[patch]` or `paths`, and
-   * a redirected crate that `cargo metadata` fails for. The projects of the
-   * workspace repeat them at the start of their tasks.
+   * file with redirections whose changes Nx does not see, because it lies
+   * outside the repository or is ignored, and a redirected crate that
+   * `cargo metadata` fails for. The projects of the workspace repeat them at
+   * the start of their tasks.
    */
   warnings: string[];
 }
@@ -103,9 +105,10 @@ export interface CargoDiscovery {
   warnings: string[];
   /**
    * The warning, also in `warnings`, for each path dependency whose report
-   * cargo refused because the crate is no member of the workspace that holds
-   * it, by the real path of the crate's folder: the projects of the crates
-   * that reach it repeat it at the start of their tasks.
+   * cargo refused for a reason that it checks only for the crate it reports,
+   * such as that the crate is no member of the workspace that holds it, by
+   * the real path of the crate's folder: the projects of the crates that
+   * reach it repeat it at the start of their tasks.
    */
   unreportedPathDependencies: Map<string, string>;
 }
@@ -208,7 +211,7 @@ export async function discoverWorkspaces(
       );
     }
   }
-  warnings.push(...outsideRedirectionWarnings(workspaces, workspaceRoot));
+  warnings.push(...(await unwatchedRedirectionWarnings(workspaces, workspaceRoot)));
   return {
     workspaceRoot,
     workspaces,
@@ -219,34 +222,64 @@ export async function discoverWorkspaces(
 }
 
 /**
- * One warning for each configuration file outside the repository that
- * redirects dependencies of a workspace: the plugin applies it, but Nx does
- * not watch it, so a change to it reaches the graph only once Nx computes
- * the graph again for another reason. Each warning also joins the
+ * One warning for each file that redirects dependencies of a workspace and
+ * whose changes Nx does not see: a configuration file outside the
+ * repository, and a configuration file or root manifest inside it that an
+ * ignore rule, such as one in `.gitignore` or `.nxignore`, leaves out of the
+ * files that Nx reads ({@link filesNxSees}). The plugin applies such a file,
+ * but the Nx daemon does not create the graph again when it changes, so a
+ * change reaches the graph only once Nx creates the graph again for another
+ * reason (`EVD-CARGO-REDIRECTIONS`). Each warning also joins the
  * {@link CargoWorkspace.warnings} of the workspaces it names.
  */
 // @mara implements DES-DIAGNOSTICS
-function outsideRedirectionWarnings(workspaces: CargoWorkspace[], workspaceRoot: string): string[] {
-  const byFile = new Map<string, CargoWorkspace[]>();
+async function unwatchedRedirectionWarnings(
+  workspaces: CargoWorkspace[],
+  workspaceRoot: string,
+): Promise<string[]> {
+  const byFile = new Map<string, { concerned: CargoWorkspace[]; tables: Set<string> }>();
   for (const workspace of workspaces) {
-    for (const { file } of workspace.redirections) {
-      const concerned = byFile.get(file) ?? [];
-      if (isOutside(workspaceRoot, file) && !concerned.includes(workspace)) {
-        byFile.set(file, [...concerned, workspace]);
+    for (const { file, table } of workspace.redirections) {
+      const entry = byFile.get(file) ?? { concerned: [], tables: new Set<string>() };
+      if (!entry.concerned.includes(workspace)) {
+        entry.concerned.push(workspace);
       }
+      entry.tables.add(table);
+      byFile.set(file, entry);
     }
   }
-  return [...byFile].map(([file, concerned]) => {
+  const inside = [...byFile.keys()]
+    .filter((file) => !isOutside(workspaceRoot, file))
+    .map((file) => repositoryPath(workspaceRoot, file));
+  const seen = await filesNxSees(workspaceRoot, inside);
+  const messages: string[] = [];
+  for (const [file, { concerned, tables }] of byFile) {
+    const outside = isOutside(workspaceRoot, file);
+    if (!outside && seen.has(repositoryPath(workspaceRoot, file))) {
+      continue;
+    }
+    const through = ["patch", "replace", "paths"]
+      .filter((table) => tables.has(table))
+      .map((table) => (table === "paths" ? table : `[${table}]`))
+      .join(" and ");
     const message = [
-      `nx-rust: ${file} redirects dependencies of ${describeWorkspaces(concerned.map((workspace) => workspace.root))} through [patch] or paths, so nx-rust gives the crates that may use the redirected crates edges to them.`,
-      "The file lies outside the repository, so Nx does not see when it changes: with the Nx daemon, the graph keeps these edges until a file in the repository changes or the daemon restarts (`nx reset`).",
-      "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository.",
+      `nx-rust: ${displayPath(workspaceRoot, file)} redirects dependencies of ${describeWorkspaces(concerned.map((workspace) => workspace.root))} through ${through}, so nx-rust gives the crates that may use the redirected crates edges to them.`,
+      ...(outside
+        ? [
+            "The file lies outside the repository, so Nx does not see when it changes: with the Nx daemon, the graph keeps these edges until a file in the repository changes or the daemon restarts (`nx reset`).",
+            "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository.",
+          ]
+        : [
+            "An ignore rule, such as one in .gitignore or .nxignore, leaves the file out of the files that Nx reads, so Nx does not see when it changes: with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (`nx reset`).",
+            "To let Nx follow the redirections, stop ignoring the file, or run `nx reset` after each change to it.",
+          ]),
     ].join("\n");
     for (const workspace of concerned) {
       addWarning(workspace, message);
     }
-    return message;
-  });
+    messages.push(message);
+  }
+  return messages;
 }
 
 // Adds a warning to those that the workspace's projects repeat, once.
@@ -350,10 +383,10 @@ function pathsCandidates(
  * workspace's folder that is not its member, which cargo builds as a patch
  * but does not report, graph creation goes on: a warning in `warnings` names
  * the manifest and cargo's message, and the crate has no report. So it does
- * for a path dependency that cargo does not report because it is no member
- * of the workspace it lies in ({@link isUnreportedNonMember}), which cargo
- * builds as a dependency all the same; any other failure of a path
- * dependency's report fails graph creation. Such a path dependency's warning
+ * for a path dependency whose report cargo refuses for a reason that it
+ * checks only for the crate it reports, which it builds as a dependency all
+ * the same ({@link isUnreportedPathDependency}); any other failure of a
+ * path dependency's report fails graph creation. Such a path dependency's warning
  * also goes into `unreported`, by the real path of the crate's folder, and
  * the warning of a redirected crate joins the {@link CargoWorkspace.warnings}
  * of each workspace whose table redirects to it.
@@ -426,7 +459,7 @@ async function readPathDependencies(
         cwd,
         workspaceRoot,
         reports,
-        via === "path" ? isUnreportedNonMember : () => true,
+        via === "path" ? (error) => isUnreportedPathDependency(error, manifest) : () => true,
       );
       if (typeof report === "string") {
         warnings.push(report);
@@ -567,14 +600,42 @@ async function requestWorkspace(
 }
 
 /**
- * Whether cargo refused the report of a crate because the crate lies in the
- * folder of a workspace, or names one in `package.workspace`, without being
- * its member. Cargo checks that only for the crate it reports, never for a
- * path dependency or patch that it builds for another workspace, so such a
- * crate builds as before. Cargo 1.91 and later state it with this message.
+ * Whether cargo refused the report of a crate for a reason that it checks
+ * only for the crate it reports, never for a path dependency or patch that
+ * it builds for another workspace, so that such a crate builds as before
+ * (`EVD-CARGO-UNREPORTED-CRATES`). Cargo 1.91 and later state each reason
+ * with one message:
+ *
+ * - "current package believes it's in a workspace when it's not": the crate
+ *   lies in the folder of a workspace, or names one in `package.workspace`,
+ *   without being its member;
+ * - "root of a workspace inferred but wasn't a root": the manifest that the
+ *   crate's `package.workspace`, or that of a crate above it, names has no
+ *   `[workspace]` table;
+ * - "failed to read" a manifest other than the crate's own: cargo cannot
+ *   read that manifest, as where `package.workspace` names a missing folder.
+ *
+ * The last two count only as cargo's error itself, the first line of its
+ * output that starts with `error:`. Cargo prints them also below another
+ * error, as the cause of a manifest that it rejects, such as one that takes
+ * a key from a workspace that it cannot read, and then it fails to build the
+ * crate as a dependency as well. "failed to load manifest for workspace
+ * member" stays an error: cargo prints it also where the member that fails
+ * to load is one that the crate depends on.
+ *
+ * @param manifest The absolute path of the crate's manifest, which cargo
+ *   names where it cannot read that manifest itself.
  */
-function isUnreportedNonMember(error: CargoError): boolean {
-  return error.stderr.includes("current package believes it's in a workspace when it's not");
+function isUnreportedPathDependency(error: CargoError, manifest: string): boolean {
+  if (error.stderr.includes("current package believes it's in a workspace when it's not")) {
+    return true;
+  }
+  const failure = /^error: (.*)$/m.exec(error.stderr)?.[1].trim() ?? "";
+  if (failure.startsWith("root of a workspace inferred but wasn't a root: ")) {
+    return true;
+  }
+  const unread = /^failed to read `(.+)`$/.exec(failure)?.[1];
+  return unread !== undefined && realPath(unread) !== realPath(manifest);
 }
 
 // Reads a crate without a project. A failure of cargo itself that `goesOn`

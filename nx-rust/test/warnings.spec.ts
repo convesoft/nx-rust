@@ -52,6 +52,35 @@ const unreportedPathDependency: FileChanges = {
   },
 };
 
+/** The manifest of the crate p, with `package.workspace` naming `workspace` if given. */
+const crateP = (workspace?: string) =>
+  `[package]\nname = "p"\nversion = "0.1.0"\nedition = "2024"\n${workspace === undefined ? "" : `workspace = "${workspace}"\n`}`;
+
+/**
+ * cross-workspace-path where server depends on extra/p/x, a crate in the
+ * folder of the crate p, and the plugin gives neither a project. Where p
+ * names a missing folder in package.workspace, cargo refuses x's report and
+ * builds x all the same, so server warns (EVD-CARGO-UNREPORTED-CRATES). p's
+ * manifest is no input of server's tasks.
+ */
+const belowCrateP: FileChanges = {
+  "backend/crates/server/Cargo.toml": (manifest) =>
+    `${manifest}x = { path = "../../../extra/p/x" }\n`,
+  "extra/p/Cargo.toml": crateP(),
+  "extra/p/src/lib.rs": "",
+  "extra/p/x/Cargo.toml": '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2024"\n',
+  "extra/p/x/src/lib.rs": "",
+  "nx.json": (current) => {
+    const nxJson = JSON.parse(current ?? "{}");
+    nxJson.plugins = (nxJson.plugins ?? []).map((entry: string | { plugin: string }) =>
+      typeof entry === "string"
+        ? { plugin: entry, exclude: ["extra/**"] }
+        : { ...entry, exclude: ["extra/**"] },
+    );
+    return JSON.stringify(nxJson);
+  },
+};
+
 /** The warnings in a project's metadata, which its tasks print. */
 function warningsOf(graph: FixtureGraph, project: string): string[] {
   return cargoMetadataOf(graph.projects[project])?.warnings ?? [];
@@ -71,28 +100,34 @@ function changedInputs(before: TaskHash, after: TaskHash): string[] {
   return [...keys].filter((key) => nodes(before)[key] !== nodes(after)[key]).sort();
 }
 
-/** Runs api:fmt-check and says whether it ran cargo and printed `warning`. */
-async function fmtCheck(workspace: FixtureWorkspace, env: Env, warning: string) {
+/** Runs `task`, api:fmt-check by default, and says whether it ran cargo and printed `warning`. */
+async function fmtCheck(
+  workspace: FixtureWorkspace,
+  env: Env,
+  warning: string,
+  task = "api:fmt-check",
+) {
   const calls = taskCalls(workspace).length;
-  const { status, output } = await runNx(workspace, ["run", "api:fmt-check"], env);
+  const { status, output } = await runNx(workspace, ["run", task], env);
   expect({ status, output }).toEqual({ status: 0, output });
   return { ran: taskCalls(workspace).length > calls, warned: output.includes(warning) };
 }
 
 /**
- * Runs api:fmt-check in the states of one cause and returns what the task
- * did in each ({@link followsTheCause}).
+ * Runs `task`, api:fmt-check by default, in the states of one cause and
+ * returns what the task did in each ({@link followsTheCause}).
  */
 async function stepsOfCause(
   workspace: FixtureWorkspace,
   env: Env,
   warning: string,
   cause: { add: () => void; remove: () => void },
+  task = "api:fmt-check",
 ): Promise<{ ran: boolean; warned: boolean }[]> {
   const steps: { ran: boolean; warned: boolean }[] = [];
   const step = async (change?: () => void) => {
     change?.();
-    steps.push(await fmtCheck(workspace, env, warning));
+    steps.push(await fmtCheck(workspace, env, warning, task));
   };
   await step(cause.remove);
   await step(cause.add);
@@ -283,6 +318,28 @@ describe("the keys of a project's tasks", () => {
     HARNESS_TIMEOUT,
   );
 
+  it(
+    "change with the warning about a path dependency whose report cargo refuses, through the project's configuration alone",
+    async () => {
+      const outcomes = await compareCacheKeys({
+        change: "a missing folder in package.workspace of the crate above a path dependency",
+        fixture: "cross-workspace-path",
+        base: { files: belowCrateP },
+        after: { files: { "extra/p/Cargo.toml": crateP("../missing") } },
+        keys: { "server:fmt-check": "must differ", "server:build": "must differ" },
+      });
+
+      for (const { task, before, after, holds } of outcomes) {
+        expect({ task, holds }).toEqual({ task, holds: true });
+        expect({ task, changed: changedInputs(before, after) }).toEqual({
+          task,
+          changed: ["server:ProjectConfiguration"],
+        });
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
   /**
    * subfolder-workspace whose Cargo directory is `rust/link/../target`,
    * where `rust/link` leads to `deep/child`: the warning names `deep/target`
@@ -416,6 +473,60 @@ describe("a task's output", () => {
           add: () => writeFileSync(gitignore, ""),
           remove: () => writeFileSync(gitignore, "target/\n"),
         });
+
+        expect(steps).toEqual(followsTheCause);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 3,
+  );
+
+  it(
+    "shows the warning about a [patch] in a .cargo/config.toml that .gitignore leaves out when the graph has it, whether the task runs or is restored, without the daemon",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", withoutModelPatch, {
+        ".gitignore": "target/\nrust/.cargo/\n",
+      });
+      const config = join(workspace.root, "rust", ".cargo", "config.toml");
+      try {
+        const steps = await stepsOfCause(
+          workspace,
+          {},
+          "nx-rust: rust/.cargo/config.toml redirects dependencies",
+          {
+            add: () => {
+              mkdirSync(dirname(config), { recursive: true });
+              writeFileSync(config, '[patch.crates-io]\nmodel = { path = "crates/model" }\n');
+            },
+            remove: () => rmSync(config, { force: true }),
+          },
+        );
+
+        expect(steps).toEqual(followsTheCause);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 3,
+  );
+
+  it(
+    "shows the warning about a path dependency whose report cargo refuses when the graph has it, whether the task runs or is restored, without the daemon",
+    async () => {
+      const workspace = FixtureWorkspace.create("cross-workspace-path", belowCrateP);
+      const manifest = join(workspace.root, "extra", "p", "Cargo.toml");
+      try {
+        const steps = await stepsOfCause(
+          workspace,
+          {},
+          "nx-rust: `cargo metadata` failed for extra/p/x/Cargo.toml",
+          {
+            add: () => writeFileSync(manifest, crateP("../missing")),
+            remove: () => writeFileSync(manifest, crateP()),
+          },
+          "server:fmt-check",
+        );
 
         expect(steps).toEqual(followsTheCause);
       } finally {

@@ -505,6 +505,56 @@ describe("edges to redirected crates", () => {
     HARNESS_TIMEOUT,
   );
 
+  it.each([
+    ["a .cargo/config.toml", ".gitignore", { ".gitignore": "target/\nrust/.cargo/\n" }],
+    ["a .cargo/config.toml", ".nxignore", { ".nxignore": "rust/.cargo/\n" }],
+    ["the root manifest", ".nxignore", { ".nxignore": "rust/Cargo.toml\n" }],
+  ])(
+    "come from %s that %s leaves out of the files that Nx reads, with a warning that names the file",
+    async (subject, _ignoreFile, ignore) => {
+      // The Nx daemon does not create the graph again when such a file
+      // changes (EVD-CARGO-REDIRECTIONS).
+      const config = subject !== "the root manifest";
+      const file = config ? "rust/.cargo/config.toml" : "rust/Cargo.toml";
+      const workspace = FixtureWorkspace.create(
+        "patched-workspaces",
+        config
+          ? {
+              "rust/Cargo.toml": rootManifest(...patchWithoutModel),
+              "rust/.cargo/config.toml": '[patch.crates-io]\nmodel = { path = "crates/model" }\n',
+            }
+          : {},
+      );
+      const warning = `nx-rust: ${file} redirects dependencies of the Cargo workspace in rust through [patch], so nx-rust gives the crates that may use the redirected crates edges to them.`;
+      try {
+        const seen = await workspace.nx(["show", "projects"]);
+        applyFileChanges(workspace.root, ignore);
+        const graph = await workspace.graph();
+        const shown = await workspace.nx(["show", "projects"]);
+
+        // Without its root manifest, the workspace has no project of its own.
+        const projects = config ? rustProjects : rustProjects.filter((name) => name !== "rust");
+        expect(edges(graph)).toEqual(
+          committed.filter(([source, target]) => config || ![source, target].includes("rust")),
+        );
+        expect(seen.status).toBe(0);
+        expect(seen.output).not.toContain(warning);
+        expect(shown.status).toBe(0);
+        expect(shown.output).toContain(warning);
+        expect(shown.output).toContain(
+          "An ignore rule, such as one in .gitignore or .nxignore, leaves the file out of the files that Nx reads, so Nx does not see when it changes: with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (`nx reset`).",
+        );
+        expect(shown.output).toContain(
+          "To let Nx follow the redirections, stop ignoring the file, or run `nx reset` after each change to it.",
+        );
+        expect(warnedProjects(graph, `nx-rust: ${file} redirects dependencies`)).toEqual(projects);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
   it(
     "warn about configuration outside the repository again at the start of a task, where the Nx daemon keeps graph creation's output in its log",
     async () => {

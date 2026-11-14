@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { CreateDependenciesContext, CreateNodesContext } from "@nx/devkit";
 import plugin = require("../src");
@@ -454,11 +454,46 @@ describe("failed discovery", () => {
         { "backend/rust-toolchain.toml": `[toolchain]\nchannel = "${pinnedToolchain}"\n` },
       ]);
     }
+    /** model's manifest with `package.workspace` naming `folder`. */
+    const pointing = (folder: string): FileChanges => ({
+      "shared/crates/model/Cargo.toml": (manifest) =>
+        manifest.replace('edition = "2024"\n', `edition = "2024"\nworkspace = "${folder}"\n`),
+    });
+    // Each reason that cargo checks only for the crate it reports, with what
+    // gives it on top of `unreported` and cargo's message
+    // (EVD-CARGO-UNREPORTED-CRATES). A package.workspace takes precedence
+    // over shared's folder.
+    const reasons: [string, FileChanges, string][] = [
+      [
+        "no member of the workspace whose folder holds it",
+        {},
+        "current package believes it's in a workspace when it's not",
+      ],
+      [
+        "naming a manifest without [workspace] in package.workspace",
+        {
+          ...pointing("../../../extra/plain"),
+          "extra/plain/Cargo.toml": crateManifest("plain"),
+          "extra/plain/src/lib.rs": "",
+        },
+        "error: root of a workspace inferred but wasn't a root: ",
+      ],
+      [
+        "naming a missing folder in package.workspace",
+        pointing("../../../extra/missing"),
+        "error: failed to read `",
+      ],
+    ];
+    const cases = reasons.flatMap(([reason, files, message]) =>
+      toolchains.map(
+        ([toolchain, pinned]) => [reason, toolchain, { ...files, ...pinned }, message] as const,
+      ),
+    );
 
-    it.each(toolchains)(
-      "goes on with a warning and does not follow the crates behind it, with %s",
-      async (_toolchain, toolchain) => {
-        const workspace = FixtureWorkspace.create("cross-workspace-path", unreported, toolchain);
+    it.each(cases)(
+      "goes on with a warning and does not follow the crates behind it, %s, with %s",
+      async (_reason, _toolchain, files, message) => {
+        const workspace = FixtureWorkspace.create("cross-workspace-path", unreported, files);
         try {
           const graph = await workspace.graph();
           const calls = workspace.cargoCalls();
@@ -475,7 +510,7 @@ describe("failed discovery", () => {
           expect(warning).toContain(
             "`cargo metadata` failed for shared/crates/model/Cargo.toml, a path dependency of backend/crates/server/Cargo.toml that has no project of its own",
           );
-          expect(warning).toContain("believes it's in a workspace when it's not");
+          expect(warning).toContain(message);
           expect(warning).toContain(
             "so it does not follow the crates that this crate depends on by path: the crates that use it take only its own folder into their cache keys, and a change in a crate behind it can leave their keys unchanged.",
           );
@@ -515,6 +550,103 @@ describe("failed discovery", () => {
         );
       },
       HARNESS_TIMEOUT,
+    );
+
+    it(
+      "fails graph creation when the workspace whose folder holds it lists a missing member",
+      async () => {
+        // Cargo builds model for server all the same, but gives the message
+        // that it also gives where the missing member is one that model
+        // depends on, which it does not build.
+        const loading = loadFixtureGraph("cross-workspace-path", {
+          files: {
+            ...unreported,
+            "shared/Cargo.toml": (manifest) =>
+              manifest.replace('members = ["crates/*"]', 'members = ["crates/*", "missing"]'),
+          },
+        });
+
+        await expect(loading).rejects.toThrow(
+          /`cargo metadata` failed for shared\/crates\/model\/Cargo\.toml, a path dependency of backend\/crates\/server\/Cargo\.toml that has no project of its own/,
+        );
+        await expect(loading).rejects.toThrow("failed to load manifest for workspace member");
+        await expect(loading).rejects.toThrow(
+          "Fix what cargo reports, so that `cargo metadata --no-deps --manifest-path shared/crates/model/Cargo.toml` succeeds in backend.",
+        );
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    /**
+     * server depends on extra/z, which depends on extra/x, and Nx sees
+     * neither: cargo reads x only for z's build and for x's own report.
+     */
+    const behindAnother = (x: string): FileChanges => ({
+      "backend/crates/server/Cargo.toml": (manifest) =>
+        `${manifest}z = { path = "../../../extra/z" }\n`,
+      "extra/z/Cargo.toml": `${crateManifest("z")}\n[dependencies]\nx = { path = "../x" }\n`,
+      "extra/z/src/lib.rs": "",
+      "extra/x/Cargo.toml": x,
+      "extra/x/src/lib.rs": "",
+      "extra/plain/Cargo.toml": crateManifest("plain"),
+      "extra/plain/src/lib.rs": "",
+      ".nxignore": "extra/\n",
+    });
+    const inheriting = (folder: string) =>
+      `[package]\nname = "x"\nversion.workspace = true\nedition = "2024"\nworkspace = "${folder}"\n`;
+
+    it.each([
+      [
+        "a manifest without [workspace]",
+        "../plain",
+        "root of a workspace inferred but wasn't a root",
+      ],
+      ["a missing folder", "../missing", "failed to read `"],
+    ])(
+      "fails graph creation when cargo gives that reason only as the cause of a manifest it rejects, as for a crate that takes a key from %s",
+      async (_target, folder, cause) => {
+        // Cargo cannot build z with x either.
+        const loading = loadFixtureGraph("cross-workspace-path", {
+          files: behindAnother(inheriting(folder)),
+        });
+
+        await expect(loading).rejects.toThrow(
+          /`cargo metadata` failed for extra\/x\/Cargo\.toml, a path dependency of extra\/z\/Cargo\.toml that has no project of its own/,
+        );
+        await expect(loading).rejects.toThrow(/error: failed to parse manifest at/);
+        await expect(loading).rejects.toThrow(cause);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    // Root reads every file, so the case needs another user.
+    (process.getuid?.() === 0 ? describe.skip : describe)(
+      "where cargo cannot read a manifest",
+      () => {
+        it(
+          "fails graph creation when cargo cannot read the crate's own manifest",
+          async () => {
+            const workspace = FixtureWorkspace.create(
+              "cross-workspace-path",
+              behindAnother(crateManifest("x")),
+            );
+            const manifest = join(workspace.root, "extra/x/Cargo.toml");
+            try {
+              chmodSync(manifest, 0o000);
+              const loading = workspace.graph();
+
+              await expect(loading).rejects.toThrow(
+                /`cargo metadata` failed for extra\/x\/Cargo\.toml, a path dependency of extra\/z\/Cargo\.toml that has no project of its own/,
+              );
+              await expect(loading).rejects.toThrow(`error: failed to read \`${manifest}\``);
+            } finally {
+              chmodSync(manifest, 0o644);
+              workspace.remove();
+            }
+          },
+          HARNESS_TIMEOUT,
+        );
+      },
     );
   });
 });
