@@ -95,6 +95,15 @@ export interface TargetCargoMetadata {
    */
   tripleProblem?: string;
   /**
+   * On `build` and `doc`, the triples that Cargo's configuration alone
+   * picked when the graph was created, without `CARGO_BUILD_TARGET`, as
+   * `pickText` in `target-triples.ts` writes them. The executor tells by it
+   * whether a cached task's triples differ because the configuration
+   * changed after graph creation or because of the task's environment
+   * (`DES-OUTPUTS`).
+   */
+  configuredPick?: string;
+  /**
    * On the lockfile task: the workspace's members, whose digests it writes
    * (`DES-LOCKFILE-HASHING`).
    */

@@ -1,7 +1,7 @@
 import type { NxJsonConfiguration, TargetConfiguration } from "@nx/devkit";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { PackageVersion } from "../cargo/lockfile";
-import { type PickedTriples, unnamedTripleProblem } from "../cargo/target-triples";
+import { type PickedTriples, pickText, unnamedTripleProblem } from "../cargo/target-triples";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import { workspacesWithoutRootProject } from "./entries";
@@ -15,6 +15,7 @@ import {
   pluginVersionInput,
   repositoryDefaultInputs,
   targetInputs,
+  tripleCommand,
 } from "./inputs";
 import { digestFolder, lockfileDependency } from "./lockfile-task";
 import { ArtifactDirectory, targetOutputs, uncachedByDesign, uncachedReason } from "./outputs";
@@ -279,6 +280,7 @@ export function configureCaching(
       if (tripleProblem !== undefined) {
         metadata.tripleProblem = tripleProblem;
       }
+      metadata.configuredPick = pickText(subject.workspace.configuredTriples ?? { kind: "none" });
     }
     const readsDigest = target.cache && cachedTargets.has(name) && name !== "fmt-check";
     if (readsDigest) {
@@ -293,6 +295,9 @@ export function configureCaching(
         ? lockfileInputs(subject, context)
         : targetInputs(name, subject, context, settings, readsDigest);
     target.inputs = inputs ?? [...(target.inputs ?? []), pluginVersionInput(context.plugin)];
+    if (target.cache && (name === "build" || name === "doc")) {
+      target.inputs = [...target.inputs, { runtime: tripleCommand(workspaceRoot) }];
+    }
     if (name === "lockfile") {
       target.outputs = [`{workspaceRoot}/${digestFolder(workspaceRoot)}`];
       if (metadata !== undefined) {

@@ -89,6 +89,36 @@ export function pickedTriples(workspaceRoot: string, env: NodeJS.ProcessEnv): Pi
   };
 }
 
+/**
+ * The triples that Cargo's configuration alone picks in `workspaceRoot`,
+ * without `CARGO_BUILD_TARGET` ({@link pickedTriples}): what tells a
+ * configuration that changed after graph creation from a variable that only
+ * the task's environment sets.
+ */
+export function configuredTriples(workspaceRoot: string, env: NodeJS.ProcessEnv): PickedTriples {
+  const rest = { ...env };
+  delete rest.CARGO_BUILD_TARGET;
+  return pickedTriples(workspaceRoot, rest);
+}
+
+/**
+ * A pick as text that names its folders and nothing else, so that two
+ * checkouts in different folders give the same text: `none`, `triples` with
+ * the sorted triples, or `unnamed` with the value and the reason. The
+ * runtime input of `build` and `doc` prints it (`DES-INPUTS`), and target
+ * metadata records the configuration's pick in it.
+ */
+export function pickText(picked: PickedTriples): string {
+  switch (picked.kind) {
+    case "none":
+      return "none";
+    case "triples":
+      return ["triples", ...[...new Set(picked.triples)].sort()].join(" ");
+    case "unnamed":
+      return `unnamed ${JSON.stringify(picked.value)}: ${picked.reason}`;
+  }
+}
+
 /** Whether two picks name the same folders. */
 export function samePick(a: PickedTriples, b: PickedTriples): boolean {
   if (a.kind !== b.kind) {

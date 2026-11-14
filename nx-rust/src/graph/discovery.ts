@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { CargoMetadata, CargoPackage } from "../cargo/metadata";
 import { readRedirections, Redirection } from "../cargo/redirections";
-import { PickedTriples, pickedTriples } from "../cargo/target-triples";
+import { configuredTriples, PickedTriples, pickedTriples } from "../cargo/target-triples";
 import { CargoError } from "../cargo/run-cargo";
 import { UnsupportedCargoError } from "../compatibility/cargo-version";
 import { ComputationReports } from "./computation-reports";
@@ -39,6 +39,11 @@ export interface CargoWorkspace {
    * of the graph's environment pick them ({@link pickedTriples}).
    */
   triples: PickedTriples;
+  /**
+   * The triples that Cargo's configuration alone picks there, without
+   * `CARGO_BUILD_TARGET` ({@link configuredTriples}).
+   */
+  configuredTriples: PickedTriples;
   /**
    * The configuration files that `include` adds for the workspace
    * ({@link readRedirections}).
@@ -157,6 +162,7 @@ export async function discoverWorkspaces(
         .sort((a, b) => compare(a.manifest_path, b.manifest_path)),
       redirections: found.redirections,
       triples: pickedTriples(report.workspace_root, process.env),
+      configuredTriples: configuredTriples(report.workspace_root, process.env),
       configIncludes: found.includedFiles,
       warnings: [...new Set(found.warnings)],
     });

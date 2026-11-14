@@ -4,10 +4,12 @@ import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { PackageVersion } from "../cargo/lockfile";
 import {
+  configuredTriples,
   describeFolders,
   describeTriples,
   type PickedTriples,
   pickedTriples,
+  pickText,
   samePick,
   tripleSource,
   unnamedTripleProblem,
@@ -493,8 +495,12 @@ function namesTriple(options: CargoTargetOptions): boolean {
 // environment and Cargo's configuration, as they are now, pick other
 // triples than those whose folders its outputs name, which graph creation
 // recorded: cargo would write elsewhere, and Nx would store no artifact
-// (`DES-OUTPUTS`).
+// (`DES-OUTPUTS`). Where the configuration alone picks other triples than
+// at graph creation, the graph is out of date, as when a file that Nx does
+// not watch changed under the Nx daemon; otherwise the task's environment
+// differs from the graph's, as through a dotenv file of the task.
 // @mara implements DES-OUTPUTS
+// @mara implements DES-DIAGNOSTICS
 function checkPickedTriples(
   task: string,
   metadata: TargetCargoMetadata,
@@ -507,14 +513,27 @@ function checkPickedTriples(
     metadata.triples === undefined
       ? { kind: "none" }
       : { kind: "triples", triples: metadata.triples, files: [], fromEnv: false };
+  if (samePick(now, named)) {
+    return;
+  }
   const end = "The task does not run, so that Nx stores no result for it.";
+  const configured = configuredTriples(cwd, env);
+  if (metadata.configuredPick !== undefined && pickText(configured) !== metadata.configuredPick) {
+    const source =
+      configured.kind === "none"
+        ? "no file sets build.target any more"
+        : `${tripleSource(configured, root)} now ${configured.kind === "unnamed" ? `picks ${JSON.stringify(configured.value)}` : `picks ${describeTriples(configured)}`}`;
+    throw new TaskError(
+      [
+        `${task}: Cargo's configuration has changed since Nx created the project graph: ${source}, while the outputs of the cached ${metadata.target} name ${describeFolders(named)}.`,
+        `Nx does not watch a configuration file outside the repository, such as the Cargo home's, so the graph that the Nx daemon keeps is out of date. Run \`nx reset\`, or stop the daemon with \`nx daemon --stop\`, and run the task again. ${end}`,
+      ].join("\n"),
+    );
+  }
   if (now.kind === "unnamed") {
     throw new TaskError(
       `${task}: ${unnamedTripleProblem(now, root)}, and this run of the cached ${metadata.target} names no triple in the targetTriple option. Give the triple as the targetTriple option instead. ${end}`,
     );
-  }
-  if (samePick(now, named)) {
-    return;
   }
   const source = now.kind === "none" ? "" : `, as ${tripleSource(now, root)} picks`;
   const option =
@@ -522,7 +541,7 @@ function checkPickedTriples(
   throw new TaskError(
     [
       `${task}: cargo builds this run of the cached ${metadata.target} for ${describeTriples(now)}${source}, but its outputs name ${describeFolders(named)}, as Cargo's configuration and the environment picked them when Nx created the graph.`,
-      `A CARGO_BUILD_TARGET that only a dotenv file of the task sets, such as a .env file in the crate's folder, is unknown when Nx creates the graph. Set it in the environment of the nx command or in the repository's root .env file, or give the triple as the targetTriple option${option}. Where a Cargo configuration file outside the repository has changed since, stop the Nx daemon with \`nx daemon --stop\`, so that the graph is created afresh. ${end}`,
+      `A CARGO_BUILD_TARGET that only a dotenv file of the task sets, such as a .env file in the crate's folder, is unknown when Nx creates the graph. Set it in the environment of the nx command or in the repository's root .env file, or give the triple as the targetTriple option${option}. ${end}`,
     ].join("\n"),
   );
 }
@@ -542,7 +561,8 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
-  const { target, locked, uncached, triples, tripleProblem, members, digests } = value as Partial<
+  const { target, locked, uncached, triples, tripleProblem, configuredPick, members, digests } =
+    value as Partial<
     Record<keyof TargetCargoMetadata, unknown>
   >;
   return (inferredTargetNames as readonly unknown[]).includes(target)
@@ -554,6 +574,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
           ? { triples: triples as string[] }
           : {}),
         ...(typeof tripleProblem === "string" ? { tripleProblem } : {}),
+        ...(typeof configuredPick === "string" ? { configuredPick } : {}),
         ...(isPackageList(members) ? { members } : {}),
         ...(isPackageList(digests) ? { digests } : {}),
       }
