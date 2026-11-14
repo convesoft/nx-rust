@@ -75,6 +75,32 @@ async function within(ms: number, condition: () => boolean): Promise<boolean> {
   return condition();
 }
 
+/**
+ * Each task's ordinary and continuous dependencies, by task id, in the task
+ * graph that `nx <args> --graph=<file>` writes without running a task.
+ */
+async function taskGraph(
+  workspace: FixtureWorkspace,
+  args: string[],
+): Promise<Record<"dependencies" | "continuousDependencies", Record<string, string[]>>> {
+  // Beside the copy, in its own folder, so that Nx does not see it.
+  const file = join(workspace.root, "..", "task-graph.json");
+  const { status, output } = await workspace.nx([...args, `--graph=${file}`]);
+  expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+  const { tasks } = JSON.parse(readFileSync(file, "utf8"));
+  const ids = (edges: Record<string, (string | { id: string })[]> = {}) =>
+    Object.fromEntries(
+      Object.entries(edges).map(([task, on]) => [
+        task,
+        on.map((edge) => (typeof edge === "string" ? edge : edge.id)),
+      ]),
+    );
+  return {
+    dependencies: ids(tasks.dependencies),
+    continuousDependencies: ids(tasks.continuousDependencies),
+  };
+}
+
 /** Sets the options of the plugin's entry in a fixture copy's `nx.json`. */
 function pluginOptions(options: object): (nxJson: string) => string {
   return (nxJson) => {
@@ -295,13 +321,21 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
         }),
       });
       try {
+        // The run holds app:build, and reaches it only as a continuous
+        // dependency, as the task graph shows without running a task.
+        const graph = await taskGraph(workspace, ["run", "app:test"]);
+        expect(graph.continuousDependencies["app:test"]).toContain("app:build");
+        expect(graph.dependencies["app:test"]).not.toContain("app:build");
+
         const run = await nx(workspace, ["run", "app:test"]);
 
         expect(run.status).toBe(1);
         expect(run.output).toContain(
           "app:test: cargo test replaces the executables that app:build declares as its outputs",
         );
-        expect(calls(workspace)).toEqual([`build -p ${spec(workspace, "app")}`]);
+        // Once app:test has failed, Nx ends the run and stops the continuous
+        // app:build, which may or may not have reached its cargo call by then.
+        expect(calls(workspace).filter((call) => call.startsWith("test"))).toEqual([]);
       } finally {
         workspace.remove();
       }
