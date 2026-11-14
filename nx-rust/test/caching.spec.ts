@@ -1099,9 +1099,9 @@ describe("caching", () => {
       "leave build and doc uncached, and say so, when a symbolic link inside the repository leads the artifact directory outside",
       async () => {
         const workspace = FixtureWorkspace.create("two-workspaces", {
+          // No ignore file covers tools/out, which leads outside the
+          // repository and so draws no warning about an unignored directory.
           "tools/.cargo/config.toml": '[build]\ntarget-dir = "out"\n',
-          // The repository ignores the link as it would a directory there.
-          ".gitignore": (text) => `${text ?? ""}/tools/out\n`,
         });
         try {
           symlinkSync("../../outside/target", join(workspace.root, "tools", "out"));
