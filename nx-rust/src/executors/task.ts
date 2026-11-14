@@ -293,8 +293,8 @@ export function taskInvocation(
         `${task}: the profile ${options.profile} puts cargo's artifacts in the folder of another profile, which @convesoft/nx-rust cannot name for the cache. Build with ${replacement}.`,
       );
     }
-    // The outputs name the option's value as the triple's folder, which
-    // cargo calls otherwise for these values (`DES-OUTPUTS`).
+    // The outputs take the option's value for the triple's folder, which
+    // cargo names otherwise for some values (`DES-OUTPUTS`).
     if (context.target?.cache === true && namesTriple(options)) {
       checkOptionTriple(task, metadata.target, options.targetTriple as string, context, env);
     }
@@ -730,9 +730,9 @@ function taskDirectories(task: string, cwd: string, env: NodeJS.ProcessEnv): Car
 // and Nx would store what lies at the declared paths, an older artifact or
 // nothing, under the task's key (`DES-OUTPUTS`). Where the variables that
 // move the directory, `CARGO_TARGET_DIR`, `CARGO_BUILD_TARGET_DIR` and
-// `CARGO_HOME`, have the values that graph creation saw, or other values
-// would move it as well, Cargo's configuration has changed since graph
-// creation, as a file that Nx does not watch can under the Nx daemon;
+// `CARGO_HOME`, have the values that graph creation saw, or those values
+// give another directory as well, Cargo's configuration has changed since
+// graph creation, as a file that Nx does not watch can under the Nx daemon;
 // otherwise the task's environment moves it, as a dotenv file of the task
 // does. Returns the task's directories where they agree.
 // @mara implements DES-OUTPUTS

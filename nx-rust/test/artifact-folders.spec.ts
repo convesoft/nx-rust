@@ -331,6 +331,37 @@ describe("a cached build or doc whose artifact directory moves after graph creat
   );
 
   it(
+    "fails a cached build before cargo builds where cargo cannot report its directories with the task's environment",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        ".gitignore": appended(".env\n"),
+      });
+      try {
+        const home = join(workspace.root, "..", "broken-home");
+        mkdirSync(home);
+        writeFileSync(join(home, "config.toml"), "[build\n");
+        writeFileSync(join(workspace.root, "rust/crates/cli/.env"), `CARGO_HOME=${home}\n`);
+        const run = await runNx(workspace, ["run", "cli:build"]);
+
+        expect({ status: run.status, output: run.output }).toEqual({
+          status: 1,
+          output: expect.stringContaining(
+            "cli:build: `cargo metadata` could not report Cargo's directories for this task, so @convesoft/nx-rust cannot tell where cargo puts its files: cargo exited with status 101.",
+          ),
+        });
+        expect(run.output).toContain("could not load Cargo configuration");
+        expect(run.output).toContain(
+          `${notRun} Correct what cargo reports, such as a manifest or a configuration file that it cannot read, and run the task again.`,
+        );
+        expect(taskCalls(workspace)).toEqual([]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "caches build and doc in the folder that the repository's root .env names, which graph creation sees",
     async () => {
       const workspace = FixtureWorkspace.create("crate-shapes", {

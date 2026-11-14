@@ -12,7 +12,6 @@ import {
 } from "node:path";
 import { configuredDepInfoBasedir } from "../cargo/dep-info-basedir";
 import type { BuildRecordSource } from "../graph/build-records";
-import { physicalPath } from "../graph/real-path";
 import { type BuildSelection, nameRecords, type NamedRecord, parseRecord } from "./build-records";
 import type { NxTaskFiles } from "./nx-task-files";
 
