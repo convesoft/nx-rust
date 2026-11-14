@@ -591,6 +591,95 @@ describe("a task's output of the warnings about targetDefaults", () => {
     HARNESS_TIMEOUT,
   );
 
+  /** A plugin, listed after nx-rust, that gives api the tag `extra`. */
+  const tagger = `exports.name = "tagger";
+exports.createNodes = [
+  "**/Cargo.toml",
+  async (files) =>
+    files
+      .filter((file) => file === "rust/crates/api/Cargo.toml")
+      .map((file) => [file, { projects: { "rust/crates/api": { tags: ["extra"] } } }]),
+];
+`;
+
+  /** An entry filtered to the tag `extra` that adds the fmt-check tasks of the dependencies. */
+  const taggedEntry = {
+    "fmt-check": [{ filter: { projects: ["tag:extra"] }, dependsOn: ["...", "^fmt-check"] }],
+  };
+
+  /**
+   * patched-workspaces with `tagger` and an `nx.json` that extends
+   * `base.json`, which holds `targetDefaults`, where Nx hashes no change.
+   */
+  const extendedWithTagger = (plugins: boolean): FileChanges => ({
+    ...withoutModelPatch,
+    ...(plugins ? { "tagger.cjs": tagger } : {}),
+    "base.json": "{}\n",
+    "nx.json": (current) => {
+      const config = JSON.parse(nxJsonWith(undefined, { extends: "./base.json" })(current));
+      return JSON.stringify({
+        ...config,
+        plugins: [...config.plugins, ...(plugins ? ["./tagger.cjs"] : [])],
+      });
+    },
+  });
+
+  /** The start of the warning that the plugin cannot tell which configuration changed api's fmt-check. */
+  const unattributedFmtCheck =
+    'The target "fmt-check" of the Rust project api (rust/crates/api/Cargo.toml) differs from what nx-rust infers in "dependsOn", and nx-rust cannot tell which configuration changed it';
+
+  it(
+    "makes a cached task run again with and without the warning when an entry from a file that nx.json extends, filtered to a tag that another plugin gives, appears and goes away",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", extendedWithTagger(true));
+      const base = join(workspace.root, "base.json");
+      try {
+        const steps = await stepsOfCause(workspace, {}, unattributedFmtCheck, {
+          add: () => writeFileSync(base, JSON.stringify({ targetDefaults: taggedEntry })),
+          remove: () => writeFileSync(base, "{}\n"),
+        });
+
+        expect(steps).toEqual(followsTheCause);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 3,
+  );
+
+  it.each<[string, boolean]>([
+    ["where another plugin gives the tag to api", true],
+    ["where no plugin gives the tag, at the cost of a run without a warning", false],
+  ])(
+    "count an entry from a file that nx.json extends, filtered to a tag, for every crate with a target of its key, %s",
+    async (_case, plugins) => {
+      const outcomes = await compareCacheKeys({
+        change: "an entry filtered to tag:extra in base.json",
+        fixture: "patched-workspaces",
+        base: { files: extendedWithTagger(plugins) },
+        after: { files: { "base.json": JSON.stringify({ targetDefaults: taggedEntry }) } },
+        // The input reaches every task of a crate with fmt-check, and no
+        // task of the workspace project, which has none.
+        keys: {
+          "api:fmt-check": "must differ",
+          "api:check": "must differ",
+          "plain:fmt-check": "must differ",
+          "rust:lockfile": "must not differ",
+        },
+      });
+
+      for (const { task, holds, before, after } of outcomes) {
+        const changed = changedInputs(before, after);
+        expect({ task, holds }).toEqual({ task, holds: true });
+        expect({
+          task,
+          other: changed.filter((input) => !input.endsWith(":ProjectConfiguration")),
+        }).toEqual({ task, other: [] });
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
   it(
     "repeats the warning for a target that changed where the plugin cannot tell why at the start of the target's tasks, also with the daemon on",
     async () => {

@@ -514,7 +514,9 @@ export async function failOnTargetDefaults(
  * `project.json` on disk in each project's folder. A `dependsOn` entry
  * counts where the rebuild with the `targetDefaults` layer has it and the
  * rebuild without it does not, unless its form shows that it reaches only
- * the project's own tasks ({@link reachesOnlyOwnTasks}). A target whose
+ * the project's own tasks ({@link reachesOnlyOwnTasks}). An element whose
+ * filter names a tag, which `createNodes` cannot decide, counts wherever its
+ * key can reach the target ({@link undecidedCauses}). A target whose
  * executor the folder's files replace is left out, as the check leaves it.
  * Nothing is loaded without an entry that sets `dependsOn`; where Nx lacks
  * the internal parts, nothing counts, and `createDependencies` fails graph
@@ -567,9 +569,6 @@ export async function targetDefaultCauses(
   const applied = appliedElements(layers.targetDefaults, targetDefaults);
   for (const project of projects) {
     const byTarget = applied.get(project.root);
-    if (byTarget === undefined) {
-      continue;
-    }
     const withDefaults = rebuild(nx, layers, project.root, true);
     const withoutDefaults = rebuild(nx, layers, project.root, false);
     const names = [project.name, ...(withDefaults.name === undefined ? [] : [withDefaults.name])];
@@ -577,29 +576,93 @@ export async function targetDefaultCauses(
     for (const [name, inferred] of Object.entries(project.targets).sort(([a], [b]) =>
       compare(a, b),
     )) {
-      const entry = byTarget.get(name);
       const target = withDefaults.targets?.[name];
-      if (entry === undefined || target === undefined || target.executor !== inferred.executor) {
+      if (target === undefined || target.executor !== inferred.executor) {
         continue;
       }
-      const without = withoutDefaults.targets?.[name] ?? {};
-      const added = (target.dependsOn ?? []).filter(
-        (dependency) =>
-          dependency !== spread &&
-          !includes(without.dependsOn, dependency) &&
-          !reachesOnlyOwnTasks(dependency, names),
-      );
-      if (added.length > 0) {
-        lines.push(
-          canonical({ target: name, key: entry.key, elements: entry.indices ?? null, added }),
+      const entry = byTarget?.get(name);
+      if (entry !== undefined) {
+        const without = withoutDefaults.targets?.[name] ?? {};
+        const added = (target.dependsOn ?? []).filter(
+          (dependency) =>
+            dependency !== spread &&
+            !includes(without.dependsOn, dependency) &&
+            !reachesOnlyOwnTasks(dependency, names),
         );
+        if (added.length > 0) {
+          lines.push(
+            canonical({ target: name, key: entry.key, elements: entry.indices ?? null, added }),
+          );
+        }
       }
+      lines.push(
+        ...undecidedCauses(targetDefaults, name, inferred.executor, entry, names, nx).map((cause) =>
+          canonical({ target: name, ...cause }),
+        ),
+      );
     }
     if (lines.length > 0) {
       causes.set(project.root, lines);
     }
   }
   return causes;
+}
+
+/**
+ * The elements of `targetDefaults` whose `filter` `createNodes` cannot
+ * decide for a target, because its `projects` names a tag, which another
+ * plugin may give the project, and that add dependencies which may reach
+ * other projects' tasks: each counts as a cause for every target that its
+ * key can reach, by the target's executor, its name or a glob, unless Nx's
+ * synthesis applied it already. That errs towards a run without a warning,
+ * never towards a cache hit that shows an earlier state of the warning
+ * (`DES-TARGET-DEFAULT-GUARD`).
+ *
+ * @param applied The elements that Nx's synthesis laid over the target.
+ */
+function undecidedCauses(
+  targetDefaults: Record<string, unknown>,
+  target: string,
+  executor: string | undefined,
+  applied: AppliedEntry | undefined,
+  names: readonly string[],
+  nx: TargetDefaultsInternals,
+): { key: string; elements: number[] | null; added: unknown[] }[] {
+  const causes: { key: string; elements: number[] | null; added: unknown[] }[] = [];
+  for (const [key, value] of Object.entries(targetDefaults)) {
+    if (!nx.keyMayApply(key, target, executor)) {
+      continue;
+    }
+    const elements: [unknown, number | undefined][] = Array.isArray(value)
+      ? value.map((element, index) => [element, index])
+      : [[value, undefined]];
+    for (const [element, index] of elements) {
+      if (!isRecord(element) || !namesTag(element.filter)) {
+        continue;
+      }
+      const appliedAlready =
+        applied?.key === key &&
+        (index === undefined ? applied.indices === undefined : applied.indices?.includes(index));
+      const dependsOn: unknown[] = Array.isArray(element.dependsOn) ? element.dependsOn : [];
+      const added = dependsOn.filter(
+        (dependency) => dependency !== spread && !reachesOnlyOwnTasks(dependency, names),
+      );
+      if (!appliedAlready && added.length > 0) {
+        causes.push({ key, elements: index === undefined ? null : [index], added });
+      }
+    }
+  }
+  return causes;
+}
+
+// Whether an entry's filter selects projects by a tag, also through `!`,
+// which `createNodes` cannot decide: another plugin may add the tag.
+function namesTag(filter: unknown): boolean {
+  if (!isRecord(filter) || filter.projects === undefined) {
+    return false;
+  }
+  const patterns: unknown[] = Array.isArray(filter.projects) ? filter.projects : [filter.projects];
+  return patterns.some((pattern) => typeof pattern === "string" && /^!?tag:/.test(pattern));
 }
 
 // Whether a value of targetDefaults, an entry or a list of entries, sets dependsOn.
