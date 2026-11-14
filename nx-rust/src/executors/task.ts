@@ -139,7 +139,8 @@ export type DigestStep = ({ kind: "write" } & DigestWrite) | ({ kind: "check" } 
  * lets the plugin run with, which the Nx daemon keeps out of the terminal.
  * The project's keys hold a digest of them, so that a cache hit replays the
  * warnings of the graph that the command uses (`DES-DIAGNOSTICS`, "Warnings
- * where they are seen").
+ * where they are seen"), apart from those about Cargo configuration that Nx
+ * does not hash, which no key holds.
  */
 // @mara implements DES-INVOCATION
 // @mara implements REQ-CARGO-UNCHANGED
@@ -149,7 +150,7 @@ export async function runTask(
   options: CargoTargetOptions,
   context: ExecutorContext,
 ): Promise<{ success: boolean }> {
-  for (const warning of projectWarnings(context, executor.shortName === "lockfile")) {
+  for (const warning of projectWarnings(context)) {
     console.warn(warning);
   }
   let invocation: TaskInvocation;
@@ -787,18 +788,16 @@ function checkArtifactDirectory(
 // The warnings that graph creation recorded for the task's project, whose
 // digest the task's key holds, then those that `createDependencies` found
 // for the task's target, each once (`DES-DIAGNOSTICS`, "Warnings where they
-// are seen"). The lockfile task, which is never cached, also prints those
-// about its workspace's Cargo configuration that Nx does not hash, which no
-// key holds.
+// are seen"), and those about its workspace's Cargo configuration that Nx
+// does not hash, which no key holds, so that a cache hit replays them as the
+// run that stored the result printed them.
 // @mara implements DES-DIAGNOSTICS
-function projectWarnings(context: ExecutorContext, lockfileTask: boolean): string[] {
+function projectWarnings(context: ExecutorContext): string[] {
   const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];
   const cargo = project === undefined ? undefined : cargoMetadataOf(project);
   const warnings: unknown[] = [
     ...(Array.isArray(cargo?.warnings) ? cargo.warnings : []),
-    ...(lockfileTask && Array.isArray(cargo?.configurationWarnings)
-      ? cargo.configurationWarnings
-      : []),
+    ...(Array.isArray(cargo?.configurationWarnings) ? cargo.configurationWarnings : []),
   ];
   const targetWarnings: unknown[] = Array.isArray(cargo?.targetWarnings)
     ? cargo.targetWarnings

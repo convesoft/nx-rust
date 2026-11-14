@@ -505,24 +505,18 @@ describe("edges to redirected crates", () => {
         // The Cargo home applies to both workspaces; shared has no member
         // with a registry dependency, so it gets no edge.
         for (const text of [
-          `nx-rust: ${config} sets [patch] for the Cargo workspaces in rust and shared, and Nx does not hash it: it lies outside the repository. A result that Nx cached before a change to the file can therefore be restored after it.`,
-          "It redirects dependencies through [patch], so nx-rust gives the crates that may use the redirected crates edges to them; with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (`nx reset`).",
-          "After changing the file, run `nx reset`. Running a command with --skip-nx-cache instead covers that command alone: Nx stores none of its results, so a later run can still restore a result from before the change.",
-          "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository.",
+          `nx-rust: ${config} sets [patch] for the Cargo workspaces in rust and shared, but lies outside the repository, so Nx does not hash it, and a result cached before a change to it can be restored afterwards.`,
+          "It redirects dependencies through [patch]; with the Nx daemon, the graph's edges follow a change to it only once Nx creates the graph again.",
+          'Run `nx reset` after each change to it; --skip-nx-cache covers only the command it is given to (see "Cargo configuration that Nx does not hash" in the nx-rust caching guide).',
         ]) {
           expect(after.output).toContain(text);
         }
-        // The lockfile task of each workspace repeats it, and a task of a
-        // crate does not (DES-DIAGNOSTICS).
-        for (const [task, warned] of [
-          ["rust:lockfile", true],
-          ["shared:lockfile", true],
-          ["api:fmt-check", false],
-        ] as const) {
+        // Every task of both workspaces repeats it (DES-DIAGNOSTICS).
+        for (const task of ["api:fmt-check", "types:fmt-check", "rust:lockfile"]) {
           expect(await printedByTask(workspace, task, `nx-rust: ${config} sets`, env)).toEqual({
             task,
             status: 0,
-            warned,
+            warned: true,
           });
         }
       } finally {
@@ -552,14 +546,13 @@ describe("edges to redirected crates", () => {
             }
           : {},
       );
-      // A configuration file names what it sets; the root manifest, whose
-      // workspace has no lockfile task then, only its redirections.
+      // A configuration file names what it sets; the root manifest only its
+      // redirections.
       const texts = config
         ? [
-            "nx-rust: rust/.cargo/config.toml sets [patch] for the Cargo workspace in rust, and Nx does not hash it: an ignore rule, such as one in .gitignore or .nxignore, leaves it out of the files that Nx reads. A result that Nx cached before a change to the file can therefore be restored after it.",
-            "It redirects dependencies through [patch], so nx-rust gives the crates that may use the redirected crates edges to them; with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (`nx reset`).",
-            "After changing the file, run `nx reset`. Running a command with --skip-nx-cache instead covers that command alone: Nx stores none of its results, so a later run can still restore a result from before the change.",
-            "To have Nx hash the file and follow its redirections, stop ignoring it.",
+            "nx-rust: rust/.cargo/config.toml sets [patch] for the Cargo workspace in rust, but an ignore rule leaves it out of the files that Nx reads, so Nx does not hash it, and a result cached before a change to it can be restored afterwards.",
+            "It redirects dependencies through [patch]; with the Nx daemon, the graph's edges follow a change to it only once Nx creates the graph again.",
+            'Stop ignoring it to have Nx hash it, or run `nx reset` after each change to it; --skip-nx-cache covers only the command it is given to (see "Cargo configuration that Nx does not hash" in the nx-rust caching guide).',
           ]
         : [
             "nx-rust: rust/Cargo.toml redirects dependencies of the Cargo workspace in rust through [patch], so nx-rust gives the crates that may use the redirected crates edges to them.",
@@ -583,12 +576,11 @@ describe("edges to redirected crates", () => {
         for (const text of texts) {
           expect(shown.output).toContain(text);
         }
-        // The lockfile task of rust repeats it, and that of shared does not.
-        const tasks: [string, boolean][] = [
-          ...(config ? ([["rust:lockfile", true]] as [string, boolean][]) : []),
-          ["shared:lockfile", false],
-        ];
-        for (const [task, warned] of tasks) {
+        // A task of rust's member repeats it, and one of shared's does not.
+        for (const [task, warned] of [
+          ["api:fmt-check", true],
+          ["types:fmt-check", false],
+        ] as const) {
           expect(await printedByTask(workspace, task, start)).toEqual({ task, status: 0, warned });
         }
       } finally {
@@ -599,7 +591,7 @@ describe("edges to redirected crates", () => {
   );
 
   it(
-    "warn about configuration outside the repository again in the lockfile tasks, where the Nx daemon keeps graph creation's output in its log",
+    "warn about configuration outside the repository again at the start of a task, where the Nx daemon keeps graph creation's output in its log",
     async () => {
       const workspace = FixtureWorkspace.create("patched-workspaces", {
         "rust/Cargo.toml": rootManifest(...patchWithoutModel),
@@ -614,7 +606,7 @@ describe("edges to redirected crates", () => {
       const env = { CARGO_HOME: cargoHome, NX_DAEMON: "true" };
       const warning = `nx-rust: ${config} sets [patch]`;
       try {
-        for (const task of ["shared:lockfile", "rust:lockfile"]) {
+        for (const task of ["types:fmt-check", "api:fmt-check"]) {
           expect(await printedByTask(workspace, task, warning, env)).toEqual({
             task,
             status: 0,

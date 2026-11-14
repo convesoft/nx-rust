@@ -14,6 +14,7 @@ import {
   runNx,
   taskCalls,
   TaskHash,
+  withoutColours,
 } from "./harness";
 
 // Checks the part of VER-SETUP about "Warnings where they are seen" in
@@ -516,9 +517,9 @@ describe("a task's output", () => {
 });
 
 // The warning about Cargo configuration that Nx does not hash
-// (DES-DIAGNOSTICS, RISK-HOST-ENVIRONMENT): no key holds it, so that a
-// machine's Cargo home gives no keys of its own, and the lockfile task of the
-// workspace project, which is never cached, prints it in every run.
+// (DES-DIAGNOSTICS, RISK-HOST-ENVIRONMENT): every task of the projects of
+// the workspace concerned prints it, and no key holds it, so that a
+// machine's Cargo home gives no keys of its own.
 describe("the warning about Cargo configuration that Nx does not hash", () => {
   /** The output of `task` alone, after its header and below what graph creation printed. */
   const ownOutput = (output: string, task: string) => {
@@ -526,26 +527,55 @@ describe("the warning about Cargo configuration that Nx does not hash", () => {
     const next = output.indexOf("> nx run ", header + 1);
     return header < 0 ? "" : output.slice(header, next < 0 ? undefined : next);
   };
-  const remedy =
-    "After changing the file, run `nx reset`. Running a command with --skip-nx-cache instead covers that command alone: Nx stores none of its results, so a later run can still restore a result from before the change.";
-  const ignored =
-    "an ignore rule, such as one in .gitignore or .nxignore, leaves it out of the files that Nx reads";
+  const guide = '(see "Cargo configuration that Nx does not hash" in the nx-rust caching guide)';
+  const remedy = `run \`nx reset\` after each change to it; --skip-nx-cache covers only the command it is given to ${guide}.`;
+  const ignoredWarning =
+    "nx-rust: rust/.cargo/config.toml sets [env] for the Cargo workspace in rust, but an ignore rule leaves it out of the files that Nx reads, so Nx does not hash it, and a result cached before a change to it can be restored afterwards.";
+  /** patched-workspaces where plain's library reads FLAVOUR, which an ignored file's [env] sets. */
+  const ignoredEnv: FileChanges = {
+    ".gitignore": "target/\nrust/.cargo/\n",
+    "rust/.cargo/config.toml": '[env]\nFLAVOUR = "a"\n',
+    "rust/crates/plain/src/lib.rs": 'pub const FLAVOUR: &str = env!("FLAVOUR");\n',
+  };
+
+  it.each([
+    ["CI=false", "false"],
+    ["CI=true", "true"],
+  ])(
+    "is in the output of nx run plain:build with the Nx daemon and the default output style, %s, which hides the lockfile task's",
+    async (_ci, ci) => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", ignoredEnv);
+      const env: Env = { NX_DAEMON: "true", CI: ci };
+      try {
+        // The second run restores plain:build and replays what it printed.
+        for (const run of ["runs", "restored"]) {
+          const { status, output } = await workspace.nx(["run", "plain:build"], env);
+          const plain = withoutColours(output);
+          expect({
+            run,
+            status,
+            shown: ownOutput(plain, "plain:build").includes(ignoredWarning),
+          }).toEqual({
+            run,
+            status: 0,
+            shown: true,
+          });
+        }
+      } finally {
+        await workspace.nx(["daemon", "--stop"], env);
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
 
   it(
-    "is printed by the lockfile task of every run where a .cargo/config.toml that .gitignore leaves out sets [env], while a build cached before a change to it is restored until nx reset",
+    "is printed by every task of the workspace where a .cargo/config.toml that .gitignore leaves out sets [env], while a build cached before a change to it is restored until nx reset",
     async () => {
       // plain's library reads FLAVOUR, which the ignored file's [env] sets.
-      const workspace = FixtureWorkspace.create("patched-workspaces", {
-        ".gitignore": "target/\nrust/.cargo/\n",
-        "rust/.cargo/config.toml": '[env]\nFLAVOUR = "a"\n',
-        "rust/crates/plain/src/lib.rs": 'pub const FLAVOUR: &str = env!("FLAVOUR");\n',
-      });
+      const workspace = FixtureWorkspace.create("patched-workspaces", ignoredEnv);
       const config = join(workspace.root, "rust", ".cargo", "config.toml");
-      const texts = [
-        `nx-rust: rust/.cargo/config.toml sets [env] for the Cargo workspace in rust, and Nx does not hash it: ${ignored}. A result that Nx cached before a change to the file can therefore be restored after it.`,
-        remedy,
-        "To have Nx hash the file, stop ignoring it.",
-      ];
+      const texts = [ignoredWarning, `Stop ignoring it to have Nx hash it, or ${remedy}`];
       // Runs plain:build and says whether it ran cargo and what printed the warning.
       const build = async (args: string[] = []) => {
         const calls = taskCalls(workspace).length;
@@ -554,7 +584,7 @@ describe("the warning about Cargo configuration that Nx does not hash", () => {
           status,
           ran: taskCalls(workspace).length > calls,
           lockfile: texts.every((text) => ownOutput(output, "rust:lockfile").includes(text)),
-          build: ownOutput(output, "plain:build").includes(texts[0]),
+          build: texts.every((text) => ownOutput(output, "plain:build").includes(text)),
         };
       };
       try {
@@ -566,14 +596,14 @@ describe("the warning about Cargo configuration that Nx does not hash", () => {
         const reset = await runNx(workspace, ["reset"]);
         const afterReset = await build();
 
-        expect(first).toEqual({ status: 0, ran: true, lockfile: true, build: false });
+        expect(first).toEqual({ status: 0, ran: true, lockfile: true, build: true });
         // The accepted risk that the warning names: the key ignores the file,
         // and Nx stores nothing of a run with --skip-nx-cache.
-        expect(changed).toEqual({ status: 0, ran: false, lockfile: true, build: false });
-        expect(skipped).toEqual({ status: 0, ran: true, lockfile: true, build: false });
-        expect(afterSkipped).toEqual({ status: 0, ran: false, lockfile: true, build: false });
+        expect(changed).toEqual({ status: 0, ran: false, lockfile: true, build: true });
+        expect(skipped).toEqual({ status: 0, ran: true, lockfile: true, build: true });
+        expect(afterSkipped).toEqual({ status: 0, ran: false, lockfile: true, build: true });
         expect(reset.status).toBe(0);
-        expect(afterReset).toEqual({ status: 0, ran: true, lockfile: true, build: false });
+        expect(afterReset).toEqual({ status: 0, ran: true, lockfile: true, build: true });
       } finally {
         workspace.remove();
       }
@@ -617,26 +647,23 @@ describe("the warning about Cargo configuration that Nx does not hash", () => {
         });
         const withIt = await workspace.hashTasks(tasks, { env });
         const shown = await runNx(workspace, ["show", "projects"], env);
-        const lockfile = await runNx(workspace, ["run", "rust:lockfile"], env);
+        const task = await runNx(workspace, ["run", "api:fmt-check"], env);
 
-        expect({ shown: shown.status, lockfile: lockfile.status }).toEqual({
-          shown: 0,
-          lockfile: 0,
-        });
-        // What graph creation and the lockfile task print: the warning and
+        expect({ shown: shown.status, task: task.status }).toEqual({ shown: 0, task: 0 });
+        // What graph creation and a task of a crate print: the warning and
         // its remedy for [build], nothing for the others, and never the
         // remedy for an ignored file.
-        const warning = `nx-rust: ${join(cargoHome, "config.toml")} sets ${tables} for the Cargo workspaces in rust and shared, and Nx does not hash it: it lies outside the repository. A result that Nx cached before a change to the file can therefore be restored after it.`;
+        const warning = `nx-rust: ${join(cargoHome, "config.toml")} sets ${tables} for the Cargo workspaces in rust and shared, but lies outside the repository, so Nx does not hash it, and a result cached before a change to it can be restored afterwards.`;
         const printed = (output: string) => ({
           warning: output.includes(warning),
-          remedy: output.includes(remedy),
+          remedy: output.includes(`R${remedy.slice(1)}`),
           any: output.includes("Nx does not hash it"),
-          ignored: output.includes("stop ignoring it"),
+          ignored: output.includes("Stop ignoring it"),
         });
         const warns = tables !== null;
         const expected = { warning: warns, remedy: warns, any: warns, ignored: false };
         expect(printed(shown.output)).toEqual(expected);
-        expect(printed(ownOutput(lockfile.output, "rust:lockfile"))).toEqual(expected);
+        expect(printed(ownOutput(task.output, "api:fmt-check"))).toEqual(expected);
         // No key holds the file or its warning.
         for (const task of tasks) {
           expect({ task, hash: withIt[task].value }).toEqual({ task, hash: without[task].value });

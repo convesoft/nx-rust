@@ -252,17 +252,6 @@ are those at the workspace root and above it.
 - A toolchain or configuration file **inside a member crate** applies only to a
   `cargo` you start in that crate's folder. It does not apply to Nx runs,
   although a change to it still changes the cache key.
-- **Cargo configuration that Nx does not hash** is outside the key: a
-  `.cargo/config.toml` above the repository or in your Cargo home, and one that
-  `.gitignore` or `.nxignore` hides. If such a file sets something that can
-  change a build, such as `[build]`, `[target]`, `[profile]` or `[env]`, the
-  plugin warns, because a result cached before you change the file can be
-  restored afterwards. After changing it, run `nx reset`; `--skip-nx-cache`
-  helps only the command you give it to, since Nx stores nothing from that
-  run. Inside the repository, stop ignoring the file to have Nx hash it. The
-  warning appears when Nx builds the graph without the daemon and in the
-  workspace's `lockfile` task, which Nx shows with `--verbose` or
-  `--output-style=static`.
 - The toolchain in the key is whatever `rustc -Vv` reports in the workspace
   root. `RUSTUP_TOOLCHAIN`, `rustup override` and a toolchain installed without
   rustup are all respected. Nx runs `rustc -Vv` with each task's environment, so
@@ -302,6 +291,33 @@ are those at the workspace root and above it.
   `--exclude-task-dependencies` and one without Rust tasks do not check it; for
   that, see
   [Continuous integration](ci.mara.md#cache-two-things-in-two-places).
+
+### Cargo configuration that Nx does not hash
+
+Nx hashes no file outside the repository and no file that `.gitignore` or
+`.nxignore` hides. A `.cargo/config.toml` in a folder above the repository or
+in your Cargo home, and an ignored one inside the repository, is therefore in
+no cache key. If such a file sets something that can change a build or a check
+(`[build]`, `[target]`, `[host]`, `[profile]`, `[env]`, `[patch]`,
+`[source]`, `paths`, `[unstable]` or `[doc]`), every task of the workspaces it
+applies to starts with a warning that names the file. A file with only other
+settings, such as `[alias]`, `[net]` or `[registries]`, draws none.
+
+- A result that Nx cached before you change such a file can be restored
+  afterwards, because the key stays the same. After changing the file, run
+  `nx reset`, which empties the local cache.
+- `--skip-nx-cache` makes one command run its tasks, but Nx stores none of
+  their results, so a later run without it can still restore a result from
+  before the change.
+- Stop ignoring a file inside the repository, and Nx hashes it like the other
+  configuration files.
+- Where the file redirects dependencies through `[patch]` or `paths`, the Nx
+  daemon also keeps the graph's edges until it creates the graph again;
+  `nx reset` restarts it. Redirections in the root `Cargo.toml` or in a
+  `.cargo/config.toml` that Nx reads are followed at once.
+- The warning itself stays out of the keys, so that your machine's Cargo
+  configuration does not give you keys of your own. A task restored from the
+  cache shows the warning as the run that stored the result printed it.
 
 ## What is stored
 

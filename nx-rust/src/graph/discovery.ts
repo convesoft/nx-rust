@@ -85,8 +85,8 @@ export interface CargoWorkspace {
   /**
    * The warnings, also in {@link CargoDiscovery.warnings}, about the files
    * that cargo reads for the workspace and that Nx does not hash
-   * ({@link unhashedConfigurationWarnings}). Only the lockfile task of the
-   * workspace project repeats them, and no key holds them.
+   * ({@link unhashedConfigurationWarnings}). The projects of the workspace
+   * repeat them at the start of their tasks, and no key holds them.
    */
   configurationWarnings: string[];
 }
@@ -269,7 +269,9 @@ const buildTables = [
  *
  * Each warning joins the {@link CargoWorkspace.configurationWarnings} of
  * the workspaces it names, and stays out of their projects' keys, so that a
- * Cargo configuration of one machine gives no keys of their own.
+ * Cargo configuration of one machine gives no keys of their own. It is
+ * printed at the start of every task, so it is kept to a few lines, and
+ * points to the caching guide for more.
  */
 // @mara implements DES-DIAGNOSTICS
 async function unhashedConfigurationWarnings(
@@ -316,6 +318,7 @@ async function unhashedConfigurationWarnings(
       ["patch", "replace", "paths"].filter((table) => redirects.has(table)),
     );
     const graph = `with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (\`nx reset\`)`;
+    const guide = 'see "Cargo configuration that Nx does not hash" in the nx-rust caching guide';
     // A root manifest sets nothing else that this warning names.
     const message = (
       tables.size === 0
@@ -329,22 +332,13 @@ async function unhashedConfigurationWarnings(
               : "To let Nx follow the redirections, stop ignoring the file, or run `nx reset` after each change to it.",
           ]
         : [
-            `nx-rust: ${shown} sets ${tableList(buildTables.filter((table) => tables.has(table)))} for ${subject}, and Nx does not hash it: ${outside ? "it lies outside the repository" : "an ignore rule, such as one in .gitignore or .nxignore, leaves it out of the files that Nx reads"}. A result that Nx cached before a change to the file can therefore be restored after it.`,
+            `nx-rust: ${shown} sets ${tableList(buildTables.filter((table) => tables.has(table)))} for ${subject}, but ${outside ? "lies outside the repository" : "an ignore rule leaves it out of the files that Nx reads"}, so Nx does not hash it, and a result cached before a change to it can be restored afterwards.`,
             ...(redirects.size === 0
               ? []
               : [
-                  `It redirects dependencies through ${through}, so nx-rust gives the crates that may use the redirected crates edges to them; ${graph}.`,
+                  `It redirects dependencies through ${through}; with the Nx daemon, the graph's edges follow a change to it only once Nx creates the graph again.`,
                 ]),
-            "After changing the file, run `nx reset`. Running a command with --skip-nx-cache instead covers that command alone: Nx stores none of its results, so a later run can still restore a result from before the change.",
-            ...(outside
-              ? redirects.size === 0
-                ? []
-                : [
-                    "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository.",
-                  ]
-              : [
-                  `To have Nx hash the file${redirects.size === 0 ? "" : " and follow its redirections"}, stop ignoring it.`,
-                ]),
+            `${outside ? "Run" : "Stop ignoring it to have Nx hash it, or run"} \`nx reset\` after each change to it; --skip-nx-cache covers only the command it is given to (${guide}).`,
           ]
     ).join("\n");
     for (const workspace of concerned) {
