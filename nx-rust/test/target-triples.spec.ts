@@ -191,6 +191,24 @@ describe("the triples that cargo picks without --target", () => {
     write("ws/.cargo/two.toml", target('["c"]'));
     expect(pick()).toMatchObject({ kind: "unnamed", reason: versions });
   });
+
+  it("counts a file of the walk that a deeper file also includes in its own place, where cargo 1.91 reads it", () => {
+    // Read in both places by later versions, and by cargo 1.91 in its own.
+    write(".cargo/config.toml", target('"a"'));
+    write("ws/.cargo/config.toml", 'include = ["../../.cargo/config.toml"]\n');
+    expect(pick()).toMatchObject({ kind: "triples", triples: ["a"] });
+
+    // Later versions take the later include, cargo 1.91 the folder above, not
+    // the Cargo home, which agrees with later versions (EVD-CARGO-COMPILER-SELECTION).
+    write("ws/.cargo/config.toml", 'include = ["../../.cargo/config.toml", "extra.toml"]\n');
+    write("ws/.cargo/extra.toml", target('"b"'));
+    write("home/config.toml", target('"b"'));
+    expect(pick()).toMatchObject({
+      kind: "unnamed",
+      reason:
+        "a file that include adds sets build.target, which cargo 1.91 ignores and later versions apply, so the triple depends on the Cargo version",
+    });
+  });
 });
 
 describe("the artifact input of build and doc", () => {
