@@ -1,7 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { parse } from "smol-toml";
-import { configFiles } from "./redirections";
+import { isAbsolute, relative } from "node:path";
+import { buildSettings } from "./build-settings";
 
 /**
  * The target triples that cargo builds for when a command started in a
@@ -67,11 +65,9 @@ type Configured =
  */
 // @mara implements DES-OUTPUTS
 export function pickedTriples(workspaceRoot: string, env: NodeJS.ProcessEnv): PickedTriples {
-  const settings: TripleSetting[] = [];
-  const read = new Set<string>();
-  for (const [legacy, current] of configFiles(workspaceRoot, env)) {
-    collectSettings(existsSync(legacy) ? legacy : current, false, read, settings);
-  }
+  const settings: TripleSetting[] = buildSettings(workspaceRoot, env, "target").map(
+    ({ file, value, included }) => ({ file, value: tripleValue(value), included }),
+  );
   const variable = env.CARGO_BUILD_TARGET;
   const applied = pick(merge(settings, true), variable);
   const ignored = pick(merge(settings, false), variable);
@@ -193,38 +189,6 @@ function listed(words: readonly string[]): string {
     : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
-// Adds the setting of `file` and of the files it includes, in descending
-// precedence: the file's own value, then its includes from the last to the
-// first, each with its own includes after it.
-function collectSettings(
-  file: string,
-  included: boolean,
-  read: Set<string>,
-  settings: TripleSetting[],
-): void {
-  if (read.has(file)) {
-    return;
-  }
-  read.add(file);
-  let table: Record<string, unknown>;
-  try {
-    table = parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-  } catch {
-    return;
-  }
-  const build = asTable(table.build);
-  if (build.target !== undefined) {
-    settings.push({ file, value: tripleValue(build.target), included });
-  }
-  const includes = Array.isArray(table.include) ? table.include : [table.include];
-  for (const include of [...includes].reverse()) {
-    const path = typeof include === "string" ? include : asTable(include).path;
-    if (typeof path === "string") {
-      collectSettings(resolve(dirname(file), path), true, read, settings);
-    }
-  }
-}
-
 function tripleValue(value: unknown): string | string[] | undefined {
   if (typeof value === "string") {
     return value;
@@ -328,10 +292,4 @@ function describeValue(picked: PickedTriples): string {
     case "unnamed":
       return picked.value;
   }
-}
-
-function asTable(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }

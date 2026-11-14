@@ -1,6 +1,7 @@
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -9,20 +10,27 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import {
+  CompilerLinks,
   FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  pinnedToolchain,
+  pinnedToolchainAvailable,
   pluginWorkers,
+  programVersion,
   taskCalls as harnessTaskCalls,
   testEnvironment,
+  toolchainProgram,
   withoutColours,
 } from "./harness";
 
 // Checks with real Nx runs of the plugin's executor what the caching of
 // nxr-fy4t4k stores and restores: the parts of VER-CARGO-UNCHANGED about
-// cache entries and restores, the missing-toolchain case of VER-CACHE-KEYS,
+// cache entries and restores, the missing-toolchain case of VER-CACHE-KEYS
+// and its runs with a compiler that a setting names,
 // and the cases of VER-TARGET-DEFAULT-GUARD where the artifact directory
 // lies outside the repository. caching.spec.ts checks the declared inputs
 // and outputs, cache-keys.spec.ts the keys, target-defaults.spec.ts the
@@ -801,3 +809,112 @@ function hostTriple(): string {
   }
   return host;
 }
+
+// The two wrong restores of EVD-CARGO-COMPILER-SELECTION, in real runs:
+// the compiler behind the path that RUSTC names replaced, and build.rustc
+// set in the Cargo home. They need a second installed toolchain, which CI
+// installs; elsewhere they skip where rustup lacks 1.91.0.
+(pinnedToolchainAvailable() ? describe : describe.skip)(
+  "a run with a compiler that a setting names",
+  () => {
+    /** `tools` in two-workspaces, changed to print the version of the compiler that built it. */
+    const reportingCompiler: FileChanges = {
+      "tools/build.rs": [
+        "use std::process::Command;",
+        "",
+        "fn main() {",
+        '    let rustc = std::env::var("RUSTC").unwrap();',
+        '    let version = Command::new(rustc).arg("-V").output().unwrap().stdout;',
+        "    let version = String::from_utf8(version).unwrap();",
+        '    println!("cargo:rustc-env=BUILT_BY={}", version.trim());',
+        "}",
+        "",
+      ].join("\n"),
+      "tools/src/main.rs": 'fn main() {\n    println!("{}", env!("BUILT_BY"));\n}\n',
+    };
+    const binary = (workspace: FixtureWorkspace) =>
+      join(workspace.root, "tools", "target", "debug", "tools");
+    const builtBy = (workspace: FixtureWorkspace) =>
+      spawnSync(binary(workspace), { encoding: "utf8" }).stdout.trim();
+
+    /**
+     * Runs `tools:build`, applies `change` and deletes the binary, runs the
+     * task again and expects it to have been built anew, not restored, by
+     * the compiler that `expected` names, and by `old` the first time.
+     */
+    async function expectBuiltAgain(
+      workspace: FixtureWorkspace,
+      env: Record<string, string>,
+      change: () => void,
+      old: string,
+      expected: () => string,
+    ): Promise<void> {
+      const first = await nx(workspace, ["run", "tools:build"], env);
+      expect({ status: first.status, output: first.output }).toEqual({
+        status: 0,
+        output: expect.any(String),
+      });
+      expect(builtBy(workspace)).toBe(old);
+      change();
+      rmSync(binary(workspace));
+
+      const second = await nx(workspace, ["run", "tools:build"], env);
+
+      expect({ status: second.status, output: second.output }).toEqual({
+        status: 0,
+        output: expect.not.stringMatching(new RegExp(`nx run tools:build\\s+${hit}`)),
+      });
+      expect(builtBy(workspace)).toBe(expected());
+      expect(taskCalls(workspace)).toEqual(["build -p tools", "build -p tools"]);
+    }
+
+    it(
+      "builds with the new compiler, and restores nothing, after the compiler at the path that RUSTC names is replaced",
+      async () => {
+        const links = CompilerLinks.create(pinnedToolchain);
+        const workspace = FixtureWorkspace.create("two-workspaces", reportingCompiler);
+        try {
+          const old = programVersion(links.rustc);
+          await expectBuiltAgain(
+            workspace,
+            { RUSTC: links.rustc },
+            () => links.point(),
+            old,
+            () => programVersion(links.rustc),
+          );
+          expect(programVersion(links.rustc)).not.toBe(old);
+        } finally {
+          workspace.remove();
+          links.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "builds with the compiler that build.rustc in the Cargo home names once it is set, and restores nothing, without the daemon",
+      async () => {
+        const cargoHome = mkdtempSync(join(tmpdir(), "nx-rust-cargo-home-"));
+        const workspace = FixtureWorkspace.create("two-workspaces", reportingCompiler);
+        try {
+          const pinned = toolchainProgram("rustc", pinnedToolchain);
+          await expectBuiltAgain(
+            workspace,
+            { CARGO_HOME: cargoHome },
+            () =>
+              writeFileSync(
+                join(cargoHome, "config.toml"),
+                `[build]\nrustc = ${JSON.stringify(pinned)}\n`,
+              ),
+            programVersion(toolchainProgram("rustc")),
+            () => programVersion(pinned),
+          );
+        } finally {
+          workspace.remove();
+          rmSync(cargoHome, { recursive: true, force: true });
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+  },
+);
