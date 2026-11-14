@@ -1,7 +1,12 @@
 import type { NxJsonConfiguration, PluginConfiguration } from "@nx/devkit";
 import { existsSync, realpathSync } from "node:fs";
 import { join, relative } from "node:path";
-import type { CargoDiscovery } from "./discovery";
+import { ComputationReports } from "./computation-reports";
+import {
+  type CargoDiscovery,
+  discoverReportedWorkspaces,
+  type ReportedWorkspace,
+} from "./discovery";
 import { nxGraphInternals } from "./nx-internals";
 import { GraphSettings, WorkspaceWideSetting, workspaceWideSettings } from "./settings";
 
@@ -131,6 +136,177 @@ export async function workspacesWithoutRootProject(
     unhanded
       .filter((workspace) => !received.has(workspace.rootManifest))
       .map((workspace) => workspace.root),
+  );
+}
+
+/**
+ * The workspaces that the other entries of the plugin in `nx.json` receive
+ * and this entry does not, each with its root folder and report, for the
+ * comparison of artifact directories (`DES-OUTPUTS`, "Files of one name").
+ * An entry does not know its own place among the entries, so it reads the
+ * manifests that every entry receives, applying each entry's `include` and
+ * `exclude` to the `Cargo.toml` files of Nx's workspace context as Nx does
+ * ({@link checkEntries}), and leaves out those that its own workspaces
+ * claim. Every entry thereby compares the same workspaces, whatever the
+ * order in which Nx runs them. With one entry there are no others, and
+ * nothing is read.
+ *
+ * The reports come from those of the graph computation, so that entries in
+ * one process request each once. A workspace whose report fails is left
+ * out: the entry that receives it fails graph creation with that error.
+ */
+// @mara implements DES-OUTPUTS
+export async function otherEntriesWorkspaces(
+  discovery: CargoDiscovery,
+  nxJson: NxJsonConfiguration | undefined,
+  reports: ComputationReports | undefined,
+): Promise<ReportedWorkspace[]> {
+  const { workspaceRoot } = discovery;
+  const entries = (nxJson?.plugins ?? []).filter((entry) => isOwnEntry(entry, workspaceRoot));
+  if (entries.length < 2) {
+    return [];
+  }
+  const nx = nxGraphInternals(workspaceRoot);
+  const manifests = await nx.globWithWorkspaceContext(workspaceRoot, ["**/Cargo.toml"]);
+  const received = new Set(
+    entries.flatMap((entry) =>
+      typeof entry === "string"
+        ? manifests
+        : nx.findMatchingConfigFiles(manifests, entry.include, entry.exclude),
+    ),
+  );
+  const own = new Set(
+    discovery.workspaces.flatMap((workspace) => [
+      workspace.rootManifest,
+      ...workspace.report.packages.map((pkg) => relative(workspaceRoot, pkg.manifest_path)),
+    ]),
+  );
+  const ownRoots = new Set(discovery.workspaces.map((workspace) => workspace.root));
+  const shared = reports ?? new ComputationReports();
+  const others: ReportedWorkspace[] = [];
+  const claimed = new Set<string>();
+  const depth = (path: string) => path.split("/").length;
+  const remaining = [...received]
+    .filter((manifest) => !own.has(manifest))
+    .sort((a, b) => depth(a) - depth(b) || (a < b ? -1 : a > b ? 1 : 0));
+  for (const manifest of remaining) {
+    if (claimed.has(manifest)) {
+      continue;
+    }
+    try {
+      for (const found of await discoverReportedWorkspaces([manifest], workspaceRoot, shared)) {
+        claimed.add(relative(workspaceRoot, join(found.report.workspace_root, "Cargo.toml")));
+        for (const pkg of found.report.packages) {
+          claimed.add(relative(workspaceRoot, pkg.manifest_path));
+        }
+        if (!ownRoots.has(found.root) && !others.some((other) => other.root === found.root)) {
+          others.push(found);
+        }
+      }
+    } catch {
+      // The entry that receives the manifest reports the failure.
+    }
+  }
+  return others;
+}
+
+/**
+ * Which entry of the plugin in `nx.json` is the first, by its place, to
+ * receive each manifest, and which entry this one is: for warnings that
+ * several entries find about one project, so that one entry prints each and
+ * one attaches them to the project (`DES-DIAGNOSTICS`, "Warnings where they
+ * are seen"). Nx merges the projects that several entries create for one
+ * folder and joins the lists in their metadata, so a list that every such
+ * entry attached would hold each warning once per entry.
+ */
+export interface EntryView {
+  /** This entry's place among the entries of `nx.json`; `undefined` where it cannot tell. */
+  readonly self: number | undefined;
+  /**
+   * The place of the first entry of the plugin that receives `manifest`,
+   * relative to the repository root; `undefined` where none does or this
+   * entry cannot tell.
+   */
+  firstReceiver(manifest: string): number | undefined;
+}
+
+/** The view of an entry that is the plugin's only one, or that cannot tell its place. */
+const soleEntry: EntryView = { self: undefined, firstReceiver: () => undefined };
+
+/**
+ * The {@link EntryView} of the entry that receives `handed` with `options`.
+ * An entry does not know its own place, so it takes the first entry of the
+ * plugin whose options are the same and that receives the same manifests,
+ * applying each entry's `include` and `exclude` to the `Cargo.toml` files of
+ * Nx's workspace context as Nx does ({@link checkEntries}). Two entries that
+ * agree in both create the same projects and each take the first place; the
+ * view then cannot tell them apart.
+ *
+ * @param handed The manifests that Nx hands this entry, relative to the repository root.
+ * @param options The options that Nx hands this entry.
+ */
+// @mara implements DES-DIAGNOSTICS
+export async function entryView(
+  workspaceRoot: string,
+  nxJson: NxJsonConfiguration | undefined,
+  handed: readonly string[],
+  options: unknown,
+): Promise<EntryView> {
+  const entries = (nxJson?.plugins ?? [])
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => isOwnEntry(entry, workspaceRoot));
+  if (entries.length < 2) {
+    return soleEntry;
+  }
+  const nx = nxGraphInternals(workspaceRoot);
+  const manifests = await nx.globWithWorkspaceContext(workspaceRoot, ["**/Cargo.toml"]);
+  const received = entries.map(({ entry, index }) => ({
+    index,
+    options: typeof entry === "string" ? undefined : entry.options,
+    manifests: new Set(
+      typeof entry === "string"
+        ? manifests
+        : nx.findMatchingConfigFiles(manifests, entry.include, entry.exclude),
+    ),
+  }));
+  const own = new Set(handed);
+  const self = received.find(
+    (entry) =>
+      stableJson(entry.options ?? {}) === stableJson(options ?? {}) &&
+      entry.manifests.size === own.size &&
+      [...own].every((manifest) => entry.manifests.has(manifest)),
+  );
+  if (self === undefined) {
+    return soleEntry;
+  }
+  return {
+    self: self.index,
+    firstReceiver: (manifest) => received.find((entry) => entry.manifests.has(manifest))?.index,
+  };
+}
+
+/**
+ * Whether this entry prints, or attaches to its projects, a warning that
+ * concerns the projects of `manifests`: where it is the first entry of the
+ * plugin, by its place in `nx.json`, that receives any of them, or where it
+ * cannot tell, as the plugin's only entry ({@link EntryView}).
+ */
+export function warnsHere(view: EntryView, manifests: readonly string[]): boolean {
+  if (view.self === undefined) {
+    return true;
+  }
+  const places = manifests
+    .map((manifest) => view.firstReceiver(manifest))
+    .filter((place) => place !== undefined);
+  return places.length === 0 || Math.min(...places) === view.self;
+}
+
+// JSON with the keys of every object sorted, so that options compare by value.
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item) =>
+    typeof item === "object" && item !== null && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : item,
   );
 }
 

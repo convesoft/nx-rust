@@ -8,7 +8,7 @@ import type { InferredTargetName } from "./targets";
  * every symbolic link followed (`DES-OUTPUTS`).
  */
 export type ArtifactDirectory =
-  /** Inside the repository, at `path` relative to its real path; `shared` when it is another workspace's too. */
+  /** Inside the repository, at `path` relative to its real path; `shared` when it is another workspace's too, or lies inside another's or holds it. */
   | { inside: true; path: string; shared: boolean }
   /** Outside the repository, where Nx cannot store files. */
   | { inside: false };
@@ -82,7 +82,8 @@ export interface CachePlace {
  * `doc` where the artifact directory lies outside the repository, or where
  * Cargo's configuration or the graph's environment picks a triple whose
  * folder the plugin cannot name and the target's options name none, and
- * `doc` where another workspace shares the artifact directory. The plugin
+ * `doc` where another workspace shares the artifact directory, as the same
+ * folder or one inside the other. The plugin
  * cannot name or store the artifacts of such a task.
  *
  * @param namesTriple Whether the target's options or configurations name a triple.
@@ -100,7 +101,7 @@ export function uncachedReason(
     return "its workspace's artifact directory lies outside the repository, where Nx cannot store files";
   }
   if (target === "doc" && place.artifacts.shared) {
-    return "another workspace shares its artifact directory, and restoring one workspace's doc folder from the cache would delete the pages of the others";
+    return "another workspace's artifact directory is the same folder or lies inside it or around it, and restoring one workspace's doc folder from the cache would delete or replace files of the others";
   }
   if (place.tripleProblem !== undefined && !namesTriple) {
     return `${place.tripleProblem}; give the triple as the targetTriple option instead`;

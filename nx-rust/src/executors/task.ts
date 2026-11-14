@@ -32,6 +32,7 @@ import {
   runIdVariable,
 } from "../graph/lockfile-task";
 import { uncachedByDesign } from "../graph/outputs";
+import { sharedArtifact, sharedArtifactMessage } from "./shared-artifacts";
 import { physicalPath, repositoryFolder } from "../graph/real-path";
 import {
   cachedTargets,
@@ -301,6 +302,28 @@ export function taskInvocation(
         `${task}: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves \`${metadata.target}\` uncached in this project, because ${uncached}. The task does not run, so that Nx stores no result for it.`,
         `The setting comes from the workspace's configuration: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry. If it is a \`targetDefaults\` entry in nx.json, add a \`filter\` to it or add an empty entry keyed by "${context.target.executor ?? executor.name}".`,
       ].join("\n"),
+    );
+  }
+  // A file of this task that another project's target writes too, where
+  // graph creation did not see that project (`DES-OUTPUTS`, "Files of one
+  // name"): only a task that Nx caches can store it.
+  const shared =
+    context.target?.cache === true &&
+    (metadata.target === "build" ||
+      metadata.target === "doc" ||
+      (metadata.target === "test" && metadata.waitsForBuild === true))
+      ? sharedArtifact(context.projectsConfigurations?.projects ?? {}, {
+          task,
+          project: projectName,
+          target: metadata.target,
+        })
+      : undefined;
+  if (shared !== undefined) {
+    throw new TaskError(
+      sharedArtifactMessage(
+        { task, project: projectName, target: metadata.target as "build" | "doc" | "test" },
+        shared,
+      ),
     );
   }
   if (metadata.target === "build" || metadata.target === "doc") {

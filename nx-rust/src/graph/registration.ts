@@ -3,7 +3,7 @@ import { checkNxForGraph } from "../compatibility/nx-version";
 import { cacheContext } from "./caching";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
-import { checkEntries } from "./entries";
+import { checkEntries, entryView, warnsHere } from "./entries";
 import type { TargetWarning } from "./collisions";
 import { CargoGraph, inferProjects, projectNodes, withWarningsInputs } from "./projects";
 import { readPluginOptions, readSettings } from "./settings";
@@ -62,7 +62,7 @@ export class Registration {
         for (const warning of graph.discovery.warnings) {
           console.warn(warning);
         }
-        return projectNodes(graph.projects);
+        return projectNodes(graph.projects, graph.view);
       },
     ];
     registrations.set(this.createNodes, this);
@@ -111,10 +111,13 @@ export class Registration {
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
       const settings = readSettings(discovery, pluginOptions);
       await checkEntries(discovery, settings, nxJson);
+      const view = await entryView(workspaceRoot, nxJson, manifests, options);
       const context = await cacheContext(
         discovery,
         nxJson,
         nxWarning === undefined ? [] : [nxWarning],
+        reports,
+        view,
       );
       const projects = inferProjects(discovery, settings, context);
       const causes = await targetDefaultCauses(projects, nxJson, workspaceRoot);
@@ -125,6 +128,7 @@ export class Registration {
           ...projects.flatMap((project) => project.declaredPatterns),
           ...(context.declaredPatterns ?? []),
         ],
+        view,
       };
       return graph;
     } finally {
@@ -173,9 +177,29 @@ export class Registration {
       return byProject;
     }
     for (const { project, target, warning } of this.latest.targetWarnings ?? []) {
-      byProject.set(project, [...(byProject.get(project) ?? []), { target, warning }]);
+      if (this.attachesWarningsOf(project)) {
+        byProject.set(project, [...(byProject.get(project) ?? []), { target, warning }]);
+      }
     }
     return byProject;
+  }
+
+  /**
+   * Whether this entry attaches the warnings of the project of this name,
+   * and prints those that concern it: the first entry of the plugin that
+   * receives its manifest does, so that Nx's merge of the projects that
+   * several entries create for one folder keeps each warning once
+   * (`warnsHere` in `entries.ts`).
+   */
+  attachesWarningsOf(...projects: string[]): boolean {
+    const graph = this.latest?.graph;
+    if (graph?.view === undefined) {
+      return true;
+    }
+    const manifests = graph.projects
+      .filter((project) => projects.includes(project.name))
+      .map((project) => project.manifest);
+    return warnsHere(graph.view, manifests);
   }
 }
 

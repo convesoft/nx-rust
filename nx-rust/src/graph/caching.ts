@@ -4,10 +4,22 @@ import type { PackageVersion } from "../cargo/lockfile";
 import { type PickedTriples, pickText, unnamedTripleProblem } from "../cargo/target-triples";
 import type { CargoPackage } from "../cargo/metadata";
 import { directoryVariables } from "../cargo/directories";
+import {
+  foldedFileName,
+  namedArtifacts,
+  type SharedArtifactNames,
+  sharedArtifactNames,
+} from "./artifact-names";
 import { buildRecordSource, sharedRecordNames } from "./build-records";
 import type { DeclaredPattern } from "./declared-files";
-import type { CargoDiscovery, CargoWorkspace } from "./discovery";
-import { workspacesWithoutRootProject } from "./entries";
+import type { ComputationReports } from "./computation-reports";
+import type { CargoDiscovery, CargoWorkspace, ReportedWorkspace } from "./discovery";
+import {
+  type EntryView,
+  otherEntriesWorkspaces,
+  warnsHere,
+  workspacesWithoutRootProject,
+} from "./entries";
 import {
   defaultInputSettings,
   Input,
@@ -64,6 +76,12 @@ export interface CacheContext extends InputContext {
    * `build-records.ts`), which the check of `DES-BUILD-INPUT-CHECK` does not read.
    */
   sharedRecordNames?: ReadonlyMap<string, readonly string[]>;
+  /**
+   * The crates whose `build`, and maybe `test`, the plugin leaves uncached
+   * because another crate puts a file of the same name into their artifact
+   * directory, with the reasons (`sharedArtifactNames` in `artifact-names.ts`).
+   */
+  sharedArtifactNames?: SharedArtifactNames;
 }
 
 /**
@@ -86,14 +104,26 @@ export interface CacheContext extends InputContext {
  * counts as one without a project, and its folder joins the inputs beside
  * the edge that `createDependencies` adds.
  *
+ * Artifact directories are compared with those of the workspaces that the
+ * other entries of the plugin receive as well ({@link otherEntriesWorkspaces}),
+ * so that every entry reaches the same verdict (`DES-OUTPUTS`).
+ *
  * @param everyProject Warnings that concern every project and have been
  *   printed already, such as the one for an Nx major newer than the
  *   supported ones (`checkNxForGraph` in `nx-version.ts`); they come first.
+ * @param reports The reports of the graph computation, which the other
+ *   entries in this process share.
+ * @param view Where this entry stands among the entries of the plugin: a
+ *   warning is printed by the first entry that receives a project it
+ *   concerns ({@link warnsHere}), so that entries that receive one
+ *   workspace print it once.
  */
 export async function cacheContext(
   discovery: CargoDiscovery,
   nxJson: NxJsonConfiguration | undefined,
   everyProject: readonly string[] = [],
+  reports?: ComputationReports,
+  view?: EntryView,
 ): Promise<CacheContext> {
   const { workspaceRoot } = discovery;
   const uses = redirectedUses({ discovery, projects: [] }, projectRoots(discovery));
@@ -147,15 +177,26 @@ export async function cacheContext(
       }
     }
   }
-  const reached = reachedArtifactDirectories(discovery.workspaces);
-  const sharers = artifactDirectorySharers(discovery.workspaces, reached);
-  const artifactDirectories = locateArtifactDirectories(discovery, sharers);
+  const compared: ReportedWorkspace[] = [
+    ...discovery.workspaces,
+    ...(await otherEntriesWorkspaces(discovery, nxJson, reports)),
+  ];
+  const reached = reachedArtifactDirectories(compared);
+  const sharers = artifactDirectorySharers(compared, reached);
+  const artifactDirectories = locateArtifactDirectories(compared, workspaceRoot, sharers);
+  const directoryOf = (workspace: ReportedWorkspace) => {
+    const artifacts = artifactDirectories.get(workspace.root);
+    return artifacts?.inside === true
+      ? artifacts.path
+      : (reached.get(workspace) ?? workspace.report.target_directory);
+  };
   const directoryWarnings = unignoredDirectoryWarnings(discovery.workspaces, workspaceRoot);
   const withoutLockfileTask = await workspacesWithoutRootProject(discovery, nxJson);
+  const sharedNames = sharedArtifactNames(compared, sharers, directoryOf, workspaceRoot);
   for (const workspace of discovery.workspaces) {
     const messages = [
       ...workspace.warnings,
-      artifactDirectoryWarning(workspace, artifactDirectories, reached, sharers),
+      artifactDirectoryWarning(workspace, artifactDirectories, reached, sharers, directoryOf),
       tripleWarning(workspace, workspaceRoot),
       ...(directoryWarnings.get(workspace) ?? []),
       withoutLockfileTask.has(workspace.root) ? noLockfileTaskWarning(workspace) : undefined,
@@ -166,9 +207,26 @@ export async function cacheContext(
       }
     }
   }
+  for (const { message, manifests } of sharedNames.warnings) {
+    for (const manifest of manifests) {
+      warn(manifest, message);
+    }
+  }
+  // Each warning once, from the first entry of the plugin that receives a
+  // project it concerns, also where several entries receive one workspace
+  // or a warning names crates of several entries.
+  const concerned = new Map<string, string[]>();
+  for (const [manifest, messages] of warnings) {
+    for (const message of messages) {
+      concerned.set(message, [
+        ...(concerned.get(message) ?? []),
+        relative(workspaceRoot, manifest),
+      ]);
+    }
+  }
   const printed = new Set([...everyProject, ...discovery.warnings]);
-  for (const message of new Set([...warnings.values()].flat())) {
-    if (!printed.has(message)) {
+  for (const [message, manifests] of concerned) {
+    if (!printed.has(message) && (view === undefined || warnsHere(view, manifests))) {
       console.warn(message);
     }
   }
@@ -184,7 +242,8 @@ export async function cacheContext(
     artifactDirectories,
     warnings,
     withoutLockfileTask,
-    sharedRecordNames: sharedRecordNames(discovery.workspaces, reached),
+    sharedRecordNames: sharedRecordNames(compared, sharers),
+    sharedArtifactNames: sharedNames,
   };
 }
 
@@ -232,6 +291,28 @@ function noLockfileTaskReason(
     : undefined;
 }
 
+/**
+ * Why the plugin leaves a crate's `build` or `test` uncached because
+ * another crate puts a file of the same name into its artifact directory
+ * (`DES-OUTPUTS`, "Files of one name"), or `undefined`.
+ */
+// @mara implements DES-OUTPUTS
+function sharedArtifactNameReason(
+  name: InferredTargetName,
+  subject: CacheSubject,
+  context: CacheContext,
+): string | undefined {
+  const shared = context.sharedArtifactNames;
+  if (shared === undefined || subject.pkg === undefined) {
+    return undefined;
+  }
+  return name === "build"
+    ? shared.build.get(subject.pkg.manifest_path)
+    : name === "test"
+      ? shared.test.get(subject.pkg.manifest_path)
+      : undefined;
+}
+
 /** What caching needs to know about a project. */
 export type CacheSubject = InputSubject;
 
@@ -255,7 +336,9 @@ export interface CacheOptions {
  * cached, its inputs and its outputs (`DES-INPUTS`, `DES-OUTPUTS`), and the
  * plugin's version as the option `pluginVersion` where no npm node carries
  * it. A target arrives cached where `cachedTargets` names it, and stays so
- * unless {@link uncachedReason} gives a reason for this project. Every
+ * unless {@link uncachedReason} gives a reason for this project, its
+ * workspace has no lockfile task, or another crate puts a file of the same
+ * name into its artifact directory ({@link sharedArtifactNameReason}). Every
  * inferred target gets `cache` and `outputs`, and an uncached one the
  * reason in `metadata.cargo.uncached`, from which the executor fails a task
  * that the configuration caches anyway. The targets that `DES-INPUTS`
@@ -299,7 +382,9 @@ export function configureCaching(
             name,
             place,
             alwaysNamesTriple([target, ...(options.targetTables?.(name) ?? [])]),
-          ) ?? noLockfileTaskReason(name, subject, context))
+          ) ??
+          noLockfileTaskReason(name, subject, context) ??
+          sharedArtifactNameReason(name, subject, context))
         : (uncachedByDesign[name] ?? "the plugin does not cache this target");
     target.cache = reason === undefined;
     const metadata = target.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
@@ -326,6 +411,7 @@ export function configureCaching(
       }
     }
     if (metadata !== undefined && name === "build" && subject.pkg !== undefined) {
+      metadata.artifactFiles = namedArtifacts(subject.pkg);
       metadata.records = buildRecordSource(
         subject.pkg,
         context.sharedRecordNames?.get(subject.workspace.root) ?? [],
@@ -512,41 +598,71 @@ function alwaysNamesTriple(layers: readonly TargetConfiguration[]): boolean {
 // `..`, that is not the folder that the path names as text (`DES-OUTPUTS`).
 // @mara implements DES-OUTPUTS
 function reachedArtifactDirectories(
-  workspaces: readonly CargoWorkspace[],
-): Map<CargoWorkspace, string> {
+  workspaces: readonly ReportedWorkspace[],
+): Map<ReportedWorkspace, string> {
   return new Map(
     workspaces.map((workspace) => [workspace, physicalPath(workspace.report.target_directory)]),
   );
 }
 
-// The workspaces with which each workspace shares its artifact directory.
-// Two reports name one folder where their paths agree with `.` and `..`
-// taken as text, or with symbolic links followed (`reached`); either
-// counts, because two folders taken for one only leave `doc` uncached,
-// while one folder taken for two lets a restored `doc` folder delete the
-// pages of the other workspace (`DES-OUTPUTS`).
+/** How the artifact directory of one workspace lies to another's. */
+type DirectoryRelation = "same" | "inside" | "around";
+
+// How the artifact directory of `workspace` lies to that of `other`, or
+// `undefined` where neither is the other or inside it. Each is spelt with
+// `.` and `..` taken as text and with symbolic links followed (`reached`),
+// and either spelling counts, as do names that differ only in case or
+// Unicode normalisation ({@link foldedFileName}): two folders taken for
+// one only cost caching, while one folder taken for two lets a cache entry
+// hold another workspace's files (`DES-OUTPUTS`).
+function directoryRelation(
+  workspace: ReportedWorkspace,
+  other: ReportedWorkspace,
+  reached: ReadonlyMap<ReportedWorkspace, string>,
+): DirectoryRelation | undefined {
+  const spellings = (of: ReportedWorkspace) => {
+    const directory = of.report.target_directory;
+    return [resolve(directory), reached.get(of) ?? resolve(directory)].map((path) =>
+      foldedFileName(path.replace(/\/+$/, "")),
+    );
+  };
+  const own = spellings(workspace);
+  const theirs = spellings(other);
+  const relations = own.flatMap((a) =>
+    theirs.map((b): DirectoryRelation | undefined =>
+      a === b
+        ? "same"
+        : a.startsWith(`${b}/`)
+          ? "inside"
+          : b.startsWith(`${a}/`)
+            ? "around"
+            : undefined,
+    ),
+  );
+  return (["same", "inside", "around"] as const).find((relation) => relations.includes(relation));
+}
+
+// The workspaces with which each workspace shares its artifact directory:
+// those whose artifact directory is the same folder, lies inside it or
+// holds it ({@link directoryRelation}). Outputs of `build` and `doc` lie
+// one or two folder names, of a triple and a profile, below the artifact
+// directory, so those of two different directories can coincide only
+// where one lies inside the other, and a `doc` folder restored into one
+// can hold or replace the other (`DES-OUTPUTS`).
 // @mara implements DES-OUTPUTS
 function artifactDirectorySharers(
-  workspaces: readonly CargoWorkspace[],
-  reached: ReadonlyMap<CargoWorkspace, string>,
-): Map<CargoWorkspace, CargoWorkspace[]> {
-  const spellings = new Map<CargoWorkspace, string[]>();
-  for (const workspace of workspaces) {
-    const directory = workspace.report.target_directory;
-    spellings.set(workspace, [resolve(directory), reached.get(workspace) ?? resolve(directory)]);
-  }
-  const sharers = new Map<CargoWorkspace, CargoWorkspace[]>();
-  for (const workspace of workspaces) {
-    const own = spellings.get(workspace) ?? [];
-    sharers.set(
+  workspaces: readonly ReportedWorkspace[],
+  reached: ReadonlyMap<ReportedWorkspace, string>,
+): Map<ReportedWorkspace, ReportedWorkspace[]> {
+  return new Map(
+    workspaces.map((workspace) => [
       workspace,
       workspaces.filter(
         (other) =>
-          other !== workspace && (spellings.get(other) ?? []).some((path) => own.includes(path)),
+          other !== workspace && directoryRelation(workspace, other, reached) !== undefined,
       ),
-    );
-  }
-  return sharers;
+    ]),
+  );
 }
 
 // Where each workspace's artifact directory lies, by the workspace's root
@@ -555,12 +671,13 @@ function artifactDirectorySharers(
 // the repository's real path, and is the path that the outputs name
 // ({@link repositoryFolder}, which the executor uses as well).
 function locateArtifactDirectories(
-  discovery: CargoDiscovery,
-  sharers: ReadonlyMap<CargoWorkspace, readonly CargoWorkspace[]>,
+  workspaces: readonly ReportedWorkspace[],
+  repositoryRoot: string,
+  sharers: ReadonlyMap<ReportedWorkspace, readonly ReportedWorkspace[]>,
 ): Map<string, ArtifactDirectory> {
   const located = new Map<string, ArtifactDirectory>();
-  for (const workspace of discovery.workspaces) {
-    const folder = repositoryFolder(workspace.report.target_directory, discovery.workspaceRoot);
+  for (const workspace of workspaces) {
+    const folder = repositoryFolder(workspace.report.target_directory, repositoryRoot);
     located.set(
       workspace.root,
       folder.inside
@@ -572,13 +689,15 @@ function locateArtifactDirectories(
 }
 
 // The warning of `DES-OUTPUTS` for a workspace whose artifact directory lies
-// outside the repository or is shared with another workspace.
+// outside the repository or is shared with another workspace: the same
+// folder, or one inside the other.
 // @mara implements DES-DIAGNOSTICS
 function artifactDirectoryWarning(
   workspace: CargoWorkspace,
   located: ReadonlyMap<string, ArtifactDirectory>,
-  reached: ReadonlyMap<CargoWorkspace, string>,
-  sharers: ReadonlyMap<CargoWorkspace, readonly CargoWorkspace[]>,
+  reached: ReadonlyMap<ReportedWorkspace, string>,
+  sharers: ReadonlyMap<ReportedWorkspace, readonly ReportedWorkspace[]>,
+  directoryOf: (workspace: ReportedWorkspace) => string,
 ): string | undefined {
   const artifacts = located.get(workspace.root);
   const directory = reached.get(workspace) ?? workspace.report.target_directory;
@@ -590,18 +709,36 @@ function artifactDirectoryWarning(
       `To cache them, set build.target-dir in a .cargo/config.toml of the workspace to a folder inside the repository, or unset CARGO_TARGET_DIR.`,
     ].join(" ");
   }
-  if (artifacts.shared) {
-    const others = (sharers.get(workspace) ?? []).map(describeWorkspace);
+  if (!artifacts.shared) {
+    return undefined;
+  }
+  const others = sharers.get(workspace) ?? [];
+  const relations = others.map((other) => ({
+    other,
+    relation: directoryRelation(workspace, other, reached),
+  }));
+  if (relations.every(({ relation }) => relation === "same")) {
     return [
-      `nx-rust: ${where} shares Cargo's artifact directory ${artifacts.path} with ${others.join(" and ")}.`,
+      `nx-rust: ${where} shares Cargo's artifact directory ${artifacts.path} with ${others.map(describeWorkspace).join(" and ")}.`,
       `Its doc target runs uncached, because restoring one workspace's doc folder from the cache would delete the pages of the others; its other targets stay cached.`,
       `To cache it, give each workspace an artifact directory of its own with build.target-dir in its .cargo/config.toml.`,
     ].join(" ");
   }
-  return undefined;
+  const described = relations.map(({ other, relation }) =>
+    relation === "same"
+      ? `is that of ${describeWorkspace(other)} as well`
+      : relation === "inside"
+        ? `lies inside ${directoryOf(other)}, that of ${describeWorkspace(other)}`
+        : `holds ${directoryOf(other)}, that of ${describeWorkspace(other)}`,
+  );
+  return [
+    `nx-rust: Cargo's artifact directory ${artifacts.path} of ${where} ${described.join(", and ")}, so that the folders of a triple or a profile in one can be those of the other.`,
+    `Its doc target runs uncached, because restoring one workspace's doc folder from the cache could delete or replace files of the others; its other targets stay cached.`,
+    `To cache it, give each workspace an artifact directory of its own, none inside another, with build.target-dir in its .cargo/config.toml.`,
+  ].join(" ");
 }
 
-function describeWorkspace(workspace: CargoWorkspace): string {
+function describeWorkspace(workspace: ReportedWorkspace): string {
   return workspace.root === "."
     ? "the Cargo workspace at the repository root"
     : `the Cargo workspace in ${workspace.root}`;

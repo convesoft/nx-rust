@@ -385,6 +385,22 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["xtask", "base"],
     ],
   },
+  // alpha and beta have binaries of one name; tools is a standalone crate.
+  "shared-executables": {
+    cargoFolders: ["rust", "tools"],
+    projects: {
+      alpha: "rust/crates/alpha",
+      beta: "rust/crates/beta",
+      gamma: "rust/crates/gamma",
+      rust: "rust",
+      tools: "tools",
+    },
+    edges: [
+      ["rust", "alpha"],
+      ["rust", "beta"],
+      ["rust", "gamma"],
+    ],
+  },
 };
 
 // Without the toolchain that it pins, cargo fails in different-toolchains/pinned.

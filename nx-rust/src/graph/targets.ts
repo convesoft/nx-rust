@@ -1,3 +1,4 @@
+import type { NamedArtifact } from "./artifact-names";
 import type { TargetConfiguration } from "@nx/devkit";
 import { statSync } from "node:fs";
 import { join } from "node:path";
@@ -147,6 +148,14 @@ export interface TargetCargoMetadata {
    * (`DES-TARGETS`).
    */
   waitsForBuild?: boolean;
+  /**
+   * On a crate's `build`, cached or not: the files that the crate's targets
+   * put into the folders of its artifact directory, with whether they are
+   * executables and whether `build` declares them (`namedArtifacts` in
+   * `artifact-names.ts`). The executor compares them with those of other
+   * projects when a cached task starts (`DES-OUTPUTS`, "Files of one name").
+   */
+  artifactFiles?: NamedArtifact[];
 }
 
 /**
@@ -179,7 +188,10 @@ export function testReplacesExecutables(pkg: CargoPackage): boolean {
  * `DES-OUTPUTS` give them, with the inputs of `DES-INPUTS` and the outputs
  * of `DES-OUTPUTS` (`configureCaching` in `caching.ts`). `build` and `doc`
  * are left uncached for a project where the plugin cannot name or store
- * their artifacts, with the reason in `metadata.cargo.uncached`. Graph
+ * their artifacts, and `build` and `test` for a crate whose artifacts share
+ * a file name with another crate's in its artifact directory
+ * (`sharedArtifactNames` in `artifact-names.ts`), with the reason in
+ * `metadata.cargo.uncached`. Graph
  * creation fails for a `targetDefaults` entry in `nx.json` that turns caching
  * on for a target that the plugin leaves uncached in a project
  * (`DES-TARGET-DEFAULT-GUARD`, which compares with the `cache` that

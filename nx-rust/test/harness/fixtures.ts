@@ -34,6 +34,7 @@ export const fixtureNames = [
   "shared-names",
   "binary-tests",
   "release-crates",
+  "shared-executables",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

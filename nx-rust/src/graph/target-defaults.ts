@@ -7,6 +7,7 @@ import type {
 import { existsSync, realpathSync } from "node:fs";
 import { extname, join } from "node:path";
 import type { TargetWarning } from "./collisions";
+import { warnsHere } from "./entries";
 import { pluginPackageName } from "./plugin-package";
 import { CargoGraph, CargoProject, projectNodes } from "./projects";
 
@@ -490,7 +491,17 @@ export async function failOnTargetDefaults(
     loadTargetDefaultsInternals(context.workspaceRoot),
   );
   for (const warning of report.warnings) {
-    console.warn(warning);
+    // Where several entries create a project, the first that receives it
+    // prints what concerns it (`warnsHere` in `entries.ts`).
+    const concerned = new Set(
+      report.placed.filter((placed) => placed.warning === warning).map((placed) => placed.project),
+    );
+    const manifests = graph.projects
+      .filter((project) => concerned.has(project.name))
+      .map((project) => project.manifest);
+    if (graph.view === undefined || warnsHere(graph.view, manifests)) {
+      console.warn(warning);
+    }
   }
   if (report.error !== undefined) {
     throw new Error(report.error);

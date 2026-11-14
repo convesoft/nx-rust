@@ -17,6 +17,7 @@ import type { GraphSettings, ProjectSettings } from "./settings";
 import { applyTargetTables } from "./target-tables";
 import { inferTargets, nameTargets } from "./targets";
 import { warningsInput } from "./warnings";
+import { type EntryView, warnsHere } from "./entries";
 
 /**
  * A project that the plugin creates: a crate, or the workspace project of a
@@ -88,6 +89,12 @@ export interface CargoGraph {
    * graph of discovery alone.
    */
   declaredPatterns?: DeclaredPattern[];
+  /**
+   * Where this entry stands among the entries of the plugin, which decides
+   * whether it attaches a project's warnings ({@link projectNodes}); absent
+   * where it is the only one.
+   */
+  view?: EntryView;
 }
 
 /**
@@ -280,33 +287,41 @@ export const versionActionsModule = `${pluginPackageName}/src/release/version-ac
  * out of every key, as project metadata does (`EVD-NX-24-WARNING-CHANNELS`).
  */
 // @mara implements DES-RELEASE
-export function projectNodes(projects: readonly CargoProject[]): CreateNodesResultArray {
-  return projects.map((project) => [
-    project.manifest,
-    {
-      projects: {
-        [project.root]: {
-          name: project.name,
-          ...(project.settings.tags.length > 0 ? { tags: [...project.settings.tags] } : {}),
-          ...(project.settings.implicitDependencies.length > 0
-            ? { implicitDependencies: [...project.settings.implicitDependencies] }
-            : {}),
-          namedInputs: project.namedInputs,
-          targets: project.targets,
-          ...(project.pkg === undefined
-            ? {}
-            : { release: { version: { versionActions: versionActionsModule } } }),
-          metadata: {
-            [cargoMetadataKey]: {
-              ...cargoMetadata(project),
-              ...(project.warnings.length > 0 ? { warnings: project.warnings } : {}),
-              ...(project.workspace.configurationWarnings.length > 0
-                ? { configurationWarnings: project.workspace.configurationWarnings }
-                : {}),
+export function projectNodes(
+  projects: readonly CargoProject[],
+  view?: EntryView,
+): CreateNodesResultArray {
+  return projects.map((project) => {
+    // Nx joins the lists that several entries give one project, so only
+    // the first entry that receives the project attaches its warnings.
+    const attaches = view === undefined || warnsHere(view, [project.manifest]);
+    return [
+      project.manifest,
+      {
+        projects: {
+          [project.root]: {
+            name: project.name,
+            ...(project.settings.tags.length > 0 ? { tags: [...project.settings.tags] } : {}),
+            ...(project.settings.implicitDependencies.length > 0
+              ? { implicitDependencies: [...project.settings.implicitDependencies] }
+              : {}),
+            namedInputs: project.namedInputs,
+            targets: project.targets,
+            ...(project.pkg === undefined
+              ? {}
+              : { release: { version: { versionActions: versionActionsModule } } }),
+            metadata: {
+              [cargoMetadataKey]: {
+                ...cargoMetadata(project),
+                ...(attaches && project.warnings.length > 0 ? { warnings: project.warnings } : {}),
+                ...(attaches && project.workspace.configurationWarnings.length > 0
+                  ? { configurationWarnings: project.workspace.configurationWarnings }
+                  : {}),
+              },
             },
           },
         },
       },
-    },
-  ]);
+    ];
+  });
 }

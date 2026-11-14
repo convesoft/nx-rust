@@ -12,6 +12,17 @@ import { realPath } from "./real-path";
 import { filesNxSees } from "./visibility";
 
 /** A Cargo workspace, which may be a standalone crate: a workspace of one. */
+/**
+ * A workspace as far as the comparison of artifact directories needs it:
+ * its root folder and its report (`DES-OUTPUTS`).
+ */
+export interface ReportedWorkspace {
+  /** The folder of the root manifest, relative to the repository root: `.` for the root itself. */
+  root: string;
+  /** The workspace's `cargo metadata` report. */
+  report: CargoMetadata;
+}
+
 export interface CargoWorkspace {
   /** The folder of the root manifest, relative to the repository root: `.` for the root itself. */
   root: string;
@@ -167,25 +178,13 @@ export async function discoverWorkspaces(
   reports: ComputationReports = new ComputationReports(),
 ): Promise<CargoDiscovery> {
   const handed = new Set(manifests);
-  const claimed = new Set<string>();
   const workspaces: CargoWorkspace[] = [];
   const warnings: string[] = [];
-  const readable = manifests.filter(
-    (manifest) => !isDirectorySourcePackage(join(workspaceRoot, manifest)),
-  );
-  for (const manifest of readable.sort(shallowestFirst)) {
-    if (claimed.has(manifest)) {
-      continue;
-    }
-    const report = await readWorkspace(manifest, workspaceRoot, reports);
-    const members = new Set(report.workspace_members);
-    const memberPackages = report.packages.filter((pkg) => members.has(pkg.id));
-    const rootManifest = repositoryPath(workspaceRoot, join(report.workspace_root, "Cargo.toml"));
-    claimed.add(manifest);
-    claimed.add(rootManifest);
-    for (const pkg of memberPackages) {
-      claimed.add(repositoryPath(workspaceRoot, pkg.manifest_path));
-    }
+  for await (const { report, rootManifest, memberPackages } of claimWorkspaces(
+    manifests,
+    workspaceRoot,
+    reports,
+  )) {
     const found = await readRedirections(report.workspace_root);
     warnings.push(...found.warnings);
     workspaces.push({
@@ -232,6 +231,58 @@ export async function discoverWorkspaces(
     warnings: [...new Set(warnings)],
     unreportedPathDependencies,
   };
+}
+
+/**
+ * The workspaces that the manifests make up, each as its root folder and
+ * report, found as {@link discoverWorkspaces} finds them: the shallowest
+ * unclaimed manifest is read until every manifest is claimed. Nothing else
+ * of the workspaces is read. For the workspaces that other entries of the
+ * plugin receive, whose artifact directories graph creation compares with
+ * its own (`DES-OUTPUTS`, "Files of one name").
+ *
+ * @throws {Error} As {@link discoverWorkspaces} does for a report.
+ */
+export async function discoverReportedWorkspaces(
+  manifests: readonly string[],
+  workspaceRoot: string,
+  reports: ComputationReports = new ComputationReports(),
+): Promise<ReportedWorkspace[]> {
+  const workspaces: ReportedWorkspace[] = [];
+  for await (const { report } of claimWorkspaces(manifests, workspaceRoot, reports)) {
+    workspaces.push({ root: repositoryPath(workspaceRoot, report.workspace_root) || ".", report });
+  }
+  return workspaces;
+}
+
+// The workspaces that the manifests make up, in the order of discovery:
+// the shallowest unclaimed manifest is read, and the workspace that its
+// report describes claims its root manifest and its members. A manifest of
+// a directory source is never read (`isDirectorySourcePackage`).
+async function* claimWorkspaces(
+  manifests: readonly string[],
+  workspaceRoot: string,
+  reports: ComputationReports,
+): AsyncGenerator<{ report: CargoMetadata; rootManifest: string; memberPackages: CargoPackage[] }> {
+  const claimed = new Set<string>();
+  const readable = manifests.filter(
+    (manifest) => !isDirectorySourcePackage(join(workspaceRoot, manifest)),
+  );
+  for (const manifest of [...readable].sort(shallowestFirst)) {
+    if (claimed.has(manifest)) {
+      continue;
+    }
+    const report = await readWorkspace(manifest, workspaceRoot, reports);
+    const members = new Set(report.workspace_members);
+    const memberPackages = report.packages.filter((pkg) => members.has(pkg.id));
+    const rootManifest = repositoryPath(workspaceRoot, join(report.workspace_root, "Cargo.toml"));
+    claimed.add(manifest);
+    claimed.add(rootManifest);
+    for (const pkg of memberPackages) {
+      claimed.add(repositoryPath(workspaceRoot, pkg.manifest_path));
+    }
+    yield { report, rootManifest, memberPackages };
+  }
 }
 
 /**

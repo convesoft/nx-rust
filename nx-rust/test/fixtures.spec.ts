@@ -150,6 +150,12 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
     },
     others: ["third_party/fork"],
   },
+  "shared-executables": {
+    workspaces: {
+      rust: ["rust/crates/alpha", "rust/crates/beta", "rust/crates/gamma"],
+      tools: ["tools"],
+    },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.

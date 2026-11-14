@@ -1,5 +1,6 @@
 import type { CargoPackage, CargoTarget } from "../cargo/metadata";
-import type { CargoWorkspace } from "./discovery";
+import { directoryGroups } from "./artifact-names";
+import type { ReportedWorkspace } from "./discovery";
 
 /**
  * What the executor of `build` needs to name the dependency files that
@@ -53,41 +54,36 @@ export function binaryRecordName(name: string): string {
 /**
  * The record names that targets of more than one crate with the same
  * artifact directory give, for each workspace by its root folder
- * (`DES-BUILD-INPUT-CHECK`, point 2, "A shared name"). Every member of every
- * workspace counts, those without a project too.
- *
- * @param reached Each workspace's artifact directory as the system reaches it.
+ * (`DES-BUILD-INPUT-CHECK`, point 2, "A shared name"). Workspaces count as
+ * having the same artifact directory where `sharers` links them, also
+ * through a third, as for the files of `build` (`directoryGroups` in
+ * `artifact-names.ts`). Every member of every workspace counts, those
+ * without a project too.
  */
 // @mara implements DES-BUILD-INPUT-CHECK
 export function sharedRecordNames(
-  workspaces: readonly CargoWorkspace[],
-  reached: ReadonlyMap<CargoWorkspace, string>,
+  workspaces: readonly ReportedWorkspace[],
+  sharers: ReadonlyMap<ReportedWorkspace, readonly ReportedWorkspace[]>,
 ): Map<string, string[]> {
-  const byDirectory = new Map<string, Map<string, number>>();
-  const directoryOf = (workspace: CargoWorkspace) =>
-    reached.get(workspace) ?? workspace.report.target_directory;
-  for (const workspace of workspaces) {
-    const directory = directoryOf(workspace);
-    const counts = byDirectory.get(directory) ?? new Map<string, number>();
-    byDirectory.set(directory, counts);
-    for (const pkg of workspace.report.packages) {
-      for (const name of recordNames(pkg)) {
-        counts.set(name, (counts.get(name) ?? 0) + 1);
+  const result = new Map<string, string[]>();
+  for (const group of directoryGroups(workspaces, sharers)) {
+    const counts = new Map<string, number>();
+    for (const workspace of group) {
+      for (const pkg of workspace.report.packages) {
+        for (const name of recordNames(pkg)) {
+          counts.set(name, (counts.get(name) ?? 0) + 1);
+        }
       }
     }
+    const shared = [...counts]
+      .filter(([, count]) => count > 1)
+      .map(([name]) => name)
+      .sort();
+    for (const workspace of group) {
+      result.set(workspace.root, shared);
+    }
   }
-  return new Map(
-    workspaces.map((workspace) => {
-      const counts = byDirectory.get(directoryOf(workspace)) ?? new Map<string, number>();
-      return [
-        workspace.root,
-        [...counts]
-          .filter(([, count]) => count > 1)
-          .map(([name]) => name)
-          .sort(),
-      ];
-    }),
-  );
+  return result;
 }
 
 /**
