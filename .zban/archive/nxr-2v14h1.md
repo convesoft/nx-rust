@@ -32,7 +32,7 @@ Decision of the maintainer, 14 November 2026, the option chosen word for word: "
   - `caching` names only the `hakari` and `cargo` strategies.
   - `ci` names only the coverage baseline.
   - `testing` was stale: it said `testRunner` and `affectedTests` are not read. It now says what is read and checked, and what arrives with 0.3.
-  - `workspaces` has no note left, because everything on the page works.
+  - `workspaces` has no note left. Three sentences of its guidance that described later features as present now name their milestones instead: the coverage baseline (0.3) among the workspace-level tasks, and the batches (0.2) and the coverage baseline (0.3) among what stays per workspace. The sentence about the `lockfile` task now excludes `fmt-check`, which does not wait for it (`nx-rust/src/graph/caching.ts`, `nx-rust/test/targets.spec.ts`).
 - `AGENTS.md`: the project paragraph no longer says that the implementation has not started.
 - Follow-up nxr-g5dfee: say that 0.1 is on npm in these lines in the change that publishes it.
 
