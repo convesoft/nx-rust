@@ -13,6 +13,7 @@ import {
   loadFixtureGraph,
   pinnedToolchain,
   pinnedToolchainAvailable,
+  runNx,
   testEnvironment,
   withoutColours,
 } from "./harness";
@@ -20,7 +21,9 @@ import {
 // Checks the parts of VER-GRAPH about crates that [patch], [replace] and
 // paths redirect dependencies to. graph.spec.ts checks the edges of
 // patched-workspaces as committed, where rust/Cargo.toml patches model,
-// types and fork; here the same redirections come from elsewhere.
+// types and fork; here the same redirections come from elsewhere. The
+// crates with a project behind a redirected crate without one are checked
+// here with their keys as well (VER-CACHE-KEYS).
 
 describe("reading redirections", () => {
   let root: string;
@@ -890,6 +893,313 @@ describe("edges to redirected crates", () => {
         expect(used.api).toContain("model");
         expect(used.viaw).toContain("model");
         expect(missing).toEqual([]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("crates with a project behind a redirected crate without one", () => {
+  const crate = (name: string) =>
+    `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n`;
+  // fork, which nx.json excludes and rust's [patch] redirects, depends by
+  // path on plain, a member of rust, in place of model: cargo builds plain
+  // for every member that uses fork. api uses fork directly, harness may use
+  // it through its registry dependency on types, and lone may use it through
+  // leaf, a crate of a directory source that has no report.
+  const forkUsesPlain: FileChanges = {
+    "third_party/fork/Cargo.toml": (manifest) =>
+      manifest.replace('model = "0.1"', 'plain = { path = "../../rust/crates/plain" }'),
+    "rust/crates/lone/Cargo.toml": `${crate("lone")}\n[dependencies]\nleaf = { path = "../../../third_party/leaf" }\n`,
+    "rust/crates/lone/src/lib.rs": "",
+    "third_party/leaf/Cargo.toml": crate("leaf"),
+    "third_party/leaf/src/lib.rs": "",
+    "third_party/leaf/.cargo-checksum.json": '{"files":{},"package":null}\n',
+  };
+  const plainSource = "rust/crates/plain/src/lib.rs";
+  // api's use is direct, harness's possible and lone's assumed; types uses
+  // nothing of rust.
+  const tasks = ["api:test", "api:build", "harness:test", "lone:test", "types:test"];
+
+  /** What a change in plain does: the graph before, which keys change and what `nx affected` selects. */
+  async function changePlain(
+    files: FileChanges,
+    links: Record<string, string> = {},
+  ): Promise<{ graph: FixtureGraph; keysDiffer: Record<string, boolean>; affected: string[] }> {
+    const workspace = FixtureWorkspace.create("patched-workspaces", forkUsesPlain, files);
+    try {
+      for (const [link, target] of Object.entries(links)) {
+        symlinkSync(target, join(workspace.root, link));
+      }
+      const graph = await workspace.graph();
+      const before = await workspace.hashTasks(tasks);
+      applyFileChanges(workspace.root, { [plainSource]: (current) => `${current}// changed\n` });
+      const after = await workspace.hashTasks(tasks);
+      const { status, output } = await runNx(workspace, [
+        "show",
+        "projects",
+        "--affected",
+        `--files=${plainSource}`,
+        "--json",
+      ]);
+      expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+      return {
+        graph,
+        keysDiffer: Object.fromEntries(
+          tasks.map((task) => [task, before[task].value !== after[task].value]),
+        ),
+        // The JSON is the last line, after any warning of graph creation.
+        affected: JSON.parse(output.trim().split("\n").pop()).sort(),
+      };
+    } finally {
+      workspace.remove();
+    }
+  }
+
+  // Every row names its links, also where it has none: Jest takes a test
+  // function with more parameters than its row for one that calls `done`.
+  it.each<[string, FileChanges, Record<string, string>]>([
+    ["[patch], as rust/Cargo.toml has it", {}, {}],
+    [
+      // Cargo rejects [replace] beside [patch], so all three go there.
+      "[replace]",
+      {
+        "rust/Cargo.toml": rootManifest(
+          "[replace]",
+          '"model:0.1.0" = { path = "crates/model" }',
+          '"types:0.1.0" = { path = "../shared/crates/types" }',
+          '"fork:0.1.0" = { path = "../third_party/fork" }',
+        ),
+      },
+      {},
+    ],
+    [
+      "paths",
+      {
+        "rust/Cargo.toml": rootManifest(
+          "[patch.crates-io]",
+          'model = { path = "crates/model" }',
+          'types = { path = "../shared/crates/types" }',
+        ),
+        "rust/.cargo/config.toml": 'paths = ["../third_party/fork"]\n',
+      },
+      {},
+    ],
+    [
+      "a chain of two crates without a project",
+      {
+        "third_party/fork/Cargo.toml": (manifest) =>
+          manifest.replace(
+            'plain = { path = "../../rust/crates/plain" }',
+            'bridge = { path = "../bridge" }',
+          ),
+        "third_party/bridge/Cargo.toml": `${crate("bridge")}\n[dependencies]\nplain = { path = "../../rust/crates/plain" }\n`,
+        "third_party/bridge/src/lib.rs": "",
+      },
+      {},
+    ],
+    [
+      "a path dependency written through a symbolic link",
+      {
+        "third_party/fork/Cargo.toml": (manifest) =>
+          manifest.replace('"../../rust/crates/plain"', '"../alias"'),
+      },
+      { "third_party/alias": "../rust/crates/plain" },
+    ],
+  ])(
+    "reach the members that use it through %s, with their keys and nx affected",
+    async (_how, files, links) => {
+      const { graph, keysDiffer, affected } = await changePlain(files, links);
+
+      // Every member of rust that may use fork, and none of shared.
+      expect(edges(graph).filter(([, target]) => target === "plain")).toEqual([
+        ["api", "plain"],
+        ["harness", "plain"],
+        ["lone", "plain"],
+        ["model", "plain"],
+        ["rust", "plain"],
+        ["util", "plain"],
+        ["viaw", "plain"],
+      ]);
+      expect(keysDiffer).toEqual({
+        "api:test": true,
+        "api:build": true,
+        "harness:test": true,
+        "lone:test": true,
+        "types:test": false,
+      });
+      expect(affected).toEqual([
+        "api",
+        "harness",
+        "lone",
+        "model",
+        "plain",
+        "rust",
+        "util",
+        "viaw",
+      ]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "turn an inherited use that would close a cycle into an input, as for a redirected crate with a project",
+    async () => {
+      // plain depends by path on harness and lone, so cargo would reject the
+      // use of fork, which depends on plain, by either of them; api uses
+      // fork directly, and that edge stays.
+      const { graph, keysDiffer, affected } = await changePlain({
+        "rust/crates/plain/Cargo.toml": (manifest) =>
+          `${manifest}\n[dependencies]\nharness = { path = "../harness" }\nlone = { path = "../lone" }\n`,
+      });
+
+      expect(edges(graph)).toContainEqual(["api", "plain"]);
+      expect(edges(graph)).toContainEqual(["plain", "harness"]);
+      expect(edges(graph)).toContainEqual(["plain", "lone"]);
+      expect(edges(graph)).not.toContainEqual(["harness", "plain"]);
+      expect(edges(graph)).not.toContainEqual(["lone", "plain"]);
+      for (const member of ["harness", "lone"]) {
+        expect({ member, inputs: graph.projects[member].targets.check.inputs }).toEqual({
+          member,
+          inputs: expect.arrayContaining(["{workspaceRoot}/rust/crates/plain/**/*"]),
+        });
+      }
+      expect(keysDiffer).toMatchObject({
+        "api:test": true,
+        "harness:test": true,
+        "lone:test": true,
+        "types:test": false,
+      });
+      expect(affected).toEqual(expect.arrayContaining(["api", "harness", "lone"]));
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("the crates that cargo builds with a crate whose edge is left out", () => {
+  const crate = (name: string, ...lines: string[]) =>
+    [`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n`, ...lines, ""].join("\n");
+  // In place of patched-workspaces' crates, rust has the members a, b, c and
+  // d, and b depends on c by path. The graph and the keys need no registry
+  // for the registry crates.
+  const members: FileChanges = {
+    rust: null,
+    shared: null,
+    third_party: null,
+    "rust/Cargo.toml": '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n',
+    "rust/crates/a/Cargo.toml": crate("a"),
+    "rust/crates/a/src/lib.rs": "",
+    "rust/crates/b/Cargo.toml": crate("b", "[dependencies]", 'c = { path = "../c" }'),
+    "rust/crates/b/src/lib.rs": "",
+    "rust/crates/c/Cargo.toml": crate("c"),
+    "rust/crates/c/src/lib.rs": "",
+    "rust/crates/d/Cargo.toml": crate("d"),
+    "rust/crates/d/src/lib.rs": "",
+  };
+  // x, which nx.json excludes, depends on b by path.
+  const x: FileChanges = {
+    "third_party/x/Cargo.toml": crate(
+      "x",
+      "[workspace]",
+      "[dependencies]",
+      'b = { path = "../../rust/crates/b" }',
+    ),
+    "third_party/x/src/lib.rs": "",
+  };
+  const cSource = "rust/crates/c/src/lib.rs";
+  // d uses nothing, so its key is the control.
+  const tasks = ["a:test", "a:build", "a:check", "b:test", "d:test"];
+
+  it.each<[string, FileChanges]>([
+    [
+      // a may use x through the registry crate wrapper, and b, behind x, may
+      // use a through other: two possible uses in opposite directions. Cargo
+      // builds a -> wrapper -> x -> b -> c.
+      "a's possible use of b behind x yields to b's possible use of a",
+      {
+        ...x,
+        "rust/Cargo.toml": rootManifest(
+          "[patch.crates-io]",
+          'x = { path = "../third_party/x" }',
+          'a = { path = "crates/a" }',
+        ),
+        "rust/crates/a/Cargo.toml": crate("a", "[dependencies]", 'wrapper = "0.1"'),
+        "rust/crates/b/Cargo.toml": (manifest) => `${manifest}other = "0.1"\n`,
+      },
+    ],
+    [
+      // a may use x only through leaf, a crate of a directory source without
+      // a report; b dev-depends on a, so a's assumed use of b behind x gives
+      // way. Cargo builds a -> leaf -> x -> b -> c.
+      "a's assumed use of b behind x yields to b's dev-dependency on a",
+      {
+        ...x,
+        "rust/Cargo.toml": rootManifest("[patch.crates-io]", 'x = { path = "../third_party/x" }'),
+        "rust/crates/a/Cargo.toml": crate(
+          "a",
+          "[dependencies]",
+          'leaf = { path = "../../../third_party/leaf" }',
+        ),
+        "third_party/leaf/Cargo.toml": crate("leaf", "[dependencies]", 'x = "0.1"'),
+        "third_party/leaf/src/lib.rs": "",
+        "third_party/leaf/.cargo-checksum.json": '{"files":{},"package":null}\n',
+        "rust/crates/b/Cargo.toml": (manifest) =>
+          `${manifest}\n[dev-dependencies]\na = { path = "../a" }\n`,
+      },
+    ],
+    [
+      // rust redirects a and b to themselves, and each may use the other
+      // through a registry crate. Cargo can build a -> wrapper -> b -> c.
+      "a's possible use of the redirected b yields to b's possible use of a",
+      {
+        "rust/Cargo.toml": rootManifest(
+          "[patch.crates-io]",
+          'a = { path = "crates/a" }',
+          'b = { path = "crates/b" }',
+        ),
+        "rust/crates/a/Cargo.toml": crate("a", "[dependencies]", 'wrapper = "0.1"'),
+        "rust/crates/b/Cargo.toml": (manifest) => `${manifest}other = "0.1"\n`,
+      },
+    ],
+  ])(
+    "give the member what lies behind the crate, where %s",
+    async (_case, files) => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", members, files);
+      try {
+        const graph = await workspace.graph();
+        const before = await workspace.hashTasks(tasks);
+        applyFileChanges(workspace.root, { [cSource]: (current) => `${current}// changed\n` });
+        const after = await workspace.hashTasks(tasks);
+        const { status, output } = await runNx(workspace, [
+          "show",
+          "projects",
+          "--affected",
+          `--files=${cSource}`,
+          "--json",
+        ]);
+
+        expect(edges(graph)).not.toContainEqual(["a", "b"]);
+        expect(edges(graph)).toContainEqual(["b", "c"]);
+        expect(graph.projects.a.targets.check.inputs).toEqual(
+          expect.arrayContaining([
+            "{workspaceRoot}/rust/crates/b/**/*",
+            "{workspaceRoot}/rust/crates/c/**/*",
+          ]),
+        );
+        expect(
+          Object.fromEntries(tasks.map((task) => [task, before[task].value !== after[task].value])),
+        ).toEqual({
+          "a:test": true,
+          "a:build": true,
+          "a:check": true,
+          "b:test": true,
+          "d:test": false,
+        });
+        expect(status).toBe(0);
+        // The JSON is the last line, after any warning of graph creation.
+        expect(JSON.parse(output.trim().split("\n").pop()).sort()).toEqual(["a", "b", "c", "rust"]);
       } finally {
         workspace.remove();
       }

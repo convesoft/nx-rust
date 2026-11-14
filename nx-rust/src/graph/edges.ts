@@ -27,7 +27,8 @@ const implicit = "implicit" as DependencyType.implicit;
  * through path dependencies on crates without one
  * ({@link projectsReachedByPath}), from each workspace project to every
  * member of its workspace, and from members to the crates that their
- * workspace's `[patch]`, `[replace]` and `paths` tables redirect to
+ * workspace's `[patch]`, `[replace]` and `paths` tables redirect to and to
+ * the crates with a project behind such crates without one
  * ({@link redirectedUses}).
  *
  * An edge exists only where both crates are Nx projects, and names each end
