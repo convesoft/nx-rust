@@ -184,9 +184,9 @@ script that imports the harness, the fixtures load the source, `src/index.ts`
 leaving out `node_modules` and `.nx`, and **`changedFiles(before, after)`**
 lists the paths that differ between two such results. Together they show
 which files a command wrote, such as `init`, which may write `nx.json` only.
-**`withoutColours(output)`** removes the colour codes that Nx writes when the
-environment asks for colours, as `nx run-many` does for this repository's
-tests, so that a test can compare the text.
+**`withoutColours(output)`** removes the colour codes that Nx writes into the
+output of every command that the helpers run, as `testEnvironment` explains,
+so that a test can compare the text.
 
 **`runNx(workspace, args, env)`** runs Nx with static output, put before
 `args` so that it stays Nx's own option when `args` holds `--`, and returns
@@ -293,8 +293,13 @@ leaves out the variables from which Nx concludes that an agent runs it
 agent would make `nx show` print JSON and `nx run` print no task output by
 default; CI turns off the daemon, sync generators before tasks and the
 daemon's start-up questions; and in GitHub Actions Nx wraps each task's
-output in a log group and writes to the job's summary page. A test that
-needs CI or an agent sets the variables itself. It also keeps Nx's caches out
+output in a log group and writes to the job's summary page. It also leaves
+out `FORCE_COLOR`, `NO_COLOR` and `NODE_DISABLE_COLORS`: Nx gives its tasks
+`FORCE_COLOR`, and beside an inherited `NO_COLOR` every Node process warns
+that `NO_COLOR` is ignored, in lines that `withoutColours` leaves in. Nx then
+colours its output in every command, because picocolors takes any `CI` as a
+request for colours, `CI=false` too. A test that needs CI, an agent or other
+colours sets the variables itself. It also keeps Nx's caches out
 of `/tmp/.nx/<uid>`, which Nx uses whatever `TMPDIR` says and which is
 memory on some machines: Nx loads its native binary where it is installed
 instead of copying it there, and Node's compile cache, whose entries are

@@ -81,12 +81,14 @@ describe("the environment of fixture commands", () => {
         const summary = join(workspace.root, "..", "step-summary.md");
 
         const plain = await withOuterEnvironment(noAgentOutsideCi(), () => observe(workspace));
-        const agentInCi = await withOuterEnvironment(agentInGitHubActions(summary), () =>
-          observe(workspace),
+        const agentInCi = await withOuterEnvironment(
+          { ...agentInGitHubActions(summary), NO_COLOR: "1" },
+          () => observe(workspace),
         );
 
-        // Plain names without `--json`, and the task's output in the default
-        // style, with a `> nx run` line outside any log group.
+        // Plain names without `--json` and nothing else, and the task's
+        // output in the default style, with a `> nx run` line outside any
+        // log group.
         expect(plain.shown.status).toBe(0);
         expect([...plain.shown.lines].sort()).toEqual(projects);
         for (const run of [plain.run, plain.static]) {
@@ -115,8 +117,11 @@ describe("the environment of fixture commands", () => {
         // output, a log group, and a performance report on the summary page.
         expect(asked.shown.status).toBe(0);
         expect(JSON.parse(asked.shown.lines.join("\n")).sort()).toEqual(projects);
-        expect(asked.run).toEqual({ status: 0, lines: [] });
-        expect(asked.static.lines[0]).toMatch(/^::group::.* > nx run hello:greet$/);
+        expect(asked.run.status).toBe(0);
+        expect(asked.run.lines).not.toContain("hello");
+        expect(asked.static.lines.filter((line) => line.includes("nx run"))).toEqual([
+          expect.stringMatching(/^::group::.* > nx run hello:greet$/),
+        ]);
         expect(fs.existsSync(summary)).toBe(true);
       }),
     HARNESS_TIMEOUT,
@@ -126,7 +131,8 @@ describe("the environment of fixture commands", () => {
 /**
  * What a test sees in `workspace` of `nx show projects` and of the task
  * `hello:greet`, run in the default output style and in the static one: the
- * exit status and the lines that name a project, without colours.
+ * exit status and the lines of the output, without colours and with each
+ * duration replaced by `<duration>`.
  */
 async function observe(workspace: FixtureWorkspace, env: Env = {}) {
   const commands = {
@@ -137,11 +143,8 @@ async function observe(workspace: FixtureWorkspace, env: Env = {}) {
   const seen = {} as Record<keyof typeof commands, { status: number | null; lines: string[] }>;
   for (const name of Object.keys(commands) as (keyof typeof commands)[]) {
     const { status, output } = await workspace.nx(commands[name], env);
-    const lines = withoutColours(output).split("\n");
-    seen[name] = {
-      status,
-      lines: lines.filter((line) => /api|hello|rust|xtask/.test(line)),
-    };
+    const text = withoutColours(output).replace(/\d+(\.\d+)?(ms|s|m)\b/g, "<duration>");
+    seen[name] = { status, lines: text.trim().split("\n") };
   }
   return seen;
 }

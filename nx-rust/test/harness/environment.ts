@@ -35,6 +35,23 @@ export const agentVariables = [
   "VSCODE_AGENT",
 ];
 
+/**
+ * Variables that turn colours on or off. Nx gives its tasks `FORCE_COLOR`,
+ * `true` where it is unset, the tests of this repository among them; with an
+ * inherited `NO_COLOR` beside it, as some agents' sessions have, every Node
+ * process warns that `NO_COLOR` is ignored, in lines that `withoutColours`
+ * leaves in the output.
+ */
+const colourVariables = ["FORCE_COLOR", "NO_COLOR", "NODE_DISABLE_COLORS"];
+
+/** The variables, besides those starting with `NX_`, that the commands do not inherit. */
+const leftOut = new Set([
+  ...unsetVariables,
+  ...agentVariables,
+  ...colourVariables,
+  "GITHUB_ACTIONS",
+]);
+
 /** How long a test that runs Nx or cargo in a fixture may take. */
 export const HARNESS_TIMEOUT = 120_000;
 
@@ -65,7 +82,11 @@ export const HARNESS_TIMEOUT = 120_000;
  *
  * Nx sees neither an AI agent nor CI, wherever the tests run, so that a test
  * sees the same Nx in an agent's session, on a developer's machine and in
- * GitHub Actions. A test that needs either sets the variables itself.
+ * GitHub Actions. A test that needs either sets the variables itself, and
+ * so does a test that needs other colours than Nx's default: the
+ * {@link colourVariables} are left out as well. Nx then colours its output
+ * in every command, because picocolors, which it uses, takes any `CI` as a
+ * request for colours, `CI=false` too.
  *
  * - Nx has no setting that turns its agent detection off, so the
  *   {@link agentVariables} are left out. With an agent, `nx show` prints JSON
@@ -108,13 +129,7 @@ export function testEnvironment(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (
-      value !== undefined &&
-      !name.startsWith("NX_") &&
-      !unsetVariables.includes(name) &&
-      !agentVariables.includes(name) &&
-      name !== "GITHUB_ACTIONS"
-    ) {
+    if (value !== undefined && !name.startsWith("NX_") && !leftOut.has(name)) {
       env[name] = value;
     }
   }
