@@ -99,12 +99,16 @@ export class Registration {
     const reports = computationReports();
     let graph: CargoGraph | undefined;
     try {
-      checkNxForGraph(workspaceRoot, reports);
+      const nxWarning = checkNxForGraph(workspaceRoot, reports);
       const pluginOptions = readPluginOptions(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
       const settings = readSettings(discovery, pluginOptions);
       await checkEntries(discovery, settings, nxJson);
-      const context = await cacheContext(discovery, nxJson);
+      const context = await cacheContext(
+        discovery,
+        nxJson,
+        nxWarning === undefined ? [] : [nxWarning],
+      );
       graph = { discovery, projects: inferProjects(discovery, settings, context) };
       return graph;
     } finally {

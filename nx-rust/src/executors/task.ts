@@ -15,7 +15,6 @@ import {
   unnamedTripleProblem,
 } from "../cargo/target-triples";
 import type { BuildRecordSource } from "../graph/build-records";
-import { nxVerdictFor } from "../compatibility/nx-version";
 import { cargoMetadataOf } from "../graph/collisions";
 import {
   commandDigestFolder,
@@ -126,10 +125,12 @@ export type DigestStep = ({ kind: "write" } & DigestWrite) | ({ kind: "check" } 
  * A problem found before cargo starts fails the task with a message that
  * names it and runs no cargo. An option that the task ignores gets a warning
  * line at the top of its output. Before anything else, the task prints the
- * warnings that graph creation found for its project, and the warning for
+ * warnings that graph creation found for its project, among them the one for
  * an Nx major newer than the supported ones that `NX_RUST_ALLOW_UNSUPPORTED_NX`
- * lets the plugin run with, which the Nx daemon keeps out of the terminal
- * (`DES-DIAGNOSTICS`, "Warnings where they are seen").
+ * lets the plugin run with, which the Nx daemon keeps out of the terminal.
+ * The project's keys hold a digest of them, so that a cache hit replays the
+ * warnings of the graph that the command uses (`DES-DIAGNOSTICS`, "Warnings
+ * where they are seen").
  */
 // @mara implements DES-INVOCATION
 // @mara implements REQ-CARGO-UNCHANGED
@@ -139,7 +140,7 @@ export async function runTask(
   options: CargoTargetOptions,
   context: ExecutorContext,
 ): Promise<{ success: boolean }> {
-  for (const warning of [...nxWarnings(context.root), ...projectWarnings(context)]) {
+  for (const warning of projectWarnings(context)) {
     console.warn(warning);
   }
   let invocation: TaskInvocation;
@@ -546,15 +547,6 @@ export function runCargo({ args, cwd }: CargoInvocation): Promise<boolean> {
   });
 }
 
-// The warning for an unsupported Nx that the plugin runs with, which graph
-// creation printed where the daemon may have kept it from the terminal. An
-// unsupported Nx without the variable has failed graph creation already.
-// @mara implements DES-DIAGNOSTICS
-function nxWarnings(workspaceRoot: string): string[] {
-  const verdict = nxVerdictFor(workspaceRoot, process.env);
-  return verdict.kind === "warning" ? [verdict.message] : [];
-}
-
 // Whether a task's options name a triple, which `--target` then gives cargo
 // in place of what the configuration and the environment pick.
 function namesTriple(options: CargoTargetOptions): boolean {
@@ -616,7 +608,8 @@ function checkPickedTriples(
   );
 }
 
-// The warnings that graph creation recorded for the task's project.
+// The warnings that graph creation recorded for the task's project, whose
+// digest the task's key holds.
 // @mara implements DES-DIAGNOSTICS
 function projectWarnings(context: ExecutorContext): string[] {
   const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];

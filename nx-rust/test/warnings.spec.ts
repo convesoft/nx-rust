@@ -1,0 +1,456 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { cargoMetadataOf } from "../src/graph/collisions";
+import { warningsDigest, warningsInputName } from "../src/graph/warnings";
+import {
+  compareCacheKeys,
+  Env,
+  FileChanges,
+  FixtureGraph,
+  FixtureName,
+  FixtureWorkspace,
+  HARNESS_TIMEOUT,
+  runNx,
+  taskCalls,
+  TaskHash,
+} from "./harness";
+
+// Checks the part of VER-SETUP about "Warnings where they are seen" in
+// DES-DIAGNOSTICS: each project's warnings reach its tasks' keys through a
+// digest in a named input, so that a task prints the warnings of the graph
+// that the command uses, whether it runs or is restored from the cache.
+
+/** The root manifest of patched-workspaces without its [patch] of model, as redirections.spec.ts writes it. */
+const withoutModelPatch: FileChanges = {
+  "rust/Cargo.toml": (manifest) => manifest.replace(/^model = .*\n/m, ""),
+};
+
+/** The warning about a configuration file outside the repository that redirects dependencies. */
+const outsideWarning = (config: string) => `nx-rust: ${config} redirects dependencies`;
+
+/** The start of the warning about Cargo's directory of rust inside the repository. */
+const unignoredWarning =
+  "nx-rust: rust/target, Cargo's build and artifact directory of the Cargo workspace in rust, lies inside the repository";
+
+/**
+ * cross-workspace-path where model is no member of the workspace whose
+ * folder holds it and has no project, so that cargo refuses its report:
+ * server warns with cargo's message, which names files of the repository
+ * by their absolute paths.
+ */
+const unreportedPathDependency: FileChanges = {
+  "shared/Cargo.toml": (manifest) => manifest.replace(/members = \[[^\]]*\]/, "members = []"),
+  "nx.json": (current) => {
+    const nxJson = JSON.parse(current ?? "{}");
+    nxJson.plugins = (nxJson.plugins ?? []).map((entry: string | { plugin: string }) =>
+      typeof entry === "string"
+        ? { plugin: entry, exclude: ["shared/**"] }
+        : { ...entry, exclude: ["shared/**"] },
+    );
+    return JSON.stringify(nxJson);
+  },
+};
+
+/** The warnings in a project's metadata, which its tasks print. */
+function warningsOf(graph: FixtureGraph, project: string): string[] {
+  return cargoMetadataOf(graph.projects[project])?.warnings ?? [];
+}
+
+/** The ids of every task of the graph. */
+function allTasks(graph: FixtureGraph): string[] {
+  return Object.entries(graph.projects)
+    .flatMap(([name, project]) => Object.keys(project.targets ?? {}).map((t) => `${name}:${t}`))
+    .sort();
+}
+
+/** The inputs whose hashes differ between two hashes of one task. */
+function changedInputs(before: TaskHash, after: TaskHash): string[] {
+  const nodes = (hash: TaskHash) => (hash.details.nodes ?? {}) as Record<string, string>;
+  const keys = new Set([...Object.keys(nodes(before)), ...Object.keys(nodes(after))]);
+  return [...keys].filter((key) => nodes(before)[key] !== nodes(after)[key]).sort();
+}
+
+describe("the digest of a project's warnings", () => {
+  it("writes the paths inside the repository relative to its root, so that two checkouts get one digest", () => {
+    const message = (root: string) =>
+      `nx-rust: \`cargo metadata\` failed for ${root}/shared/crates/model/Cargo.toml in ${root}: error.`;
+
+    expect(warningsDigest([message("/work/a/repo")], "/work/a/repo")).toBe(
+      warningsDigest([message("/home/b/checkout")], "/home/b/checkout"),
+    );
+    expect(warningsDigest([message("/work/a/repo")], "/work/a/repo")).toBe(
+      warningsDigest(
+        ["nx-rust: `cargo metadata` failed for shared/crates/model/Cargo.toml in .: error."],
+        "/elsewhere",
+      ),
+    );
+  });
+
+  it("keeps a path outside the repository, which names the cause", () => {
+    expect(warningsDigest([outsideWarning("/home/a/.cargo/config.toml")], "/work/repo")).not.toBe(
+      warningsDigest([outsideWarning("/home/b/.cargo/config.toml")], "/work/repo"),
+    );
+  });
+
+  it("leaves a folder alone that only begins or ends like the repository root", () => {
+    for (const path of ["/work/repo-old/Cargo.toml", "/old/work/repo/Cargo.toml"]) {
+      expect({ path, digest: warningsDigest([`nx-rust: ${path}`], "/work/repo") }).not.toEqual({
+        path,
+        digest: warningsDigest(["nx-rust: Cargo.toml"], "/work/repo"),
+      });
+    }
+  });
+
+  it("depends on neither the order of the warnings nor their repetition", () => {
+    expect(warningsDigest(["b", "a", "b"], "/work/repo")).toBe(
+      warningsDigest(["a", "b"], "/work/repo"),
+    );
+    expect(warningsDigest(["a"], "/work/repo")).not.toBe(warningsDigest(["a", "b"], "/work/repo"));
+  });
+});
+
+describe("the named input of a project's warnings", () => {
+  it.each<FixtureName>(["two-workspaces", "subfolder-workspace"])(
+    "is absent from the projects of %s, which have no warnings, so that their keys stay as they are without it",
+    async (fixture) => {
+      const workspace = FixtureWorkspace.create(fixture);
+      try {
+        const graph = await workspace.graph();
+
+        for (const [name, project] of Object.entries(graph.projects)) {
+          expect({ name, warnings: warningsOf(graph, name) }).toEqual({ name, warnings: [] });
+          expect({ name, inputs: Object.keys(project.namedInputs ?? {}) }).toEqual({
+            name,
+            inputs: ["default"],
+          });
+        }
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "holds the digest of the warnings that the project's tasks print, and only on projects that have warnings",
+    async () => {
+      const workspace = FixtureWorkspace.create("cross-workspace-path", unreportedPathDependency);
+      try {
+        const graph = await workspace.graph();
+        const warnings = warningsOf(graph, "server");
+
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain(join(workspace.root, "shared"));
+        expect(graph.projects.server.namedInputs?.[warningsInputName]).toEqual([
+          { runtime: `echo ${warningsDigest(warnings, workspace.root)}` },
+        ]);
+        for (const [name, project] of Object.entries(graph.projects).filter(
+          ([n]) => n !== "server",
+        )) {
+          expect({ name, inputs: Object.keys(project.namedInputs ?? {}) }).toEqual({
+            name,
+            inputs: ["default"],
+          });
+        }
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("the keys of a project's tasks", () => {
+  it(
+    "change with the project's warnings, through the project's configuration",
+    async () => {
+      // Without target/ in .gitignore, every project of rust warns about
+      // rust/target. Nx hashes .gitignore into every key itself.
+      const outcomes = await compareCacheKeys({
+        change: "a .gitignore that leaves rust/target to Nx",
+        fixture: "patched-workspaces",
+        base: { files: withoutModelPatch },
+        after: { files: { ".gitignore": "" } },
+        keys: { "api:fmt-check": "must differ", "model:fmt-check": "must differ" },
+      });
+
+      for (const { task, before, after, holds } of outcomes) {
+        expect({ task, holds }).toEqual({ task, holds: true });
+        expect({ task, changed: changedInputs(before, after) }).toEqual({
+          task,
+          changed: expect.arrayContaining([`${task.split(":")[0]}:ProjectConfiguration`]),
+        });
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "change with a [patch] that the Cargo home's configuration adds, which Nx does not hash otherwise",
+    async () => {
+      const cargoHome = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "cargo-home-"));
+      try {
+        const config = join(cargoHome, "config.toml");
+        const outcomes = await compareCacheKeys({
+          change: "a [patch] of model in the Cargo home's config.toml",
+          fixture: "patched-workspaces",
+          base: { files: withoutModelPatch, env: { CARGO_HOME: cargoHome } },
+          before: { prepare: () => rmSync(config, { force: true }) },
+          after: {
+            prepare: (workspace) =>
+              writeFileSync(
+                config,
+                `[patch.crates-io]\nmodel = { path = "${workspace.root}/rust/crates/model" }\n`,
+              ),
+          },
+          keys: {
+            "api:fmt-check": "must differ",
+            "plain:fmt-check": "must differ",
+            "types:fmt-check": "must differ",
+          },
+        });
+
+        for (const { task, holds } of outcomes) {
+          expect({ task, holds }).toEqual({ task, holds: true });
+        }
+        // plain uses no redirected crate: only its warning changes its key.
+        const plain = outcomes.find(({ task }) => task === "plain:fmt-check");
+        expect(plain && changedInputs(plain.before, plain.after)).toEqual([
+          "plain:ProjectConfiguration",
+        ]);
+      } finally {
+        rmSync(cargoHome, { recursive: true, force: true });
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // Each case: whether the projects warn, and whether the warnings' texts
+  // differ between the checkouts.
+  it.each<[string, FixtureName, FileChanges, boolean, boolean]>([
+    ["without warnings", "subfolder-workspace", {}, false, false],
+    [
+      "with a warning that names files of the repository by their absolute paths",
+      "cross-workspace-path",
+      unreportedPathDependency,
+      true,
+      true,
+    ],
+    [
+      "with a warning about a folder outside both checkouts",
+      "subfolder-workspace",
+      {},
+      true,
+      false,
+    ],
+  ])(
+    "are the same in two checkouts of one repository in different folders, %s",
+    async (_case, fixture, files, warns, textsDiffer) => {
+      // The third case: an artifact directory outside the repository, named
+      // by its absolute path, which is the same for both checkouts.
+      const outside =
+        _case.includes("outside") &&
+        mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "shared-target-"));
+      const env: Env = outside ? { CARGO_TARGET_DIR: outside } : {};
+      const first = FixtureWorkspace.create(fixture, files);
+      const second = FixtureWorkspace.create(fixture, files);
+      try {
+        expect(first.root).not.toBe(second.root);
+        const graphs = [await first.graph(env), await second.graph(env)];
+        const warnings = graphs.map((graph) =>
+          Object.keys(graph.projects).flatMap((name) => warningsOf(graph, name)),
+        );
+        expect(warnings.map((list) => list.length > 0)).toEqual([warns, warns]);
+        // Where the texts differ, the digests still agree.
+        expect(JSON.stringify(warnings[0]) !== JSON.stringify(warnings[1])).toBe(textsDiffer);
+        const tasks = allTasks(graphs[0]);
+        const [one, two] = [
+          await first.hashTasks(tasks, { env }),
+          await second.hashTasks(tasks, { env }),
+        ];
+
+        for (const task of tasks) {
+          expect({ task, hash: one[task].value }).toEqual({ task, hash: two[task].value });
+        }
+      } finally {
+        first.remove();
+        second.remove();
+        if (outside) {
+          rmSync(outside, { recursive: true, force: true });
+        }
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
+});
+
+describe("a task's output", () => {
+  /** Runs api:fmt-check and says whether it ran cargo and printed `warning`. */
+  async function fmtCheck(workspace: FixtureWorkspace, env: Env, warning: string) {
+    const calls = taskCalls(workspace).length;
+    const { status, output } = await runNx(workspace, ["run", "api:fmt-check"], env);
+    expect({ status, output }).toEqual({ status: 0, output });
+    return { ran: taskCalls(workspace).length > calls, warned: output.includes(warning) };
+  }
+
+  /**
+   * Runs api:fmt-check in the states of one cause and returns what the task
+   * did in each ({@link followsTheCause}).
+   */
+  async function stepsOfCause(
+    workspace: FixtureWorkspace,
+    env: Env,
+    warning: string,
+    cause: { add: () => void; remove: () => void },
+  ): Promise<{ ran: boolean; warned: boolean }[]> {
+    const steps: { ran: boolean; warned: boolean }[] = [];
+    const step = async (change?: () => void) => {
+      change?.();
+      steps.push(await fmtCheck(workspace, env, warning));
+    };
+    await step(cause.remove);
+    await step(cause.add);
+    await step();
+    await step(cause.remove);
+    const reset = await runNx(workspace, ["reset"], env);
+    if (reset.status !== 0) {
+      throw new Error(`nx reset failed:\n${reset.output}`);
+    }
+    await step(cause.add);
+    await step(cause.remove);
+    await step();
+    await step(cause.add);
+    return steps;
+  }
+
+  /**
+   * What the task does in the states of {@link stepsOfCause}: cached without
+   * the warning, adding the cause makes it run and warn, and a hit replays
+   * the warning; removing the cause gives the key without the warning again,
+   * whose result from before comes back without it. After `nx reset`, with
+   * the cause there from the start, removing it makes the task run without
+   * the warning, and adding it again restores the result with the warning.
+   */
+  const followsTheCause = [
+    { ran: true, warned: false },
+    { ran: true, warned: true },
+    { ran: false, warned: true },
+    { ran: false, warned: false },
+    { ran: true, warned: true },
+    { ran: true, warned: false },
+    { ran: false, warned: false },
+    { ran: false, warned: true },
+  ];
+
+  it(
+    "shows the warning about a [patch] in the Cargo home's configuration when the graph has it, whether the task runs or is restored, without the daemon",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", withoutModelPatch);
+      const cargoHome = join(dirname(workspace.root), "cargo-home");
+      mkdirSync(cargoHome);
+      const config = join(cargoHome, "config.toml");
+      try {
+        const steps = await stepsOfCause(
+          workspace,
+          { CARGO_HOME: cargoHome },
+          outsideWarning(config),
+          {
+            add: () =>
+              writeFileSync(
+                config,
+                `[patch.crates-io]\nmodel = { path = "${basename(workspace.root)}/rust/crates/model" }\n`,
+              ),
+            remove: () => rmSync(config, { force: true }),
+          },
+        );
+
+        expect(steps).toEqual(followsTheCause);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 3,
+  );
+
+  it(
+    "shows the warning about Cargo's directory that Nx does not ignore when the graph has it, whether the task runs or is restored, without the daemon",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", withoutModelPatch);
+      const gitignore = join(workspace.root, ".gitignore");
+      try {
+        const steps = await stepsOfCause(workspace, {}, unignoredWarning, {
+          add: () => writeFileSync(gitignore, ""),
+          remove: () => writeFileSync(gitignore, "target/\n"),
+        });
+
+        expect(steps).toEqual(followsTheCause);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 3,
+  );
+
+  it(
+    "matches the graph of the Nx daemon, which keeps a warning about configuration outside the repository until a file in the repository changes",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", withoutModelPatch);
+      const cargoHome = join(dirname(workspace.root), "cargo-home");
+      mkdirSync(cargoHome);
+      const config = join(cargoHome, "config.toml");
+      const warning = outsideWarning(config);
+      const env: Env = { CARGO_HOME: cargoHome, NX_DAEMON: "true" };
+      // Whether the daemon's graph gives api the warning.
+      const graphWarns = async () => {
+        const { status, output } = await runNx(
+          workspace,
+          ["show", "project", "api", "--json"],
+          env,
+        );
+        expect(status).toBe(0);
+        const project = JSON.parse(output.trim().split("\n").pop() ?? "{}");
+        return (cargoMetadataOf(project)?.warnings ?? []).some((text) => text.includes(warning));
+      };
+      // Changes a file of the repository that no task hashes, and waits
+      // until the daemon has created the graph again.
+      let touches = 0;
+      const touchRepository = async (expected: boolean) => {
+        writeFileSync(join(workspace.root, "notes.txt"), `${++touches}\n`);
+        for (let attempt = 0; attempt < 40 && (await graphWarns()) !== expected; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        expect(await graphWarns()).toBe(expected);
+      };
+      try {
+        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: true, warned: false });
+
+        // Nx does not watch the Cargo home: the graph and the hit have no warning.
+        writeFileSync(
+          config,
+          `[patch.crates-io]\nmodel = { path = "${basename(workspace.root)}/rust/crates/model" }\n`,
+        );
+        expect(await graphWarns()).toBe(false);
+        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: false, warned: false });
+
+        // A change in the repository: the graph has the warning, and so does the task.
+        await touchRepository(true);
+        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: true, warned: true });
+
+        // The cause is gone, but the graph keeps the warning, and the hit replays it.
+        rmSync(config);
+        expect(await graphWarns()).toBe(true);
+        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: false, warned: true });
+
+        // Once the graph is created again, the result from before the warning returns.
+        await touchRepository(false);
+        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: false, warned: false });
+        expect(workspace.daemonLog()).toContain(warning);
+      } finally {
+        await workspace.nx(["daemon", "--stop"], env);
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 3,
+  );
+});

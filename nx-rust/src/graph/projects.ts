@@ -10,6 +10,7 @@ import { projectName } from "./names";
 import type { GraphSettings, ProjectSettings } from "./settings";
 import { applyTargetTables } from "./target-tables";
 import { inferTargets, nameTargets } from "./targets";
+import { warningsInput } from "./warnings";
 
 /**
  * A project that the plugin creates: a crate, or the workspace project of a
@@ -52,12 +53,16 @@ export interface CargoProject {
   targets: Record<string, TargetConfiguration>;
   /** What the plugin options and the metadata tables give the project. */
   settings: ProjectSettings;
-  /** The project's named inputs, which its targets and its dependents hash (`DES-INPUTS`). */
+  /**
+   * The project's named inputs, which its targets and its dependents hash
+   * (`DES-INPUTS`), with the one that holds the digest of its warnings where
+   * it has any (`warningsInput` in `warnings.ts`).
+   */
   namedInputs: Record<string, Input[]>;
   /**
    * The warnings found while creating the graph that concern the project,
-   * which the executor prints again at the start of each of its tasks
-   * (`DES-DIAGNOSTICS`).
+   * which the executor prints again at the start of each of its tasks, and
+   * which the project's keys hold through a digest (`DES-DIAGNOSTICS`).
    */
   warnings: string[];
 }
@@ -161,16 +166,18 @@ export function inferProjects(
     discovery.workspaceRoot,
     settings.options.targetNames,
   );
-  return projects.map((project, index) => ({
-    ...project,
-    targets: targets[index],
-    namedInputs: namedInputs(
-      project,
-      context,
-      inputSettings(project.settings, fileInputs(project)),
-    ),
-    warnings: projectWarnings(project, context),
-  }));
+  return projects.map((project, index) => {
+    const warnings = projectWarnings(project, context);
+    return {
+      ...project,
+      targets: targets[index],
+      namedInputs: {
+        ...namedInputs(project, context, inputSettings(project.settings, fileInputs(project))),
+        ...warningsInput(warnings, discovery.workspaceRoot),
+      },
+      warnings,
+    };
+  });
 }
 
 /**

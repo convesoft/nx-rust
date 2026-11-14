@@ -3,6 +3,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UnsupportedCargoError } from "../src/compatibility/cargo-version";
+import { cargoMetadataOf } from "../src/graph/collisions";
+import { warningsInputName } from "../src/graph/warnings";
 import {
   describeNxMajors,
   installedNx,
@@ -357,6 +359,41 @@ describe("a task with an Nx major newer than the supported ones", () => {
             await workspace.nx(["daemon", "--stop"], allowed);
           }
         }
+      }),
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("the keys of tasks with an Nx major newer than the supported ones", () => {
+  it(
+    "hold the warning of NX_RUST_ALLOW_UNSUPPORTED_NX=true, which names the version found, through every project's named input",
+    () =>
+      inFixture({}, async (workspace) => {
+        const allowed = { NX_RUST_ALLOW_UNSUPPORTED_NX: "true" };
+        const supportedHash = (await workspace.hashTasks(["api:fmt-check"], { env: allowed }))[
+          "api:fmt-check"
+        ];
+        const hashes = [];
+        for (const version of [newerNx, `${installedMajor + 1}.1.0`]) {
+          workspace.useNx(version);
+          const graph = await workspace.graph(allowed);
+          for (const [name, project] of Object.entries(graph.projects)) {
+            expect({
+              name,
+              warned: (cargoMetadataOf(project)?.warnings ?? []).some((warning) =>
+                warning.includes(untested(version)),
+              ),
+              input: warningsInputName in (project.namedInputs ?? {}),
+            }).toEqual({ name, warned: true, input: true });
+          }
+          hashes.push(
+            (await workspace.hashTasks(["api:fmt-check"], { env: allowed }))["api:fmt-check"],
+          );
+        }
+
+        const configuration = (hash: typeof supportedHash) =>
+          (hash.details.nodes as Record<string, string>)["api:ProjectConfiguration"];
+        expect(new Set([configuration(supportedHash), ...hashes.map(configuration)]).size).toBe(3);
       }),
     HARNESS_TIMEOUT,
   );
