@@ -7,6 +7,7 @@ import {
   HARNESS_TIMEOUT,
   inFixture,
   linesWith,
+  pluginWorkers,
   runNx,
   sortedCalls,
   taskCalls,
@@ -46,7 +47,7 @@ const run = (crate: string, ...rest: string[]): CargoCall => ({
 
 describe("the binary of a run task", () => {
   it.each<[string, Env]>([
-    ["without the daemon", {}],
+    ["without the daemon", pluginWorkers],
     ["with the daemon", { NX_DAEMON: "true" }],
   ])(
     "gets the arguments after -- and the words of args, and no option, %s",
@@ -130,9 +131,9 @@ describe("the binary of a run task", () => {
   );
 
   it.each<[string, Env, object]>([
-    ["without the daemon", {}, {}],
+    ["without the daemon", pluginWorkers, {}],
     ["with the daemon", { NX_DAEMON: "true" }, {}],
-    ["without the daemon, as a continuous task", {}, { continuous: true }],
+    ["without the daemon, as a continuous task", pluginWorkers, { continuous: true }],
     ["with the daemon, as a continuous task", { NX_DAEMON: "true" }, { continuous: true }],
   ])(
     "of a dependency that dependsOn reaches without params: forward gets none of them, %s",

@@ -1,5 +1,6 @@
 export * from "./cache-keys";
 export * from "./cargo-wrapper";
+export * from "./compiled-plugin";
 export * from "./environment";
 export * from "./files";
 export * from "./fixtures";
