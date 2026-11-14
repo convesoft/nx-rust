@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { PackageVersion } from "../cargo/lockfile";
 import type { CargoPackage } from "../cargo/metadata";
 import { buildRecordSource, sharedRecordNames } from "./build-records";
+import type { DeclaredPattern } from "./declared-files";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import { workspacesWithoutRootProject } from "./entries";
 import {
@@ -42,6 +43,12 @@ export interface CacheContext extends InputContext {
    * (`inferProjects` in `projects.ts`).
    */
   declaredFileProblems: readonly string[];
+  /**
+   * The patterns of the files that the crates without an edge declare, for
+   * the check of `createDependencies` (`failOnUncoveredProjectFolders` in
+   * `declared-files.ts`).
+   */
+  declaredPatterns?: readonly DeclaredPattern[];
   /**
    * The root folders of the workspaces that have no lockfile task, because
    * Nx hands their root manifest to no entry of the plugin
@@ -155,6 +162,7 @@ export async function cacheContext(
     pathDependencyInputs,
     redirectedInputs,
     declaredFileProblems: folders.problems,
+    declaredPatterns: folders.patterns,
     pathPackageManifests: pathPackageManifests(discovery),
     artifactDirectories,
     warnings,

@@ -287,6 +287,70 @@ describe("the check of a build's dependency files", () => {
   );
 
   it(
+    "passes a build that reads a file of a crate it does not depend on through a pattern that starts above that crate's folder",
+    async () => {
+      // rust/crates lies in the folder of the workspace project rust, so the
+      // pattern reaches plain's file only through the fileset for plain's folder.
+      await inFixture(
+        "undeclared-files",
+        {
+          "rust/crates/reader/Cargo.toml": crateTable(
+            'fileInputs = ["../../../shared/**", "../*/data.txt"]',
+          ),
+          "rust/crates/plain/data.txt": "data\n",
+          ...readerIncludes("../../plain/data.txt"),
+        },
+        async (workspace) => {
+          const { status, output } = await nx(workspace, ["run", "reader:build"]);
+          expect(output).not.toContain(failure);
+          expect(status).toBe(0);
+          expect(cargoCalls(workspace)).toEqual(["build -p reader"]);
+        },
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "passes with the pattern that it shows for a recorded folder that holds the folders of other crates",
+    async () => {
+      await inFixture(
+        "undeclared-files",
+        {
+          ...readerDeclares,
+          "rust/crates/reader/build.rs": (source = "") =>
+            source.replace(
+              'println!("cargo::rerun-if-changed=build.rs");',
+              'println!("cargo::rerun-if-changed=build.rs");\n    println!("cargo::rerun-if-changed=..");',
+            ),
+        },
+        async (workspace) => {
+          const first = await nx(workspace, ["run", "reader:build"]);
+          expect(first.status).not.toBe(0);
+          expect(listedFiles(first.output, "reader")).toContain(
+            "rust/crates/plain/src/lib.rs, in the folder rust/crates, which cargo records as a whole",
+          );
+          const folderLine =
+            'A pattern for the folder rust/crates, "../**", also covers the files that are added to it later.';
+          expect(first.output).toContain(folderLine);
+
+          applyFileChanges(workspace.root, {
+            "rust/crates/reader/Cargo.toml": (manifest = "") =>
+              manifest.replace(
+                '"../../../shared/assets/**"',
+                '"../../../shared/assets/**", "../**"',
+              ),
+          });
+          const declared = await nx(workspace, ["run", "reader:build"]);
+          expect(declared.output).not.toContain(failure);
+          expect(declared.status).toBe(0);
+        },
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "finds an undeclared file with build.dep-info-basedir set, inside and outside the folder it names, and one whose name holds a space",
     async () => {
       // The folder holds the artifact directory, so the record names the

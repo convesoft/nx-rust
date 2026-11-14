@@ -4,7 +4,7 @@ import type { CargoPackage } from "../cargo/metadata";
 import { CacheContext, projectWarnings } from "./caching";
 import { cargoMetadata, cargoMetadataKey } from "./collisions";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
-import { declaredFiles } from "./declared-files";
+import { DeclaredPattern, declaredFiles, pluginProjectRoots } from "./declared-files";
 import { Input, InputDefinition, InputSettings, namedInputs } from "./inputs";
 import { projectName } from "./names";
 import type { GraphSettings, ProjectSettings } from "./settings";
@@ -60,12 +60,22 @@ export interface CargoProject {
    * (`DES-DIAGNOSTICS`).
    */
   warnings: string[];
+  /** Its own `fileInputs` patterns, as resolved (`declaredFiles` in `declared-files.ts`). */
+  declaredPatterns: DeclaredPattern[];
 }
 
 /** What one `createNodes` call of a plugin entry found, kept for its `createDependencies`. */
 export interface CargoGraph {
   discovery: CargoDiscovery;
   projects: CargoProject[];
+  /**
+   * The `fileInputs` patterns of the projects and of the crates whose
+   * folders their inputs name, as resolved, which `createDependencies`
+   * checks against the projects of every plugin
+   * (`failOnUncoveredProjectFolders` in `declared-files.ts`); absent in a
+   * graph of discovery alone.
+   */
+  declaredPatterns?: DeclaredPattern[];
 }
 
 /**
@@ -96,7 +106,10 @@ export function inferProjects(
   settings: GraphSettings,
   context: CacheContext,
 ): CargoProject[] {
-  const projects: Omit<CargoProject, "targets" | "namedInputs" | "warnings">[] = [];
+  const projects: Omit<
+    CargoProject,
+    "targets" | "namedInputs" | "warnings" | "declaredPatterns"
+  >[] = [];
   for (const workspace of discovery.workspaces) {
     const rootManifest = join(workspace.report.workspace_root, "Cargo.toml");
     for (const pkg of workspace.members) {
@@ -130,10 +143,14 @@ export function inferProjects(
       });
     }
   }
+  const projectRoots = pluginProjectRoots(discovery);
   const declared = new Map(
     projects.map((project) => [
       project,
-      declaredFiles(project.settings.fileInputs, project.workspace, discovery.workspaceRoot),
+      declaredFiles(project.settings.fileInputs, project.workspace, discovery.workspaceRoot, {
+        crate: project.pkg?.name ?? project.name,
+        projectRoots,
+      }),
     ]),
   );
   const problems = new Set([
@@ -170,6 +187,7 @@ export function inferProjects(
       inputSettings(project.settings, fileInputs(project)),
     ),
     warnings: projectWarnings(project, context),
+    declaredPatterns: declared.get(project)?.patterns ?? [],
   }));
 }
 

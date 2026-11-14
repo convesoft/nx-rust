@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { lutimesSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { patternsBelow } from "../src/graph/declared-files";
 import {
   applyFileChanges,
   FileChanges,
@@ -9,17 +10,19 @@ import {
   HARNESS_TIMEOUT,
   inFixture,
   testEnvironment,
+  withoutColours,
 } from "./harness";
 
 // Checks the parts of VER-CACHE-KEYS for declared files that the matrix in
 // cache-keys.spec.ts does not: what `nx affected` selects after a commit or
 // with --files, declared files that Git or Nx ignores and declared links,
-// each hashed twice in one workspace as consecutive runs hash them, and the
-// graph-creation errors of REQ-FILE-INPUTS-HASHABLE and DES-INPUTS.
+// each hashed twice in one workspace as consecutive runs hash them, patterns
+// that name files of other projects, and the graph-creation errors of
+// REQ-FILE-INPUTS-HASHABLE and DES-INPUTS.
 //
 // In declared-files, the workspace table declares proto/**/*.proto for every
 // member, and api's own table declares docs/banner.txt. app depends on api;
-// other depends on neither.
+// other depends on neither. rust is the folder of the workspace project rust.
 
 /** The cached targets of a crate and the workspace project's `doc`. */
 const cachedTargets = ["build", "check", "lint", "test", "fmt-check", "doc"];
@@ -161,6 +164,46 @@ async function changeDeclaredFile(options: {
 }
 
 const bothDiffer = { "api:test": true, "app:test": true };
+
+/** What a commit that changes one file does to the keys of some tasks and to `nx affected`. */
+interface FileChangeOutcome extends DeclaredFileOutcome {
+  /** The file that the commit changed. */
+  changed: string;
+}
+
+/**
+ * Commits the fixture with `files`, then for each file of `changed` in turn
+ * hashes `tasks`, commits a change to the file, hashes them again in the
+ * same workspace and asks `nx affected` what the commit and `--files` select.
+ */
+async function changeFilesInTurn(options: {
+  fixture?: "declared-files" | "undeclared-files";
+  files: FileChanges;
+  changed: string[];
+  tasks: string[];
+}): Promise<FileChangeOutcome[]> {
+  const workspace = FixtureWorkspace.create(options.fixture ?? "declared-files", options.files);
+  try {
+    commitWorkspace(workspace);
+    const outcomes: FileChangeOutcome[] = [];
+    for (const changed of options.changed) {
+      const before = await workspace.hashTasks(options.tasks);
+      commitChanges(workspace, { [changed]: (current) => `${current ?? ""}// changed\n` });
+      const after = await workspace.hashTasks(options.tasks);
+      outcomes.push({
+        changed,
+        keysDiffer: Object.fromEntries(
+          options.tasks.map((task) => [task, before[task].value !== after[task].value]),
+        ),
+        afterCommit: await affectedTasks(workspace, ["--base=HEAD~1", "--head=HEAD"]),
+        withFiles: await affectedTasks(workspace, [`--files=${changed}`]),
+      });
+    }
+    return outcomes;
+  } finally {
+    workspace.remove();
+  }
+}
 
 describe("declared files", () => {
   it(
@@ -829,5 +872,320 @@ describe("declared files", () => {
         }),
       HARNESS_TIMEOUT,
     );
+  });
+
+  describe("that name files of other projects", () => {
+    // A pattern of api that starts in rust/crates starts inside the folder of
+    // the workspace project rust, so that Nx matches it against rust's own
+    // files only (EVD-NX-24-FILESET-SCOPE). The filesets for the folders of
+    // the crates below are what reach their files.
+
+    /** The tasks of api that compile, and its workspace's doc. */
+    const apiCompiling = ["api:build", "api:check", "api:lint", "api:test", "rust:doc"];
+    const everyKeyDiffers = Object.fromEntries(apiCompiling.map((task) => [task, true]));
+    const declared = (path: string) => ({
+      fileset: `{workspaceRoot}/${path}`,
+      includeIgnored: true,
+    });
+    /** A change to the workspace table that declares `pattern` beside proto/**\/*.proto. */
+    const workspaceDeclares = (pattern: string): FileChanges => ({
+      "rust/Cargo.toml": (manifest) =>
+        manifest.replace(
+          'fileInputs = ["../proto/**/*.proto"]',
+          `fileInputs = ["../proto/**/*.proto", ${JSON.stringify(pattern)}]`,
+        ),
+    });
+
+    it(
+      "give a fileset for each folder of the plugin's projects below where a pattern starts, unless it starts at the repository root",
+      () =>
+        inFixture(
+          "declared-files",
+          {
+            ...workspaceDeclares("crates/*/templates/**"),
+            ...apiDeclares(
+              "../*/src/**",
+              "../a*/src/main.rs",
+              "../app/**",
+              "../../../*/banner.txt",
+            ),
+          },
+          async (workspace) => {
+            const graph = await workspace.graph();
+            const templates = [
+              declared("rust/crates/*/templates/**"),
+              ...["api", "app", "other"].map((crate) =>
+                declared(`rust/crates/${crate}/templates/**`),
+              ),
+            ];
+
+            expect(graph.projects.api.namedInputs.default).toEqual([
+              "{projectRoot}/**/*",
+              "{workspaceRoot}/rust/Cargo.toml",
+              declared("proto/**/*.proto"),
+              ...templates,
+              declared("rust/crates/*/src/**"),
+              declared("rust/crates/api/src/**"),
+              declared("rust/crates/app/src/**"),
+              declared("rust/crates/other/src/**"),
+              declared("rust/crates/a*/src/main.rs"),
+              declared("rust/crates/api/src/main.rs"),
+              declared("rust/crates/app/src/main.rs"),
+              declared("rust/crates/app/**"),
+              declared("*/banner.txt"),
+            ]);
+            expect(graph.projects.other.namedInputs.default).toEqual([
+              "{projectRoot}/**/*",
+              "{workspaceRoot}/rust/Cargo.toml",
+              declared("proto/**/*.proto"),
+              ...templates,
+            ]);
+          },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    // rust/crates/assets is no crate: the workspace excludes it, and its
+    // files belong to the workspace project rust.
+    const sibling = "rust/crates/app/src/main.rs";
+    const noCrate = "rust/crates/assets/src/main.rs";
+    const withFilesOfNoCrate: FileChanges = {
+      "rust/Cargo.toml": (manifest) =>
+        manifest.replace(
+          'members = ["crates/*"]',
+          'members = ["crates/*"]\nexclude = ["crates/assets"]',
+        ),
+      [noCrate]: "fn main() {}\n",
+      "rust/banner.txt": "Built in rust\n",
+    };
+
+    it.each([
+      ["../app/src/main.rs", [sibling]],
+      ["../app/**", [sibling]],
+      ["../*/**", [sibling, noCrate]],
+      ["../*/**/*", [sibling, noCrate]],
+      ["../*/src/**", [sibling, noCrate]],
+      ["../*/src/main.rs", [sibling, noCrate]],
+      ["../a*/src/main.rs", [sibling, noCrate]],
+      // rust/banner.txt is a file of the project rust, docs/banner.txt one of no project.
+      ["../../../*/banner.txt", ["rust/banner.txt", "docs/banner.txt"]],
+    ])(
+      "change the keys of check, lint, test, build and doc and select the tasks for each file of another project and of no crate that %s names",
+      async (pattern, changed) => {
+        const outcomes = await changeFilesInTurn({
+          files: { ...withFilesOfNoCrate, ...apiDeclares(pattern) },
+          changed,
+          tasks: apiCompiling,
+        });
+
+        expect(outcomes).toEqual(
+          changed.map((file) => ({
+            changed: file,
+            keysDiffer: everyKeyDiffers,
+            afterCommit: apiAndDependents,
+            withFiles: apiAndDependents,
+          })),
+        );
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "change the keys of a crate's tasks and select them for a file of a crate it does not depend on, and of no crate, that ../** names",
+      async () => {
+        // In undeclared-files, reader depends on base only.
+        const readerCompiling = ["reader:build", "reader:check", "reader:lint", "reader:test"];
+        const outcomes = await changeFilesInTurn({
+          fixture: "undeclared-files",
+          files: {
+            "rust/crates/reader/Cargo.toml": (manifest = "") =>
+              `${manifest}\n[package.metadata.nx]\nfileInputs = ["../**"]\n`,
+            "rust/crates/notes.txt": "notes\n",
+          },
+          changed: ["rust/crates/plain/src/lib.rs", "rust/crates/notes.txt"],
+          tasks: [...readerCompiling, "rust:doc"],
+        });
+
+        for (const outcome of outcomes) {
+          expect(outcome.keysDiffer).toEqual(
+            Object.fromEntries([...readerCompiling, "rust:doc"].map((task) => [task, true])),
+          );
+          expect(outcome.afterCommit).toEqual(
+            expect.arrayContaining([...readerCompiling, "rust:doc"]),
+          );
+          expect(outcome.withFiles).toEqual(outcome.afterCommit);
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    /** The lines of the graph-creation error about a project folder that a pattern names. */
+    async function uncoveredFolderErrors(workspace: FixtureWorkspace): Promise<string[]> {
+      const error = await workspace.graph().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(error).toBeInstanceOf(GraphCreationError);
+      const lines = (error as Error).message
+        .split("\n")
+        .filter((line) => line.includes("which Nx would leave out of the cache keys"))
+        .map((line) => line.replace(/^.*?(?=rust\/)/, ""));
+      return [...new Set(lines)];
+    }
+
+    // web is a project of its own, from a project.json, inside app's folder.
+    const withWeb: FileChanges = {
+      "rust/crates/app/web/project.json": JSON.stringify({ name: "web" }),
+      "rust/crates/app/web/index.js": "export {};\n",
+    };
+    const remedyOf = (manifest: string, root: string, owner: string, ...lines: string[]) =>
+      [
+        `The pattern starts in ${root}, inside the folder of the project "${owner}", and Nx matches such a pattern only against that project's own files, not against those of a project in a folder below it.`,
+        `nx-rust adds a pattern for the folder of each project that it creates, but "web" comes from another plugin or entry.`,
+        `Add ${lines.join(" and ")} beside it in the fileInputs of ${manifest}, or narrow the pattern so that it does not reach rust/crates/app/web.`,
+      ].join(" ");
+
+    it(
+      "fail graph creation for a pattern that names files of another plugin's project in a folder below where it starts, naming the crates and the pattern to add",
+      () =>
+        inFixture(
+          "declared-files",
+          {
+            ...withWeb,
+            ...workspaceDeclares("crates/*/w*/**"),
+            ...apiDeclares("../app/**", "../*/src/**"),
+          },
+          async (workspace) => {
+            expect(await uncoveredFolderErrors(workspace)).toEqual([
+              `rust/Cargo.toml: the fileInputs pattern "crates/*/w*/**" of the crates api, app and other names files in rust/crates/app/web, the folder of the project "web", which Nx would leave out of the cache keys. ${remedyOf("rust/Cargo.toml", "rust/crates", "rust", '"crates/app/web/**"')}`,
+              `rust/crates/api/Cargo.toml: the fileInputs pattern "../app/**" of the crate api names files in rust/crates/app/web, the folder of the project "web", which Nx would leave out of the cache keys. ${remedyOf("rust/crates/api/Cargo.toml", "rust/crates/app", "app", '"../app/web/**"')}`,
+            ]);
+          },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "change the keys and select the tasks for a file of another plugin's project once the manifest adds the pattern that the error shows",
+      async () => {
+        const outcomes = await changeFilesInTurn({
+          files: { ...withWeb, ...apiDeclares("../app/**", "../app/web/**") },
+          changed: ["rust/crates/app/web/index.js"],
+          tasks: apiCompiling,
+        });
+
+        expect(outcomes).toEqual([
+          {
+            changed: "rust/crates/app/web/index.js",
+            keysDiffer: everyKeyDiffers,
+            afterCommit: apiAndDependents,
+            withFiles: apiAndDependents,
+          },
+        ]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "cover a crate added later in a folder that a pattern names, and fail graph creation for a project.json added there, with the Nx daemon",
+      async () => {
+        const daemon = { NX_DAEMON: "true" };
+        const workspace = FixtureWorkspace.create("declared-files", {
+          "rust/Cargo.toml": (manifest) =>
+            manifest.replace(
+              'members = ["crates/*"]',
+              'members = ["crates/*"]\nexclude = ["crates/web"]',
+            ),
+          ...apiDeclares("../*/src/**"),
+        });
+        /** api's named input `default` as the daemon's graph has it, once `ready` accepts it. */
+        const apiInputs = async (ready: (inputs: unknown[]) => boolean): Promise<unknown[]> => {
+          let inputs: unknown[] = [];
+          // The daemon recomputes the graph once its watcher reports the change.
+          for (let attempt = 0; attempt < 60; attempt++) {
+            const { status, output } = await workspace.nx(
+              ["show", "project", "api", "--json"],
+              daemon,
+            );
+            expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+            inputs = JSON.parse(output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1))
+              .namedInputs.default;
+            if (ready(inputs)) {
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+          return inputs;
+        };
+        const extra = declared("rust/crates/extra/src/**");
+        try {
+          expect(await apiInputs(() => true)).not.toContainEqual(extra);
+
+          applyFileChanges(workspace.root, {
+            "rust/crates/extra/Cargo.toml":
+              '[package]\nname = "extra"\nversion = "0.1.0"\nedition = "2024"\n',
+            "rust/crates/extra/src/lib.rs": "",
+          });
+          expect(
+            await apiInputs((inputs) =>
+              inputs.some((input) => JSON.stringify(input) === JSON.stringify(extra)),
+            ),
+          ).toContainEqual(extra);
+
+          applyFileChanges(workspace.root, {
+            "rust/crates/web/project.json": JSON.stringify({ name: "web" }),
+            "rust/crates/web/src/index.js": "export {};\n",
+          });
+          let failed = { status: 0 as number | null, output: "" };
+          for (let attempt = 0; attempt < 60 && failed.status === 0; attempt++) {
+            failed = await workspace.nx(["show", "projects"], daemon);
+            if (failed.status === 0) {
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+          }
+          expect(failed.status).not.toBe(0);
+          expect(withoutColours(failed.output)).toContain(
+            'rust/crates/api/Cargo.toml: the fileInputs pattern "../*/src/**" of the crate api names files in rust/crates/web, the folder of the project "web", which Nx would leave out of the cache keys.',
+          );
+          expect(withoutColours(failed.output)).toContain(
+            'Add "../web/src/**" beside it in the fileInputs of rust/crates/api/Cargo.toml',
+          );
+        } finally {
+          await workspace.nx(["daemon", "--stop"], daemon);
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
+  describe("patternsBelow", () => {
+    it.each([
+      ["*/**", ["app"], ["**"]],
+      ["*/**/*", ["app"], ["**"]],
+      ["*/src/**", ["app"], ["src/**"]],
+      ["*/src/main.rs", ["app"], ["src/main.rs"]],
+      ["a*/src/main.rs", ["app"], ["src/main.rs"]],
+      ["a*/src/main.rs", ["other"], []],
+      ["**/*.proto", ["a", "b"], ["**/*.proto"]],
+      ["**/x/*.txt", ["a", "x"], ["**/x/*.txt", "*.txt"]],
+      // A pattern that ends at the folder names no file below it.
+      ["*", ["app"], []],
+      // Without a glob, the pattern names a folder and everything below it.
+      ["", ["app", "web"], ["**"]],
+      ["{app,lib}/src/**", ["lib"], ["src/**"]],
+      ["{app,lib}/src/**", ["other"], []],
+      ["{app/src,lib}/**", ["app"], ["src/**"]],
+      ["[ab]pp/**", ["app"], ["**"]],
+      ["[!a]pp/**", ["app"], []],
+      ["\\*/src/**", ["*"], ["src/**"]],
+      ["\\*/src/**", ["app"], []],
+      // A group is taken to match any name.
+      ["@(app|lib)/src/**", ["other"], ["src/**"]],
+      ["*/w*/**", ["app"], ["w*/**"]],
+      ["*/w*/**", ["app", "web"], ["**"]],
+    ])("gives for %j below %j the patterns %j", (glob, names, expected) => {
+      expect(patternsBelow(glob, names)).toEqual(expected);
+    });
   });
 });

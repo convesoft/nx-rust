@@ -1,6 +1,6 @@
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import type { CargoMetadata, CargoPackage } from "../cargo/metadata";
-import { declaredFiles } from "./declared-files";
+import { DeclaredPattern, declaredFiles, pluginProjectRoots } from "./declared-files";
 import type { CargoDiscovery } from "./discovery";
 import type { Input, InputDefinition } from "./inputs";
 import { realPath } from "./real-path";
@@ -53,6 +53,8 @@ export interface CrateFolders {
    * stop graph creation (`declaredFiles` in `declared-files.ts`).
    */
   problems: string[];
+  /** The patterns of the declared files of those crates, for the check of `createDependencies`. */
+  patterns: DeclaredPattern[];
 }
 
 /**
@@ -119,6 +121,8 @@ export async function findCrateFolders(
 
   const declared = new Map<string, InputDefinition[]>();
   const problems = new Set<string>();
+  const patterns: DeclaredPattern[] = [];
+  const projectRoots = pluginProjectRoots(discovery);
   type Reached = { name: string; folder: string; via: PathDependency["via"] };
   const reached = new Map<string, Reached[]>();
   const leftOutEdges = new Map<string, PathDependency[]>();
@@ -209,7 +213,7 @@ export async function findCrateFolders(
       crates.filter((crate) => !folders.has(crate.folder) && folders.add(crate.folder)),
     );
   }
-  return { withoutProject, leftOutEdges, problems: [...problems] };
+  return { withoutProject, leftOutEdges, problems: [...problems], patterns };
 
   // The filesets for the files that the crate in `folder`, a real path,
   // declares, read once per crate from its report; none without one.
@@ -224,10 +228,14 @@ export async function findCrateFolders(
       const found: string[] = [];
       const fileInputs = readCrateFileInputs(pkg, report, workspaceRoot, found);
       const workspace = { root: relative(workspaceRoot, report.workspace_root) || ".", report };
-      const result = declaredFiles(fileInputs, workspace, workspaceRoot);
+      const result = declaredFiles(fileInputs, workspace, workspaceRoot, {
+        crate: pkg.name,
+        projectRoots,
+      });
       for (const problem of [...found, ...result.problems]) {
         problems.add(problem);
       }
+      patterns.push(...result.patterns);
       filesets = result.filesets;
       declared.set(folder, filesets);
     }
