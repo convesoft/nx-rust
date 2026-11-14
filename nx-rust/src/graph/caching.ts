@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { PackageVersion } from "../cargo/lockfile";
 import { type PickedTriples, pickText, unnamedTripleProblem } from "../cargo/target-triples";
 import type { CargoPackage } from "../cargo/metadata";
+import { directoryVariables } from "../cargo/directories";
 import { buildRecordSource, sharedRecordNames } from "./build-records";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import { workspacesWithoutRootProject } from "./entries";
@@ -16,13 +17,13 @@ import {
   pluginVersionInput,
   repositoryDefaultInputs,
   targetInputs,
-  tripleCommand,
+  artifactFoldersCommand,
 } from "./inputs";
 import { digestFolder, lockfileDependency } from "./lockfile-task";
 import { ArtifactDirectory, targetOutputs, uncachedByDesign, uncachedReason } from "./outputs";
 import { crateInputs, findCrateFolders, unseenPathDependencyWarning } from "./path-dependencies";
 import { pluginInput } from "./plugin-package";
-import { physicalPath, realPath } from "./real-path";
+import { physicalPath, realPath, repositoryFolder } from "./real-path";
 import { redirectedUses } from "./redirected-uses";
 import {
   cachedTargets,
@@ -129,7 +130,7 @@ export async function cacheContext(
   }
   const reached = reachedArtifactDirectories(discovery.workspaces);
   const sharers = artifactDirectorySharers(discovery.workspaces, reached);
-  const artifactDirectories = locateArtifactDirectories(discovery, reached, sharers);
+  const artifactDirectories = locateArtifactDirectories(discovery, sharers);
   const directoryWarnings = unignoredDirectoryWarnings(discovery.workspaces, workspaceRoot);
   const withoutLockfileTask = await workspacesWithoutRootProject(discovery, nxJson);
   for (const workspace of discovery.workspaces) {
@@ -294,13 +295,18 @@ export function configureCaching(
       if (configuredPick !== "none") {
         metadata.configuredPick = configuredPick;
       }
+      if (artifacts.inside) {
+        metadata.artifactDirectory = artifacts.path;
+      }
+      const variables = directoryVariables(process.env);
+      if (Object.keys(variables).length > 0) {
+        metadata.directoryVariables = variables;
+      }
     }
     if (metadata !== undefined && name === "build" && subject.pkg !== undefined) {
       metadata.records = buildRecordSource(
         subject.pkg,
-        subject.workspace,
         context.sharedRecordNames?.get(subject.workspace.root) ?? [],
-        context.repositoryRoot,
       );
     }
     const readsDigest = target.cache && cachedTargets.has(name) && name !== "fmt-check";
@@ -317,7 +323,7 @@ export function configureCaching(
         : targetInputs(name, subject, context, settings, readsDigest);
     target.inputs = inputs ?? [...(target.inputs ?? []), pluginVersionInput(context.plugin)];
     if (target.cache && (name === "build" || name === "doc")) {
-      target.inputs = [...target.inputs, { runtime: tripleCommand(workspaceRoot) }];
+      target.inputs = [...target.inputs, { runtime: artifactFoldersCommand(workspaceRoot) }];
     }
     if (name === "lockfile") {
       target.outputs = [`{workspaceRoot}/${digestFolder(workspaceRoot)}`];
@@ -524,22 +530,20 @@ function artifactDirectorySharers(
 // Where each workspace's artifact directory lies, by the workspace's root
 // folder: outside the repository, or inside it and shared with another
 // workspace or not. The folder that the system reaches decides, relative to
-// the repository's real path, and is the path that the outputs name.
+// the repository's real path, and is the path that the outputs name
+// ({@link repositoryFolder}, which the executor uses as well).
 function locateArtifactDirectories(
   discovery: CargoDiscovery,
-  reached: ReadonlyMap<CargoWorkspace, string>,
   sharers: ReadonlyMap<CargoWorkspace, readonly CargoWorkspace[]>,
 ): Map<string, ArtifactDirectory> {
-  const repositoryRoot = realPath(discovery.workspaceRoot);
   const located = new Map<string, ArtifactDirectory>();
   for (const workspace of discovery.workspaces) {
-    const directory = reached.get(workspace) ?? workspace.report.target_directory;
-    const path = relative(repositoryRoot, directory);
+    const folder = repositoryFolder(workspace.report.target_directory, discovery.workspaceRoot);
     located.set(
       workspace.root,
-      path === "" || path === ".." || path.startsWith("../") || isAbsolute(path)
-        ? { inside: false }
-        : { inside: true, path, shared: (sharers.get(workspace) ?? []).length > 0 },
+      folder.inside
+        ? { inside: true, path: folder.path, shared: (sharers.get(workspace) ?? []).length > 0 }
+        : { inside: false },
     );
   }
   return located;

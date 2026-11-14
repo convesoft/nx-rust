@@ -266,6 +266,19 @@ function pick(configured: Configured, variable: string | undefined): PickedTripl
   return { kind: "triples", triples: [...new Set(triples)], files, fromEnv };
 }
 
+/**
+ * Why cargo writes to another folder for a `targetTriple` option than the
+ * one that the outputs name with the option's value (`DES-OUTPUTS`):
+ * `host-tuple`, which cargo replaces with the host's triple, and the path
+ * of a target specification file, which cargo takes for any value that
+ * ends in `.json`; `undefined` for any other value. Cargo fails on the other
+ * values that {@link pickedTriples} cannot name, so no artifact is stored
+ * for them.
+ */
+export function optionTripleReason(triple: string): string | undefined {
+  return triple === "host-tuple" || triple.endsWith(".json") ? unnamedReason(triple) : undefined;
+}
+
 // Why the plugin cannot put a triple's folder into an output, or undefined.
 function unnamedReason(triple: string): string | undefined {
   if (triple === "") {

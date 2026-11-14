@@ -11,6 +11,7 @@ import {
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
+  loadsCompiledPlugin,
   pnpmLockfile,
   testEnvironment,
   withoutColours,
@@ -60,6 +61,56 @@ function everyTarget(graph: FixtureGraph): [string, TargetConfiguration][] {
       ],
     ),
   );
+}
+
+/**
+ * Checks, for each target of the graph with the artifact input, that the
+ * input, run in the fixture copy as Nx runs it, prints the artifact
+ * directory that the target's outputs and metadata name: what cargo reports
+ * when the task is hashed agrees with what graph creation named
+ * (`DES-INPUTS`, `DES-OUTPUTS`). The input needs the compiled plugin.
+ */
+function expectArtifactInputAgrees(
+  workspace: FixtureWorkspace,
+  graph: FixtureGraph,
+  env: Record<string, string> = {},
+): void {
+  if (!loadsCompiledPlugin()) {
+    return;
+  }
+  let checked = 0;
+  for (const [task, target] of everyTarget(graph)) {
+    const command = (target.inputs ?? []).flatMap((input) =>
+      typeof input === "object" &&
+      "runtime" in input &&
+      input.runtime.includes("print-artifact-folders")
+        ? [input.runtime]
+        : [],
+    )[0];
+    if (command === undefined) {
+      continue;
+    }
+    const run = spawnSync("sh", ["-c", command], {
+      cwd: workspace.root,
+      env: testEnvironment(env),
+      encoding: "utf8",
+    });
+    const directory = /^artifacts (.+)$/m.exec(run.stdout)?.[1];
+    expect({ task, directory }).toEqual({
+      task,
+      directory: target.metadata.cargo.artifactDirectory,
+    });
+    for (const output of target.outputs ?? []) {
+      expect({ task, output: output.startsWith(`{workspaceRoot}/${directory}/{options.`) }).toEqual(
+        {
+          task,
+          output: true,
+        },
+      );
+    }
+    checked += 1;
+  }
+  expect(checked).toBeGreaterThan(0);
 }
 
 describe("caching", () => {
@@ -163,8 +214,11 @@ describe("caching", () => {
       ]);
       expect(envInputs(api.targets["fmt-check"])).toEqual([...environmentVariables]);
 
-      // build, whose outputs depend on the triple, also has the triple input.
-      const tripleInput = { runtime: expect.stringMatching(/\/src\/cargo\/print-triples\.js'/) };
+      // build, whose outputs depend on the triple and the artifact
+      // directory, also has the artifact input.
+      const tripleInput = {
+        runtime: expect.stringMatching(/\/src\/cargo\/print-artifact-folders\.js' 'rust'/),
+      };
       // test, which runs rustdoc for doctests, also asks the rustdoc that a setting names.
       for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt"]) {
         expect(inputsOf(api.targets[name], "runtime")).toEqual([
@@ -221,7 +275,7 @@ describe("caching", () => {
   );
 
   it(
-    "gives bench and run the inputs of the targets that compile, so that nx affected selects them, with Cargo.lock in place of the digest and without the triple input",
+    "gives bench and run the inputs of the targets that compile, so that nx affected selects them, with Cargo.lock in place of the digest and without the artifact input",
     async () => {
       const graph = await loadFixtureGraph("crate-shapes");
 
@@ -240,7 +294,7 @@ describe("caching", () => {
             JSON.stringify(input) === JSON.stringify(digest)
               ? [{ fileset: "{workspaceRoot}/rust/Cargo.lock", includeIgnored: true }]
               : JSON.stringify(input) === JSON.stringify({ env: "NX_RUST_RUN_ID" }) ||
-                  JSON.stringify(input).includes("print-triples.js")
+                  JSON.stringify(input).includes("print-artifact-folders.js")
                 ? []
                 : [input],
           ),
@@ -700,6 +754,41 @@ describe("caching", () => {
       HARNESS_TIMEOUT,
     );
 
+    it.each<[string, FileChanges, Record<string, string>, string]>([
+      [
+        "a build directory from a template",
+        {
+          "rust/.cargo/config.toml":
+            '[build]\nbuild-dir = "{cargo-cache-home}/build/{workspace-path-hash}"\n',
+        },
+        {},
+        "rust/target",
+      ],
+      ["CARGO_TARGET_DIR", {}, { CARGO_TARGET_DIR: "../moved" }, "moved"],
+      [
+        "a configuration at the repository root",
+        { ".cargo/config.toml": '[build]\ntarget-dir = "shared/target"\n' },
+        {},
+        "shared/target",
+      ],
+    ])(
+      "give build and doc an artifact input that prints the directory that their outputs name, with %s",
+      async (_case, files, env, directory) => {
+        const workspace = FixtureWorkspace.create("crate-shapes", files);
+        try {
+          const graph = await workspace.graph(env);
+          expect(graph.projects.cli.targets.build.metadata.cargo.artifactDirectory).toBe(directory);
+          expect(graph.projects.rust.targets.doc.metadata.cargo.artifactDirectory).toBe(directory);
+          // Targets whose outputs do not depend on the directory record none.
+          expect(graph.projects.cli.targets.test.metadata.cargo.artifactDirectory).toBeUndefined();
+          expectArtifactInputAgrees(workspace, graph, env);
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
     it(
       "leave build and doc uncached, and say so, when the artifact directory lies outside the repository",
       async () => {
@@ -716,6 +805,8 @@ describe("caching", () => {
             expect(target.metadata.cargo.uncached).toMatch(/artifact directory lies outside/);
           }
           expect(api.targets.check.metadata.cargo.uncached).toBeUndefined();
+          // An artifact directory outside names no folder for the executor to compare.
+          expect(api.targets.build.metadata.cargo.artifactDirectory).toBeUndefined();
           for (const name of ["check", "lint", "test", "fmt-check"]) {
             expect(api.targets[name].cache).toBe(true);
           }
@@ -771,7 +862,7 @@ describe("caching", () => {
         const graph = await loadFixtureGraph("crate-shapes", { files, env });
         const { cli, rust } = graph.projects;
         const tripleInput = expect.stringMatching(
-          /^\{ cd '\.\/rust' && '[^']+' '[^']+\/src\/cargo\/print-triples\.js' 2>\/dev\/null \|\| od -An -N16 -tx1 \/dev\/urandom; \}; true$/,
+          /^\{ '[^']+' '[^']+\/src\/cargo\/print-artifact-folders\.js' 'rust' 2>\/dev\/null \|\| od -An -N16 -tx1 \/dev\/urandom; \}; true$/,
         );
         const folders = triples.map(
           (triple) => `{workspaceRoot}/rust/target/{options.targetTriple ?? ${triple}}`,
@@ -843,8 +934,8 @@ describe("caching", () => {
           expect(target.metadata.cargo.uncached).toBe(
             `${problem}; give the triple as the targetTriple option instead`,
           );
-          // An uncached target has no triple input.
-          expect(JSON.stringify(target.inputs)).not.toContain("print-triples");
+          // An uncached target has no artifact input.
+          expect(JSON.stringify(target.inputs)).not.toContain("print-artifact-folders");
         }
         for (const name of ["check", "lint", "test", "fmt-check"]) {
           expect(cli.targets[name].cache).toBe(true);
@@ -993,6 +1084,7 @@ describe("caching", () => {
             outputs: [`${folder}/tools`],
           });
           expect(graph.projects.app.targets.test.cache).toBe(true);
+          expectArtifactInputAgrees(workspace, graph);
         } finally {
           workspace.remove();
         }
@@ -1059,6 +1151,7 @@ describe("caching", () => {
             outputs: ["{workspaceRoot}/inside/target/{options.targetTriple ?? .}/doc"],
           });
           expect(tools.metadata.cargo.warnings).toBeUndefined();
+          expectArtifactInputAgrees(workspace, graph);
         } finally {
           workspace.remove();
         }

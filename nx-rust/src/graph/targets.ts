@@ -106,6 +106,22 @@ export interface TargetCargoMetadata {
    */
   configuredPick?: string;
   /**
+   * On `build` and `doc`, the workspace's artifact directory whose folders
+   * the outputs name, relative to the repository's real path; absent where
+   * it lies outside the repository. The executor fails a cached task for
+   * which cargo reports another directory when it starts (`DES-OUTPUTS`).
+   */
+  artifactDirectory?: string;
+  /**
+   * On `build` and `doc`, the variables of graph creation's environment that
+   * move the artifact directory, `CARGO_TARGET_DIR`, `CARGO_BUILD_TARGET_DIR`
+   * and `CARGO_HOME`, with their values; absent where none is set. The
+   * executor tells by them whether a cached task's artifact directory
+   * differs because Cargo's configuration changed after graph creation or
+   * because of the task's environment (`DES-OUTPUTS`).
+   */
+  directoryVariables?: Record<string, string>;
+  /**
    * On the lockfile task: the workspace's members, whose digests it writes
    * (`DES-LOCKFILE-HASHING`).
    */

@@ -449,7 +449,7 @@ describe("keys with the environment", () => {
     HARNESS_TIMEOUT * 4,
   );
   it(
-    "differ after a profile or target variable in a crate's .env, for that crate only, and not after CARGO_TARGET_DIR there",
+    "differ after a profile or target variable in a crate's .env, for that crate only, and after CARGO_TARGET_DIR there for its build only",
     async () => {
       // A .env that Git ignores, so that only the environment changes for Nx.
       const workspace = FixtureWorkspace.create("subfolder-workspace", {
@@ -476,10 +476,10 @@ describe("keys with the environment", () => {
           "api:test": true,
           "model:build": false,
         });
-        expect(
-          await differs(`CARGO_TARGET_DIR=${join(workspace.root, "..", "elsewhere")}\n`),
-        ).toEqual({
-          "api:build": false,
+        // The artifact input of build prints the directory, which says
+        // where the artifacts go and not what they are for test.
+        expect(await differs(`CARGO_TARGET_DIR=${join(workspace.root, "elsewhere")}\n`)).toEqual({
+          "api:build": true,
           "api:test": false,
           "model:build": false,
         });

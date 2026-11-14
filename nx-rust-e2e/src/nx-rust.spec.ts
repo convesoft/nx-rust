@@ -63,6 +63,13 @@ const readRustWorkspace: CargoCall = {
   ],
 };
 
+/**
+ * The same call with which a cached `build` or `doc` asks cargo for its
+ * artifact directory: once in its artifact folder input, when Nx hashes the
+ * task, and once more when the task starts (`DES-OUTPUTS`).
+ */
+const reportRustDirectories: CargoCall = readRustWorkspace;
+
 describe("@convesoft/nx-rust", () => {
   let projectDirectory: string;
   // Outside the test project, so that Nx does not see the wrapper.
@@ -503,6 +510,8 @@ describe("@convesoft/nx-rust", () => {
           expect(cargo.calls(projectDirectory)).toEqual([
             readRustWorkspace,
             updateRustLockfile,
+            reportRustDirectories,
+            reportRustDirectories,
             { cwd: "rust", args: ["build", "-p", "api"] },
           ]);
         },
@@ -510,7 +519,7 @@ describe("@convesoft/nx-rust", () => {
       );
 
       it(
-        "restores a cached task from the cache, running no cargo",
+        "restores a cached task from the cache, running no cargo build",
         () => {
           cargo.clear();
           const output = withoutColours(
@@ -520,8 +529,13 @@ describe("@convesoft/nx-rust", () => {
           expect(output).toMatch(
             /nx run api:build\s+\[(local cache|existing outputs match the cache, left as is)\]/,
           );
-          // The lockfile task, which is not cached, runs in every run.
-          expect(cargo.calls(projectDirectory)).toEqual([readRustWorkspace, updateRustLockfile]);
+          // The lockfile task, which is not cached, runs in every run, and
+          // the key asks cargo for the artifact directory.
+          expect(cargo.calls(projectDirectory)).toEqual([
+            readRustWorkspace,
+            updateRustLockfile,
+            reportRustDirectories,
+          ]);
         },
         HARNESS_TIMEOUT,
       );
@@ -564,9 +578,13 @@ describe("@convesoft/nx-rust", () => {
           expect(cargo.calls(projectDirectory)).toEqual([
             readRustWorkspace,
             updateRustLockfile,
+            reportRustDirectories,
+            reportRustDirectories,
             { cwd: "rust", args: ["build", "-p", "api"] },
             readRustWorkspace,
             updateRustLockfile,
+            reportRustDirectories,
+            reportRustDirectories,
             { cwd: "rust", args: ["build", "-p", "api"] },
           ]);
         },
@@ -614,8 +632,11 @@ describe("@convesoft/nx-rust", () => {
           expect(output).toContain("Successfully ran targets build, test, lint for 4 projects");
           expect(output).not.toMatch(compiles);
           // Each task ran cargo, which found everything up to date, and so
-          // did the lockfile task, once.
-          expect(cargo.calls(projectDirectory)).toHaveLength(2 + 3 * crates.length);
+          // did the lockfile task, once; each build asked cargo for its
+          // artifact directory twice.
+          expect(cargo.calls(projectDirectory)).toHaveLength(
+            2 + 3 * crates.length + 2 * crates.length,
+          );
         },
         HARNESS_TIMEOUT,
       );
