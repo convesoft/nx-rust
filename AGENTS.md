@@ -108,8 +108,12 @@ the user before implementing it.
   item without one and run `mara project mid backfill`.
 - Link implementing code with comment markers on the declaration, for example
   `// @mara implements DES-DISCOVERY`. `.mara/project.toml` indexes the
-  TypeScript sources with `scip-typescript`; confirm the link with
-  `mara related <ID>`.
+  TypeScript sources with `scip-typescript` through
+  `.mara/code/scip-index-cache.cjs`. Its cached index equals a fresh one while
+  the files git does not ignore, the tsconfig chains, pnpm's installed state
+  and the tool versions are unchanged (ignored files such as build output are
+  outside that promise); set `SCIP_INDEX_CACHE=0` where Mara runs to reindex
+  on every call. Confirm the link with `mara related <ID>`.
 
 ## Documentation layout
 

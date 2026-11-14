@@ -20,7 +20,7 @@ max_rows = 10000
 
 [[code.languages]]
 name = "typescript"
-command = ["pnpm", "exec", "scip-typescript", "index", "--no-progress-bar", "--output", "{output}", "nx-rust", "nx-rust-e2e"]
+command = ["node", ".mara/code/scip-index-cache.cjs", "{output}", "pnpm", "exec", "scip-typescript", "index", "--no-progress-bar", "--output", "@OUTPUT@", "nx-rust", "nx-rust-e2e"]
 position_encoding = "utf16"
 extensions = ["ts", "mts", "cts"]
 grammar = ".mara/code/typescript.wasm"

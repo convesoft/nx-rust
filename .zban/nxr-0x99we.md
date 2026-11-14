@@ -14,7 +14,7 @@ Why it was left out: the knowledge base in `.mara/` needs Mara 0.4, and the newe
 
 - [ ] Confirm that a Mara version which validates this repository is published, and which one
 - [ ] Install exactly that version in the `check` job
-- [ ] Run `mara schema validate` and `mara project validate` after `pnpm install`: the project validation runs `scip-typescript` through pnpm (`.mara/project.toml`)
+- [ ] Run `mara schema validate` and `mara project validate` after `pnpm install`: the project validation runs `scip-typescript` through pnpm, wrapped by the Node script `.mara/code/scip-index-cache.cjs` (`.mara/project.toml`), whose cache in `node_modules/.cache/` starts empty in each job
 - [ ] Remove the note about Mara from `AGENTS.md` and the comment in the workflow
 
 Done when: a pull request shows the two Mara commands green in the workflow.
