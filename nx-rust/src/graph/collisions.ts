@@ -34,6 +34,20 @@ export interface ProjectCargoMetadata {
    * (`DES-DIAGNOSTICS`, "Warnings where they are seen"); absent without any.
    */
   warnings?: string[];
+  /**
+   * The warnings that `createDependencies` found for targets of the project,
+   * which `createMetadata` adds, so that the executor prints each at the
+   * start of a task of its target (`DES-TARGET-DEFAULT-GUARD`); absent
+   * without any.
+   */
+  targetWarnings?: TargetWarning[];
+}
+
+/** A warning about one target of a project, with the text graph creation prints. */
+export interface TargetWarning {
+  /** The target's name in the merged graph. */
+  target: string;
+  warning: string;
 }
 
 /** The metadata that {@link ProjectCargoMetadata} describes, for one project. */

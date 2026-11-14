@@ -1,8 +1,13 @@
 import type {
   CreateDependenciesContext,
+  NxJsonConfiguration,
   ProjectConfiguration,
   TargetConfiguration,
 } from "@nx/devkit";
+import { existsSync, realpathSync } from "node:fs";
+import { extname, join } from "node:path";
+import type { TargetWarning } from "./collisions";
+import { pluginPackageName } from "./plugin-package";
 import { CargoGraph, CargoProject, projectNodes } from "./projects";
 
 /**
@@ -58,8 +63,19 @@ export interface TargetDefaultChanges {
 /** What {@link checkTargetDefaults} found: warnings to print and an error to fail with. */
 export interface TargetDefaultReport {
   warnings: string[];
+  /**
+   * Each warning once for each target it concerns, which the tasks of that
+   * target print again (`DES-DIAGNOSTICS`, "Warnings where they are seen").
+   */
+  placed: PlacedWarning[];
   /** Absent when no entry does what makes an error. */
   error?: string;
+}
+
+/** A warning of {@link TargetDefaultReport} for one target of one project. */
+export interface PlacedWarning extends TargetWarning {
+  /** The project's name in the merged graph. */
+  project: string;
 }
 
 /** A project as Nx's root maps hold it while it merges the layers of a project. */
@@ -460,6 +476,8 @@ export async function checkTargetDefaults(
  *
  * @param plugin Nx's copy of the plugin for the entry, whose `name` Nx set
  *   to the name it knows the entry by.
+ * @returns Each warning for each target it concerns, which `createMetadata`
+ *   gives the projects, so that the tasks of those targets print it again.
  * @throws {Error} When an entry replaces what the plugin inferred or turns
  *   on caching, naming each entry, target and project and how to narrow it.
  */
@@ -467,7 +485,7 @@ export async function failOnTargetDefaults(
   graph: CargoGraph,
   context: TargetDefaultsContext,
   plugin: unknown,
-): Promise<void> {
+): Promise<PlacedWarning[]> {
   const report = await checkTargetDefaults(graph, context, pluginEntryName(plugin), () =>
     loadTargetDefaultsInternals(context.workspaceRoot),
   );
@@ -477,6 +495,246 @@ export async function failOnTargetDefaults(
   if (report.error !== undefined) {
     throw new Error(report.error);
   }
+  return report.placed;
+}
+
+/**
+ * What the `targetDefaults` of `nx.json` add to the `dependsOn` of each
+ * project's inferred targets, as far as `createNodes` can see it: the
+ * cause of the warning of `DES-TARGET-DEFAULT-GUARD` for an entry that adds
+ * dependencies on other projects' tasks, which the digest of the project's
+ * warnings covers (`DES-DIAGNOSTICS`, "Warnings where they are seen").
+ * `createDependencies` finds the warning itself, once Nx has merged the
+ * projects of every plugin, too late to change a key.
+ *
+ * The targets are rebuilt as {@link findTargetDefaultChanges} rebuilds
+ * them, from the layers that `createNodes` sees: the projects of this
+ * entry, the elements of `targetDefaults` that Nx's synthesis lays over
+ * them, and what Nx's default plugins make of the `package.json` and
+ * `project.json` on disk in each project's folder. A `dependsOn` entry
+ * counts where the rebuild with the `targetDefaults` layer has it and the
+ * rebuild without it does not, unless its form shows that it reaches only
+ * the project's own tasks ({@link reachesOnlyOwnTasks}). An element whose
+ * filter names a tag, which `createNodes` cannot decide, counts wherever its
+ * key can reach the target ({@link undecidedCauses}). A target whose
+ * executor the folder's files replace is left out, as the check leaves it.
+ * Nothing is loaded without an entry that sets `dependsOn`; where Nx lacks
+ * the internal parts, nothing counts, and `createDependencies` fails graph
+ * creation where such an entry changes a target of the plugin.
+ *
+ * @returns By project root, one line for each target that entries add such
+ *   dependencies to, naming the target, the entry and what it adds.
+ */
+// @mara implements DES-TARGET-DEFAULT-GUARD
+export async function targetDefaultCauses(
+  projects: readonly CargoProject[],
+  nxJson: NxJsonConfiguration | undefined,
+  workspaceRoot: string,
+  loadInternals: () => TargetDefaultsInternals = () => loadTargetDefaultsInternals(workspaceRoot),
+): Promise<Map<string, string[]>> {
+  const causes = new Map<string, string[]>();
+  const targetDefaults: unknown = nxJson?.targetDefaults;
+  if (
+    projects.length === 0 ||
+    !isRecord(targetDefaults) ||
+    !Object.values(targetDefaults).some(setsDependsOn)
+  ) {
+    return causes;
+  }
+  let nx: TargetDefaultsInternals;
+  try {
+    nx = loadInternals();
+  } catch {
+    return causes;
+  }
+  const roots = projects.map(({ root }) => root);
+  const files = roots
+    .flatMap((root) =>
+      ["package.json", "project.json"].map((name) => (root === "." ? name : `${root}/${name}`)),
+    )
+    .filter((file) => existsSync(join(workspaceRoot, file)));
+  const context: TargetDefaultsContext = {
+    projects: {},
+    nxJsonConfiguration: nxJson ?? {},
+    workspaceRoot,
+    fileMap: { projectFileMap: {}, nonProjectFiles: files.map((file) => ({ file, hash: "" })) },
+  };
+  const layers = await rebuildLayers(
+    nx,
+    projects,
+    pluginEntryNameIn(nxJson, workspaceRoot),
+    context,
+    roots,
+  );
+  const applied = appliedElements(layers.targetDefaults, targetDefaults);
+  for (const project of projects) {
+    const byTarget = applied.get(project.root);
+    const withDefaults = rebuild(nx, layers, project.root, true);
+    const withoutDefaults = rebuild(nx, layers, project.root, false);
+    const names = [project.name, ...(withDefaults.name === undefined ? [] : [withDefaults.name])];
+    const lines: string[] = [];
+    for (const [name, inferred] of Object.entries(project.targets).sort(([a], [b]) =>
+      compare(a, b),
+    )) {
+      const target = withDefaults.targets?.[name];
+      if (target === undefined || target.executor !== inferred.executor) {
+        continue;
+      }
+      const entry = byTarget?.get(name);
+      if (entry !== undefined) {
+        const without = withoutDefaults.targets?.[name] ?? {};
+        const added = (target.dependsOn ?? []).filter(
+          (dependency) =>
+            dependency !== spread &&
+            !includes(without.dependsOn, dependency) &&
+            !reachesOnlyOwnTasks(dependency, names),
+        );
+        if (added.length > 0) {
+          lines.push(
+            canonical({ target: name, key: entry.key, elements: entry.indices ?? null, added }),
+          );
+        }
+      }
+      lines.push(
+        ...undecidedCauses(targetDefaults, name, inferred.executor, entry, names, nx).map((cause) =>
+          canonical({ target: name, ...cause }),
+        ),
+      );
+    }
+    if (lines.length > 0) {
+      causes.set(project.root, lines);
+    }
+  }
+  return causes;
+}
+
+/**
+ * The elements of `targetDefaults` whose `filter` `createNodes` cannot
+ * decide for a target, because its `projects` names a tag, which another
+ * plugin may give the project, and that add dependencies which may reach
+ * other projects' tasks: each counts as a cause for every target that its
+ * key can reach, by the target's executor, its name or a glob, unless Nx's
+ * synthesis applied it already. That errs towards a run without a warning,
+ * never towards a cache hit that shows an earlier state of the warning
+ * (`DES-TARGET-DEFAULT-GUARD`).
+ *
+ * @param applied The elements that Nx's synthesis laid over the target.
+ */
+function undecidedCauses(
+  targetDefaults: Record<string, unknown>,
+  target: string,
+  executor: string | undefined,
+  applied: AppliedEntry | undefined,
+  names: readonly string[],
+  nx: TargetDefaultsInternals,
+): { key: string; elements: number[] | null; added: unknown[] }[] {
+  const causes: { key: string; elements: number[] | null; added: unknown[] }[] = [];
+  for (const [key, value] of Object.entries(targetDefaults)) {
+    if (!nx.keyMayApply(key, target, executor)) {
+      continue;
+    }
+    const elements: [unknown, number | undefined][] = Array.isArray(value)
+      ? value.map((element, index) => [element, index])
+      : [[value, undefined]];
+    for (const [element, index] of elements) {
+      if (!isRecord(element) || !namesTag(element.filter)) {
+        continue;
+      }
+      const appliedAlready =
+        applied?.key === key &&
+        (index === undefined ? applied.indices === undefined : applied.indices?.includes(index));
+      const dependsOn: unknown[] = Array.isArray(element.dependsOn) ? element.dependsOn : [];
+      const added = dependsOn.filter(
+        (dependency) => dependency !== spread && !reachesOnlyOwnTasks(dependency, names),
+      );
+      if (!appliedAlready && added.length > 0) {
+        causes.push({ key, elements: index === undefined ? null : [index], added });
+      }
+    }
+  }
+  return causes;
+}
+
+// Whether an entry's filter selects projects by a tag, also through `!`,
+// which `createNodes` cannot decide: another plugin may add the tag.
+function namesTag(filter: unknown): boolean {
+  if (!isRecord(filter) || filter.projects === undefined) {
+    return false;
+  }
+  const patterns: unknown[] = Array.isArray(filter.projects) ? filter.projects : [filter.projects];
+  return patterns.some((pattern) => typeof pattern === "string" && /^!?tag:/.test(pattern));
+}
+
+// Whether a value of targetDefaults, an entry or a list of entries, sets dependsOn.
+function setsDependsOn(value: unknown): boolean {
+  return Array.isArray(value)
+    ? value.some((element) => isRecord(element) && "dependsOn" in element)
+    : isRecord(value) && "dependsOn" in value;
+}
+
+/**
+ * Whether a `dependsOn` entry reaches only tasks of the project itself, as
+ * far as its form shows without the names of other plugins' projects: a
+ * target name without `^` and without another project before a colon, or
+ * an object without `dependencies: true` whose `projects` is absent,
+ * `"self"`, or only the project's own names.
+ *
+ * @param names The project's names: the one the plugin gives it, and the
+ *   one that a file in its folder gives it.
+ */
+function reachesOnlyOwnTasks(dependency: unknown, names: readonly string[]): boolean {
+  if (typeof dependency === "string") {
+    if (dependency.startsWith("^")) {
+      return false;
+    }
+    const colon = dependency.indexOf(":");
+    return colon === -1 || names.includes(dependency.slice(0, colon));
+  }
+  if (!isRecord(dependency) || dependency.dependencies === true) {
+    return false;
+  }
+  const projects = dependency.projects;
+  if (projects === undefined) {
+    return true;
+  }
+  const listed = typeof projects === "string" ? [projects] : projects;
+  return (
+    Array.isArray(listed) &&
+    listed.every((name) => name === "self" || (typeof name === "string" && names.includes(name)))
+  );
+}
+
+/**
+ * The name under which Nx knows the plugin's entry in `nx.json`, which
+ * `filter.plugin` of a `targetDefaults` entry compares with, as Nx 24
+ * derives it (`getPluginPathAndName` in `project-graph/plugins/resolve-plugin.js`):
+ * the entry's `plugin` itself where it names a `.js` or `.ts` file, and
+ * otherwise the name of the package it resolves to. The first entry that
+ * resolves to this plugin decides; the package's name where none does.
+ */
+function pluginEntryNameIn(nxJson: NxJsonConfiguration | undefined, workspaceRoot: string): string {
+  let own: string | undefined;
+  try {
+    own = realpathSync(join(__dirname, "..", `index${extname(__filename)}`));
+  } catch {
+    return pluginPackageName;
+  }
+  for (const entry of nxJson?.plugins ?? []) {
+    const plugin = typeof entry === "string" ? entry : entry.plugin;
+    if (plugin === pluginPackageName) {
+      return plugin;
+    }
+    let resolved: string;
+    try {
+      resolved = realpathSync(require.resolve(plugin, { paths: [workspaceRoot] }));
+    } catch {
+      continue;
+    }
+    if (resolved === own) {
+      return [".js", ".ts"].includes(extname(plugin)) ? plugin : pluginPackageName;
+    }
+  }
+  return pluginPackageName;
 }
 
 /**
@@ -793,14 +1051,27 @@ export function describeTargetDefaultChanges(
   const byEntry = groupBy(findings, (finding) =>
     JSON.stringify([finding.severity, finding.key, finding.elements ?? null]),
   );
-  const paragraphs = (severity: TargetDefaultFinding["severity"]) =>
+  const groups = (severity: TargetDefaultFinding["severity"]) =>
     [...byEntry.values()]
       .filter(([first]) => first.severity === severity)
-      .sort(([a], [b]) => compare(a.key, b.key))
-      .map(paragraph);
-  const errors = paragraphs("error");
+      .sort(([a], [b]) => compare(a.key, b.key));
+  const errors = groups("error").map(paragraph);
+  const warnings = groups("warning").map((group) => ({ warning: paragraph(group), group }));
+  const placed: PlacedWarning[] = [
+    ...warnings.flatMap(({ warning, group }) =>
+      [...groupBy(group, ({ project, target }) => `${project}\0${target}`).values()].map(
+        ([{ project, target }]) => ({ project, target, warning }),
+      ),
+    ),
+    ...unattributed.map((change) => ({
+      project: change.project,
+      target: change.target,
+      warning: unattributedWarning(change),
+    })),
+  ];
   return {
-    warnings: [...paragraphs("warning"), ...unattributed.map(unattributedWarning)],
+    warnings: [...warnings.map(({ warning }) => warning), ...unattributed.map(unattributedWarning)],
+    placed,
     ...(errors.length === 0 ? {} : { error: errors.join("\n\n") }),
   };
 }

@@ -5,10 +5,7 @@
 > commands below, each task with a cargo call of its own until the batching
 > of milestone 0.2. Without cargo-audit or
 > cargo-deny, `audit` and `deny` fail with cargo's own message for an unknown
-> command. The warnings of
-> [Target defaults that reach Rust targets](#target-defaults-that-reach-rust-targets)
-> are printed when the graph is created and by `nx add`, not yet in the output
-> of a task (nxr-rxzgbq).
+> command.
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.
@@ -241,8 +238,10 @@ An error stops every Nx command that needs the project graph until the entry is
 narrowed: Nx would otherwise restore results that the task would not produce,
 or `nx affected` would miss crates. A warning is printed, and the graph is
 created ([Setup](setup.mara.md#error-messages-and-warnings) says where you see
-it). The message names the entry, the targets, the projects and the fixes that
-fit:
+it). Each task of a target that the entry changes prints the warning again at
+its start, also when Nx restores the task from the cache, and adding or
+removing the entry runs those tasks again. The message names the entry, the
+targets, the projects and the fixes that fit:
 
 ```text
 The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:
@@ -257,7 +256,8 @@ Where something else changes a Rust target as well, such as another plugin
 listed in `nx.json`, nx-rust may not be able to tell which configuration made
 the change. It then reports no entry, but warns, naming the target and the
 fields that differ, and points to `nx show target <project>:<target> --json`,
-whose `sourceMap` names the file and entry behind each field.
+whose `sourceMap` names the file and entry behind each field. The tasks of that
+target print this warning at their start too.
 
 Neither the plugin nor `nx add` changes an entry that is there. Narrow it in one
 of these ways:
@@ -540,5 +540,5 @@ The differences are read from the targets that Nx merged, and from nothing else:
 
 **Which layer.** `createDependencies` receives no record of which layer set a value, so where a target differs, the plugin rebuilds it with Nx's own code. The layers are the plugin's projects as its `createNodes` returned them; the elements of `targetDefaults` that Nx's synthesis (`createTargetDefaultsResults` from `nx/src/devkit-internals`) lays over them, given what Nx's default plugins make of the `package.json` and `project.json` in the project's folder and the name under which Nx knows the plugin's entry; and those default-plugin results. Each layer is merged with Nx's merge of project nodes, so `"..."` in lists and in objects, and the elements of an entry's list, behave as in Nx. The rebuild must give the target's `cache`, `inputs`, `outputs` and `dependsOn` and the project's name and tags, which filters read, as Nx merged them. Where it does, a difference that the same rebuild without the `targetDefaults` layer lacks is reported against the entry that Nx's synthesis names, with the severity below. A difference that the rebuild has without that layer was made by the folder's `project.json` or `package.json` and is not reported. Where the rebuild does not give what Nx merged, as when another plugin listed in `nx.json` contributes to the project, the plugin does not conclude: it warns that it cannot tell which configuration changed the target, names the project, the target and the fields that differ, and points to `nx show target <project>:<target> --json` and its `sourceMap`. For caching, the executor's check of a task's merged configuration stays the second line: it fails a task that caches a target which the plugin leaves uncached in its project, whichever layer turned caching on. Nx's normalisation of `dependsOn` for the task graph decides which projects an added entry reaches. These parts of Nx are not public API. They are loaded only when a target differs, and where the installed Nx lacks one, graph creation fails with the error of [[DES-DIAGNOSTICS]].
 
-**Message.** One paragraph per entry and severity names the key and its elements, says what the entry does to which targets of which projects, with their manifests, and lists the ways to narrow the entry that fit: a `filter` on `projects` or `executor`; an empty entry keyed by the targets' executor, which Nx chooses before an entry keyed by the target's name; removing the field from an entry keyed by the plugin's executor; and `"..."` in a list that replaces. Errors stop graph creation, and warnings are printed where [[DES-DIAGNOSTICS]] says. Graph creation never edits `targetDefaults`, and `init` only adds the empty entries that are missing.
+**Message.** One paragraph per entry and severity names the key and its elements, says what the entry does to which targets of which projects, with their manifests, and lists the ways to narrow the entry that fit: a `filter` on `projects` or `executor`; an empty entry keyed by the targets' executor, which Nx chooses before an entry keyed by the target's name; removing the field from an entry keyed by the plugin's executor; and `"..."` in a list that replaces. Errors stop graph creation, and warnings are printed where [[DES-DIAGNOSTICS]] says. `createDependencies` hands each warning, with the targets it concerns, to `createMetadata`, which puts it into the metadata of those targets' projects for the executor, whose tasks of those targets print it at their start. So that a cache hit shows the current state, the digest of a project's warnings also covers the `dependsOn` entries that `targetDefaults` adds to the project's targets as far as `createNodes` sees them: its own projects, Nx's synthesis of target defaults and the `package.json` and `project.json` on disk in the projects' folders, leaving out entries whose form shows that they reach only the project's own tasks. An entry whose `filter` selects projects by a tag, which another plugin may give, counts for every project with a target that its key can reach, since `createNodes` cannot decide it; filters by name, folder, plugin or executor keep their exact reading. That matters for entries from a file that `nx.json` extends: Nx hashes `nx.json` itself into every key, but not the file it extends ([[EVD-NX-24-WARNING-CHANNELS]]). Where only the list of projects that a warning names changes, a cache hit of another crate shows the earlier list until its key changes; an entry that counts without applying, or that adds only own tasks in a form that does not show it, causes one run without a warning; and a `dependsOn` that another plugin changes reaches no key ([[DES-DIAGNOSTICS]], "Warnings that `createDependencies` finds"). Graph creation never edits `targetDefaults`, and `init` only adds the empty entries that are missing.
 :::

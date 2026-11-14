@@ -15,6 +15,7 @@ import { projectName } from "./names";
 import type { GraphSettings, ProjectSettings } from "./settings";
 import { applyTargetTables } from "./target-tables";
 import { inferTargets, nameTargets } from "./targets";
+import { warningsInput } from "./warnings";
 
 /**
  * A project that the plugin creates: a crate, or the workspace project of a
@@ -57,12 +58,17 @@ export interface CargoProject {
   targets: Record<string, TargetConfiguration>;
   /** What the plugin options and the metadata tables give the project. */
   settings: ProjectSettings;
-  /** The project's named inputs, which its targets and its dependents hash (`DES-INPUTS`). */
+  /**
+   * The project's named inputs, which its targets and its dependents hash
+   * (`DES-INPUTS`), and, once {@link withWarningsInputs} has added it, the
+   * one that holds the digest of its warnings where it has any
+   * (`warningsInput` in `warnings.ts`).
+   */
   namedInputs: Record<string, Input[]>;
   /**
    * The warnings found while creating the graph that concern the project,
-   * which the executor prints again at the start of each of its tasks
-   * (`DES-DIAGNOSTICS`).
+   * which the executor prints again at the start of each of its tasks, and
+   * which the project's keys hold through a digest (`DES-DIAGNOSTICS`).
    */
   warnings: string[];
   /** Its own `fileInputs` patterns, as resolved (`declaredFiles` in `declared-files.ts`). */
@@ -195,6 +201,29 @@ export function inferProjects(
     ),
     warnings: projectWarnings(project, context),
     declaredPatterns: declared.get(project)?.patterns ?? [],
+  }));
+}
+
+/**
+ * The projects, each with the named input that holds the digest of its
+ * warnings and of the `targetDefaults` causes of the warnings that only
+ * `createDependencies` finds, where it has any (`DES-DIAGNOSTICS`,
+ * "Warnings where they are seen").
+ *
+ * @param repositoryRoot The absolute path of the repository root.
+ * @param causes By project root (`targetDefaultCauses` in `target-defaults.ts`).
+ */
+export function withWarningsInputs(
+  projects: readonly CargoProject[],
+  repositoryRoot: string,
+  causes: ReadonlyMap<string, readonly string[]>,
+): CargoProject[] {
+  return projects.map((project) => ({
+    ...project,
+    namedInputs: {
+      ...project.namedInputs,
+      ...warningsInput(project.warnings, repositoryRoot, causes.get(project.root)),
+    },
   }));
 }
 
