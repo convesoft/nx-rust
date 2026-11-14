@@ -706,6 +706,158 @@ describeCacheKeyMatrix("keys with the declared files of a crate without an edge"
   },
 ]);
 
+// The variables and commands that a crate adds with envInputs and
+// runtimeInputs travel with its folder as its declared files do. In
+// declared-files, api reaches token through lexer, both without a project.
+const tokenBehindLexer = (token: string): FileChanges => ({
+  "rust/crates/api/Cargo.toml": appended(
+    '\n[dependencies]\nlexer = { path = "../../../vendor/lexer" }\n',
+  ),
+  "vendor/lexer/Cargo.toml": `${crate("lexer")}\n[workspace]\n\n[dependencies]\ntoken = { path = "../token" }\n`,
+  "vendor/lexer/src/lib.rs": "",
+  "vendor/token/Cargo.toml": `${crate("token")}\n[workspace]\n${token}`,
+  "vendor/token/src/lib.rs": "",
+  "nx.json": excludedFromPlugin("vendor/**"),
+});
+// In place of patched-workspaces' crates, rust has the members a, b and d,
+// and shared the member c, which b depends on by path. rust's [patch]
+// redirects x, which nx.json excludes and which depends on b by path, and
+// a. a may use x through the registry crate wrapper, and so b behind it; b
+// may use a through other. The two possible uses point in opposite
+// directions, so a has no edge to b and gets, in its place, what lies in b
+// and c. d uses nothing.
+const leftOutEdge = (b: string, c: string, shared: string): FileChanges => ({
+  rust: null,
+  shared: null,
+  third_party: null,
+  "rust/Cargo.toml":
+    '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n\n[patch.crates-io]\nx = { path = "../third_party/x" }\na = { path = "crates/a" }\n',
+  "rust/crates/a/Cargo.toml": `${crate("a")}\n[dependencies]\nwrapper = "0.1"\n`,
+  "rust/crates/a/src/lib.rs": "",
+  "rust/crates/b/Cargo.toml": `${crate("b")}\n[dependencies]\nother = "0.1"\nc = { path = "../../../shared/crates/c" }\n${b}`,
+  "rust/crates/b/src/lib.rs": "",
+  "rust/crates/d/Cargo.toml": crate("d"),
+  "rust/crates/d/src/lib.rs": "",
+  "shared/Cargo.toml": `[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n${shared}`,
+  "shared/crates/c/Cargo.toml": `${crate("c")}${c}`,
+  "shared/crates/c/src/lib.rs": "",
+  "third_party/x/Cargo.toml": `${crate("x")}\n[workspace]\n\n[dependencies]\nb = { path = "../../rust/crates/b" }\n`,
+  "third_party/x/src/lib.rs": "",
+});
+
+describeCacheKeyMatrix("keys with the variables and commands of a crate without an edge", [
+  ...(
+    [
+      ["its own table", '\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n'],
+      ["its workspace's table", '\n[workspace.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n'],
+    ] as const
+  ).map(([where, table]): CacheKeyRow => ({
+    change: `a change of a variable that a path dependency without a project adds in ${where}, behind another crate without a project`,
+    fixture: "declared-files",
+    base: { files: tokenBehindLexer(table) },
+    before: { env: { REVIEW_ADDED: "a" } },
+    after: { env: { REVIEW_ADDED: "b" } },
+    keys: {
+      "api:test": "must differ",
+      "api:build": "must differ",
+      "app:test": "must differ",
+      "other:test": "must not differ",
+    },
+  })),
+  {
+    change:
+      "a change of the output of a command that a path dependency without a project adds, for the crates that reach it",
+    fixture: "declared-files",
+    base: {
+      files: tokenBehindLexer(
+        '\n[package.metadata.nx]\nruntimeInputs = ["echo $REVIEW_RUNTIME"]\n',
+      ),
+    },
+    before: { env: { REVIEW_RUNTIME: "a" } },
+    after: { env: { REVIEW_RUNTIME: "b" } },
+    keys: { "api:test": "must differ", "app:test": "must differ", "other:test": "must not differ" },
+  },
+  {
+    change:
+      "a change of a variable that a path dependency without a project adds, where Nx cannot see its files",
+    fixture: "declared-files",
+    base: {
+      files: {
+        ...tokenBehindLexer('\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n'),
+        ".gitignore": appended("vendor/token/\n"),
+      },
+    },
+    before: { env: { REVIEW_ADDED: "a" } },
+    after: { env: { REVIEW_ADDED: "b" } },
+    keys: { "api:test": "must differ", "other:test": "must not differ" },
+  },
+  {
+    change: "a change of a variable that a redirected crate without a project adds",
+    fixture: "patched-workspaces",
+    base: {
+      files: {
+        "third_party/fork/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n',
+        ),
+      },
+    },
+    before: { env: { REVIEW_ADDED: "a" } },
+    after: { env: { REVIEW_ADDED: "b" } },
+    keys: {
+      "api:test": "must differ",
+      "viaw:test": "must differ",
+      "plain:test": "must not differ",
+    },
+  },
+  {
+    change:
+      "a change of a variable that a redirected crate adds whose edge is left out to avoid a cycle",
+    fixture: "patched-workspaces",
+    base: {
+      files: {
+        "rust/crates/model/Cargo.toml": appended(
+          '\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n',
+        ),
+      },
+    },
+    before: { env: { REVIEW_ADDED: "a" } },
+    after: { env: { REVIEW_ADDED: "b" } },
+    keys: { "util:test": "must differ", "plain:test": "must not differ" },
+  },
+  ...(
+    [
+      [
+        "a variable that the crate whose edge is left out adds in its own table",
+        leftOutEdge('\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n', "", ""),
+      ],
+      [
+        "a variable that a crate behind it, in another workspace, adds in its own table",
+        leftOutEdge("", '\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n', ""),
+      ],
+      [
+        "a variable that the workspace of a crate behind it adds in its table",
+        leftOutEdge("", "", '\n[workspace.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n'),
+      ],
+      [
+        "the output of a command that a crate behind it adds",
+        leftOutEdge("", '\n[package.metadata.nx]\nruntimeInputs = ["echo $REVIEW_ADDED"]\n', ""),
+      ],
+    ] as const
+  ).map(([what, files]): CacheKeyRow => ({
+    change: `a change of ${what}, for a member whose edge to that crate is left out`,
+    fixture: "patched-workspaces",
+    base: { files },
+    before: { env: { REVIEW_ADDED: "a" } },
+    after: { env: { REVIEW_ADDED: "b" } },
+    keys: {
+      "a:test": "must differ",
+      "a:build": "must differ",
+      "a:check": "must differ",
+      "d:test": "must not differ",
+    },
+  })),
+]);
+
 describeCacheKeyMatrix("keys without declared files", [
   {
     change: "a change in a file outside the crate's folder that a dependent declares",

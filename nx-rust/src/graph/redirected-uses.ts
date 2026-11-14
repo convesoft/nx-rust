@@ -330,8 +330,11 @@ function workspaceUses(
 }
 
 // The crates that the workspace's entries name, by real folder: the crate
-// of a `[patch]` or `[replace]` entry, and every crate at or below the
-// folder of a `paths` entry, or that folder itself where it holds none.
+// of a `[patch]` or `[replace]` entry; for a `paths` entry, every crate at
+// or below its folder that a report describes or that has a project, and
+// every crate that discovery found there as cargo finds them
+// (`CargoWorkspace.pathsCrates`), with or without a report; or that folder
+// itself where it holds none.
 function redirectedCrates(
   workspace: CargoWorkspace,
   known: Map<string, CargoPackage>,
@@ -359,11 +362,16 @@ function redirectedCrates(
     if (!existsSync(folder)) {
       continue;
     }
-    const crates = [...new Set([...known.keys(), ...rootByFolder.keys()])].filter(
-      (candidate) =>
-        (candidate === folder || candidate.startsWith(folder + sep)) &&
-        existsSync(join(candidate, "Cargo.toml")),
-    );
+    const crates = [
+      ...new Set([
+        ...[...new Set([...known.keys(), ...rootByFolder.keys()])].filter(
+          (candidate) =>
+            (candidate === folder || candidate.startsWith(folder + sep)) &&
+            existsSync(join(candidate, "Cargo.toml")),
+        ),
+        ...(workspace.pathsCrates?.get(redirection.folder) ?? []),
+      ]),
+    ];
     for (const crate of crates.length > 0 ? crates : [folder]) {
       add(crate, redirection);
     }

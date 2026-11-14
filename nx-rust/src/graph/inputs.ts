@@ -110,15 +110,16 @@ export interface InputContext {
   repositoryDefault: readonly Input[];
   /**
    * The inputs for the crates without a project that each crate reaches, by
-   * the crate's manifest path: each one's folder and the root manifest of its
-   * workspace (`findCrateFolders` in `path-dependencies.ts`).
+   * the crate's manifest path: each one's folder, the root manifest of its
+   * workspace, its declared files and the variables and commands it adds
+   * (`findCrateFolders` in `path-dependencies.ts`).
    */
   pathDependencyInputs: ReadonlyMap<string, readonly Input[]>;
   /**
    * The inputs for the redirected crates with a project that each crate may
-   * use but has no edge to, by the crate's manifest path: each one's folder
-   * and the root manifest of its workspace, and those of the crates that
-   * cargo builds with it (`RedirectedUse.brings`).
+   * use but has no edge to, by the crate's manifest path: the same for each
+   * one and for the crates that cargo builds with it
+   * (`RedirectedUse.brings`).
    */
   redirectedInputs: ReadonlyMap<string, readonly Input[]>;
   /**
@@ -226,10 +227,13 @@ const toolFileNames: Partial<Record<InferredTargetName, readonly string[]>> = {
  * workspace, whose fields the crate can inherit, also when another
  * workspace builds it (`EVD-CARGO-DEPENDENCY-SIDE`); the folder and
  * workspace manifest of every crate without a project that the crate
- * reaches; what the repository adds; and the repository's own `default`
- * without its patterns under the project's folder. A pattern that the
- * repository negates in a target's own `inputs` takes files out of it, on
- * the repository's responsibility.
+ * reaches, with what each of them declares and adds; what the repository
+ * adds; and the repository's own `default` without its patterns under the
+ * project's folder. A variable or command that a crate without a project
+ * adds appears once, and not where the crate's own additions or the
+ * repository's `default` hold it ({@link withoutRepeatedAdditions}). A
+ * pattern that the repository negates in a target's own `inputs` takes
+ * files out of it, on the repository's responsibility.
  */
 // @mara implements DES-INPUTS
 // @mara implements REQ-INPUT-FILES
@@ -249,16 +253,44 @@ export function namedInputs(
   const pathDependencies = subject.pkg
     ? (context.pathDependencyInputs.get(subject.pkg.manifest_path) ?? [])
     : [];
+  const own: Input[] = [
+    ...settings.added.fileInputs,
+    ...settings.added.envInputs.map((env) => ({ env })),
+    ...settings.added.runtimeInputs.map((runtime) => ({ runtime })),
+    ...context.repositoryDefault,
+  ];
   return {
-    [crateInputName]: [
-      ...crateFiles,
-      ...pathDependencies,
-      ...settings.added.fileInputs,
-      ...settings.added.envInputs.map((env) => ({ env })),
-      ...settings.added.runtimeInputs.map((runtime) => ({ runtime })),
-      ...context.repositoryDefault,
-    ],
+    [crateInputName]: [...crateFiles, ...withoutRepeatedAdditions(pathDependencies, own), ...own],
   };
+}
+
+/**
+ * `inputs` without the `env` and `runtime` entries whose variable or
+ * command `elsewhere` holds already, so that a variable or command that
+ * several crates add, or that the crate adds itself, is declared once
+ * (`DES-INPUTS`, "Added variables and commands"). Other entries stay.
+ */
+function withoutRepeatedAdditions(inputs: readonly Input[], elsewhere: readonly Input[]): Input[] {
+  const held = new Set(elsewhere.map(additionKey).filter((key) => key !== undefined));
+  return inputs.filter((input) => {
+    const key = additionKey(input);
+    return key === undefined || !held.has(key);
+  });
+}
+
+// What an `env` or `runtime` entry names, as one string; `undefined` for
+// any other input.
+function additionKey(input: Input): string | undefined {
+  if (typeof input !== "object" || input === null) {
+    return undefined;
+  }
+  if ("env" in input && typeof input.env === "string") {
+    return `env:${input.env}`;
+  }
+  if ("runtime" in input && typeof input.runtime === "string") {
+    return `runtime:${input.runtime}`;
+  }
+  return undefined;
 }
 
 /**
@@ -295,7 +327,9 @@ export function repositoryDefaultInputs(namedInputs: unknown): Input[] {
  * workspace files, the redirected crates that the crate may use without an
  * edge, the members' manifests, the tool's configuration, the external
  * dependencies, the environment, the toolchain with Cargo's profile and
- * target variables, and the plugin.
+ * target variables, and the plugin. A variable or command that a redirected
+ * crate without an edge adds appears once, and not where the crate's named
+ * input or another entry of the target holds it.
  *
  * @param readsDigest Whether the target depends on the workspace's lockfile
  *   task and hashes digests of it: a cached target other than `fmt-check`
@@ -319,13 +353,11 @@ export function targetInputs(
     return undefined;
   }
   const workspaceRoot = workspaceFolder(subject, context);
-  return [
-    crateInputName,
-    `^${crateInputName}`,
-    ...workspaceFiles(subject, context.repositoryRoot),
-    ...(subject.pkg === undefined
+  const redirected =
+    subject.pkg === undefined
       ? []
-      : (context.redirectedInputs.get(subject.pkg.manifest_path) ?? [])),
+      : (context.redirectedInputs.get(subject.pkg.manifest_path) ?? []);
+  const after: Input[] = [
     ...(settings.featureUnification === "hakari" ? [] : memberManifestInputs(subject, context)),
     ...toolConfigurationInputs(target, subject, workspaceRoot, settings),
     ...(target === "fmt" || target === "fmt-check"
@@ -334,6 +366,16 @@ export function targetInputs(
     ...environmentInputs(target),
     { runtime: toolchainCommand(workspaceRoot) },
     pluginVersionInput(context.plugin),
+  ];
+  return [
+    crateInputName,
+    `^${crateInputName}`,
+    ...workspaceFiles(subject, context.repositoryRoot),
+    ...withoutRepeatedAdditions(redirected, [
+      ...namedInputs(subject, context, settings)[crateInputName],
+      ...after,
+    ]),
+    ...after,
   ];
 }
 

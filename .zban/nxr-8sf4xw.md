@@ -1,6 +1,6 @@
 ---
 title: Reach a crate with a project behind a crate deeper below a paths folder
-status: todo
+status: in-progress
 type: bug
 parent: nxr-w9qa5f
 discovered_from: nxr-vaywmh

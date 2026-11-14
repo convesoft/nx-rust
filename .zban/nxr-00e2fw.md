@@ -1,6 +1,6 @@
 ---
 title: Carry the envInputs and runtimeInputs of the crates behind a left-out edge
-status: todo
+status: in-progress
 type: bug
 parent: nxr-w9qa5f
 discovered_from: nxr-vaywmh

@@ -5,7 +5,7 @@ import type { CargoDiscovery } from "./discovery";
 import type { Input, InputDefinition } from "./inputs";
 import { realPath } from "./real-path";
 import type { RedirectedUse } from "./redirected-uses";
-import { readCrateFileInputs } from "./settings";
+import { readCrateAddedInputs, readCrateFileInputs } from "./settings";
 import { foldersNxSees } from "./visibility";
 
 /** A crate without an Nx project that a crate with a project reaches. */
@@ -31,6 +31,14 @@ export interface PathDependency {
    * files"); none where no report describes it or Nx does not see it.
    */
   declared: InputDefinition[];
+  /**
+   * An `env` input for each variable and a `runtime` input for each command
+   * that its own table and its workspace's add with `envInputs` and
+   * `runtimeInputs`, each once, which an edge would have brought in its
+   * named input (`DES-INPUTS`, "Added variables and commands"): also where
+   * Nx does not see its files, and none where no report describes it.
+   */
+  added: InputDefinition[];
 }
 
 /** The crates whose files a crate's inputs name beyond its edges, by the crate's manifest path. */
@@ -81,8 +89,10 @@ export interface CrateFolders {
  * Whether Nx sees a crate's files is whether it sees its manifest, or any
  * file of a folder without one. The files that a crate seen there declares
  * with `fileInputs`, in its own table or its workspace's, travel with its
- * folder; they are read from its report, so a crate without one declares
- * none.
+ * folder, and so do the variables and commands that any of these crates
+ * adds there with `envInputs` and `runtimeInputs`, also where Nx does not
+ * see its files; they are read from its report, so a crate without one
+ * declares and adds none.
  *
  * @param uses The redirected uses of the members (`redirectedUses`), for the
  *   projects that this plugin entry creates.
@@ -123,6 +133,7 @@ export async function findCrateFolders(
   }
 
   const declared = new Map<string, InputDefinition[]>();
+  const added = new Map<string, InputDefinition[]>();
   const problems = new Set<string>();
   type Reached = { name: string; folder: string; via: PathDependency["via"] };
   const reached = new Map<string, Reached[]>();
@@ -154,6 +165,7 @@ export async function findCrateFolders(
           via: "redirection",
           workspaceManifest: ownWorkspaceManifest(use.folder),
           declared: declaredOf(use.folder),
+          added: addedOf(use.folder),
         },
       ]);
       behindLeftOut.set(member, [
@@ -236,7 +248,33 @@ export async function findCrateFolders(
       via: crate.via,
       workspaceManifest: ownWorkspaceManifest(crate.folder),
       declared: isSeen ? declaredOf(crate.folder) : [],
+      added: addedOf(crate.folder),
     };
+  }
+
+  // The `env` and `runtime` inputs for what the crate in `folder`, a real
+  // path, adds with `envInputs` and `runtimeInputs`, read once per crate
+  // from its report; none without one.
+  function addedOf(folder: string): InputDefinition[] {
+    const pkg = byRealFolder.get(folder);
+    const report = reportOf.get(folder);
+    if (pkg === undefined || report === undefined) {
+      return [];
+    }
+    let inputs = added.get(folder);
+    if (inputs === undefined) {
+      const found: string[] = [];
+      const { envInputs, runtimeInputs } = readCrateAddedInputs(pkg, report, workspaceRoot, found);
+      for (const problem of found) {
+        problems.add(problem);
+      }
+      inputs = [
+        ...envInputs.map((env): InputDefinition => ({ env })),
+        ...runtimeInputs.map((runtime): InputDefinition => ({ runtime })),
+      ];
+      added.set(folder, inputs);
+    }
+    return inputs;
   }
 
   // The filesets for the files that the crate in `folder`, a real path,
@@ -276,11 +314,12 @@ export async function findCrateFolders(
 
 /**
  * The inputs for a crate without an edge: its folder, the root manifest of
- * its workspace and the files it declares, where Nx can see them.
+ * its workspace and the files it declares, where Nx can see them, and the
+ * variables and commands it adds, also where Nx cannot.
  */
 export function crateInputs(crate: PathDependency): Input[] {
   if (!crate.seen) {
-    return [];
+    return crate.added;
   }
   const folder = crate.folder === "." ? "{workspaceRoot}" : `{workspaceRoot}/${crate.folder}`;
   return [
@@ -289,6 +328,7 @@ export function crateInputs(crate: PathDependency): Input[] {
       ? []
       : [`{workspaceRoot}/${crate.workspaceManifest}`]),
     ...crate.declared,
+    ...crate.added,
   ];
 }
 
