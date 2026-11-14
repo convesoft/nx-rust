@@ -20,6 +20,7 @@ import {
   findExecutable,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  includedAncestorFiles,
   pinnedToolchain,
   pinnedToolchainAvailable,
   pluginSourceEntry,
@@ -1108,6 +1109,35 @@ describe("keys with the toolchain", () => {
             expect(tasks.filter((task) => before[task].value !== after[task].value)).toEqual(tasks);
           } finally {
             workspace.remove();
+          }
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "differ for Cargo 1.91 after the compiler that build.rustc names in a folder's file is replaced, where a deeper file also includes that file",
+        async () => {
+          const cargoHome = mkdtempSync(join(tmpdir(), "nx-rust-cargo-home-"));
+          const workspace = FixtureWorkspace.create(
+            "two-workspaces",
+            includedAncestorFiles(links.rustc),
+          );
+          try {
+            // tools is a workspace whose root is also a crate.
+            const toolsTasks = ["build", "check", "lint", "test", "fmt-check", "doc"].map(
+              (target) => `tools:${target}`,
+            );
+            const env = { CARGO_HOME: cargoHome, RUSTUP_TOOLCHAIN: pinnedToolchain };
+            const before = await workspace.hashTasks(toolsTasks, { env });
+            links.point();
+            const after = await workspace.hashTasks(toolsTasks, { env });
+
+            expect(toolsTasks.filter((task) => before[task].value !== after[task].value)).toEqual(
+              toolsTasks,
+            );
+          } finally {
+            workspace.remove();
+            rmSync(cargoHome, { recursive: true, force: true });
           }
         },
         HARNESS_TIMEOUT,

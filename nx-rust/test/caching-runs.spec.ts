@@ -17,6 +17,7 @@ import {
   FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  includedAncestorFiles,
   pinnedToolchain,
   pinnedToolchainAvailable,
   pluginWorkers,
@@ -887,6 +888,35 @@ function hostTriple(): string {
         } finally {
           workspace.remove();
           links.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "builds with the new compiler under Cargo 1.91, and restores nothing, after the compiler that build.rustc names in a folder's file is replaced, where a deeper file also includes that file",
+      async () => {
+        const links = CompilerLinks.create(pinnedToolchain);
+        const cargoHome = mkdtempSync(join(tmpdir(), "nx-rust-cargo-home-"));
+        const workspace = FixtureWorkspace.create(
+          "two-workspaces",
+          reportingCompiler,
+          includedAncestorFiles(links.rustc),
+        );
+        try {
+          // Cargo 1.91 ignores the include and runs the compiler behind the links.
+          await expectBuiltAgain(
+            workspace,
+            { CARGO_HOME: cargoHome, RUSTUP_TOOLCHAIN: pinnedToolchain },
+            () => links.point(),
+            programVersion(toolchainProgram("rustc", pinnedToolchain)),
+            () => programVersion(toolchainProgram("rustc")),
+          );
+          expect(taskCalls(workspace)).toEqual(["build -p tools", "build -p tools"]);
+        } finally {
+          workspace.remove();
+          links.remove();
+          rmSync(cargoHome, { recursive: true, force: true });
         }
       },
       HARNESS_TIMEOUT,

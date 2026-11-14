@@ -93,6 +93,26 @@ describe("the programs that Cargo's configuration names in place of rustc and ru
     expect(tools().rustc).toEqual([join(root, "ws/bin/rustc"), "/parent"]);
   });
 
+  it("counts a file of the walk that a deeper file also includes in its own place, where Cargo 1.91 reads it", () => {
+    // The folder above sets both; the workspace includes its file, and then extra.toml.
+    write(
+      ".cargo/config.toml",
+      `${build("rustc", '"/parent/rustc"')}rustdoc = "/parent/rustdoc"\n`,
+    );
+    write("ws/.cargo/config.toml", 'include = ["../../.cargo/config.toml", "extra.toml"]\n');
+    write(
+      "ws/.cargo/extra.toml",
+      `${build("rustc", '"/extra/rustc"')}rustdoc = "/extra/rustdoc"\n`,
+    );
+    expect(tools()).toEqual({
+      rustc: ["/extra/rustc", "/parent/rustc"],
+      rustdoc: ["/extra/rustdoc", "/parent/rustdoc"],
+    });
+    // Without extra.toml, both versions take the folder above.
+    write("ws/.cargo/config.toml", 'include = ["../../.cargo/config.toml"]\n');
+    expect(tools()).toEqual({ rustc: ["/parent/rustc"], rustdoc: ["/parent/rustdoc"] });
+  });
+
   it("names nothing for a value that is no string, on which cargo fails", () => {
     write("ws/.cargo/config.toml", build("rustc", "5"));
     write(".cargo/config.toml", build("rustc", '"/parent"'));

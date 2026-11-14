@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testEnvironment } from "./environment";
+import type { FileChanges } from "./fixtures";
 
 /** A program of a Rust toolchain that a setting can name. */
 export type ToolchainProgram = "rustc" | "rustdoc";
@@ -92,4 +93,21 @@ export class CompilerLinks {
   remove(): void {
     rmSync(this.folder, { recursive: true, force: true });
   }
+}
+
+/**
+ * Files for `two-workspaces` in which a configuration file of cargo's walk
+ * is also included by a deeper one: the repository's `.cargo/config.toml`
+ * names the compiler at the path `rustc` in `build.rustc`, and
+ * `tools/.cargo/config.toml` includes that file and then `extra.toml`, which
+ * names rustup's default `rustc`. In `tools`, Cargo 1.97 and later run the
+ * default `rustc`, while Cargo 1.91, which ignores `include`, runs the one
+ * at `rustc` (`EVD-CARGO-COMPILER-SELECTION`).
+ */
+export function includedAncestorFiles(rustc: string): FileChanges {
+  return {
+    ".cargo/config.toml": `[build]\nrustc = ${JSON.stringify(rustc)}\n`,
+    "tools/.cargo/config.toml": 'include = ["../../.cargo/config.toml", "extra.toml"]\n',
+    "tools/.cargo/extra.toml": `[build]\nrustc = ${JSON.stringify(toolchainProgram("rustc"))}\n`,
+  };
 }
