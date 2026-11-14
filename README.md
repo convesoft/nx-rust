@@ -110,6 +110,12 @@ mara schema validate && mara project validate
 zban check
 ```
 
+Outside CI, the Nx daemon that the first `nx` command in a checkout starts
+installs `nx@latest` into `~/.nx/tmp`, about 73 MB for each checkout, and
+removes it when it stops. Set `NX_USE_LOCAL=true` in the environment of your
+`nx` commands to avoid that; a `.env` file in the repository does not reach
+the daemon.
+
 ## License
 
 nx-rust is available under your choice of the [MIT license](LICENSE-MIT) or the

@@ -101,6 +101,8 @@ export async function startLocalRegistry(
 /** A registry that `nx run <target>` runs. */
 class NxRun {
   output = "";
+  /** What `nx run` printed on stderr after the setup asked it to stop. */
+  stopOutput = "";
   exitStatus: string | undefined;
   /** Resolves to the exit status once `nx run` has exited. */
   readonly exited: Promise<string>;
@@ -124,7 +126,7 @@ class NxRun {
 
   /** Stops `nx run` and resolves once it has exited. */
   stop(): Promise<void> {
-    return (this.stopping ??= stopProcess(this.child));
+    return (this.stopping ??= stopProcess(this.child, () => this.stopOutput));
   }
 }
 
@@ -197,7 +199,19 @@ function runRegistry(
       clearTimeout(timeout);
       resolve({ run, port: Number(port) });
     });
-    child.stderr!.on("data", (data: Buffer) => process.stderr.write(data));
+    // Once the setup has asked `nx run` to stop, its stderr is kept rather
+    // than shown, and shown only if it does not stop. The `@nx/js:verdaccio`
+    // executor takes every exit of verdaccio for a failed start: it rejects
+    // when the IPC channel to verdaccio closes, which every exit does, and
+    // logs `Failed to start verdaccio: undefined`. Nx then reports the task
+    // as stopped. Neither says anything about a stop that the setup asked for.
+    child.stderr!.on("data", (data: Buffer) => {
+      if (run.stopRequested) {
+        run.stopOutput += data.toString();
+      } else {
+        process.stderr.write(data);
+      }
+    });
     child.on("error", (error) => fail(`nx run ${target} failed: ${error.message}`));
     child.on("exit", () =>
       fail(`nx run ${target} exited with ${run.exitStatus} before the registry started`),
@@ -308,10 +322,10 @@ function useRegistry(port: number) {
 
 /**
  * Asks `child` to stop and resolves once it has exited, or after
- * `stopTimeoutMs` with a warning. `nx run` stops the registry it runs before it
- * exits.
+ * `stopTimeoutMs` with a warning that adds what `stopOutput` returns by then.
+ * `nx run` stops the registry it runs before it exits.
  */
-async function stopProcess(child: ChildProcess): Promise<void> {
+async function stopProcess(child: ChildProcess, stopOutput: () => string): Promise<void> {
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
     return;
   }
@@ -324,8 +338,10 @@ async function stopProcess(child: ChildProcess): Promise<void> {
   const stopped = await Promise.race([exited, timedOut]);
   clearTimeout(timer);
   if (!stopped) {
+    const output = stopOutput();
     console.error(
-      `The local registry (nx run, process ${child.pid}) did not stop within ${stopTimeoutMs / 1000} seconds. Stop it before the next run.`,
+      `The local registry (nx run, process ${child.pid}) did not stop within ${stopTimeoutMs / 1000} seconds. Stop it before the next run.` +
+        (output === "" ? "" : `\nWhat it printed on stderr since it was asked to stop:\n${output}`),
     );
   }
 }
