@@ -111,7 +111,10 @@ export async function readRedirections(
  * one above it, then those of the Cargo home, which cargo reads once where
  * it is also one of the folders.
  */
-export function configFiles(folder: string, env: NodeJS.ProcessEnv): [string, string][] {
+export function configFiles(
+  folder: string,
+  env: Readonly<Record<string, string | undefined>>,
+): [string, string][] {
   const files: [string, string][] = [];
   let current = resolve(folder);
   for (;;) {
