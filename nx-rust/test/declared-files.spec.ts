@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { lutimesSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { patternsBelow } from "../src/graph/declared-files";
+import { nxSegmentMatcher } from "../src/graph/nx-glob";
 import {
   applyFileChanges,
   FileChanges,
@@ -928,11 +929,14 @@ describe("declared files", () => {
               declared("rust/crates/api/src/**"),
               declared("rust/crates/app/src/**"),
               declared("rust/crates/other/src/**"),
+              // Its last segment is a name, which may be a folder's.
               declared("rust/crates/a*/src/main.rs"),
+              declared("rust/crates/a*/src/main.rs/**"),
               declared("rust/crates/api/src/main.rs"),
               declared("rust/crates/app/src/main.rs"),
               declared("rust/crates/app/**"),
               declared("*/banner.txt"),
+              declared("*/banner.txt/**"),
             ]);
             expect(graph.projects.other.namedInputs.default).toEqual([
               "{projectRoot}/**/*",
@@ -1157,35 +1161,289 @@ describe("declared files", () => {
       },
       HARNESS_TIMEOUT,
     );
+
+    // Two members in folders below other's: other/nest and other/nest/deep.
+    const withNested: FileChanges = {
+      "rust/Cargo.toml": (manifest) =>
+        manifest.replace(
+          'members = ["crates/*"]',
+          'members = ["crates/*", "crates/other/nest", "crates/other/nest/deep"]',
+        ),
+      "rust/crates/other/nest/Cargo.toml":
+        '[package]\nname = "nest"\nversion = "0.1.0"\nedition = "2024"\n',
+      "rust/crates/other/nest/src/lib.rs": "",
+      "rust/crates/other/nest/deep/Cargo.toml":
+        '[package]\nname = "deep"\nversion = "0.1.0"\nedition = "2024"\n',
+      "rust/crates/other/nest/deep/src/lib.rs": "",
+    };
+    const deep = "rust/crates/other/nest/deep/src/lib.rs";
+    /** The cached tasks of the crates that `nx affected` selects besides api's and app's, sorted. */
+    const selectedWith = (...crates: string[]) =>
+      [
+        ...apiAndDependents,
+        ...crates.flatMap((crate) =>
+          ["build", "check", "fmt-check", "lint", "test"].map((target) => `${crate}:${target}`),
+        ),
+      ].sort();
+    const apiAndAppCompiling = [
+      ...apiCompiling,
+      ...["build", "check", "lint", "test"].map((target) => `app:${target}`),
+    ];
+
+    it.each([
+      // An alternative of braces that names a folder covers the projects below it.
+      ["../{app,other}/", deep, "deep"],
+      ["../other/", deep, "deep"],
+      ["../other", deep, "deep"],
+      ["../*/", deep, "deep"],
+      // A last segment that is a name after a glob names a folder as well.
+      ["../*/src", "rust/crates/other/src/lib.rs", "other"],
+    ])(
+      "change the keys of check, lint, test, build and doc and select the tasks for a file below the folders that %s names",
+      async (pattern, changed, owner) => {
+        const outcomes = await changeFilesInTurn({
+          files: { ...withNested, ...apiDeclares(pattern) },
+          changed: [changed],
+          tasks: apiAndAppCompiling,
+        });
+
+        expect(outcomes).toEqual([
+          {
+            changed,
+            keysDiffer: Object.fromEntries(apiAndAppCompiling.map((task) => [task, true])),
+            afterCommit: selectedWith(owner),
+            withFiles: selectedWith(owner),
+          },
+        ]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    // web is a project of its own, from a project.json, beside the crates;
+    // the workspace excludes its folder.
+    const withWebBeside: FileChanges = {
+      "rust/Cargo.toml": (manifest) =>
+        manifest.replace(
+          'members = ["crates/*"]',
+          'members = ["crates/*"]\nexclude = ["crates/web"]',
+        ),
+      "rust/crates/web/project.json": JSON.stringify({ name: "web" }),
+      "rust/crates/web/src/index.js": "export {};\n",
+      "rust/crates/web/src/lib.rs": "",
+    };
+    const webFile = "rust/crates/web/src/index.js";
+    const withNestedAndWebBeside: FileChanges = {
+      "rust/Cargo.toml": (manifest) =>
+        manifest.replace(
+          'members = ["crates/*"]',
+          'members = ["crates/*", "crates/other/nest", "crates/other/nest/deep"]\nexclude = ["crates/web"]',
+        ),
+    };
+
+    it(
+      "change the keys and select the tasks for a file of another plugin's project that an alternative of braces starts in",
+      async () => {
+        const outcomes = await changeFilesInTurn({
+          files: { ...withWebBeside, ...apiDeclares("../{app,web}/src/**") },
+          changed: [webFile],
+          tasks: apiCompiling,
+        });
+
+        expect(outcomes).toEqual([
+          {
+            changed: webFile,
+            keysDiffer: everyKeyDiffers,
+            afterCommit: apiAndDependents,
+            withFiles: apiAndDependents,
+          },
+        ]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "leave out a file of another plugin's project that an extended group does not match, and keep those that it matches",
+      async () => {
+        const outcomes = await changeFilesInTurn({
+          files: { ...withWebBeside, ...apiDeclares("../@(app|other)/src/**") },
+          changed: [webFile, sibling],
+          tasks: apiCompiling,
+        });
+
+        expect(outcomes).toEqual([
+          {
+            changed: webFile,
+            keysDiffer: Object.fromEntries(apiCompiling.map((task) => [task, false])),
+            afterCommit: [],
+            withFiles: [],
+          },
+          {
+            changed: sibling,
+            keysDiffer: everyKeyDiffers,
+            afterCommit: apiAndDependents,
+            withFiles: apiAndDependents,
+          },
+        ]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "name the alternative of braces whose files of another plugin's project Nx would leave out",
+      () =>
+        inFixture(
+          "declared-files",
+          { ...withWeb, ...apiDeclares("../{other,app}/w*/**") },
+          async (workspace) => {
+            expect(await uncoveredFolderErrors(workspace)).toEqual([
+              `rust/crates/api/Cargo.toml: the fileInputs pattern "../{other,app}/w*/**" (its alternative "../app/w*/**") of the crate api names files in rust/crates/app/web, the folder of the project "web", which Nx would leave out of the cache keys. ${remedyOf("rust/crates/api/Cargo.toml", "rust/crates/app", "app", '"../app/web/**"')}`,
+            ]);
+          },
+        ),
+      HARNESS_TIMEOUT,
+    );
+
+    /** The patterns that an error about project folders gives to add. */
+    function remedies(message: string): string[] {
+      const lines = message
+        .split("\n")
+        .filter((line) => line.includes("which Nx would leave out of the cache keys"));
+      return [
+        ...new Set(
+          lines.flatMap((line) =>
+            [
+              ...(/ Add (.*) beside it in the fileInputs of /.exec(line)?.[1] ?? "").matchAll(
+                /"(?:[^"\\]|\\.)*"/g,
+              ),
+            ].map(([quoted]) => JSON.parse(quoted) as string),
+          ),
+        ),
+      ];
+    }
+
+    it.each([
+      "../*/**",
+      "../*/src/**",
+      "../a*/src/main.rs",
+      "../{app,other}/src/**",
+      "../{app,web}/src/**",
+      "../{app,{other,web}}/src/**",
+      "../{a*,w*}/src/**",
+      "../{app,other}/",
+      "../[ao]*/src/**",
+      "../[!o]*/src/**",
+      "../**/src/**",
+      "../**/*.rs",
+      "../@(app|other)/src/**",
+      "../+(app|web)/src/**",
+      "../*(app)/src/**",
+      "../?(web)/src/**",
+      "../!(app)/src/**",
+      "../[[:alpha:]]*/src/**",
+      "../*/",
+      "../*/src",
+      "../other/",
+      "../other",
+      "../../**",
+      "../../../*/crates/*/src/**",
+    ])(
+      "hash every file that Nx's own glob finds for %s, and fail graph creation only where it reaches a project folder that the crate's filesets leave out",
+      (pattern) =>
+        inFixture(
+          "declared-files",
+          { ...withNested, ...withWebBeside, ...withNestedAndWebBeside, ...apiDeclares(pattern) },
+          async (workspace) => {
+            // What the pattern names in the repository, as Nx's glob reads it
+            // without projects, with everything below what it names where it
+            // names folders: a trailing "/" or a last segment that is a name.
+            const glob = posix.normalize(`rust/crates/api/${pattern}`);
+            const folders =
+              glob.endsWith("/") || !/[*?[\]{}()\\]/.test(glob.split("/").pop() ?? "");
+            const named = await workspace.glob(
+              folders ? [glob, `${glob.replace(/\/$/, "")}/**`] : [glob],
+            );
+            const error = await workspace.graph().then(
+              () => undefined,
+              (error: unknown) => error as Error,
+            );
+            // An error must be about a folder that the pattern reaches, and give
+            // the patterns that cover it.
+            const added = error === undefined ? [] : remedies(error.message);
+            const reachesWeb = named.some((file) => file.startsWith("rust/crates/web/"));
+            expect({
+              pattern,
+              failure: error && {
+                reachesWeb,
+                addsWeb: added.some((line) => line.startsWith("../web/")),
+              },
+            }).toEqual({ pattern, failure: error && { reachesWeb: true, addsWeb: true } });
+            applyFileChanges(workspace.root, {
+              "rust/crates/api/Cargo.toml": (manifest) =>
+                manifest.replace(
+                  `fileInputs = ${JSON.stringify([pattern])}`,
+                  `fileInputs = ${JSON.stringify([pattern, ...added])}`,
+                ),
+            });
+            const files = await workspace.taskFiles(["api:check"]);
+
+            expect({
+              pattern,
+              missing: named.filter((file) => !files["api:check"].includes(file)),
+            }).toEqual({
+              pattern,
+              missing: [],
+            });
+          },
+        ),
+      HARNESS_TIMEOUT,
+    );
   });
 
   describe("patternsBelow", () => {
+    // Matched as Nx matches a segment of a fileset, with its conversion of groups.
+    const matches = nxSegmentMatcher(join(__dirname, "..", ".."));
+
     it.each([
-      ["*/**", ["app"], ["**"]],
-      ["*/**/*", ["app"], ["**"]],
-      ["*/src/**", ["app"], ["src/**"]],
-      ["*/src/main.rs", ["app"], ["src/main.rs"]],
-      ["a*/src/main.rs", ["app"], ["src/main.rs"]],
-      ["a*/src/main.rs", ["other"], []],
-      ["**/*.proto", ["a", "b"], ["**/*.proto"]],
-      ["**/x/*.txt", ["a", "x"], ["**/x/*.txt", "*.txt"]],
-      // A pattern that ends at the folder names no file below it.
-      ["*", ["app"], []],
+      ["*/**", ["app"], false, ["**"]],
+      ["*/**/*", ["app"], false, ["**"]],
+      ["*/src/**", ["app"], false, ["src/**"]],
+      ["*/src/main.rs", ["app"], true, ["src/main.rs"]],
+      ["a*/src/main.rs", ["app"], true, ["src/main.rs"]],
+      ["a*/src/main.rs", ["other"], true, []],
+      ["**/*.proto", ["a", "b"], false, ["**/*.proto"]],
+      ["**/x/*.txt", ["a", "x"], false, ["**/x/*.txt", "*.txt"]],
+      // A pattern that names files only names none at the folder itself...
+      ["*", ["app"], false, []],
+      // ...while one that names folders names everything below them.
+      ["*", ["app", "web"], true, ["**"]],
+      ["*/templates", ["app", "templates", "x"], true, ["**"]],
+      ["*/templates", ["app"], true, ["templates"]],
       // Without a glob, the pattern names a folder and everything below it.
-      ["", ["app", "web"], ["**"]],
-      ["{app,lib}/src/**", ["lib"], ["src/**"]],
-      ["{app,lib}/src/**", ["other"], []],
-      ["{app/src,lib}/**", ["app"], ["src/**"]],
-      ["[ab]pp/**", ["app"], ["**"]],
-      ["[!a]pp/**", ["app"], []],
-      ["\\*/src/**", ["*"], ["src/**"]],
-      ["\\*/src/**", ["app"], []],
-      // A group is taken to match any name.
-      ["@(app|lib)/src/**", ["other"], ["src/**"]],
-      ["*/w*/**", ["app"], ["w*/**"]],
-      ["*/w*/**", ["app", "web"], ["**"]],
-    ])("gives for %j below %j the patterns %j", (glob, names, expected) => {
-      expect(patternsBelow(glob, names)).toEqual(expected);
-    });
+      ["", ["app", "web"], true, ["**"]],
+      ["[ab]pp/**", ["app"], false, ["**"]],
+      ["[!a]pp/**", ["app"], false, []],
+      ["\\*/src/**", ["*"], false, ["src/**"]],
+      ["\\*/src/**", ["app"], false, []],
+      ["@(app|lib)/src/**", ["lib"], false, ["src/**"]],
+      ["@(app|lib)/src/**", ["other"], false, []],
+      ["!(app)/src/**", ["app"], false, []],
+      ["!(app)/src/**", ["web"], false, ["src/**"]],
+      ["?(web)/src/**", ["web"], false, ["src/**"]],
+      ["?(web)/src/**", ["app"], false, []],
+      // Nx reads `+(…)` as one of its alternatives, and `*(…)` before
+      // another segment as any name.
+      ["+(app|web)/src/**", ["web"], false, ["src/**"]],
+      ["+(app|web)/src/**", ["appweb"], false, []],
+      ["*(app)/src/**", ["web"], false, ["src/**"]],
+      // Nx's glob has no POSIX classes.
+      ["[[:alpha:]]*/src/**", ["app"], false, []],
+      ["*/w*/**", ["app"], false, ["w*/**"]],
+      ["*/w*/**", ["app", "web"], false, ["**"]],
+    ])(
+      "gives for %j below %j, naming folders: %j, the patterns %j",
+      (glob, names, folders, expected) => {
+        expect(patternsBelow(glob, names, { folders, matches })).toEqual(expected);
+      },
+    );
   });
 });

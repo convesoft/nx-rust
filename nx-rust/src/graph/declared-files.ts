@@ -3,6 +3,7 @@ import { lstatSync, readlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { CargoDiscovery, CargoWorkspace, describeWorkspaces } from "./discovery";
 import type { InputDefinition } from "./inputs";
+import { literalSegment, nxSegmentMatcher, SegmentMatcher } from "./nx-glob";
 import { physicalPath } from "./real-path";
 import type { FileInput } from "./settings";
 
@@ -10,9 +11,10 @@ import type { FileInput } from "./settings";
 export interface DeclaredFiles {
   /**
    * The filesets for the patterns, with `includeIgnored`, in the order of
-   * the patterns: for each, those of the links it passes, the one for its
-   * real path and those for the folders of the plugin's projects below
-   * where it starts.
+   * the patterns and of the alternatives of their braces: for each, those of
+   * the links it passes, the one for its real path, with the one for
+   * everything below it where it names a folder, and those for the folders
+   * of the plugin's projects below where it starts.
    */
   filesets: InputDefinition[];
   /** The problems of `DES-DIAGNOSTICS` that the patterns have; graph creation stops on any. */
@@ -22,24 +24,31 @@ export interface DeclaredFiles {
 }
 
 /**
- * A `fileInputs` pattern as graph creation resolved it, kept for the check
- * that `createDependencies` makes with the projects of every plugin
- * ({@link failOnUncoveredProjectFolders}).
+ * One alternative of a `fileInputs` pattern as graph creation resolved it,
+ * kept for the check that `createDependencies` makes with the projects of
+ * every plugin ({@link failOnUncoveredProjectFolders}).
  */
 export interface DeclaredPattern {
   /** The pattern as written, with its manifest. */
   input: FileInput;
+  /** The alternative of the pattern's braces, the pattern itself where it has none. */
+  alternative: string;
   /** The real name of the crate whose key the pattern goes into. */
   crate: string;
   /** The real path of the folder of the manifest, relative to the repository root. */
   manifestFolder: string;
   /**
-   * The real path of the pattern's fixed part, relative to the repository
-   * root, `""` for the root itself: the folder that Nx reads it from.
+   * The folder that Nx reads the alternative from, relative to the
+   * repository root, `""` for the root itself: the real path of its fixed
+   * part, with the segments after it that Nx reads as names.
    */
   folder: string;
-  /** The rest of the pattern, `""` where the fixed part is all of it. */
+  /** The rest of the alternative after {@link folder}, `""` where it has none. */
   glob: string;
+  /** Whether it names folders, and thereby everything below them ({@link namesFolders}). */
+  namesFolders: boolean;
+  /** Whether the plugin cannot read it, so that it takes it to name everything below its folder. */
+  unread: boolean;
   /** Every fileset that the crate's patterns give, this one's among them. */
   crateFilesets: readonly string[];
 }
@@ -53,6 +62,11 @@ export interface DeclaredScope {
    * relative to the repository root ({@link pluginProjectRoots}).
    */
   projectRoots: readonly string[];
+  /**
+   * How a segment of a pattern is matched against a folder's name; by
+   * default as Nx matches it ({@link nxSegmentMatcher}).
+   */
+  matches?: SegmentMatcher;
 }
 
 /** The characters that make a path segment a glob for Nx, and a backslash that may escape one. */
@@ -82,17 +96,25 @@ const parentAfterGlob = /(^|[/{,])\.\.($|[/},])/;
  * links lead to is seen. A link that only the glob part reaches stays as it
  * is.
  *
+ * Each alternative of the pattern's braces counts as a pattern of its own
+ * from here on, as Nx reads a fileset whose braces hold names, also for the
+ * braces that Nx leaves to its glob: each gets its own fixed part, links and
+ * filesets (`DES-INPUTS`, "Patterns over project folders"). A pattern that
+ * names folders counts everything below them ({@link namesFolders}): Nx does
+ * so for a path without a glob, and for a glob the pattern also gives the
+ * fileset with `/**` after it.
+ *
  * Nx matches an `includeIgnored` fileset only against the files of the
- * deepest project whose folder holds the folder it is read from, the
- * pattern's fixed part, and not against those of a project in a folder below
- * it; one that no project's folder holds, other than the repository root's,
- * against every file (`EVD-NX-24-FILESET-SCOPE`). For each folder of a
- * project of `scope` below the fixed part, other than the repository root,
- * the pattern therefore also gives a fileset that starts in that folder and
- * names the files below it that the pattern names ({@link patternsBelow}),
- * so that Nx counts them for the project that holds them. Projects of other
- * plugins and entries are checked in `createDependencies`
- * ({@link failOnUncoveredProjectFolders}).
+ * deepest project whose folder holds the folder it is read from, and not
+ * against those of a project in a folder below it; one that no project's
+ * folder holds, other than the repository root's, against every file
+ * (`EVD-NX-24-FILESET-SCOPE`). For each folder of a project of `scope` below
+ * that folder, the pattern therefore also gives a fileset that starts in
+ * that folder and names the files below it that the pattern names, matched
+ * as Nx matches them ({@link patternsBelow}), so that Nx counts them for the
+ * project that holds them. Projects of other plugins and entries are checked
+ * in `createDependencies` ({@link failOnUncoveredProjectFolders}). None of
+ * this depends on which files exist.
  *
  * Each of these is a problem that names the manifest and the pattern
  * (`REQ-FILE-INPUTS-HASHABLE`): a `..` after a glob character, which could
@@ -128,55 +150,119 @@ export function declaredFiles(
     const fileset = path === "" ? "{workspaceRoot}/**/*" : `{workspaceRoot}/${path}`;
     filesets.set(fileset, { fileset, includeIgnored: true });
   };
+  const matches = scope.matches ?? nxSegmentMatcher(repositoryRoot);
   for (const input of fileInputs) {
-    const { start, fixed, glob } = splitPattern(input, repositoryRoot);
-    if (parentAfterGlob.test(glob)) {
+    if (parentAfterGlob.test(splitPattern(input, repositoryRoot).glob)) {
       problems.push(parentAfterGlobProblem(input));
       continue;
     }
-    const { real, links } = resolveFixed(start, fixed);
-    const path = within(realRoot, real);
-    if (path === undefined) {
-      const resolved = [real, glob].filter((part) => part !== "").join("/");
-      problems.push(outsideProblem(input, `resolves to ${resolved}`));
-      continue;
-    }
-    const outsideLink = links.find((link) => within(realRoot, link) === undefined);
-    if (outsideLink !== undefined) {
-      problems.push(outsideProblem(input, `runs through the symbolic link ${outsideLink}`));
-      continue;
-    }
-    const directory = directories.find(
-      (directory) => within(directory.realPath, real) !== undefined,
-    );
-    if (directory !== undefined) {
-      problems.push(cargoDirectoryProblem(input, directory, workspace, repositoryRoot));
-      continue;
-    }
-    for (const link of links) {
-      declare(within(realRoot, link) ?? "");
-    }
-    declare([path, glob].filter((part) => part !== "").join("/"));
-    const folder = toPosix(path);
-    for (const root of folder === "" ? [] : scope.projectRoots) {
-      if (isBelow(folder, root)) {
-        for (const pattern of patternsBelow(glob, root.slice(folder.length + 1).split("/"))) {
-          declare(folderFileset(root, pattern).slice("{workspaceRoot}/".length));
+    const alternatives = braceAlternatives(input.pattern);
+    for (const alternative of alternatives ?? [input.pattern]) {
+      const shown = { ...input, alternative };
+      const { start, fixed, glob } = splitPattern(
+        { ...input, pattern: alternative },
+        repositoryRoot,
+      );
+      const { real, links } = resolveFixed(start, fixed);
+      const path = within(realRoot, real);
+      if (path === undefined) {
+        const resolved = [real, glob].filter((part) => part !== "").join("/");
+        problems.push(outsideProblem(shown, `resolves to ${resolved}`));
+        continue;
+      }
+      const outsideLink = links.find((link) => within(realRoot, link) === undefined);
+      if (outsideLink !== undefined) {
+        problems.push(outsideProblem(shown, `runs through the symbolic link ${outsideLink}`));
+        continue;
+      }
+      const directory = directories.find(
+        (directory) => within(directory.realPath, real) !== undefined,
+      );
+      if (directory !== undefined) {
+        problems.push(cargoDirectoryProblem(shown, directory, workspace, repositoryRoot));
+        continue;
+      }
+      const folders = namesFolders(alternative);
+      // The fileset for `<base>/<rest>`, and for everything below what it
+      // names where it names folders with a glob, which Nx does not count.
+      const declareNaming = (base: string, rest: string) => {
+        const named = [base, rest].filter((part) => part !== "").join("/");
+        declare(named);
+        const hasGlob = rest.split("/").some((segment) => literalSegment(segment) === undefined);
+        if (folders && rest !== "" && hasGlob && lastSegment(rest) !== "**") {
+          declare(`${named}/**`);
+        }
+      };
+      for (const link of links) {
+        declare(within(realRoot, link) ?? "");
+      }
+      declareNaming(path, glob);
+      const { folder, rest } = walkRoot(toPosix(path), glob);
+      const unread = alternatives === undefined;
+      for (const root of folder === "" ? [] : scope.projectRoots) {
+        if (isBelow(folder, root)) {
+          const names = root.slice(folder.length + 1).split("/");
+          const below = unread ? ["**"] : patternsBelow(rest, names, { folders, matches });
+          for (const pattern of below) {
+            declareNaming(escapeGlob(root), pattern);
+          }
         }
       }
+      const manifestFolder = physicalPath(join(repositoryRoot, posix.dirname(input.manifest)));
+      patterns.push({
+        input,
+        alternative,
+        crate: scope.crate,
+        manifestFolder: toPosix(relative(realRoot, manifestFolder)),
+        folder,
+        glob: rest,
+        namesFolders: folders,
+        unread,
+        crateFilesets,
+      });
     }
-    const manifestFolder = physicalPath(join(repositoryRoot, posix.dirname(input.manifest)));
-    patterns.push({
-      input,
-      crate: scope.crate,
-      manifestFolder: toPosix(relative(realRoot, manifestFolder)),
-      folder,
-      glob,
-      crateFilesets,
-    });
   }
   crateFilesets.push(...filesets.keys());
   return { filesets: [...filesets.values()], problems, patterns };
+}
+
+/**
+ * Whether a pattern names folders, so that it counts everything below them:
+ * where it ends in `/`, or its last segment is a name, which may be a
+ * folder's as well as a file's. A pattern whose last segment is a glob, such
+ * as `*` or `*.proto`, names files only, as Nx reads it.
+ */
+export function namesFolders(pattern: string): boolean {
+  return /\/\.?$/.test(pattern) || literalSegment(lastSegment(pattern)) !== undefined;
+}
+
+/** The last segment of a path or pattern that is neither empty nor `.`. */
+function lastSegment(path: string): string {
+  return (
+    path
+      .split("/")
+      .filter((segment) => segment !== "" && segment !== ".")
+      .pop() ?? ""
+  );
+}
+
+/**
+ * The folder that Nx reads a fileset `<path>/<glob>` from, and the rest:
+ * `path` with the segments at the start of `glob` that Nx reads as names,
+ * their escapes resolved (`literalSegment` in `nx-glob.ts`).
+ */
+function walkRoot(path: string, glob: string): { folder: string; rest: string } {
+  const folder = path === "" ? [] : [path];
+  const segments = glob.split("/").filter((segment) => segment !== "");
+  let index = 0;
+  for (; index < segments.length; index++) {
+    const name = literalSegment(segments[index]);
+    if (name === undefined) {
+      break;
+    }
+    folder.push(name);
+  }
+  return { folder: folder.join("/"), rest: segments.slice(index).join("/") };
 }
 
 /** The fileset for the files below the project folder `root` that `pattern` names. */
@@ -221,11 +307,15 @@ export function pluginProjectRoots(
  * the pattern names there count only where the crate's filesets hold the
  * fileset that `declaredFiles` would give that folder, or one for the whole
  * folder, as a pattern that the repository adds does. Otherwise the message
- * gives that fileset as a pattern relative to the manifest.
+ * gives that fileset as a pattern relative to the manifest. Each alternative
+ * of a pattern's braces is checked on its own, and its segments are matched
+ * against the folders' names as Nx matches them, so that a folder that the
+ * pattern does not reach fails nothing.
  *
  * @param patterns The patterns of the entry's projects and of the crates
  *   whose folders their inputs name ({@link DeclaredFiles.patterns}).
  * @param projects The merged projects that `createDependencies` receives.
+ * @param matches How a segment is matched against a folder's name ({@link nxSegmentMatcher}).
  * @throws {Error} Naming the manifest, the pattern, its crates and the
  *   project for each folder, with the patterns that would cover it.
  */
@@ -235,6 +325,7 @@ export function pluginProjectRoots(
 export function failOnUncoveredProjectFolders(
   patterns: readonly DeclaredPattern[],
   projects: CreateDependenciesContext["projects"],
+  matches: SegmentMatcher,
 ): void {
   const names = new Map<string, string>();
   for (const [name, project] of Object.entries(projects)) {
@@ -258,12 +349,15 @@ export function failOnUncoveredProjectFolders(
       // What `declaredFiles` gives a project folder of its own entry, or a
       // pattern for the whole folder.
       const covered = (glob: string) =>
+        pattern.crateFilesets.includes(`{workspaceRoot}/${escapeGlob(root)}`) ||
         [glob, "**", "**/*"].some((whole) =>
           pattern.crateFilesets.includes(folderFileset(root, whole)),
         );
-      const below = patternsBelow(
-        pattern.glob,
-        root.slice(pattern.folder.length + 1).split("/"),
+      const between = root.slice(pattern.folder.length + 1).split("/");
+      const below = (
+        pattern.unread
+          ? ["**"]
+          : patternsBelow(pattern.glob, between, { folders: pattern.namesFolders, matches })
       ).filter((glob) => !covered(glob));
       if (below.length === 0) {
         continue;
@@ -273,7 +367,7 @@ export function failOnUncoveredProjectFolders(
         return `${escapeGlob(path)}/${glob}`;
       });
       const message = [
-        `${pattern.input.manifest}: the fileInputs pattern ${JSON.stringify(pattern.input.pattern)} of {crates} names files in ${root}, the folder of the project "${names.get(root)}", which Nx would leave out of the cache keys.`,
+        `${pattern.input.manifest}: the fileInputs pattern ${quoted({ ...pattern.input, alternative: pattern.alternative })} of {crates} names files in ${root}, the folder of the project "${names.get(root)}", which Nx would leave out of the cache keys.`,
         `The pattern starts in ${pattern.folder}, inside the folder of the project "${names.get(owner)}", and Nx matches such a pattern only against that project's own files, not against those of a project in a folder below it.`,
         `nx-rust adds a pattern for the folder of each project that it creates, but "${names.get(root)}" comes from another plugin or entry.`,
         `Add ${list(lines.map((line) => JSON.stringify(line)))} beside it in the fileInputs of ${pattern.input.manifest}, or narrow the pattern so that it does not reach ${root}.`,
@@ -299,73 +393,78 @@ export function failOnUncoveredProjectFolders(
 /**
  * The patterns, relative to a folder below the one that a pattern starts in,
  * for the files below that folder that the rest of the pattern names: `**`
- * where the pattern names everything below it, as a pattern without a glob
- * that names a folder does, and none where it names nothing there.
+ * where the pattern names everything below it, as a pattern without a glob,
+ * or one that names folders and names that folder or one above it, does;
+ * none where it names nothing there.
  *
- * Each alternative of braces is followed on its own. A segment with a
- * group, such as `@(a|b)` or a brace left over, is taken to match every
- * name, which can only give more files than the pattern names.
+ * The rest has no braces left ({@link braceAlternatives}). Its segments are
+ * matched against the names of the folders in between with `matches`, a
+ * `**` standing for any number of them.
  *
  * @param glob The rest of the pattern after the folder it starts in, `""` for none.
  * @param names The names of the folders from that folder down to the folder below it.
+ * @param options Whether the pattern names folders ({@link namesFolders}), and how a segment is matched.
  */
-export function patternsBelow(glob: string, names: readonly string[]): string[] {
-  if (glob === "") {
+export function patternsBelow(
+  glob: string,
+  names: readonly string[],
+  options: { folders: boolean; matches: SegmentMatcher },
+): string[] {
+  const segments = glob.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (segments.length === 0) {
     return ["**"];
   }
-  const alternatives = braceAlternatives(glob);
-  if (alternatives === undefined) {
-    return ["**"];
-  }
-  const found = new Set<string>();
-  for (const alternative of alternatives) {
-    const segments = alternative.split("/").filter((segment) => segment !== "" && segment !== ".");
-    // The positions in `segments` that the names read so far can lead to,
-    // with each `**` also standing for no folder at all.
-    const close = (states: Set<number>): Set<number> => {
-      // A state added here is visited as well, which only adds what it adds already.
-      for (const state of states) {
-        for (let next = state; segments[next] === "**"; next++) {
-          states.add(next + 1);
-        }
-      }
-      return states;
-    };
-    let states = close(new Set([0]));
-    for (const name of names) {
-      const next = new Set<number>();
-      for (const state of states) {
-        if (state >= segments.length) {
-          continue;
-        }
-        if (segments[state] === "**") {
-          next.add(state);
-        } else if (segmentMayMatch(segments[state], name)) {
-          next.add(state + 1);
-        }
-      }
-      states = close(next);
-    }
-    // A pattern that ends at the folder itself names no file below it.
+  // The positions in `segments` that the names read so far can lead to,
+  // with each `**` also standing for no folder at all.
+  const close = (states: Set<number>): Set<number> => {
+    // A state added here is visited as well, which only adds what it adds already.
     for (const state of states) {
-      if (state < segments.length) {
-        found.add(segments.slice(state).join("/"));
+      for (let next = state; segments[next] === "**"; next++) {
+        states.add(next + 1);
       }
     }
+    return states;
+  };
+  let states = close(new Set([0]));
+  for (const name of names) {
+    const next = new Set<number>();
+    for (const state of states) {
+      if (state >= segments.length) {
+        continue;
+      }
+      if (segments[state] === "**") {
+        next.add(state);
+      } else if (options.matches(segments[state], name)) {
+        next.add(state + 1);
+      }
+    }
+    states = close(next);
+    // The pattern names a folder that holds the folder below.
+    if (options.folders && states.has(segments.length)) {
+      return ["**"];
+    }
   }
+  // A pattern that names files only names none at the folder itself.
+  const found = new Set(
+    [...states]
+      .filter((state) => state < segments.length)
+      .map((state) => segments.slice(state).join("/")),
+  );
   if (found.has("**") || found.has("**/*")) {
     return ["**"];
   }
   return [...found].filter((pattern) => !found.has(`**/${pattern}`)).sort();
 }
 
-/** The most alternatives that a pattern's braces are expanded to before it counts as `**`. */
+/** The most alternatives that a pattern's braces are expanded to. */
 const maximumAlternatives = 256;
 
 /**
  * The pattern with each group of braces replaced by its alternatives, once
- * for each combination; `undefined` beyond {@link maximumAlternatives}. A
- * brace without its partner stays as it is.
+ * for each combination, nested groups included; `undefined` beyond
+ * {@link maximumAlternatives}, where the plugin takes the pattern to name
+ * everything below the folder it starts in. A brace without its partner, or
+ * escaped, stays as it is.
  */
 function braceAlternatives(pattern: string): string[] | undefined {
   let open = -1;
@@ -415,70 +514,6 @@ function braceAlternatives(pattern: string): string[] | undefined {
     results.push(...expanded);
   }
   return results;
-}
-
-/**
- * Whether the segment of a pattern can match the folder name `name`: `*`
- * and `?` stand for any characters but `/`, a `[...]` class for one of its
- * characters, and a backslash makes the next character literal. A segment
- * with a group or a brace is taken to match.
- */
-function segmentMayMatch(segment: string, name: string): boolean {
-  if (/[(){}]/.test(segment)) {
-    return true;
-  }
-  let source = "";
-  for (let index = 0; index < segment.length; index++) {
-    const character = segment[index];
-    if (character === "\\" && index + 1 < segment.length) {
-      source += escapeRegExp(segment[++index]);
-    } else if (character === "*") {
-      source += "[^/]*";
-    } else if (character === "?") {
-      source += "[^/]";
-    } else if (character === "[") {
-      const end = classEnd(segment, index);
-      if (end === undefined) {
-        source += "\\[";
-      } else {
-        const body = segment.slice(index + 1, end);
-        const negated = body.startsWith("!") || body.startsWith("^");
-        const members = (negated ? body.slice(1) : body).replace(/[\]\\^[]/g, (c) => `\\${c}`);
-        source += `[${negated ? "^" : ""}${members}]`;
-        index = end;
-      }
-    } else {
-      source += escapeRegExp(character);
-    }
-  }
-  try {
-    return new RegExp(`^${source}$`).test(name);
-  } catch {
-    return true;
-  }
-}
-
-/** The index of the `]` that closes the class opened at `open`, if any. */
-function classEnd(segment: string, open: number): number | undefined {
-  let index = open + 1;
-  if (segment[index] === "!" || segment[index] === "^") {
-    index++;
-  }
-  if (segment[index] === "]") {
-    index++;
-  }
-  for (; index < segment.length; index++) {
-    if (segment[index] === "\\") {
-      index++;
-    } else if (segment[index] === "]") {
-      return index;
-    }
-  }
-  return undefined;
-}
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\/]/g, (character) => `\\${character}`);
 }
 
 /** A path with the characters that make a pattern a glob escaped by a backslash. */
@@ -626,6 +661,16 @@ function cargoDirectories(workspace: Pick<CargoWorkspace, "report">): CargoDirec
   return [directory("build directory", build), directory("artifact directory", artifact)];
 }
 
+/** A pattern of a problem, with the alternative of its braces that the problem is about. */
+type ShownPattern = FileInput & { alternative?: string };
+
+/** The pattern in quotes, with its alternative where that is another. */
+function quoted({ pattern, alternative }: ShownPattern): string {
+  return alternative === undefined || alternative === pattern
+    ? JSON.stringify(pattern)
+    : `${JSON.stringify(pattern)} (its alternative ${JSON.stringify(alternative)})`;
+}
+
 function parentAfterGlobProblem(input: FileInput): string {
   return [
     `${input.manifest}: the fileInputs pattern ${JSON.stringify(input.pattern)} has a ".." segment after a glob character, so that nx-rust cannot tell which folder it reaches, and Nx cannot hash it.`,
@@ -634,22 +679,22 @@ function parentAfterGlobProblem(input: FileInput): string {
 }
 
 /** @param where Where the pattern leaves the repository, such as `resolves to /x`. */
-function outsideProblem(input: FileInput, where: string): string {
+function outsideProblem(input: ShownPattern, where: string): string {
   return [
-    `${input.manifest}: the fileInputs pattern ${JSON.stringify(input.pattern)} ${where}, outside the repository, whose files Nx does not track.`,
+    `${input.manifest}: the fileInputs pattern ${quoted(input)} ${where}, outside the repository, whose files Nx does not track.`,
     "To key the crate's tasks on such files, add a command to runtimeInputs that prints them or a hash of them; nx affected does not see a change to its output.",
   ].join(" ");
 }
 
 function cargoDirectoryProblem(
-  input: FileInput,
+  input: ShownPattern,
   directory: CargoDirectory,
   workspace: Pick<CargoWorkspace, "root">,
   repositoryRoot: string,
 ): string {
   const shown = within(repositoryRoot, directory.path) || directory.path;
   return [
-    `${input.manifest}: the fileInputs pattern ${JSON.stringify(input.pattern)} resolves into ${shown}, Cargo's ${directory.role} of ${describeWorkspaces([workspace.root])}.`,
+    `${input.manifest}: the fileInputs pattern ${quoted(input)} resolves into ${shown}, Cargo's ${directory.role} of ${describeWorkspaces([workspace.root])}.`,
     "Cargo writes the files there; declare the files that they are made from instead.",
   ].join(" ");
 }

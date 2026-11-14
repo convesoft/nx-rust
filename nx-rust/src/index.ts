@@ -3,6 +3,7 @@ import { checkNxOnLoad } from "./compatibility/nx-version";
 import { postTasksExecution, preTasksExecution } from "./executors/nx-command";
 import { failOnNameCollisions } from "./graph/collisions";
 import { failOnUncoveredProjectFolders } from "./graph/declared-files";
+import { nxSegmentMatcher } from "./graph/nx-glob";
 import { projectEdges } from "./graph/edges";
 import { failOnPluginVersionOption } from "./graph/plugin-version";
 import { Registration, registrationOf } from "./graph/registration";
@@ -38,7 +39,11 @@ function createDependencies(
     return [];
   }
   failOnNameCollisions(graph, context);
-  failOnUncoveredProjectFolders(graph.declaredPatterns ?? [], context.projects);
+  failOnUncoveredProjectFolders(
+    graph.declaredPatterns ?? [],
+    context.projects,
+    nxSegmentMatcher(context.workspaceRoot),
+  );
   failOnAffectedTestsOption(graph, context.projects);
   const edges = projectEdges(graph, context.projects);
   return failOnPluginVersionOption(graph, context, this)
