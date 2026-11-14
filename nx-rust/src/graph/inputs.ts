@@ -118,7 +118,8 @@ export interface InputContext {
   /**
    * The inputs for the redirected crates with a project that each crate may
    * use but has no edge to, by the crate's manifest path: each one's folder
-   * and the root manifest of its workspace.
+   * and the root manifest of its workspace, and those of the crates that
+   * cargo builds with it (`RedirectedUse.brings`).
    */
   redirectedInputs: ReadonlyMap<string, readonly Input[]>;
   /**

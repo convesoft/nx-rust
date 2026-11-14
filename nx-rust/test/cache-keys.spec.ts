@@ -1137,6 +1137,29 @@ describe("keys with the toolchain", () => {
   );
 });
 
+/**
+ * A root `package.json` and a pnpm lockfile that list `left-pad` and, unless
+ * `version` is `null`, the plugin, as an installed plugin has them. `fields`
+ * are added to the `package.json`.
+ */
+const installed = (
+  integrity: { tslib?: string; leftPad?: string } = {},
+  version: string | null = "0.0.1",
+  fields: Record<string, unknown> = {},
+): FileChanges => ({
+  "package.json": JSON.stringify({
+    name: "repo",
+    private: true,
+    ...fields,
+    devDependencies: {
+      ...(version === null ? {} : { "@convesoft/nx-rust": version }),
+      "left-pad": "1.3.0",
+    },
+  }),
+  "pnpm-lock.yaml": pnpmLockfile(version, integrity),
+  "node_modules/.modules.yaml": "{}\n",
+});
+
 describe("keys with the plugin's version", () => {
   it(
     "differ for another version of the plugin loaded by path, with Nx's lockfile analysis off, and no task fails to hash",
@@ -1181,21 +1204,6 @@ describe("keys with the plugin's version", () => {
     HARNESS_TIMEOUT,
   );
 
-  // A root package.json and a pnpm lockfile that lists the plugin, as an
-  // installed plugin has them.
-  const installed = (
-    integrity: { tslib?: string; leftPad?: string } = {},
-    version = "0.0.1",
-  ): FileChanges => ({
-    "package.json": JSON.stringify({
-      name: "repo",
-      private: true,
-      devDependencies: { "@convesoft/nx-rust": version, "left-pad": "1.3.0" },
-    }),
-    "pnpm-lock.yaml": pnpmLockfile(version, integrity),
-    "node_modules/.modules.yaml": "{}\n",
-  });
-
   describeCacheKeyMatrix("where the Rust targets name the plugin's package", [
     {
       change: "a new version of the installed plugin package",
@@ -1218,6 +1226,120 @@ describe("keys with the plugin's version", () => {
       before: { files: installed() },
       after: { files: installed({ leftPad: `sha512-${"9".repeat(86)}==` }) },
       keys: { "api:test": "must not differ", "rust:doc": "must not differ" },
+    },
+  ]);
+});
+
+// The accepted limit of DES-INPUTS, "A project at the repository root": a
+// crate or workspace project there shares its folder with the JS package, so
+// its folder input covers package.json and the JS lockfile, and the edges that
+// Nx's JS plugin draws from it to npm packages reach its ^default. These rows
+// record that behaviour, so that a change of it is noticed.
+describe("keys of a project at the repository root", () => {
+  const newLeftPad = `sha512-${"9".repeat(86)}==`;
+
+  // two-workspaces with a package at the repository root, whose project then
+  // holds the workspace's targets.
+  const rootPackage: FileChanges = {
+    "Cargo.toml": [
+      "[package]",
+      'name = "rootpkg"',
+      'version = "0.1.0"',
+      'edition = "2024"',
+      "",
+      "[workspace]",
+      'members = ["crates/*"]',
+      'resolver = "3"',
+      "",
+    ].join("\n"),
+    "src/lib.rs": "pub fn root() {}\n",
+    "Cargo.lock": (lockfile) => withRootPackage(lockfile ?? ""),
+  };
+
+  function withRootPackage(lockfile: string) {
+    return lockfile.replace(
+      '[[package]]\nname = "util"',
+      '[[package]]\nname = "rootpkg"\nversion = "0.1.0"\n\n[[package]]\nname = "util"',
+    );
+  }
+
+  // The same, with app in crates/ depending on the crate at the root, whose
+  // folder its ^default then holds.
+  const appOnRootPackage: FileChanges = {
+    ...rootPackage,
+    "crates/app/Cargo.toml": appended('rootpkg = { path = "../.." }\n'),
+    "Cargo.lock": (lockfile) =>
+      withRootPackage(lockfile ?? "").replace(
+        'name = "app"\nversion = "0.1.0"\ndependencies = [\n "util",\n]',
+        'name = "app"\nversion = "0.1.0"\ndependencies = [\n "rootpkg",\n "util",\n]',
+      ),
+  };
+
+  // In two-workspaces the virtual workspace's project cargo-workspace lies at
+  // the repository root, and the tools/ workspace in a subfolder.
+  const virtualRootKeys = {
+    "cargo-workspace:doc": "must differ",
+    "cargo-workspace:lockfile": "must not differ",
+    ...all(["app:test", "app:build", "app:check", "app:lint", "app:fmt-check"], "must not differ"),
+    ...all(["util:test", "tools:test", "tools:doc", "scaffold:test"], "must not differ"),
+  } as const;
+  const rootPackageKeys = {
+    ...all(
+      ["rootpkg:test", "rootpkg:build", "rootpkg:check", "rootpkg:lint", "rootpkg:fmt-check"],
+      "must differ",
+    ),
+    "rootpkg:doc": "must differ",
+    "rootpkg:lockfile": "must not differ",
+    ...all(["app:test", "util:test", "tools:test", "tools:doc"], "must not differ"),
+  } as const;
+
+  describeCacheKeyMatrix("change with the JS package beside them", [
+    {
+      change:
+        "a change in the JS lockfile outside the plugin's package, for a virtual workspace at the repository root",
+      fixture: "two-workspaces",
+      before: { files: installed() },
+      after: { files: installed({ leftPad: newLeftPad }) },
+      keys: virtualRootKeys,
+    },
+    {
+      change: "a change in the root package.json, for a virtual workspace at the repository root",
+      fixture: "two-workspaces",
+      before: { files: installed() },
+      after: { files: installed({}, "0.0.1", { description: "changed" }) },
+      keys: virtualRootKeys,
+    },
+    {
+      change:
+        "a change in a JS lockfile that does not list the plugin, for a crate at the repository root",
+      fixture: "two-workspaces",
+      base: { files: rootPackage },
+      before: { files: installed({}, null) },
+      after: { files: installed({ leftPad: newLeftPad }, null) },
+      keys: rootPackageKeys,
+    },
+    {
+      change: "a change in the root package.json, for a crate at the repository root",
+      fixture: "two-workspaces",
+      base: { files: rootPackage },
+      before: { files: installed({}, null) },
+      after: { files: installed({}, null, { description: "changed" }) },
+      keys: rootPackageKeys,
+    },
+    {
+      change:
+        "a change in the JS lockfile outside the plugin's package, for a crate that depends on the crate at the repository root",
+      fixture: "two-workspaces",
+      base: { files: appOnRootPackage },
+      before: { files: installed() },
+      after: { files: installed({ leftPad: newLeftPad }) },
+      keys: {
+        "rootpkg:test": "must differ",
+        "app:test": "must differ",
+        "app:build": "must differ",
+        "rootpkg:lockfile": "must not differ",
+        ...all(["util:test", "tools:test", "tools:doc"], "must not differ"),
+      },
     },
   ]);
 });
