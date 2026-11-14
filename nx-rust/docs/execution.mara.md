@@ -156,7 +156,7 @@ The `hakari` strategy adds four things to what hakari does:
 - **Drift.** A cached workspace-level check fails early when the hack crate is stale.
 - **Publishing.** The release flow has to handle the dependency on the hack crate ([[REQ-RELEASE]]).
 
-Whether hakari unifies features between workspace crates is not confirmed ([[RISK-HAKARI-GAPS]]).
+cargo-hakari unifies neither the features of workspace members nor those of a third-party crate that depends on a member through normal or build dependencies, and a feature that only a platform-specific dependency table asks for it unifies only on the platforms that its configuration lists ([[EVD-HAKARI-UNIFICATION]], [[RISK-HAKARI-GAPS]]).
 :::
 
 :::mara design DES-FEATURE-SETS
