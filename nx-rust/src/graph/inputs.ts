@@ -535,38 +535,46 @@ export function toolchainCommand(workspaceRoot: string): string {
 }
 
 /**
- * The plugin's script that prints the triples that cargo builds for
- * (`print-triples.ts`), compiled beside this module.
+ * The plugin's script that prints the triples that cargo builds for and its
+ * artifact directory (`print-artifact-folders.ts`), compiled beside this
+ * module.
  */
-const tripleScript = join(__dirname, "..", "cargo", "print-triples.js");
+const artifactFoldersScript = join(__dirname, "..", "cargo", "print-artifact-folders.js");
 
 /**
- * The command of the triple input of a cached `build` and `doc`, one per
- * workspace (`DES-INPUTS`, `DES-OUTPUTS`): in the workspace root, the
- * plugin's own script prints the triples that cargo will build for there
- * without `--target`, from Cargo's configuration files and the
- * `CARGO_BUILD_TARGET` of the task's environment, read with the function
- * that graph creation uses. The key thereby follows the triples that the
- * task's cargo will use, also where the graph that the Nx daemon keeps is
- * older than a change to a configuration file that Nx does not watch, such
- * as the Cargo home's, whose folders the outputs still name; the executor
- * then fails the task before cargo runs (`taskInvocation` in `task.ts`).
+ * The command of the artifact input of a cached `build` and `doc`, one per
+ * workspace (`DES-INPUTS`, `DES-OUTPUTS`): the plugin's own script prints
+ * the triples that cargo will build for in the workspace root without
+ * `--target`, read with the function that graph creation uses, and the
+ * artifact directory that cargo reports there, as the outputs name it,
+ * both with the task's environment. The key thereby follows the folders
+ * that the task's cargo will write to, also where the graph that the Nx
+ * daemon keeps is older than a change to a configuration file that Nx does
+ * not watch, such as the Cargo home's, and where a dotenv file that Nx loads
+ * only for the task moves the artifact directory; the outputs still name
+ * the graph's folders, and the executor then fails the task before cargo
+ * runs (`taskInvocation` in `task.ts`).
  *
- * The command names Node and the script by their absolute paths. Nx keys a
- * task on what a runtime input prints and not on its command, so
- * checkouts in other folders share the keys (`EVD-CARGO-TRIPLE-FOLDERS`).
- * Where the script cannot run, as for a plugin that Nx loads from its
- * TypeScript source, the command prints a random value instead, new at each
- * evaluation, so that no result stored under the key is ever restored. It
- * always ends with status 0, like {@link toolchainCommand}.
+ * The command names Node, the script and the workspace root, relative to
+ * the repository root where Nx runs it, by paths that reach no key: Nx keys
+ * a task on what a runtime input prints and not on its command, and the
+ * script prints no path of the checkout, so checkouts in other folders
+ * share the keys (`EVD-CARGO-TRIPLE-FOLDERS`). Where the script cannot run,
+ * as for a plugin that Nx loads from its TypeScript source, or cargo fails,
+ * as for a pinned toolchain that is not installed, the command prints a
+ * random value instead, new at each evaluation, so that no result stored
+ * under the key is ever restored. It always ends with status 0, like
+ * {@link toolchainCommand}.
  *
  * @param workspaceRoot The workspace's root folder, relative to the repository root.
  */
 // @mara implements DES-INPUTS
-export function tripleCommand(workspaceRoot: string, script = tripleScript): string {
-  const folder = workspaceRoot === "." ? "." : `./${workspaceRoot}`;
+export function artifactFoldersCommand(
+  workspaceRoot: string,
+  script = artifactFoldersScript,
+): string {
   return [
-    `{ cd ${shellQuote(folder)} && ${shellQuote(process.execPath)} ${shellQuote(script)} 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
+    `{ ${shellQuote(process.execPath)} ${shellQuote(script)} ${shellQuote(workspaceRoot)} 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
     "true",
   ].join("; ");
 }

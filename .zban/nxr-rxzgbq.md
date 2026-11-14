@@ -1,6 +1,6 @@
 ---
 title: Repeat the target-default warning at the start of a task
-status: todo
+status: in-progress
 type: feature
 parent: nxr-w9qa5f
 blocked_by:
