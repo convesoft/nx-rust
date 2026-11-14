@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { cargoMetadataOf } from "../src/graph/collisions";
 import { warningsDigest, warningsInputName } from "../src/graph/warnings";
 import {
@@ -14,6 +14,7 @@ import {
   runNx,
   taskCalls,
   TaskHash,
+  withoutColours,
 } from "./harness";
 
 // Checks the part of VER-SETUP about "Warnings where they are seen" in
@@ -52,6 +53,35 @@ const unreportedPathDependency: FileChanges = {
   },
 };
 
+/** The manifest of the crate p, with `package.workspace` naming `workspace` if given. */
+const crateP = (workspace?: string) =>
+  `[package]\nname = "p"\nversion = "0.1.0"\nedition = "2024"\n${workspace === undefined ? "" : `workspace = "${workspace}"\n`}`;
+
+/**
+ * cross-workspace-path where server depends on extra/p/x, a crate in the
+ * folder of the crate p, and the plugin gives neither a project. Where p
+ * names a missing folder in package.workspace, cargo refuses x's report and
+ * builds x all the same, so server warns (EVD-CARGO-UNREPORTED-CRATES). p's
+ * manifest is no input of server's tasks.
+ */
+const belowCrateP: FileChanges = {
+  "backend/crates/server/Cargo.toml": (manifest) =>
+    `${manifest}x = { path = "../../../extra/p/x" }\n`,
+  "extra/p/Cargo.toml": crateP(),
+  "extra/p/src/lib.rs": "",
+  "extra/p/x/Cargo.toml": '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2024"\n',
+  "extra/p/x/src/lib.rs": "",
+  "nx.json": (current) => {
+    const nxJson = JSON.parse(current ?? "{}");
+    nxJson.plugins = (nxJson.plugins ?? []).map((entry: string | { plugin: string }) =>
+      typeof entry === "string"
+        ? { plugin: entry, exclude: ["extra/**"] }
+        : { ...entry, exclude: ["extra/**"] },
+    );
+    return JSON.stringify(nxJson);
+  },
+};
+
 /** The warnings in a project's metadata, which its tasks print. */
 function warningsOf(graph: FixtureGraph, project: string): string[] {
   return cargoMetadataOf(graph.projects[project])?.warnings ?? [];
@@ -71,28 +101,34 @@ function changedInputs(before: TaskHash, after: TaskHash): string[] {
   return [...keys].filter((key) => nodes(before)[key] !== nodes(after)[key]).sort();
 }
 
-/** Runs api:fmt-check and says whether it ran cargo and printed `warning`. */
-async function fmtCheck(workspace: FixtureWorkspace, env: Env, warning: string) {
+/** Runs `task`, api:fmt-check by default, and says whether it ran cargo and printed `warning`. */
+async function fmtCheck(
+  workspace: FixtureWorkspace,
+  env: Env,
+  warning: string,
+  task = "api:fmt-check",
+) {
   const calls = taskCalls(workspace).length;
-  const { status, output } = await runNx(workspace, ["run", "api:fmt-check"], env);
+  const { status, output } = await runNx(workspace, ["run", task], env);
   expect({ status, output }).toEqual({ status: 0, output });
   return { ran: taskCalls(workspace).length > calls, warned: output.includes(warning) };
 }
 
 /**
- * Runs api:fmt-check in the states of one cause and returns what the task
- * did in each ({@link followsTheCause}).
+ * Runs `task`, api:fmt-check by default, in the states of one cause and
+ * returns what the task did in each ({@link followsTheCause}).
  */
 async function stepsOfCause(
   workspace: FixtureWorkspace,
   env: Env,
   warning: string,
   cause: { add: () => void; remove: () => void },
+  task = "api:fmt-check",
 ): Promise<{ ran: boolean; warned: boolean }[]> {
   const steps: { ran: boolean; warned: boolean }[] = [];
   const step = async (change?: () => void) => {
     change?.();
-    steps.push(await fmtCheck(workspace, env, warning));
+    steps.push(await fmtCheck(workspace, env, warning, task));
   };
   await step(cause.remove);
   await step(cause.add);
@@ -244,7 +280,7 @@ describe("the keys of a project's tasks", () => {
   );
 
   it(
-    "change with a [patch] that the Cargo home's configuration adds, which Nx does not hash otherwise",
+    "change with a [patch] that the Cargo home's configuration adds only through the edges it gives, not through its warning",
     async () => {
       const cargoHome = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "cargo-home-"));
       try {
@@ -261,23 +297,82 @@ describe("the keys of a project's tasks", () => {
                 `[patch.crates-io]\nmodel = { path = "${workspace.root}/rust/crates/model" }\n`,
               ),
           },
+          // api gets an edge to model; plain and types use no redirected
+          // crate, and the warning about the file reaches no key.
           keys: {
-            "api:fmt-check": "must differ",
-            "plain:fmt-check": "must differ",
-            "types:fmt-check": "must differ",
+            "api:check": "must differ",
+            "plain:check": "must not differ",
+            "plain:fmt-check": "must not differ",
+            "types:fmt-check": "must not differ",
+            "rust:lockfile": "must not differ",
           },
         });
 
         for (const { task, holds } of outcomes) {
           expect({ task, holds }).toEqual({ task, holds: true });
         }
-        // plain uses no redirected crate: only its warning changes its key.
-        const plain = outcomes.find(({ task }) => task === "plain:fmt-check");
-        expect(plain && changedInputs(plain.before, plain.after)).toEqual([
-          "plain:ProjectConfiguration",
-        ]);
       } finally {
         rmSync(cargoHome, { recursive: true, force: true });
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "are the same in two checkouts, one with and one without a Cargo home whose configuration sets [build]",
+    async () => {
+      const homes = [0, 1].map(() =>
+        mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "cargo-home-")),
+      );
+      writeFileSync(
+        join(homes[1], "config.toml"),
+        '[build]\nrustflags = ["--cfg", "nx_rust_flag"]\n',
+      );
+      const checkouts = homes.map(() =>
+        FixtureWorkspace.create("patched-workspaces", withoutModelPatch),
+      );
+      try {
+        const graphs = await Promise.all(
+          checkouts.map((checkout, index) => checkout.graph({ CARGO_HOME: homes[index] })),
+        );
+        const shown = await checkouts[1].nx(["show", "projects"], { CARGO_HOME: homes[1] });
+        const tasks = allTasks(graphs[0]);
+        const [one, two] = [
+          await checkouts[0].hashTasks(tasks, { env: { CARGO_HOME: homes[0] } }),
+          await checkouts[1].hashTasks(tasks, { env: { CARGO_HOME: homes[1] } }),
+        ];
+
+        // The second checkout warns, and its keys are those of the first.
+        expect(shown.output).toContain(`nx-rust: ${join(homes[1], "config.toml")} sets [build]`);
+        expect(allTasks(graphs[1])).toEqual(tasks);
+        for (const task of tasks) {
+          expect({ task, hash: one[task].value }).toEqual({ task, hash: two[task].value });
+        }
+      } finally {
+        checkouts.forEach((checkout) => checkout.remove());
+        homes.forEach((home) => rmSync(home, { recursive: true, force: true }));
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
+
+  it(
+    "change with the warning about a path dependency whose report cargo refuses, through the project's configuration alone",
+    async () => {
+      const outcomes = await compareCacheKeys({
+        change: "a missing folder in package.workspace of the crate above a path dependency",
+        fixture: "cross-workspace-path",
+        base: { files: belowCrateP },
+        after: { files: { "extra/p/Cargo.toml": crateP("../missing") } },
+        keys: { "server:fmt-check": "must differ", "server:build": "must differ" },
+      });
+
+      for (const { task, before, after, holds } of outcomes) {
+        expect({ task, holds }).toEqual({ task, holds: true });
+        expect({ task, changed: changedInputs(before, after) }).toEqual({
+          task,
+          changed: ["server:ProjectConfiguration"],
+        });
       }
     },
     HARNESS_TIMEOUT,
@@ -377,36 +472,6 @@ describe("the keys of a project's tasks", () => {
 
 describe("a task's output", () => {
   it(
-    "shows the warning about a [patch] in the Cargo home's configuration when the graph has it, whether the task runs or is restored, without the daemon",
-    async () => {
-      const workspace = FixtureWorkspace.create("patched-workspaces", withoutModelPatch);
-      const cargoHome = join(dirname(workspace.root), "cargo-home");
-      mkdirSync(cargoHome);
-      const config = join(cargoHome, "config.toml");
-      try {
-        const steps = await stepsOfCause(
-          workspace,
-          { CARGO_HOME: cargoHome },
-          outsideWarning(config),
-          {
-            add: () =>
-              writeFileSync(
-                config,
-                `[patch.crates-io]\nmodel = { path = "${basename(workspace.root)}/rust/crates/model" }\n`,
-              ),
-            remove: () => rmSync(config, { force: true }),
-          },
-        );
-
-        expect(steps).toEqual(followsTheCause);
-      } finally {
-        workspace.remove();
-      }
-    },
-    HARNESS_TIMEOUT * 3,
-  );
-
-  it(
     "shows the warning about Cargo's directory that Nx does not ignore when the graph has it, whether the task runs or is restored, without the daemon",
     async () => {
       const workspace = FixtureWorkspace.create("patched-workspaces", withoutModelPatch);
@@ -426,65 +491,188 @@ describe("a task's output", () => {
   );
 
   it(
-    "matches the graph of the Nx daemon, which keeps a warning about configuration outside the repository until a file in the repository changes",
+    "shows the warning about a path dependency whose report cargo refuses when the graph has it, whether the task runs or is restored, without the daemon",
     async () => {
-      const workspace = FixtureWorkspace.create("patched-workspaces", withoutModelPatch);
-      const cargoHome = join(dirname(workspace.root), "cargo-home");
-      mkdirSync(cargoHome);
-      const config = join(cargoHome, "config.toml");
-      const warning = outsideWarning(config);
-      const env: Env = { CARGO_HOME: cargoHome, NX_DAEMON: "true" };
-      // Whether the daemon's graph gives api the warning.
-      const graphWarns = async () => {
-        const { status, output } = await runNx(
-          workspace,
-          ["show", "project", "api", "--json"],
-          env,
-        );
-        expect(status).toBe(0);
-        const project = JSON.parse(output.trim().split("\n").pop() ?? "{}");
-        return (cargoMetadataOf(project)?.warnings ?? []).some((text) => text.includes(warning));
-      };
-      // Changes a file of the repository that no task hashes, and waits
-      // until the daemon has created the graph again.
-      let touches = 0;
-      const touchRepository = async (expected: boolean) => {
-        writeFileSync(join(workspace.root, "notes.txt"), `${++touches}\n`);
-        for (let attempt = 0; attempt < 40 && (await graphWarns()) !== expected; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 250));
-        }
-        expect(await graphWarns()).toBe(expected);
-      };
+      const workspace = FixtureWorkspace.create("cross-workspace-path", belowCrateP);
+      const manifest = join(workspace.root, "extra", "p", "Cargo.toml");
       try {
-        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: true, warned: false });
-
-        // Nx does not watch the Cargo home: the graph and the hit have no warning.
-        writeFileSync(
-          config,
-          `[patch.crates-io]\nmodel = { path = "${basename(workspace.root)}/rust/crates/model" }\n`,
+        const steps = await stepsOfCause(
+          workspace,
+          {},
+          "nx-rust: `cargo metadata` failed for extra/p/x/Cargo.toml",
+          {
+            add: () => writeFileSync(manifest, crateP("../missing")),
+            remove: () => writeFileSync(manifest, crateP()),
+          },
+          "server:fmt-check",
         );
-        expect(await graphWarns()).toBe(false);
-        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: false, warned: false });
 
-        // A change in the repository: the graph has the warning, and so does the task.
-        await touchRepository(true);
-        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: true, warned: true });
+        expect(steps).toEqual(followsTheCause);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 3,
+  );
+});
 
-        // The cause is gone, but the graph keeps the warning, and the hit replays it.
-        rmSync(config);
-        expect(await graphWarns()).toBe(true);
-        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: false, warned: true });
+// The warning about Cargo configuration that Nx does not hash
+// (DES-DIAGNOSTICS, RISK-HOST-ENVIRONMENT): every task of the projects of
+// the workspace concerned prints it, and no key holds it, so that a
+// machine's Cargo home gives no keys of its own.
+describe("the warning about Cargo configuration that Nx does not hash", () => {
+  /** The output of `task` alone, after its header and below what graph creation printed. */
+  const ownOutput = (output: string, task: string) => {
+    const header = output.indexOf(`> nx run ${task}`);
+    const next = output.indexOf("> nx run ", header + 1);
+    return header < 0 ? "" : output.slice(header, next < 0 ? undefined : next);
+  };
+  const guide = '(see "Cargo configuration that Nx does not hash" in the nx-rust caching guide)';
+  const remedy = `run \`nx reset\` after each change to it; --skip-nx-cache covers only the command it is given to ${guide}.`;
+  const ignoredWarning =
+    "nx-rust: rust/.cargo/config.toml sets [env] for the Cargo workspace in rust, but an ignore rule leaves it out of the files that Nx reads, so Nx does not hash it, and a result cached before a change to it can be restored afterwards.";
+  /** patched-workspaces where plain's library reads FLAVOUR, which an ignored file's [env] sets. */
+  const ignoredEnv: FileChanges = {
+    ".gitignore": "target/\nrust/.cargo/\n",
+    "rust/.cargo/config.toml": '[env]\nFLAVOUR = "a"\n',
+    "rust/crates/plain/src/lib.rs": 'pub const FLAVOUR: &str = env!("FLAVOUR");\n',
+  };
 
-        // Once the graph is created again, the result from before the warning returns.
-        await touchRepository(false);
-        expect(await fmtCheck(workspace, env, warning)).toEqual({ ran: false, warned: false });
-        expect(workspace.daemonLog()).toContain(warning);
+  it.each([
+    ["CI=false", "false"],
+    ["CI=true", "true"],
+  ])(
+    "is in the output of nx run plain:build with the Nx daemon and the default output style, %s, which hides the lockfile task's",
+    async (_ci, ci) => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", ignoredEnv);
+      const env: Env = { NX_DAEMON: "true", CI: ci };
+      try {
+        // The second run restores plain:build and replays what it printed.
+        for (const run of ["runs", "restored"]) {
+          const { status, output } = await workspace.nx(["run", "plain:build"], env);
+          const plain = withoutColours(output);
+          expect({
+            run,
+            status,
+            shown: ownOutput(plain, "plain:build").includes(ignoredWarning),
+          }).toEqual({
+            run,
+            status: 0,
+            shown: true,
+          });
+        }
       } finally {
         await workspace.nx(["daemon", "--stop"], env);
         workspace.remove();
       }
     },
-    HARNESS_TIMEOUT * 3,
+    HARNESS_TIMEOUT * 2,
+  );
+
+  it(
+    "is printed by every task of the workspace where a .cargo/config.toml that .gitignore leaves out sets [env], while a build cached before a change to it is restored until nx reset",
+    async () => {
+      // plain's library reads FLAVOUR, which the ignored file's [env] sets.
+      const workspace = FixtureWorkspace.create("patched-workspaces", ignoredEnv);
+      const config = join(workspace.root, "rust", ".cargo", "config.toml");
+      const texts = [ignoredWarning, `Stop ignoring it to have Nx hash it, or ${remedy}`];
+      // Runs plain:build and says whether it ran cargo and what printed the warning.
+      const build = async (args: string[] = []) => {
+        const calls = taskCalls(workspace).length;
+        const { status, output } = await runNx(workspace, ["run", "plain:build", ...args]);
+        return {
+          status,
+          ran: taskCalls(workspace).length > calls,
+          lockfile: texts.every((text) => ownOutput(output, "rust:lockfile").includes(text)),
+          build: texts.every((text) => ownOutput(output, "plain:build").includes(text)),
+        };
+      };
+      try {
+        const first = await build();
+        writeFileSync(config, '[env]\nFLAVOUR = "b"\n');
+        const changed = await build();
+        const skipped = await build(["--skip-nx-cache"]);
+        const afterSkipped = await build();
+        const reset = await runNx(workspace, ["reset"]);
+        const afterReset = await build();
+
+        expect(first).toEqual({ status: 0, ran: true, lockfile: true, build: true });
+        // The accepted risk that the warning names: the key ignores the file,
+        // and Nx stores nothing of a run with --skip-nx-cache.
+        expect(changed).toEqual({ status: 0, ran: false, lockfile: true, build: true });
+        expect(skipped).toEqual({ status: 0, ran: true, lockfile: true, build: true });
+        expect(afterSkipped).toEqual({ status: 0, ran: false, lockfile: true, build: true });
+        expect(reset.status).toBe(0);
+        expect(afterReset).toEqual({ status: 0, ran: true, lockfile: true, build: true });
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
+
+  it.each<[string, FileChanges, (home: string) => string | null, string | null]>([
+    [
+      "a .cargo/config.toml that .gitignore leaves out and that sets only [alias]",
+      {
+        ".gitignore": "target/\nrust/.cargo/\n",
+        "rust/.cargo/config.toml": '[alias]\nb = "build"\n',
+      },
+      () => null,
+      null,
+    ],
+    [
+      "the Cargo home's config.toml that sets [build] rustflags",
+      {},
+      () => '[build]\nrustflags = ["--cfg", "nx_rust_flag"]\n',
+      "[build]",
+    ],
+    ["the Cargo home's config.toml that sets only [net]", {}, () => "[net]\nretry = 3\n", null],
+  ])(
+    "for %s",
+    async (_case, files, homeConfig, tables) => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", files);
+      const cargoHome = join(dirname(workspace.root), "cargo-home");
+      mkdirSync(cargoHome);
+      const content = homeConfig(cargoHome);
+      if (content !== null) {
+        writeFileSync(join(cargoHome, "config.toml"), content);
+      }
+      const env: Env = { CARGO_HOME: cargoHome };
+      try {
+        const graph = await workspace.graph(env);
+        const tasks = allTasks(graph);
+        const without = await workspace.hashTasks(tasks, {
+          env: { CARGO_HOME: dirname(cargoHome) },
+        });
+        const withIt = await workspace.hashTasks(tasks, { env });
+        const shown = await runNx(workspace, ["show", "projects"], env);
+        const task = await runNx(workspace, ["run", "api:fmt-check"], env);
+
+        expect({ shown: shown.status, task: task.status }).toEqual({ shown: 0, task: 0 });
+        // What graph creation and a task of a crate print: the warning and
+        // its remedy for [build], nothing for the others, and never the
+        // remedy for an ignored file.
+        const warning = `nx-rust: ${join(cargoHome, "config.toml")} sets ${tables} for the Cargo workspaces in rust and shared, but lies outside the repository, so Nx does not hash it, and a result cached before a change to it can be restored afterwards.`;
+        const printed = (output: string) => ({
+          warning: output.includes(warning),
+          remedy: output.includes(`R${remedy.slice(1)}`),
+          any: output.includes("Nx does not hash it"),
+          ignored: output.includes("Stop ignoring it"),
+        });
+        const warns = tables !== null;
+        const expected = { warning: warns, remedy: warns, any: warns, ignored: false };
+        expect(printed(shown.output)).toEqual(expected);
+        expect(printed(ownOutput(task.output, "api:fmt-check"))).toEqual(expected);
+        // No key holds the file or its warning.
+        for (const task of tasks) {
+          expect({ task, hash: withIt[task].value }).toEqual({ task, hash: without[task].value });
+        }
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
   );
 });
 

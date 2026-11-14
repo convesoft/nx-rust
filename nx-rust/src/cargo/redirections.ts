@@ -33,6 +33,14 @@ export interface Redirection {
   key?: string;
 }
 
+/** A configuration file that cargo reads for a workspace. */
+export interface ConfigFile {
+  /** Its absolute path. */
+  file: string;
+  /** The keys of its top level, such as `build`, `patch` or `paths`, in the file's order. */
+  keys: string[];
+}
+
 /** What {@link readRedirections} found. */
 export interface WorkspaceRedirections {
   redirections: Redirection[];
@@ -41,6 +49,12 @@ export interface WorkspaceRedirections {
    * which change a build as the files that include them do.
    */
   includedFiles: string[];
+  /**
+   * Every configuration file that cargo reads for the workspace and that
+   * exists, those that `include` adds among them, each once, with the keys
+   * it sets (`DES-DIAGNOSTICS`).
+   */
+  configFiles: ConfigFile[];
   /** One message for each included file that the plugin skipped. */
   warnings: string[];
 }
@@ -80,6 +94,7 @@ export async function readRedirections(
   const found: WorkspaceRedirections = {
     redirections: [],
     includedFiles: [],
+    configFiles: [],
     warnings: [],
   };
   const table = await readToml(manifest);
@@ -166,6 +181,7 @@ async function readConfig(
   if (includedFrom !== undefined) {
     found.includedFiles.push(file);
   }
+  found.configFiles.push({ file, keys: Object.keys(table) });
   const base = dirname(dirname(file));
   found.redirections.push(...patchEntries(table.patch, base, file));
   if (Array.isArray(table.paths)) {
