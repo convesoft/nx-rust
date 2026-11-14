@@ -176,6 +176,16 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
     const targetDir = (path: string): FileChanges => ({
       "rust/.cargo/config.toml": `[build]\ntarget-dir = ${JSON.stringify(path)}\n`,
     });
+    // The directory of rust/'s report: cargo joins the setting to the folder
+    // that holds .cargo and normalises nothing.
+    const reported = (root: string, path: string) => `${root}/rust/${path}`;
+    const linkedWarning = (directory: string, written: string) =>
+      directoryWarning(
+        directory,
+        "build and artifact directory",
+        "the Cargo workspace in rust",
+        written,
+      );
 
     it(
       "draws no warning where a link inside the repository leads it outside",
@@ -196,43 +206,62 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
     it(
       "draws a warning that names the folder inside the repository that a link outside it leads to",
       async () => {
-        let written = "";
+        let root = "";
         const output = await showProjectsAfter(
-          (root) => {
-            written = join(dirname(root), "outside-link");
-            symlinkSync(join(root, "rust", "out"), written);
+          (folder) => {
+            root = folder;
+            symlinkSync(join(root, "rust", "out"), join(dirname(root), "outside-link"));
           },
           unignored,
           targetDir("../../outside-link"),
         );
 
         expect(
+          occurrences(output, linkedWarning("rust/out", reported(root, "../../outside-link"))),
+        ).toBe(1);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "names the path as cargo reports it, where a .. follows a link outside the repository",
+      async () => {
+        // outer/link leads to outer/inner/child, so outer/link/../back is
+        // outer/inner/back, which leads to physical in the repository; the
+        // path outer/back, which the setting names as text, does not exist.
+        let root = "";
+        const output = await showProjectsAfter(
+          (folder) => {
+            root = folder;
+            const outer = join(dirname(root), "outer");
+            mkdirSync(join(outer, "inner", "child"), { recursive: true });
+            mkdirSync(join(root, "physical"));
+            symlinkSync("inner/child", join(outer, "link"));
+            symlinkSync(join(root, "physical"), join(outer, "inner", "back"));
+          },
+          unignored,
+          targetDir("../../outer/link/../back"),
+        );
+
+        expect(
           occurrences(
             output,
-            directoryWarning(
-              "rust/out",
-              "build and artifact directory",
-              "the Cargo workspace in rust",
-              written,
-            ),
+            linkedWarning("physical", reported(root, "../../outer/link/../back")),
           ),
         ).toBe(1);
+        expect(output).not.toContain(`${dirname(root)}/outer/back`);
       },
       HARNESS_TIMEOUT,
     );
 
     // rust/link leads to deep/child, so link/../target in rust reaches
     // deep/target, not rust/target, which the path names as text.
+    let linkedRoot = "";
     const throughLink = (root: string) => {
+      linkedRoot = root;
       mkdirSync(join(root, "deep", "child"), { recursive: true });
       symlinkSync("../deep/child", join(root, "rust", "link"));
     };
-    const deepTarget = directoryWarning(
-      "deep/target",
-      "build and artifact directory",
-      "the Cargo workspace in rust",
-      "rust/link/../target",
-    );
 
     it.each<[string, FileChanges, number]>([
       ["no ignore file covers either folder", unignored, 1],
@@ -247,7 +276,9 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
       async (_case, ignore, warned) => {
         const output = await showProjectsAfter(throughLink, ignore, targetDir("link/../target"));
 
-        expect(occurrences(output, deepTarget)).toBe(warned);
+        expect(
+          occurrences(output, linkedWarning("deep/target", reported(linkedRoot, "link/../target"))),
+        ).toBe(warned);
         expect(output).not.toContain("nx-rust: rust/target");
       },
       HARNESS_TIMEOUT,

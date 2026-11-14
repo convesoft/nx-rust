@@ -1,5 +1,5 @@
 import { readlinkSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /**
  * The path with every symbolic link resolved, so that two spellings of one
@@ -55,11 +55,11 @@ export function repositoryFolder(
  * `path` is the folder that the system reaches through `directory`
  * ({@link physicalPath}), relative to the real path of `repositoryRoot`, and
  * `.` for the root itself. Where symbolic links make that folder differ from
- * the one that `directory` names as text, `written` gives `directory` so that
- * a message can show the path through which the folder is reached: as cargo
- * reports it, `..` segments included, relative to the repository root where
- * it starts there and stays inside it as text, and otherwise as an absolute
- * path with `.` and `..` taken as text.
+ * the one that `directory` names as text, with `.` and `..` taken as text,
+ * `written` gives `directory` exactly as cargo reports it, so that a message
+ * can show the path through which the folder is reached. It is not
+ * normalised: a `..` after a link leaves the folder that the link leads to,
+ * so taking it as text could name a path that does not exist.
  */
 export function folderInside(
   directory: string,
@@ -70,13 +70,12 @@ export function folderInside(
   if (leaves(path)) {
     return undefined;
   }
-  const trimmed = directory.length > 1 ? directory.replace(/\/+$/, "") : directory;
-  const root = [repositoryRoot, realRoot]
-    .map((folder) => (folder.endsWith(sep) ? folder : `${folder}${sep}`))
-    .find((prefix) => trimmed.startsWith(prefix));
-  const inside = root === undefined ? undefined : trimmed.slice(root.length) || ".";
-  const written = inside === undefined || leaves(normalize(inside)) ? resolve(trimmed) : inside;
-  return normalize(written) === path ? { path } : { path, written };
+  // Only to compare: the folder that the path names as text.
+  const asText = resolve(directory);
+  const named = [repositoryRoot, realRoot]
+    .map((root) => relative(root, asText) || ".")
+    .find((inside) => !leaves(inside));
+  return named === path ? { path } : { path, written: directory };
 }
 
 // Whether a path relative to a folder leaves that folder.

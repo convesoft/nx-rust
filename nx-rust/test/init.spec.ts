@@ -1133,7 +1133,7 @@ describe("init's list of build directories inside the repository", () => {
     symlinkSync(join(root, "rust", "out"), link);
 
     expect(listed(`${root}/rust/../../outside-link`)).toEqual([
-      `  rust: rust/out (reached through ${link})`,
+      `  rust: rust/out (reached through ${root}/rust/../../outside-link)`,
     ]);
   });
 
@@ -1142,7 +1142,7 @@ describe("init's list of build directories inside the repository", () => {
     symlinkSync("../deep/child", join(root, "rust", "link"));
 
     expect(listed(`${root}/rust/link/../target`)).toEqual([
-      "  rust: deep/target (reached through rust/link/../target)",
+      `  rust: deep/target (reached through ${root}/rust/link/../target)`,
     ]);
   });
 });
