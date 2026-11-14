@@ -18,7 +18,7 @@ For each entry: read the test and the tests said to cover its case, delete it on
 - [x] 2. `executors.spec.ts`: "fails such a task with NX_RUST_LOCKED=true and leaves Cargo.lock as it is, while update updates it"
 - [x] 3. `lockfile-keys.spec.ts`: "the digests of a run follow a stale lockfile…"
 - [x] 4. `caching-runs.spec.ts`: "builds with the new compiler under Cargo 1.91 … where a deeper file also includes that file"
-- [x] 5. `caching-runs.spec.ts`: the "a list that names it twice" case (kept: `VER-CARGO-UNCHANGED` names it; decision in nxr-w7v76y)
+- [x] 5. `caching-runs.spec.ts`: the "a list that names it twice" case (deleted after `VER-CARGO-UNCHANGED` was reworded; nxr-w7v76y)
 - [x] 6. `fixture-workspace.spec.ts`: "lets a test ask for an agent in GitHub Actions itself"
 - [x] 7. `executors.spec.ts`: "is what keeps Nx from restoring it: Nx restores a JS target that its project.json caches"
 - [x] 8. `nx-rust-e2e/src/nx-rust.spec.ts`: `when a task runs cargo` (3 tests) and "should be installed"
@@ -32,7 +32,7 @@ Done when: `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e --ski
 
 ## Summary of Changes
 
-44 unit tests and 4 end-to-end tests deleted, two assertions moved into the Nx-level tests that own their case, one listed test kept (group 5). For each deleted test, the test named after "now" fails if the behaviour breaks. No Mara item changed.
+45 unit tests and 4 end-to-end tests deleted, two assertions moved into the Nx-level tests that own their case, and for group 5 one assertion and one graph row added after a rewording of `VER-CARGO-UNCHANGED`, the only Mara change. For each deleted test, the test named after "now" fails if the behaviour breaks.
 
 **1. `discovery.spec.ts`, `discovery in the plugin`: 21 of 23 deleted.**
 - "finds the workspaces of %s with their members" (15 fixtures): now `graph.spec.ts` "%s has a project per crate and per workspace…" (each member a project at its folder) and `discovery.spec.ts` "reads each workspace of %s with one cargo call" (the workspace roots in order and the reports of path dependencies).
@@ -49,7 +49,7 @@ Done when: `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e --ski
 
 **4. `caching-runs.spec.ts`, "builds with the new compiler under Cargo 1.91 … where a deeper file also includes that file": deleted.** Now `cache-keys.spec.ts` "differ for Cargo 1.91 after the compiler that build.rustc names in a folder's file is replaced, where a deeper file also includes that file"; once the key differs, Nx cannot restore. `VER-CACHE-KEYS` names runs only for `RUSTC` and for `build.rustc` in the Cargo home, both kept. `includedAncestorFiles` stays in the harness for the key test.
 
-**5. `caching-runs.spec.ts`, the "a list that names it twice" row: kept.** `VER-CARGO-UNCHANGED` names this run ("as a string and as a list that names it twice … the next run restores both"), and only parts of it are covered elsewhere (deduplication in `target-triples.spec.ts`, list outputs in `caching.spec.ts`, restores with a string). Deleting it means changing the item first, which this task does not do: filed as nxr-w7v76y.
+**5. `caching-runs.spec.ts`, the "a list that names it twice" row: deleted after all, with a rewording of `VER-CARGO-UNCHANGED`.** It was first kept because the item named this run, and the question was filed as nxr-w7v76y. The maintainer's "Go ahead" covered the rewordings of verification items that the lists need, so the item now checks the duplicate where it is decided. The run through Nx stays for a string and for a list of the host triple and a second installed triple. The graph names the folder of a triple that a list names twice once, and the triples that the plugin reads hold each triple once, for one file's list and for the lists of several files. Now `target-triples.spec.ts` "joins the lists of several files, each triple once, also where one list names it twice, …" (a new assertion for one file's `["a", "a"]`) and `caching.spec.ts` "name the folder of each triple that a list in Cargo's configuration that names one triple twice picks…" (a new row). With the `new Set` of `pickedTriples` removed for a moment, both fail, the graph row on the declared outputs. nxr-w7v76y is closed.
 
 **6. `fixture-workspace.spec.ts`, "lets a test ask for an agent in GitHub Actions itself": deleted.** It checked Nx's own agent and CI output. "gives Nx the same behaviour whatever the outer environment holds" still guards the drift; no `VER-` item names the harness. `observe` lost its unused `env` parameter.
 
@@ -82,11 +82,15 @@ Done when: `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e --ski
 
 | | Before (b6ba07a) | After |
 | --- | --- | --- |
-| Unit tests | 1,205 (1,204 passed, 1 todo) | 1,161 (1,160 passed, 1 todo) |
-| Nx process starts through the harness in one unit run | 1,703 (885 graph/hash, 818 `nx`) | 1,683 (879 graph/hash, 804 `nx`) |
-| Jest time of one full unit run | 249.6 s | 241.2 s, and 214.8 s in the clean run |
+| Unit tests | 1,205 (1,204 passed, 1 todo) | 1,161 (1,160 passed, 1 todo): 45 deleted, 1 graph row added |
+| Nx process starts through the harness in one unit run | 1,703 (885 graph/hash, 818 `nx`) | 1,683 (879 graph/hash, 804 `nx`) measured before group 5; 1,682 (880, 802) with it, counted from its 2 `nx` commands fewer and 1 graph creation more |
+| Jest time of one full unit run | 249.6 s | 241.2 s, 214.8 s in the clean run, and 222.1 s with group 5 |
 | End-to-end tests | 30 | 26, 3 `nx` commands fewer |
 
 The starts were counted with a temporary, uncommitted line in the harness's `run()`. The 20 fewer are exactly what the deleted tests started: 6 graph creations (group 9) and 14 `nx` commands (groups 2, 3, 4, 6 and 7); the other 25 deleted unit tests ran in Jest's process. The difference in time is within what other agents' load on this machine moves it. The gain is mostly fewer tests that break on refactors, as the review expected.
 
-**Checks run:** `pnpm nx run-many -t build lint test` before (with the counter: 36 suites, 1,204 passed, 1 todo) and after, with the counter and once more without it (36 suites, 1,160 passed, 1 todo, each time); the 13 changed spec files on their own (418 passed, 1 todo); `pnpm nx e2e nx-rust-e2e --skip-nx-cache` (26 passed); `pnpm nx format:check --all`; `zban check`; `tsc --noEmit` on both spec projects. No Mara file changed, so no Mara validation. After the checks, `origin/main` gained #72, which changes docs and issues only.
+**Checks run:** `pnpm nx run-many -t build lint test` before (with the counter: 36 suites, 1,204 passed, 1 todo) and after, with the counter and once more without it (36 suites, 1,160 passed, 1 todo, each time); the 13 changed spec files on their own (418 passed, 1 todo); `pnpm nx e2e nx-rust-e2e --skip-nx-cache` (26 passed); `pnpm nx format:check --all`; `zban check`; `tsc --noEmit` on both spec projects. No Mara file had changed yet, so this round ran no Mara validation. After the checks, `origin/main` gained #72, which changes docs and issues only.
+
+## Changes after the decision on group 5
+
+Group 5 went after all, with the rewording of `VER-CARGO-UNCHANGED` described above (nxr-w7v76y). Checks after that change: `pnpm nx format:write`; `mara schema validate` and `mara project validate` (`valid: true`, evaluation complete, no diagnostics); `caching-runs.spec`, `caching.spec` and `target-triples.spec` (100 passed); the same two tests with deduplication removed (both fail); `pnpm nx run-many -t build lint test` (36 suites, 1,160 passed, 1 todo); `pnpm nx format:check --all`; `zban check`. The end-to-end suite was not run again, because nothing it uses changed.

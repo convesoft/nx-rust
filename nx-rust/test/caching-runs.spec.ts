@@ -427,14 +427,14 @@ describe("a run with the plugin's executor", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each([
-    ["a string", (triple: string) => `"${triple}"`],
-    ["a list that names it twice", (triple: string) => `["${triple}", "${triple}"]`],
-  ])(
-    "caches build and doc where Cargo's configuration picks the triple as %s, and restores what the run wrote",
-    async (_case, value) => {
+  // A list that names the triple twice names its folder once: graph creation
+  // reads each triple once (target-triples.spec.ts), and the outputs name
+  // the folder once (caching.spec.ts).
+  it(
+    "caches build and doc where Cargo's configuration picks the triple as a string, and restores what the run wrote",
+    async () => {
       const workspace = FixtureWorkspace.create("crate-shapes", {
-        "rust/.cargo/config.toml": `[build]\ntarget = ${value(hostTriple())}\n`,
+        "rust/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
       });
       try {
         await expectRestored(workspace, {}, [hostTriple()]);
