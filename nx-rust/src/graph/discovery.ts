@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { CargoMetadata, CargoPackage } from "../cargo/metadata";
+import { ConfiguredTools, configuredTools } from "../cargo/configured-tools";
 import { cratesBelowPathsFolder } from "../cargo/paths-crates";
 import { readRedirections, Redirection } from "../cargo/redirections";
 import { configuredTriples, PickedTriples, pickedTriples } from "../cargo/target-triples";
@@ -55,6 +56,13 @@ export interface CargoWorkspace {
    * `CARGO_BUILD_TARGET` ({@link configuredTriples}).
    */
   configuredTriples: PickedTriples;
+  /**
+   * The programs that `build.rustc` and `build.rustdoc` in the Cargo
+   * configuration of the workspace root name, as graph creation reads them
+   * ({@link configuredTools}). The toolchain input asks them for their
+   * version where no variable of the task's environment names another.
+   */
+  configuredTools: ConfiguredTools;
   /**
    * The configuration files that `include` adds for the workspace
    * ({@link readRedirections}).
@@ -177,6 +185,7 @@ export async function discoverWorkspaces(
       redirections: found.redirections,
       triples: pickedTriples(report.workspace_root, process.env),
       configuredTriples: configuredTriples(report.workspace_root, process.env),
+      configuredTools: configuredTools(report.workspace_root, process.env),
       configIncludes: found.includedFiles,
       warnings: [...new Set(found.warnings)],
     });

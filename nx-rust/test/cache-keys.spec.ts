@@ -1,6 +1,7 @@
 import {
   chmodSync,
   cpSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -11,17 +12,22 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { environmentVariables } from "../src/graph/inputs";
 import {
+  applyFileChanges,
   CacheKeyRow,
+  CompilerLinks,
   describeCacheKeyMatrix,
   FileChanges,
   findExecutable,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  includedAncestorFiles,
   pinnedToolchain,
   pinnedToolchainAvailable,
   pluginSourceEntry,
   pnpmLockfile,
+  programVersion,
   testEnvironment,
+  toolchainProgram,
 } from "./harness";
 
 // The rows of VER-CACHE-KEYS that the inputs and outputs of nxr-fy4t4k
@@ -1075,6 +1081,245 @@ describe("keys with the toolchain", () => {
       }
     },
     HARNESS_TIMEOUT,
+  );
+
+  it(
+    "never repeat where RUSTC or CARGO_BUILD_RUSTC is empty or names no program, or build.rustc names one that does not exist, on which cargo fails too",
+    async () => {
+      const workspace = FixtureWorkspace.create("subfolder-workspace");
+      try {
+        const tasks = ["api:build", "api:test"];
+        const missing = join(workspace.root, "no-such-rustc");
+        const repeats = async (env: Record<string, string> = {}) => {
+          const first = await workspace.hashTasks(tasks, { env });
+          const second = await workspace.hashTasks(tasks, { env });
+          return Object.fromEntries(
+            tasks.map((task) => [task, first[task].value === second[task].value]),
+          );
+        };
+        const never = { "api:build": false, "api:test": false };
+
+        expect(await repeats()).toEqual({ "api:build": true, "api:test": true });
+        expect(await repeats({ RUSTC: "" })).toEqual(never);
+        expect(await repeats({ CARGO_BUILD_RUSTC: "" })).toEqual(never);
+        expect(await repeats({ RUSTC: missing })).toEqual(never);
+        expect(await repeats({ RUSTDOC: missing })).toEqual({
+          "api:build": true,
+          "api:test": false,
+        });
+        applyFileChanges(workspace.root, {
+          "rust/.cargo/config.toml": `[build]\nrustc = ${JSON.stringify(missing)}\n`,
+        });
+        expect(await repeats()).toEqual(never);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // These need a second installed toolchain, which CI installs; elsewhere
+  // they skip where rustup lacks 1.91.0. Each points links at 1.91.0 and
+  // then at rustup's default toolchain, so that the compiler behind a path
+  // changes while the path and every file and variable stay the same.
+  (pinnedToolchainAvailable() ? describe : describe.skip)(
+    "where a setting names the compiler",
+    () => {
+      /** The cached targets of api and the workspace's doc. */
+      const tasks = [...apiTasks, "rust:doc"];
+
+      let links: CompilerLinks;
+      beforeEach(() => {
+        links = CompilerLinks.create(pinnedToolchain);
+        // A test of a replaced compiler needs two different ones.
+        if (programVersion(toolchainProgram("rustc")) === programVersion(links.rustc)) {
+          throw new Error(
+            `rustup's default toolchain is ${pinnedToolchain}, which these tests replace`,
+          );
+        }
+      });
+      afterEach(() => links.remove());
+
+      /**
+       * The tasks of `checked` whose keys change when the compiler behind
+       * the links is replaced, in a copy of subfolder-workspace whose
+       * `.gitignore` ignores `.env` files, changed by `files` once it is in
+       * place, and hashed with the environment that `env` gives.
+       */
+      async function changedByReplacement(
+        env: (links: CompilerLinks) => Record<string, string>,
+        files: (links: CompilerLinks, root: string) => FileChanges = () => ({}),
+        checked = tasks,
+      ): Promise<string[]> {
+        const workspace = FixtureWorkspace.create("subfolder-workspace", {
+          ".gitignore": appended(".env\n"),
+        });
+        try {
+          links.point(pinnedToolchain);
+          applyFileChanges(workspace.root, files(links, workspace.root));
+          const before = await workspace.hashTasks(checked, { env: env(links) });
+          links.point();
+          const after = await workspace.hashTasks(checked, { env: env(links) });
+          return checked.filter((task) => before[task].value !== after[task].value);
+        } finally {
+          workspace.remove();
+        }
+      }
+
+      const buildRustc = (program: string) => `[build]\nrustc = ${JSON.stringify(program)}\n`;
+
+      it(
+        "differ after the compiler at the path that RUSTC names is replaced",
+        async () => {
+          expect(await changedByReplacement((links) => ({ RUSTC: links.rustc }))).toEqual(tasks);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "differ after the compiler at the path that CARGO_BUILD_RUSTC names is replaced",
+        async () => {
+          expect(
+            await changedByReplacement((links) => ({ CARGO_BUILD_RUSTC: links.rustc })),
+          ).toEqual(tasks);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "differ after the compiler at the path that build.rustc names is replaced, in the workspace's configuration, above the repository and through a relative path",
+        async () => {
+          expect(
+            await changedByReplacement(
+              () => ({}),
+              (links) => ({ "rust/.cargo/config.toml": buildRustc(links.rustc) }),
+            ),
+          ).toEqual(tasks);
+          expect(
+            await changedByReplacement(
+              () => ({}),
+              (links, root) => {
+                // A folder above the repository, which no file input covers.
+                mkdirSync(join(root, "..", ".cargo"), { recursive: true });
+                writeFileSync(join(root, "..", ".cargo", "config.toml"), buildRustc(links.rustc));
+                return {};
+              },
+            ),
+          ).toEqual(tasks);
+          expect(
+            await changedByReplacement(
+              () => ({}),
+              (links, root) => {
+                // Relative to rust, the folder that holds .cargo, through a
+                // link that Git ignores and no project holds.
+                symlinkSync(links.folder, join(root, "compilers"));
+                return {
+                  ".gitignore": appended("/compilers\n"),
+                  "rust/.cargo/config.toml": buildRustc("../compilers/rustc"),
+                };
+              },
+            ),
+          ).toEqual(tasks);
+        },
+        HARNESS_TIMEOUT * 3,
+      );
+
+      it(
+        "differ after the compiler at the path that RUSTC in a crate's .env names is replaced, for that crate only",
+        async () => {
+          expect(
+            await changedByReplacement(
+              () => ({}),
+              (links) => ({ "rust/crates/api/.env": `RUSTC=${links.rustc}\n` }),
+              ["api:build", "api:test", "model:build", "model:test"],
+            ),
+          ).toEqual(["api:build", "api:test"]);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "differ for doc and test after the rustdoc at the path that RUSTDOC names is replaced",
+        async () => {
+          expect(await changedByReplacement((links) => ({ RUSTDOC: links.rustdoc }))).toEqual([
+            "api:test",
+            "rust:doc",
+          ]);
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "differ after RUSTUP_TOOLCHAIN chooses another toolchain, which runs cargo and rustdoc, while RUSTC names a compiler",
+        async () => {
+          const workspace = FixtureWorkspace.create("subfolder-workspace");
+          try {
+            const before = await workspace.hashTasks(tasks, { env: { RUSTC: links.rustc } });
+            const after = await workspace.hashTasks(tasks, {
+              env: { RUSTC: links.rustc, RUSTUP_TOOLCHAIN: pinnedToolchain },
+            });
+            expect(tasks.filter((task) => before[task].value !== after[task].value)).toEqual(tasks);
+          } finally {
+            workspace.remove();
+          }
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "differ for Cargo 1.91 after the compiler that build.rustc names in a folder's file is replaced, where a deeper file also includes that file",
+        async () => {
+          const cargoHome = mkdtempSync(join(tmpdir(), "nx-rust-cargo-home-"));
+          const workspace = FixtureWorkspace.create(
+            "two-workspaces",
+            includedAncestorFiles(links.rustc),
+          );
+          try {
+            // tools is a workspace whose root is also a crate.
+            const toolsTasks = ["build", "check", "lint", "test", "fmt-check", "doc"].map(
+              (target) => `tools:${target}`,
+            );
+            const env = { CARGO_HOME: cargoHome, RUSTUP_TOOLCHAIN: pinnedToolchain };
+            const before = await workspace.hashTasks(toolsTasks, { env });
+            links.point();
+            const after = await workspace.hashTasks(toolsTasks, { env });
+
+            expect(toolsTasks.filter((task) => before[task].value !== after[task].value)).toEqual(
+              toolsTasks,
+            );
+          } finally {
+            workspace.remove();
+            rmSync(cargoHome, { recursive: true, force: true });
+          }
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "differ after build.rustc is set in the Cargo home's configuration, and after the compiler it names is replaced, without the daemon",
+        async () => {
+          const cargoHome = mkdtempSync(join(tmpdir(), "nx-rust-cargo-home-"));
+          const workspace = FixtureWorkspace.create("subfolder-workspace");
+          try {
+            const env = { CARGO_HOME: cargoHome };
+            const unset = await workspace.hashTasks(tasks, { env });
+            writeFileSync(join(cargoHome, "config.toml"), buildRustc(links.rustc));
+            const set = await workspace.hashTasks(tasks, { env });
+            links.point();
+            const replaced = await workspace.hashTasks(tasks, { env });
+
+            const changed = (a: typeof unset, b: typeof unset) =>
+              tasks.filter((task) => a[task].value !== b[task].value);
+            expect(changed(unset, set)).toEqual(tasks);
+            expect(changed(set, replaced)).toEqual(tasks);
+          } finally {
+            workspace.remove();
+            rmSync(cargoHome, { recursive: true, force: true });
+          }
+        },
+        HARNESS_TIMEOUT,
+      );
+    },
   );
 });
 
