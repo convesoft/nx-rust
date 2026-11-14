@@ -308,11 +308,12 @@ export class FixtureWorkspace {
 
   /**
    * Deletes the workspace and the cargo wrapper, unless `NX_RUST_KEEP_FIXTURES`
-   * is set, and the folder for its sockets.
+   * is set, and the folder for its sockets once the processes of its Nx have
+   * stopped ({@link removeSocketFolder}).
    */
   remove(): void {
     if (this.sockets !== undefined) {
-      rmSync(this.sockets, { recursive: true, force: true });
+      removeSocketFolder(this.sockets);
     }
     if (process.env.NX_RUST_KEEP_FIXTURES) {
       console.log(`Kept the ${this.fixture} workspace in ${this.root}`);
@@ -407,9 +408,9 @@ const socketPathLimit = 103;
  * Nx names the folder it uses by default after the workspace root and never
  * removes it, so that every fixture would leave one behind in
  * `/tmp/.nx/<uid>/sockets`. It does not let workspaces share a folder.
- * {@link FixtureWorkspace.remove} removes the folder, except where a plugin
- * worker that outlives its `nx` command still writes to it, and the end of
- * the test run removes what is left.
+ * {@link FixtureWorkspace.remove} removes the folder
+ * ({@link removeSocketFolder}), and the end of the test run removes what is
+ * left where that ran out of time.
  */
 function socketFolder(): string | undefined {
   const parent = testRunSocketFolder();
@@ -422,6 +423,62 @@ function socketFolder(): string | undefined {
   }
   rmSync(folder, { recursive: true, force: true });
   return undefined;
+}
+
+/**
+ * How long {@link removeSocketFolder} waits for the processes of a fixture's
+ * Nx to stop. In a full unit run under a load average of about 20, none was
+ * left a second after its command.
+ */
+const socketWait = 5_000;
+
+/**
+ * Removes a fixture's socket folder ({@link socketFolder}) once no process
+ * listens there any more, or after {@link socketWait} at the latest.
+ *
+ * Nx starts its plugin workers and its daemon detached, and they outlive the
+ * command that ends them by up to a second: a plugin worker stops when the
+ * connection to its `nx` process ends, and a daemon after
+ * `nx daemon --stop` has returned. Each removes its socket on the way out,
+ * and the daemon the whole folder, which is its `NX_SOCKET_DIR`; a folder
+ * without entries therefore has no process listening there. Removing it
+ * earlier races with them: `rmSync` returns without an error but leaves the
+ * folder, emptied, when another process removes one of its entries at the
+ * same moment (Node 26.12), which is why it is repeated while the folder is
+ * still there; and a process that asks Nx for a socket path after the
+ * removal creates the folder again.
+ *
+ * Without a socket in it, as for the commands that load the plugins into
+ * Nx's own process, the folder goes at once.
+ */
+function removeSocketFolder(folder: string): void {
+  const deadline = Date.now() + socketWait;
+  while (holdsEntries(folder) && Date.now() < deadline) {
+    pause(10);
+  }
+  rmSync(folder, { recursive: true, force: true });
+  while (existsSync(folder) && Date.now() < deadline) {
+    pause(10);
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+/** Whether `folder` exists and has entries. */
+function holdsEntries(folder: string): boolean {
+  try {
+    return readdirSync(folder).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Blocks the test process for `milliseconds`, for
+ * {@link FixtureWorkspace.remove}, which the tests call without awaiting
+ * anything.
+ */
+function pause(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
 /**
