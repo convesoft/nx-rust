@@ -1,3 +1,5 @@
+import { symlinkSync } from "node:fs";
+import { join } from "node:path";
 import {
   applyFileChanges,
   FileChanges,
@@ -362,6 +364,143 @@ describe("projects and edges of each fixture", () => {
         ["api", "model"],
         ["api", "testkit"],
       ]);
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("edges to crates with a project behind crates without one", () => {
+  // In declared-files, app depends on api. The crates that these cases add
+  // under rust/crates are members of rust that nx.json excludes: they have
+  // no project, but a report.
+  const excluding = (...crates: string[]) =>
+    pluginEntries({ exclude: crates.map((crate) => `rust/crates/${crate}/**`) });
+  const withEdges = (...added: [string, string][]) =>
+    [...expected["declared-files"].edges, ...added].sort(
+      (a, b) => compare(a[0], b[0]) || compare(a[1], b[1]),
+    );
+
+  it(
+    "come through any number of crates without a project, with the kinds that cargo builds",
+    async () => {
+      // cross dev-depends on relay, which build-depends on bridge, which
+      // depends on api and dev-depends on other: cargo builds api for
+      // cross's tests, and no crate's dev-dependency but cross's own.
+      const graph = await loadFixtureGraph("declared-files", {
+        files: {
+          "rust/crates/bridge/Cargo.toml": `${crateManifest("bridge")}\n[dependencies]\napi = { path = "../api" }\n\n[dev-dependencies]\nother = { path = "../other" }\n`,
+          "rust/crates/bridge/src/lib.rs": "",
+          "rust/crates/relay/Cargo.toml": `${crateManifest("relay")}\n[build-dependencies]\nbridge = { path = "../bridge" }\n`,
+          "rust/crates/relay/src/lib.rs": "",
+          "cross/Cargo.toml": `${crateManifest("cross")}\n[workspace]\n\n[dev-dependencies]\nrelay = { path = "../rust/crates/relay" }\n`,
+          "cross/src/lib.rs": "",
+          "nx.json": excluding("bridge", "relay"),
+        },
+      });
+
+      expect(edges(graph)).toEqual(withEdges(["cross", "api"]));
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "come from none behind a crate without a report",
+    async () => {
+      // shim's folder holds .cargo-checksum.json, so no report says that it
+      // depends on api: its folder alone is an input of cross.
+      const graph = await loadFixtureGraph("declared-files", {
+        files: {
+          "vendor/shim/Cargo.toml": `${crateManifest("shim")}\n[dependencies]\napi = { path = "../../rust/crates/api" }\n`,
+          "vendor/shim/src/lib.rs": "",
+          "vendor/shim/.cargo-checksum.json": '{"files":{},"package":null}\n',
+          "cross/Cargo.toml": `${crateManifest("cross")}\n[workspace]\n\n[dependencies]\nshim = { path = "../vendor/shim" }\n`,
+          "cross/src/lib.rs": "",
+        },
+      });
+
+      expect(edges(graph)).toEqual(withEdges());
+      expect(graph.projects.cross.namedInputs.default).toContain(
+        "{workspaceRoot}/vendor/shim/**/*",
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "keep both edges of a cycle through a dev-dependency, which cargo builds, and none to the crate itself",
+    async () => {
+      // api dev-depends on bridge, which depends on api and on other, which
+      // depends on api: cargo builds other and api for api's tests.
+      const workspace = FixtureWorkspace.create("declared-files", {
+        "rust/crates/bridge/Cargo.toml": `${crateManifest("bridge")}\n[dependencies]\napi = { path = "../api" }\nother = { path = "../other" }\n`,
+        "rust/crates/bridge/src/lib.rs": "",
+        "rust/crates/api/Cargo.toml": (manifest) =>
+          `${manifest}\n[dev-dependencies]\nbridge = { path = "../bridge" }\n`,
+        "rust/crates/other/Cargo.toml": (manifest) =>
+          `${manifest}\n[dependencies]\napi = { path = "../api" }\n`,
+        "nx.json": excluding("bridge"),
+      });
+      try {
+        const graph = await workspace.graph();
+        // Nx hashes the `^` inputs over the cycle.
+        const hashes = await workspace.hashTasks(["api:test", "other:test"]);
+
+        expect(edges(graph)).toEqual(withEdges(["api", "other"], ["other", "api"]));
+        expect(Object.keys(hashes).sort()).toEqual(["api:test", "other:test"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("a path dependency through a symbolic link", () => {
+  it(
+    "names the crate at the folder the link leads to, with an edge and no report of its own",
+    async () => {
+      // The standalone crate cross depends on api through alias, a link to
+      // api's folder, which Nx does not walk into.
+      const workspace = FixtureWorkspace.create("declared-files", {
+        "cross/Cargo.toml": `${crateManifest("cross")}\n[workspace]\n\n[dependencies]\napi = { path = "../alias" }\n`,
+        "cross/src/lib.rs": "",
+      });
+      try {
+        symlinkSync("rust/crates/api", join(workspace.root, "alias"));
+
+        const graph = await workspace.graph();
+        const affected = await workspace.nx([
+          "show",
+          "projects",
+          "--affected",
+          "--files=rust/crates/api/src/lib.rs",
+          // Nx prints JSON by itself only where it detects an AI agent.
+          "--json",
+        ]);
+
+        expect(edges(graph)).toEqual(
+          [...expected["declared-files"].edges, ["cross", "api"]].sort(
+            (a, b) => compare(a[0], b[0]) || compare(a[1], b[1]),
+          ),
+        );
+        // api reaches cross's key through its edge, not as a folder.
+        expect(graph.projects.cross.namedInputs.default).not.toContain(
+          "{workspaceRoot}/rust/crates/api/**/*",
+        );
+        expect(
+          workspace.cargoCalls().filter((call) => call.args.join(" ").includes("alias")),
+        ).toEqual([]);
+        expect(affected.status).toBe(0);
+        // The JSON is the last line, after any warning of graph creation.
+        expect(JSON.parse(affected.output.trim().split("\n").pop()).sort()).toEqual([
+          "api",
+          "app",
+          "cross",
+          "rust",
+        ]);
+      } finally {
+        workspace.remove();
+      }
     },
     HARNESS_TIMEOUT,
   );

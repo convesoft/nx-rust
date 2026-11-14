@@ -236,8 +236,11 @@ export function describeWorkspaces(folders: string[]): string {
  * the crate: there the member's tasks run, and so there plain cargo reads
  * the crate. A redirection to a folder without a `Cargo.toml` gets no
  * report: cargo fails when it applies one, and the plugin leaves that
- * failure to the cargo of the tasks. A redirected crate is compared with the
- * crates that have projects by its real path, through symbolic links.
+ * failure to the cargo of the tasks. A crate, whether a path or a
+ * redirection names it, is compared with the crates that have projects and
+ * with those that a report describes by the real path of its folder,
+ * through symbolic links, so a path through a link to a crate with a
+ * project asks for no report.
  *
  * When cargo fails for a redirected crate, as for a crate inside a
  * workspace's folder that is not its member, which cargo builds as a patch
@@ -263,18 +266,21 @@ async function readPathDependencies(
   warnings: string[],
   unreported: Map<string, string>,
 ): Promise<PathDependencyReport[]> {
+  // Crates by the real paths of their folders: a path names the crate at
+  // the real path of its folder, also where it passes a symbolic link.
+  const folderOf = (manifest: string) => realPath(dirname(manifest));
   const withProject = new Set(
-    workspaces.flatMap((workspace) => workspace.members.map((pkg) => pkg.manifest_path)),
+    workspaces.flatMap((workspace) => workspace.members.map((pkg) => folderOf(pkg.manifest_path))),
   );
   const known = new Map<string, CargoPackage>();
   for (const workspace of workspaces) {
     for (const pkg of workspace.report.packages) {
-      known.set(pkg.manifest_path, pkg);
+      known.set(folderOf(pkg.manifest_path), pkg);
     }
   }
   const pathDependencyReports: PathDependencyReport[] = [];
   const visited = new Set<string>();
-  // The warning for each crate whose report cargo refused, by its manifest.
+  // The warning for each crate whose report cargo refused, by its real folder.
   const failures = new Map<string, string>();
   const queue: { pkg: CargoPackage; cwd: string }[] = [];
   // Requests the report of a crate without a project, unless one covers it
@@ -288,14 +294,15 @@ async function readPathDependencies(
     subject: () => string,
     via: "path" | "redirection",
   ) => {
-    if (withProject.has(manifest) || visited.has(manifest)) {
+    const folder = folderOf(manifest);
+    if (withProject.has(folder) || visited.has(folder)) {
       return;
     }
-    visited.add(manifest);
-    if (!known.has(manifest) && isDirectorySourcePackage(manifest)) {
+    visited.add(folder);
+    if (!known.has(folder) && isDirectorySourcePackage(manifest)) {
       return;
     }
-    if (!known.has(manifest)) {
+    if (!known.has(folder)) {
       const report = await readPathDependency(
         manifest,
         subject(),
@@ -306,20 +313,20 @@ async function readPathDependencies(
       );
       if (typeof report === "string") {
         warnings.push(report);
-        failures.set(manifest, report);
+        failures.set(folder, report);
         if (via === "path") {
-          unreported.set(realPath(dirname(manifest)), report);
+          unreported.set(folder, report);
         }
         return;
       }
       pathDependencyReports.push({ manifest: repositoryPath(workspaceRoot, manifest), report });
       for (const pkg of report.packages) {
-        if (!known.has(pkg.manifest_path)) {
-          known.set(pkg.manifest_path, pkg);
+        if (!known.has(folderOf(pkg.manifest_path))) {
+          known.set(folderOf(pkg.manifest_path), pkg);
         }
       }
     }
-    const pkg = known.get(manifest);
+    const pkg = known.get(folder);
     if (pkg) {
       queue.push({ pkg, cwd });
     }
@@ -352,18 +359,14 @@ async function readPathDependencies(
       if (table === "paths" || !existsSync(manifest)) {
         continue;
       }
-      // The spelling under which a report or a project already knows it.
-      const real = realPath(manifest);
-      const spelled =
-        [...withProject, ...known.keys()].find((path) => realPath(path) === real) ?? manifest;
       await reach(
-        spelled,
+        manifest,
         workspace.report.workspace_root,
         () =>
           `a crate that ${displayPath(workspaceRoot, file)} redirects dependencies of the Cargo workspace in ${workspace.root} to, which has no project of its own`,
         "redirection",
       );
-      const failure = failures.get(spelled);
+      const failure = failures.get(folderOf(manifest));
       if (failure !== undefined) {
         addWarning(workspace, failure);
       }
