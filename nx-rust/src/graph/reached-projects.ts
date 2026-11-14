@@ -58,13 +58,48 @@ export function projectsReachedByPath(
   known: ReadonlyMap<string, CargoPackage>,
   realPath: (path: string) => string,
 ): string[] {
+  return reachedProjects(crate, true, hasProject, known, realPath);
+}
+
+/**
+ * The crates with a project behind `crate`, a crate without a project that
+ * cargo builds as a dependency, such as one that a `[patch]`, `[replace]`
+ * or `paths` entry puts in place of a registry or git dependency
+ * (DES-PROJECT-GRAPH, "Redirected crates"): those that it reaches through
+ * its normal and build path dependencies, through any number of crates
+ * without a project, by the real paths of their folders.
+ *
+ * It walks as {@link projectsReachedByPath} does from a crate without a
+ * project behind the one it starts from, so it takes no dev-dependency of
+ * `crate` either: cargo builds those only where it tests `crate`.
+ */
+// @mara implements DES-PROJECT-GRAPH
+export function projectsBehindDependency(
+  crate: CargoPackage,
+  hasProject: (folder: string) => boolean,
+  known: ReadonlyMap<string, CargoPackage>,
+  realPath: (path: string) => string,
+): string[] {
+  return reachedProjects(crate, false, hasProject, known, realPath);
+}
+
+// The walk of both: from `crate`, whose dev-dependencies count where
+// `ownDevDependencies` says so, through crates without a project.
+function reachedProjects(
+  crate: CargoPackage,
+  ownDevDependencies: boolean,
+  hasProject: (folder: string) => boolean,
+  known: ReadonlyMap<string, CargoPackage>,
+  realPath: (path: string) => string,
+): string[] {
   const reached: string[] = [];
   const visited = new Set<string>([realPath(dirname(crate.manifest_path))]);
   const queue = [crate];
   while (queue.length > 0) {
     const pkg = queue.shift();
+    const devDependencies = pkg === crate && ownDevDependencies;
     for (const dependency of pkg.dependencies) {
-      if (typeof dependency.path !== "string" || (pkg !== crate && dependency.kind === "dev")) {
+      if (typeof dependency.path !== "string" || (!devDependencies && dependency.kind === "dev")) {
         continue;
       }
       const folder = realPath(dependency.path);

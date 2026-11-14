@@ -62,7 +62,8 @@ export interface CacheContext extends InputContext {
  * Works out what the inputs and outputs of the projects that `discovery`
  * found need beyond each project: how the plugin's version reaches the keys,
  * the crates without a project that path dependencies and redirections
- * reach, the redirected crates whose edges are left out, and where each
+ * reach, the redirected crates whose edges are left out with the crates
+ * that cargo builds with them, and where each
  * workspace's artifact directory lies; and the warnings of `DES-DIAGNOSTICS`
  * that these give, together with those about Cargo directories that Nx reads
  * ({@link unignoredDirectoryWarnings}), which it also prints, each once. A
@@ -109,7 +110,8 @@ export async function cacheContext(
   for (const workspace of discovery.workspaces) {
     for (const crate of workspace.members) {
       const dependencies = folders.withoutProject.get(crate.manifest_path) ?? [];
-      for (const dependency of dependencies) {
+      const leftOut = folders.leftOutEdges.get(crate.manifest_path) ?? [];
+      for (const dependency of [...dependencies, ...leftOut]) {
         // Its folder relative to the repository's real path, or absolute.
         const folder = isAbsolute(dependency.folder)
           ? dependency.folder
@@ -122,10 +124,10 @@ export async function cacheContext(
       pathDependencyInputs.set(crate.manifest_path, [
         ...uniqueInputs(dependencies.flatMap(crateInputs)),
       ]);
-      redirectedInputs.set(crate.manifest_path, [
-        ...uniqueInputs((folders.leftOutEdges.get(crate.manifest_path) ?? []).flatMap(crateInputs)),
-      ]);
-      for (const dependency of dependencies.filter((dependency) => !dependency.seen)) {
+      redirectedInputs.set(crate.manifest_path, [...uniqueInputs(leftOut.flatMap(crateInputs))]);
+      for (const dependency of [...dependencies, ...leftOut].filter(
+        (dependency) => !dependency.seen,
+      )) {
         warn(
           crate.manifest_path,
           unseenPathDependencyWarning(
