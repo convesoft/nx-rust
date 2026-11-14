@@ -21,6 +21,7 @@ import {
   inFixture,
   linesWith,
   LocalRegistry,
+  packageSpec,
   pinnedToolchainAvailable,
   runNx,
   taskCalls,
@@ -177,7 +178,9 @@ describe("the check of a build's dependency files", () => {
         // Nothing is stored, so the next run builds again, compiling nothing.
         const second = await nx(workspace, ["run", "reader:build"]);
         expect(second.status).not.toBe(0);
-        expect(cargoCalls(workspace)).toEqual(["build -p reader"]);
+        expect(cargoCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "rust", "reader")}`,
+        ]);
         expect(second.output).not.toContain("Compiling");
         expect(listedFiles(second.output, "reader")).toEqual(files);
 
@@ -185,7 +188,9 @@ describe("the check of a build's dependency files", () => {
         const env = { NX_CACHE_FAILURES: "true" };
         const stored = await nx(workspace, ["run", "reader:build"], env);
         expect(stored.status).not.toBe(0);
-        expect(cargoCalls(workspace)).toEqual(["build -p reader"]);
+        expect(cargoCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "rust", "reader")}`,
+        ]);
         const replayed = await nx(workspace, ["run", "reader:build"], env);
         expect(replayed.status).not.toBe(0);
         // Nx 24 marks no replayed failure as restored: cargo did not run.
@@ -197,7 +202,9 @@ describe("the check of a build's dependency files", () => {
         const declared = await nx(workspace, ["run", "reader:build"], env);
         expect(declared.output).not.toContain(failure);
         expect(declared.status).toBe(0);
-        expect(cargoCalls(workspace)).toEqual(["build -p reader"]);
+        expect(cargoCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "rust", "reader")}`,
+        ]);
         const next = await nx(workspace, ["run", "reader:build"]);
         expect(next.status).toBe(0);
         expect(restored(next.output, "reader:build")).toBe(true);
@@ -246,7 +253,9 @@ describe("the check of a build's dependency files", () => {
           const { status, output } = await nx(workspace, ["run", "reader:build"]);
           expect(output).not.toContain(failure);
           expect(status).toBe(0);
-          expect(cargoCalls(workspace)).toEqual(["build -p reader"]);
+          expect(cargoCalls(workspace)).toEqual([
+            `build -p ${packageSpec(workspace.root, "rust", "reader")}`,
+          ]);
         },
       );
     },
@@ -788,7 +797,9 @@ describe("the check of a build's dependency files", () => {
           const { status, output } = await nx(workspace, ["run", "reader:build"]);
           expect(output).not.toContain(failure);
           expect(status).toBe(0);
-          expect(cargoCalls(workspace)).toEqual(["build -p reader"]);
+          expect(cargoCalls(workspace)).toEqual([
+            `build -p ${packageSpec(workspace.root, "rust", "reader")}`,
+          ]);
           expect(read(workspace, "rust/target/debug/libreader.d")).toMatch(
             /\/rust\/bd\/\S*\/out\/lines\.rs/,
           );

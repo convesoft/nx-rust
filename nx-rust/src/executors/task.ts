@@ -10,6 +10,7 @@ import {
   reportedDirectories,
 } from "../cargo/directories";
 import type { PackageVersion } from "../cargo/lockfile";
+import { memberSpecs, PackageSpecReportError } from "../cargo/package-specs";
 import {
   configuredTriples,
   describeFolders,
@@ -45,7 +46,13 @@ import {
   type OptionalToolId,
   requireTool,
 } from "../tools/optional-tools";
-import { cargoArguments, type CargoTargetOptions, pluginVersionOption } from "./command";
+import {
+  cargoArguments,
+  type CargoTargetOptions,
+  type CrateSelection,
+  pluginVersionOption,
+  selectsBySpecification,
+} from "./command";
 import { checkDigests, DigestCheck, DigestWrite, writeDigests } from "./digests";
 import { type BuildInputCheck, checkBuildInputs } from "./input-check";
 import {
@@ -248,11 +255,13 @@ async function checksAfterCargo(
  *   `pluginVersion` another value than the target's (`DES-PLUGIN-OPTIONS`),
  *   when a task whose target hashes digests does not depend on its
  *   workspace's lockfile task in a run that does not exclude task
- *   dependencies (`DES-LOCKFILE-HASHING`), or when the tool that the target
+ *   dependencies (`DES-LOCKFILE-HASHING`), when the tool that the target
  *   runs besides cargo is not installed where `env` and the workspace root
- *   say (`DES-DIAGNOSTICS`). The checks of what reaches the task's key, the
- *   cache guard, `pluginVersion` and the lockfile dependency, all run before
- *   the cargo command is built, and the check for the tool after them.
+ *   say (`DES-DIAGNOSTICS`), or when cargo cannot give the crate's package ID
+ *   specification (`DES-INVOCATION`). The checks of what reaches the task's
+ *   key, the cache guard, `pluginVersion` and the lockfile dependency, all
+ *   run before the cargo command is built, and the check for the tool and
+ *   the specification after them.
  */
 // @mara implements DES-OUTPUTS
 // @mara implements DES-PLUGIN-OPTIONS
@@ -406,10 +415,19 @@ export function taskInvocation(
       throw error instanceof MissingToolError ? new TaskError(`${task}: ${error.message}`) : error;
     }
   }
+  const crate: CrateSelection | undefined =
+    cargo.packageName === undefined
+      ? undefined
+      : {
+          name: cargo.packageName,
+          ...(selectsBySpecification(metadata.target)
+            ? { spec: packageSpec(task, cargo.packageName, workspaceRoot, cwd, env) }
+            : {}),
+        };
   const args = cargoArguments(
     {
       target: metadata.target,
-      packageName: cargo.packageName,
+      ...(crate === undefined ? {} : { crate }),
       locked,
       binaryArguments: examined.binaryArguments,
     },
@@ -691,6 +709,48 @@ function hostTriple(cwd: string, env: NodeJS.ProcessEnv): string | undefined {
     stdio: ["ignore", "pipe", "ignore"],
   });
   return run.status === 0 ? /^host: (\S+)$/m.exec(run.stdout ?? "")?.[1] : undefined;
+}
+
+// The package ID specification with which the task's command selects its
+// crate: the one that cargo reports for the member of that name when it
+// starts in the workspace root with the task's environment, as the command
+// does (`DES-INVOCATION`). It holds the absolute path of the crate's folder
+// and goes into the command only, into no input, output or option.
+// @mara implements DES-INVOCATION
+// @mara implements DES-DIAGNOSTICS
+function packageSpec(
+  task: string,
+  packageName: string,
+  workspaceRoot: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  let specs: Map<string, string>;
+  try {
+    specs = memberSpecs(cwd, env);
+  } catch (error) {
+    if (!(error instanceof PackageSpecReportError)) {
+      throw error;
+    }
+    const stderr = error.stderr.trim();
+    throw new TaskError(
+      [
+        `${task}: \`cargo metadata\` could not list the members of the Cargo workspace for this task, so @convesoft/nx-rust cannot name the crate ${packageName} to cargo: ${error.message}.`,
+        ...(stderr === "" ? [] : [stderr]),
+        "The task does not run, so that Nx stores no result for it. Correct what cargo reports, such as a manifest or a configuration file that it cannot read, and run the task again.",
+      ].join("\n"),
+    );
+  }
+  const spec = specs.get(packageName);
+  if (spec === undefined) {
+    throw new TaskError(
+      [
+        `${task}: the Cargo workspace in ${describeFolder(workspaceRoot)} has no member named ${packageName} any more, while the project graph still has the crate, so the graph is out of date. The task does not run, so that Nx stores no result for it.`,
+        "Run `nx reset`, or stop the daemon with `nx daemon --stop`, and run the task again.",
+      ].join("\n"),
+    );
+  }
+  return spec;
 }
 
 // Cargo's directories for a task, which cargo reports with the task's

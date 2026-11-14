@@ -11,6 +11,7 @@ import {
   holdCargo,
   LocalRegistry,
   lockfileCalls,
+  packageSpec,
   pluginWorkers,
   pnpmLockfile,
   runNx,
@@ -216,7 +217,9 @@ describe("the lockfile task", () => {
         expect(run.status).toBe(0);
         expect(read(workspace, "rust/Cargo.lock")).toBe(read(plain, "rust/Cargo.lock"));
         expect(ran(workspace)).toEqual(
-          running.map((crate) => `rust: check --all-targets -p ${crate}`),
+          running.map(
+            (crate) => `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", crate)}`,
+          ),
         );
         for (const crate of ["api", "codegen", "model", "testkit"]) {
           expect({ crate, restored: restored(run.output, `${crate}:check`) }).toEqual({
@@ -375,7 +378,7 @@ describe("nx affected after a change to Cargo.lock", () => {
         for (const task of ["tools:test", "scaffold:test", "tools:lockfile"]) {
           expect(run.output).not.toContain(`nx run ${task}`);
         }
-        expect(ran(workspace)).toEqual([".: test -p app"]);
+        expect(ran(workspace)).toEqual([`.: test -p ${packageSpec(workspace.root, ".", "app")}`]);
         expect(restored(run.output, "util:test")).toBe(true);
       } finally {
         if (daemon.NX_DAEMON === "true") {
@@ -539,7 +542,9 @@ describe("the check after cargo's call", () => {
 
         expect(first.status).toBe(1);
         expect(first.output).toContain("api:check: the locked dependencies of api had the digest");
-        expect(ran(workspace)).toEqual(["rust: check --all-targets -p api"]);
+        expect(ran(workspace)).toEqual([
+          `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "api")}`,
+        ]);
 
         // The next run keys api on the new digest and stores it.
         rmSync(join(workspace.root, "rust", "crates", "api", "project.json"));
@@ -581,7 +586,9 @@ describe("the check after cargo's call", () => {
 
           // The task runs, also the second time, and repeats the warning.
           expect({ run, status: result.status }).toEqual({ run, status: 0 });
-          expect(ran(workspace)).toEqual(["rust: check --all-targets -p model"]);
+          expect(ran(workspace)).toEqual([
+            `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "model")}`,
+          ]);
           expect(lockfileCalls(workspace)).toEqual([]);
           expect(result.output).toContain(warning);
           expect(restored(result.output, "model:check")).toBe(false);
@@ -719,7 +726,9 @@ describe("a run that excludes task dependencies", () => {
       try {
         const first = await nx(workspace, ["run-many", "-t", "check", "-p", "model"], daemon);
         expect(first.status).toBe(0);
-        expect(ran(workspace)).toEqual(["rust: check --all-targets -p model"]);
+        expect(ran(workspace)).toEqual([
+          `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "model")}`,
+        ]);
 
         for (const flag of [
           ["run", "model:check", "--exclude-task-dependencies"],
@@ -739,7 +748,7 @@ describe("a run that excludes task dependencies", () => {
           expect({ flag, status: run.status }).toEqual({ flag, status: 0 });
           expect({ flag, ran: ran(workspace) }).toEqual({
             flag,
-            ran: ["rust: check --all-targets -p model"],
+            ran: [`rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "model")}`],
           });
           expect(lockfileCalls(workspace)).toEqual([]);
         }
@@ -750,7 +759,9 @@ describe("a run that excludes task dependencies", () => {
           ["run", "model:check", "--exclude-task-dependencies"],
           daemon,
         );
-        expect(ran(workspace)).toEqual(["rust: check --all-targets -p model"]);
+        expect(ran(workspace)).toEqual([
+          `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "model")}`,
+        ]);
         expect(excluded.status).toBe(0);
         cargo(workspace, "rust", "update", "-p", "zzlib", "--precise", "1.0.0");
 

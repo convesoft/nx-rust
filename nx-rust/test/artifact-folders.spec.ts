@@ -12,6 +12,7 @@ import { dirname, join, relative } from "node:path";
 import {
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  packageSpec,
   pluginWorkers,
   runNx,
   taskCalls as harnessTaskCalls,
@@ -232,7 +233,9 @@ describe("a cached build or doc whose artifact directory moves after graph creat
         // 3. A new source under the dotenv file fails as well.
         writeFileSync(join(workspace.root, "rust/crates/cli/src/main.rs"), cliPrinting("v2"));
         expect((await runNx(workspace, ["run", "cli:build"])).status).toBe(1);
-        expect(taskCalls(workspace)).toEqual(["build -p cli"]);
+        expect(taskCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+        ]);
         expect(existsSync(join(workspace.root, "rust/out"))).toBe(false);
 
         // 4. Without the dotenv file and the folders, nothing of v1 is restored.
@@ -441,7 +444,9 @@ describe("a cached build or doc whose targetTriple option cargo names another fo
           status: 0,
           output: expect.any(String),
         });
-        expect(taskCalls(uncached)).toEqual(["build -p cli --target host-tuple"]);
+        expect(taskCalls(uncached)).toEqual([
+          `build -p ${packageSpec(uncached.root, "rust", "cli")} --target host-tuple`,
+        ]);
       } finally {
         uncached.remove();
       }

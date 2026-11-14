@@ -85,12 +85,24 @@ export function targetTakes(target: InferredTargetName, name: string): boolean {
   );
 }
 
+/** How the commands of a crate's targets name the crate to cargo (`DES-INVOCATION`). */
+export interface CrateSelection {
+  /** The crate's real package name, which `cargo fmt -p` takes. */
+  name: string;
+  /**
+   * The crate's package ID specification, which every other command takes
+   * with `-p`; absent where the target's command takes the name
+   * ({@link selectsBySpecification}).
+   */
+  spec?: string;
+}
+
 /** What a task's cargo command depends on besides the target's options. */
 export interface CommandSubject {
   /** The default name of the task's target, which decides the command. */
   target: InferredTargetName;
-  /** The crate's real package name; absent for a workspace project without a crate. */
-  packageName?: string;
+  /** The crate that the task selects; absent for a workspace project without a crate. */
+  crate?: CrateSelection;
   /** Whether the command runs in locked mode (`DES-INVOCATION`). */
   locked: boolean;
   /** The binary's arguments, which `run` passes after `--`; none for other targets. */
@@ -114,8 +126,8 @@ const crateCommands: Partial<Record<InferredTargetName, readonly string[]>> = {
  * The arguments after `cargo` of the command that a task of an inferred
  * target runs in its workspace's root folder.
  *
- * A crate's targets select it with `-p` and its real package name, and the
- * workspace project's targets address the whole workspace. Apart from that,
+ * A crate's targets select it with `-p` as {@link crateSelection} says, and
+ * the workspace project's targets address the whole workspace. Apart from that,
  * a flag comes only from an option that the target takes
  * ({@link optionTargets}), so that the command is the one that a developer
  * types in the workspace root (`DES-INVOCATION`); `run` passes the binary's
@@ -126,20 +138,21 @@ const crateCommands: Partial<Record<InferredTargetName, readonly string[]>> = {
  * cargo-audit only reads the lockfile and has no such flag; cargo-deny takes
  * it before its `check`.
  *
- * @throws {Error} When a crate's target has no package name.
+ * @throws {Error} When a crate's target has no crate, or no specification
+ *   where its command takes one.
  */
 // @mara implements DES-INVOCATION
 // @mara implements DES-TARGET-COMMANDS
 // @mara implements DES-WORKSPACE-TARGETS
 // @mara implements REQ-TEST-RUNNER
 export function cargoArguments(subject: CommandSubject, options: CargoTargetOptions): string[] {
-  const { target, packageName, locked } = subject;
+  const { target, crate, locked } = subject;
   const taken: CargoTargetOptions = Object.fromEntries(
     Object.entries(options).filter(([name]) => targetTakes(target, name)),
   );
   const crateCommand = crateCommands[target];
   if (crateCommand !== undefined) {
-    if (packageName === undefined) {
+    if (crate === undefined) {
       throw new Error(`The target "${target}" runs for a crate, and the project has none.`);
     }
     const formatting = target === "fmt" || target === "fmt-check";
@@ -147,8 +160,7 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
     return [
       ...crateCommand,
       ...flag(taken.allTargets, "--all-targets"),
-      "-p",
-      packageName,
+      ...crateSelection(target, [crate]),
       ...compilingFlags(taken),
       ...(taken.bin !== undefined ? ["--bin", taken.bin] : []),
       ...flag(locked && !formatting, "--locked"),
@@ -174,6 +186,47 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
       return ["update", "--workspace", ...flag(locked, "--locked")];
   }
   throw new Error(`nx-rust has no command for the target "${target}".`);
+}
+
+/**
+ * Whether the command of the target with this default name selects crates
+ * by their package ID specifications: every per-crate command but `cargo
+ * fmt`, which takes package names only (`DES-INVOCATION`).
+ */
+export function selectsBySpecification(target: InferredTargetName): boolean {
+  return crateCommands[target] !== undefined && target !== "fmt" && target !== "fmt-check";
+}
+
+/**
+ * The arguments with which the command of the target with this default name
+ * selects `crates`, all of one workspace: `-p` and each crate's package ID
+ * specification, in the given order, or for `cargo fmt` `-p` and each
+ * crate's package name (`DES-INVOCATION`). A bare name is not enough for the
+ * other commands: cargo matches it against every package that the selection
+ * reaches, where a dependency can have a member's name, also with its
+ * version, and the plugin, which reads the workspace without dependencies,
+ * cannot tell where that happens (`EVD-CARGO-PACKAGE-SPECS`).
+ *
+ * @throws {Error} When the target's command takes specifications and a
+ *   crate has none.
+ */
+// @mara implements DES-INVOCATION
+export function crateSelection(
+  target: InferredTargetName,
+  crates: readonly CrateSelection[],
+): string[] {
+  const bySpecification = selectsBySpecification(target);
+  return crates.flatMap(({ name, spec }) => {
+    if (!bySpecification) {
+      return ["-p", name];
+    }
+    if (spec === undefined) {
+      throw new Error(
+        `The target "${target}" selects the crate ${name} by its specification, and it has none.`,
+      );
+    }
+    return ["-p", spec];
+  });
 }
 
 // The feature, profile and triple flags, from the options that the target takes.

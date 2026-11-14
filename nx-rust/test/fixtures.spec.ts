@@ -104,6 +104,10 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       ],
     },
   },
+  "shared-names": {
+    workspaces: { rust: ["rust/crates/good", "rust/crates/toolkit"] },
+    others: ["third_party/good"],
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.

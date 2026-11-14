@@ -17,6 +17,7 @@ import {
   FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  packageSpec,
   pinnedToolchain,
   pinnedToolchainAvailable,
   pluginWorkers,
@@ -179,7 +180,9 @@ describe("a run with the plugin's executor", () => {
         expect(second.status).toBe(0);
         expect(second.output).toMatch(new RegExp(hit));
         expect(second.output).not.toContain('sets "cache": true');
-        expect(taskCalls(workspace)).toEqual(["build -p cli"]);
+        expect(taskCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+        ]);
       } finally {
         workspace.remove();
       }
@@ -214,10 +217,23 @@ describe("a run with the plugin's executor", () => {
         expect(first.status).toBe(1);
         expect(second.status).toBe(1);
         expect(second.output).not.toMatch(new RegExp(hit));
-        expect(taskCalls(workspace)).toEqual([
-          "check --all-targets -p cli",
-          "check --all-targets -p cli",
-        ]);
+        // Each run's first cargo call, which asks for the crate's package ID
+        // specification before its command (DES-INVOCATION), meets the
+        // missing toolchain with the task's environment, as the command would.
+        expect(second.output).toContain(
+          "cli:check: `cargo metadata` could not list the members of the Cargo workspace for this task",
+        );
+        expect(second.output).toContain("nx-rust-missing-toolchain");
+        const memberReport = {
+          cwd: "rust",
+          args: ["metadata", "--format-version", "1", "--no-deps"],
+        };
+        expect(
+          workspace
+            .cargoCalls()
+            .filter((call) => call.args.join(" ") === memberReport.args.join(" ")),
+        ).toEqual([memberReport, memberReport]);
+        expect(taskCalls(workspace)).toEqual([]);
       } finally {
         workspace.remove();
       }
@@ -334,7 +350,10 @@ describe("a run with the plugin's executor", () => {
       try {
         const env = { CARGO_BUILD_TARGET: hostTriple() };
         await expectRestored(workspace, env, [hostTriple()]);
-        expect(taskCalls(workspace)).toEqual(["build -p cli", "doc --no-deps --workspace"]);
+        expect(taskCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+          "doc --no-deps --workspace",
+        ]);
       } finally {
         workspace.remove();
       }
@@ -442,7 +461,10 @@ describe("a run with the plugin's executor", () => {
       });
       try {
         await expectRestored(workspace, {}, [hostTriple()]);
-        expect(taskCalls(workspace)).toEqual(["build -p cli", "doc --no-deps --workspace"]);
+        expect(taskCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+          "doc --no-deps --workspace",
+        ]);
       } finally {
         workspace.remove();
       }
@@ -459,7 +481,10 @@ describe("a run with the plugin's executor", () => {
         });
         try {
           await expectRestored(workspace, {}, [hostTriple(), secondTriple]);
-          expect(taskCalls(workspace)).toEqual(["build -p cli", "doc --no-deps --workspace"]);
+          expect(taskCalls(workspace)).toEqual([
+            `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+            "doc --no-deps --workspace",
+          ]);
         } finally {
           workspace.remove();
         }
@@ -518,7 +543,10 @@ describe("a run with the plugin's executor", () => {
         expect(second.output).toContain(
           'build.target in rust/.cargo/config.toml picks the target triple "host-tuple"',
         );
-        expect(taskCalls(workspace)).toEqual(["build -p cli", "build -p cli"]);
+        expect(taskCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+        ]);
 
         // A project.json that caches build anyway fails the task before
         // cargo runs, saying why and what to do instead.
@@ -709,7 +737,9 @@ describe("a run with the plugin's executor", () => {
         expect(restored.status).toBe(0);
         expect(restored.output).toMatch(new RegExp(`nx run cli:build\\s+${hit}`));
         expect(existsSync(binary)).toBe(true);
-        expect(taskCalls(workspace)).toEqual(["build -p cli"]);
+        expect(taskCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+        ]);
       } finally {
         workspace.remove();
       }
@@ -745,7 +775,9 @@ describe("a run with the plugin's executor", () => {
         expect(restored.output).toMatch(new RegExp(`nx run tools:build\\s+${hit}`));
         expect(existsSync(binary)).toBe(true);
         expect(existsSync(join(workspace.root, "tools", "target"))).toBe(false);
-        expect(taskCalls(workspace)).toEqual(["build -p tools"]);
+        expect(taskCalls(workspace)).toEqual([
+          `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
+        ]);
       } finally {
         workspace.remove();
       }
@@ -901,7 +933,10 @@ function hostTriple(): string {
             () => programVersion(links.rustc),
           );
           expect(programVersion(links.rustc)).not.toBe(old);
-          expect(taskCalls(workspace)).toEqual(["build -p tools", "build -p tools"]);
+          expect(taskCalls(workspace)).toEqual([
+            `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
+            `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
+          ]);
         } finally {
           workspace.remove();
           links.remove();
@@ -928,7 +963,10 @@ function hostTriple(): string {
             programVersion(toolchainProgram("rustc")),
             () => programVersion(pinned),
           );
-          expect(taskCalls(workspace)).toEqual(["build -p tools", "build -p tools"]);
+          expect(taskCalls(workspace)).toEqual([
+            `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
+            `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
+          ]);
         } finally {
           workspace.remove();
           rmSync(cargoHome, { recursive: true, force: true });

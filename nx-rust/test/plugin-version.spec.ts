@@ -7,6 +7,7 @@ import {
   HARNESS_TIMEOUT,
   inFixture,
   lockfileCalls,
+  packageSpec,
   pluginWorkers,
   pnpmLockfile,
   runNx,
@@ -293,7 +294,10 @@ describe("a pluginVersion that only the run gives", () => {
         );
         expect(ownValue.status).toBe(0);
         expect(taskCalls(workspace)).toEqual<CargoCall[]>([
-          { cwd: "rust", args: ["check", "--all-targets", "-p", "core-lib"] },
+          {
+            cwd: "rust",
+            args: ["check", "--all-targets", "-p", packageSpec(workspace.root, "rust", "core-lib")],
+          },
         ]);
 
         workspace.cargo.clear();
@@ -304,7 +308,16 @@ describe("a pluginVersion that only the run gives", () => {
         );
         expect(forwarded.status).toBe(0);
         expect(taskCalls(workspace)).toEqual<CargoCall[]>([
-          { cwd: "rust", args: ["run", "-p", "cli", "--", "--pluginVersion=0.0.0"] },
+          {
+            cwd: "rust",
+            args: [
+              "run",
+              "-p",
+              packageSpec(workspace.root, "rust", "cli"),
+              "--",
+              "--pluginVersion=0.0.0",
+            ],
+          },
         ]);
       }),
     HARNESS_TIMEOUT,

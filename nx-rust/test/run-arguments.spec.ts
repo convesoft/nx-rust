@@ -4,9 +4,11 @@ import {
   type CargoCall,
   type Env,
   type FileChanges,
+  FixtureWorkspace,
   HARNESS_TIMEOUT,
   inFixture,
   linesWith,
+  packageSpec,
   pluginWorkers,
   runNx,
   sortedCalls,
@@ -40,9 +42,13 @@ function received(output: string, binary: string): string[] | undefined {
   return line === undefined ? undefined : JSON.parse(line.slice(`${binary} got `.length));
 }
 
-const run = (crate: string, ...rest: string[]): CargoCall => ({
+/**
+ * The cargo call of `run` for `crate` of crate-shapes' workspace in the copy,
+ * which selects the crate by its package ID specification (`DES-INVOCATION`).
+ */
+const run = (workspace: FixtureWorkspace, crate: string, ...rest: string[]): CargoCall => ({
   cwd: "rust",
-  args: ["run", "-p", crate, ...rest],
+  args: ["run", "-p", packageSpec(workspace.root, "rust", crate), ...rest],
 });
 
 describe("the binary of a run task", () => {
@@ -57,45 +63,45 @@ describe("the binary of a run task", () => {
           const cases: [string[], CargoCall, string, string[]][] = [
             [
               ["run", "cli:run", "--", "--port", "3000"],
-              run("cli", "--", "--port", "3000"),
+              run(workspace, "cli", "--", "--port", "3000"),
               "cli",
               ["--port", "3000"],
             ],
             [
               ["run", "cli:run", "--args=--port 3000"],
-              run("cli", "--", "--port", "3000"),
+              run(workspace, "cli", "--", "--port", "3000"),
               "cli",
               ["--port", "3000"],
             ],
             [
               ["run", "server:run", "--bin", "migrate", "--args=--port 3000"],
-              run("server", "--bin", "migrate", "--", "--port", "3000"),
+              run(workspace, "server", "--bin", "migrate", "--", "--port", "3000"),
               "migrate",
               ["--port", "3000"],
             ],
             // Nx drops the flags before -- that it does not know itself.
             [
               ["run", "server:run", "--bin", "migrate", "--", "--port", "3000"],
-              run("server", "--", "--port", "3000"),
+              run(workspace, "server", "--", "--port", "3000"),
               "server",
               ["--port", "3000"],
             ],
             [
               ["run", "cli:run", "--args=SHOULD_NOT_REACH_BINARY", "--", "--port", "3000"],
-              run("cli", "--", "--port", "3000"),
+              run(workspace, "cli", "--", "--port", "3000"),
               "cli",
               ["--port", "3000"],
             ],
             [
               ["run", "cli:run", "--args=--profile"],
-              run("cli", "--", "--profile"),
+              run(workspace, "cli", "--", "--profile"),
               "cli",
               ["--profile"],
             ],
             // Taken as arguments, not as run's own option.
             [
               ["run", "server:run", "--", "--bin", "migrate"],
-              run("server", "--", "--bin", "migrate"),
+              run(workspace, "server", "--", "--bin", "migrate"),
               "server",
               ["--bin", "migrate"],
             ],
@@ -166,8 +172,8 @@ describe("the binary of a run task", () => {
 
             expect(result.status).toBe(0);
             expect(sortedCalls(taskCalls(workspace))).toEqual([
-              run("cli", "--", "--port", "3000"),
-              run("server"),
+              run(workspace, "cli", "--", "--port", "3000"),
+              run(workspace, "server"),
             ]);
             expect(received(result.output, "cli")).toEqual(["--port", "3000"]);
             expect(linesWith(result.output, "ignoring")).toEqual([]);
@@ -201,7 +207,7 @@ describe("the binary of a run task", () => {
         expect(linesWith(words.output, "ignoring")).toEqual([
           'cli:run: ignoring the positional arguments ["serve"] (option `_`), passed on the command line. Remove them, or pass them to the binary after `--` or with `--args`.',
         ]);
-        expect(taskCalls(workspace)).toEqual([run("cli"), run("cli")]);
+        expect(taskCalls(workspace)).toEqual([run(workspace, "cli"), run(workspace, "cli")]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -230,7 +236,7 @@ describe("the binary of a run task", () => {
           expect({ args, words: received(result.output, "cli") }).toEqual({ args, words });
           expect({ args, calls: taskCalls(workspace) }).toEqual({
             args,
-            calls: [run("cli", "--", ...words)],
+            calls: [run(workspace, "cli", "--", ...words)],
           });
         }
       }),
@@ -253,7 +259,9 @@ describe("the binary of a run task", () => {
 
           expect(result.status).toBe(0);
           expect(received(result.output, "cli")).toEqual(["--name", "a b", "--verbose"]);
-          expect(taskCalls(workspace)).toEqual([run("cli", "--", "--name", "a b", "--verbose")]);
+          expect(taskCalls(workspace)).toEqual([
+            run(workspace, "cli", "--", "--name", "a b", "--verbose"),
+          ]);
         },
       ),
     HARNESS_TIMEOUT,
@@ -337,8 +345,8 @@ args = "--name 'a b'"
           expect(ran.status).toBe(0);
           expect(received(ran.output, "cli")).toEqual(["--name", "a b", "--verbose"]);
           expect(sortedCalls(taskCalls(workspace))).toEqual([
-            run("cli", "--", "--name", "a b", "--verbose"),
-            run("server"),
+            run(workspace, "cli", "--", "--name", "a b", "--verbose"),
+            run(workspace, "server"),
           ]);
           expect(linesWith(ran.output, "ignoring")).toEqual([]);
 
@@ -347,7 +355,12 @@ args = "--name 'a b'"
           workspace.cargo.clear();
           const built = await runNx(workspace, ["run", "cli:build"]);
           expect(built.status).toBe(0);
-          expect(taskCalls(workspace)).toEqual([{ cwd: "rust", args: ["build", "-p", "cli"] }]);
+          expect(taskCalls(workspace)).toEqual([
+            {
+              cwd: "rust",
+              args: ["build", "-p", packageSpec(workspace.root, "rust", "cli")],
+            },
+          ]);
           expect(linesWith(built.output, "ignoring")).toEqual([
             'cli:build: ignoring option `allTargets`, which this target does not take. It comes from the workspace\'s configuration: run `nx show target cli:build --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by "@convesoft/nx-rust:cargo".',
           ]);

@@ -18,6 +18,7 @@ import {
   fakeNxPackage,
   HARNESS_TIMEOUT,
   installFixture,
+  packageSpec,
   repositoryFiles,
   testEnvironment,
   ToolFolders,
@@ -67,6 +68,16 @@ const readRustWorkspace: CargoCall = {
  * task, and once more when the task starts (`DES-OUTPUTS`).
  */
 const reportRustDirectories: CargoCall = readRustWorkspace;
+
+/**
+ * The call with which a task that selects its crate asks cargo, where its
+ * command will start, for the package ID specifications of the members of
+ * the workspace in `rust/` (`DES-INVOCATION`).
+ */
+const listRustMembers: CargoCall = {
+  cwd: "rust",
+  args: ["metadata", "--format-version", "1", "--no-deps"],
+};
 
 describe("@convesoft/nx-rust", () => {
   let projectDirectory: string;
@@ -499,7 +510,8 @@ describe("@convesoft/nx-rust", () => {
             updateRustLockfile,
             reportRustDirectories,
             reportRustDirectories,
-            { cwd: "rust", args: ["build", "-p", "api"] },
+            listRustMembers,
+            { cwd: "rust", args: ["build", "-p", packageSpec(projectDirectory, "rust", "api")] },
           ]);
         },
         HARNESS_TIMEOUT,
@@ -567,12 +579,14 @@ describe("@convesoft/nx-rust", () => {
             updateRustLockfile,
             reportRustDirectories,
             reportRustDirectories,
-            { cwd: "rust", args: ["build", "-p", "api"] },
+            listRustMembers,
+            { cwd: "rust", args: ["build", "-p", packageSpec(projectDirectory, "rust", "api")] },
             readRustWorkspace,
             updateRustLockfile,
             reportRustDirectories,
             reportRustDirectories,
-            { cwd: "rust", args: ["build", "-p", "api"] },
+            listRustMembers,
+            { cwd: "rust", args: ["build", "-p", packageSpec(projectDirectory, "rust", "api")] },
           ]);
         },
         HARNESS_TIMEOUT,
@@ -618,11 +632,12 @@ describe("@convesoft/nx-rust", () => {
           );
           expect(output).toContain("Successfully ran targets build, test, lint for 4 projects");
           expect(output).not.toMatch(compiles);
-          // Each task ran cargo, which found everything up to date, and so
+          // Each task asked cargo for its crate's package ID specification
+          // and ran its command, which found everything up to date, and so
           // did the lockfile task, once; each build asked cargo for its
           // artifact directory twice.
           expect(cargo.calls(projectDirectory)).toHaveLength(
-            2 + 3 * crates.length + 2 * crates.length,
+            2 + 2 * 3 * crates.length + 2 * crates.length,
           );
         },
         HARNESS_TIMEOUT,
@@ -682,7 +697,16 @@ describe("@convesoft/nx-rust", () => {
             expect(cargo.calls(projectDirectory)).toEqual([
               readRustWorkspace,
               updateRustLockfile,
-              { cwd: "rust", args: ["check", "--all-targets", "-p", "model"] },
+              listRustMembers,
+              {
+                cwd: "rust",
+                args: [
+                  "check",
+                  "--all-targets",
+                  "-p",
+                  packageSpec(projectDirectory, "rust", "model"),
+                ],
+              },
             ]);
             // Cargo calls the lockfile current now.
             execFileSync("cargo", ["metadata", "--format-version", "1", "--locked"], {
@@ -714,7 +738,16 @@ describe("@convesoft/nx-rust", () => {
             expect(excluded.output).not.toMatch(hit);
             expect(cargo.calls(projectDirectory)).toEqual([
               readRustWorkspace,
-              { cwd: "rust", args: ["check", "--all-targets", "-p", "model"] },
+              listRustMembers,
+              {
+                cwd: "rust",
+                args: [
+                  "check",
+                  "--all-targets",
+                  "-p",
+                  packageSpec(projectDirectory, "rust", "model"),
+                ],
+              },
             ]);
           }
           const normal = nxResult(projectDirectory, cargo, ["run", "model:check"]);

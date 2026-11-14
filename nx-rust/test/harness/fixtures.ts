@@ -31,6 +31,7 @@ export const fixtureNames = [
   "patched-workspaces",
   "declared-files",
   "undeclared-files",
+  "shared-names",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

@@ -276,6 +276,16 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["rust", "reader"],
     ],
   },
+  // good depends by path on third_party/good, which the entry excludes, and
+  // kit lies in crates/toolkit.
+  "shared-names": {
+    cargoFolders: ["rust", "rust"],
+    projects: { good: "rust/crates/good", kit: "rust/crates/toolkit", rust: "rust" },
+    edges: [
+      ["rust", "good"],
+      ["rust", "kit"],
+    ],
+  },
 };
 
 // Without the toolchain that it pins, cargo fails in different-toolchains/pinned.

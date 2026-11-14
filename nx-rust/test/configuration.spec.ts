@@ -15,6 +15,7 @@ import {
   GraphCreationError,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
+  packageSpec,
   pluginWorkers,
   testEnvironment,
   withoutColours,
@@ -1362,10 +1363,13 @@ describe("tasks of targets that the tables configure", () => {
         }
 
         expect(taskCalls(workspace)).toEqual([
-          { cwd: "rust", args: ["check", "-p", "core-lib"] },
-          { cwd: "rust", args: ["clippy", "-p", "core-lib"] },
+          { cwd: "rust", args: ["check", "-p", packageSpec(workspace.root, "rust", "core-lib")] },
+          { cwd: "rust", args: ["clippy", "-p", packageSpec(workspace.root, "rust", "core-lib")] },
           // A crate without the table keeps the inferred option.
-          { cwd: "rust", args: ["check", "--all-targets", "-p", "cli"] },
+          {
+            cwd: "rust",
+            args: ["check", "--all-targets", "-p", packageSpec(workspace.root, "rust", "cli")],
+          },
         ]);
       } finally {
         workspace.remove();
@@ -1407,7 +1411,9 @@ describe("tasks of targets that the tables configure", () => {
 
         expect(result.status).toBe(0);
         expect(result.output).toContain("the binary was running");
-        expect(taskCalls(workspace)).toEqual([{ cwd: "rust", args: ["run", "-p", "cli"] }]);
+        expect(taskCalls(workspace)).toEqual([
+          { cwd: "rust", args: ["run", "-p", packageSpec(workspace.root, "rust", "cli")] },
+        ]);
       } finally {
         workspace.remove();
       }
@@ -1470,7 +1476,16 @@ describe("tasks of targets that the tables configure", () => {
 
         expect(result.status).toBe(0);
         expect(taskCalls(workspace)).toEqual([
-          { cwd: "rust", args: ["test", "-p", "model", "--profile", "review"] },
+          {
+            cwd: "rust",
+            args: [
+              "test",
+              "-p",
+              packageSpec(workspace.root, "rust", "model"),
+              "--profile",
+              "review",
+            ],
+          },
         ]);
         expect(existsSync(join(workspace.root, "rust", "target", "review"))).toBe(true);
       } finally {

@@ -9,6 +9,7 @@ import {
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   lockfileCalls,
+  packageSpec,
   taskCalls,
   testEnvironment,
   ToolFolders,
@@ -101,9 +102,19 @@ function hostTriple(): string {
 
 const rust = (args: string[]): CargoCall => ({ cwd: "rust", args });
 
+/**
+ * `-p` and the package ID specification with which cargo commands other
+ * than `cargo fmt` select `crate` of the workspace in `folder` of the copy
+ * (`DES-INVOCATION`).
+ */
+const select = (workspace: FixtureWorkspace, crate: string, folder = "rust"): string[] => [
+  "-p",
+  packageSpec(workspace.root, folder, crate),
+];
+
 describe("the cargo executor", () => {
   it(
-    "runs each crate target's command in the workspace root, with the crate's package name",
+    "runs each crate target's command in the workspace root, selecting the crate by its package ID specification, and by its package name for cargo fmt",
     () =>
       inFixture("crate-shapes", undefined, async (workspace) => {
         const result = await nx(workspace, [
@@ -126,15 +137,15 @@ describe("the cargo executor", () => {
         expect(sorted(calls)).toEqual(
           sorted([
             ...["core-lib", "perf"].flatMap((crate) => [
-              rust(["build", "-p", crate]),
-              rust(["check", "--all-targets", "-p", crate]),
-              rust(["clippy", "--all-targets", "-p", crate]),
-              rust(["test", "-p", crate]),
+              rust(["build", ...select(workspace, crate)]),
+              rust(["check", "--all-targets", ...select(workspace, crate)]),
+              rust(["clippy", "--all-targets", ...select(workspace, crate)]),
+              rust(["test", ...select(workspace, crate)]),
               rust(["fmt", "--check", "-p", crate]),
               rust(["fmt", "-p", crate]),
             ]),
             // Only perf has a bench target.
-            rust(["bench", "-p", "perf"]),
+            rust(["bench", ...select(workspace, "perf")]),
           ]),
         );
         // No flag that turns warnings into errors.
@@ -146,7 +157,7 @@ describe("the cargo executor", () => {
   );
 
   it(
-    "addresses a crate by its package name where the project has another name",
+    "addresses a crate by its package ID specification where the project has another name",
     () =>
       // engine's project.json names the project rust-engine.
       inFixture("mixed-folders", undefined, async (workspace) => {
@@ -154,7 +165,7 @@ describe("the cargo executor", () => {
 
         expect(result.status).toBe(0);
         expect(taskCalls(workspace)).toEqual([
-          { cwd: "libs/rust", args: ["build", "-p", "engine"] },
+          { cwd: "libs/rust", args: ["build", ...select(workspace, "engine", "libs/rust")] },
         ]);
       }),
     HARNESS_TIMEOUT,
@@ -162,21 +173,22 @@ describe("the cargo executor", () => {
 
   // Each case: targetNames, and the names to run with the cargo command that
   // each runs.
+  // The commands select core-lib with `-p` and its specification after them.
   it.each<[string, Record<string, string>, [string, string[]][]]>([
     [
       "one name passed on to another target",
       { lint: "clippy", build: "lint" },
       [
-        ["clippy", ["clippy", "--all-targets", "-p", "core-lib"]],
-        ["lint", ["build", "-p", "core-lib"]],
+        ["clippy", ["clippy", "--all-targets"]],
+        ["lint", ["build"]],
       ],
     ],
     [
       "two targets that swap their names",
       { lint: "check", check: "lint" },
       [
-        ["lint", ["check", "--all-targets", "-p", "core-lib"]],
-        ["check", ["clippy", "--all-targets", "-p", "core-lib"]],
+        ["lint", ["check", "--all-targets"]],
+        ["check", ["clippy", "--all-targets"]],
       ],
     ],
   ])(
@@ -191,7 +203,9 @@ describe("the cargo executor", () => {
             expect({ name, status: result.status }).toEqual({ name, status: 0 });
           }
 
-          expect(taskCalls(workspace)).toEqual(runs.map(([, command]) => rust(command)));
+          expect(taskCalls(workspace)).toEqual(
+            runs.map(([, command]) => rust([...command, ...select(workspace, "core-lib")])),
+          );
         },
       ),
     HARNESS_TIMEOUT,
@@ -245,11 +259,11 @@ describe("the cargo executor", () => {
             "release",
           ];
           expect(taskCalls(workspace)).toEqual([
-            rust(["build", "-p", "core-lib", ...flags, "--target", triple]),
-            rust(["check", "-p", "core-lib"]),
-            rust(["clippy", "-p", "core-lib"]),
+            rust(["build", ...select(workspace, "core-lib"), ...flags, "--target", triple]),
+            rust(["check", ...select(workspace, "core-lib")]),
+            rust(["clippy", ...select(workspace, "core-lib")]),
             // test runs on the host triple only.
-            rust(["test", "-p", "core-lib", ...flags]),
+            rust(["test", ...select(workspace, "core-lib"), ...flags]),
             rust(["fmt", "-p", "core-lib"]),
             rust(["doc", "--workspace"]),
             rust([
@@ -261,7 +275,7 @@ describe("the cargo executor", () => {
               "--profile",
               "release",
             ]),
-            rust(["run", "-p", "server", "--bin", "migrate"]),
+            rust(["run", ...select(workspace, "server"), "--bin", "migrate"]),
           ]);
         },
       ),
@@ -275,7 +289,9 @@ describe("the cargo executor", () => {
         const result = await nx(workspace, ["run", "core-lib:check", "--release", "--jobs=1"]);
 
         expect(result.status).toBe(0);
-        expect(taskCalls(workspace)).toEqual([rust(["check", "--all-targets", "-p", "core-lib"])]);
+        expect(taskCalls(workspace)).toEqual([
+          rust(["check", "--all-targets", ...select(workspace, "core-lib")]),
+        ]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -309,8 +325,8 @@ describe("the cargo executor", () => {
 
         expect(result.status).toBe(0);
         expect(sorted(taskCalls(workspace))).toEqual([
-          rust(["run", "-p", "cli"]),
-          rust(["run", "-p", "server"]),
+          rust(["run", ...select(workspace, "cli")]),
+          rust(["run", ...select(workspace, "server")]),
         ]);
         // What the binaries printed: core_lib::answer() and server::port().
         expect(result.output).toMatch(/^42$/m);
@@ -351,7 +367,7 @@ describe("the cargo executor", () => {
           expect(result.status).toBe(0);
           expect(result.output).toMatch(/^42$/m);
           expect(result.output).toContain("the binary had exited");
-          expect(taskCalls(workspace)).toEqual([rust(["run", "-p", "cli"])]);
+          expect(taskCalls(workspace)).toEqual([rust(["run", ...select(workspace, "cli")])]);
         },
       ),
     HARNESS_TIMEOUT,
@@ -371,7 +387,7 @@ describe("the cargo executor", () => {
           const result = await nx(workspace, ["run", "core-lib:build"]);
 
           expect(result.status).toBe(0);
-          expect(taskCalls(workspace)).toEqual([rust(["build", "-p", "core-lib"])]);
+          expect(taskCalls(workspace)).toEqual([rust(["build", ...select(workspace, "core-lib")])]);
           // The file applies to a cargo started in the crate's folder.
           const inCrate = spawnSync("cargo", ["build"], {
             cwd: join(workspace.root, "rust/crates/core"),
@@ -401,11 +417,17 @@ describe("the cargo executor", () => {
             args: expect.arrayContaining(["metadata"]),
             env: { RUSTUP_AUTO_INSTALL: "0" },
           }),
-          // The lockfile task's cargo and the task's own get the task's environment.
+          // The lockfile task's cargo, the task's report of the members'
+          // specifications and its own command get the task's environment.
           { cwd: "rust", args: ["update", "--workspace"], env: { RUSTUP_AUTO_INSTALL: null } },
           {
             cwd: "rust",
-            args: ["check", "--all-targets", "-p", "core-lib"],
+            args: ["metadata", "--format-version", "1", "--no-deps"],
+            env: { RUSTUP_AUTO_INSTALL: null },
+          },
+          {
+            cwd: "rust",
+            args: ["check", "--all-targets", ...select(workspace, "core-lib")],
             env: { RUSTUP_AUTO_INSTALL: null },
           },
         ]);
@@ -461,7 +483,13 @@ describe("the cargo executor", () => {
         }
 
         const calls = taskCalls(workspace).map((call) => call.args.join(" "));
-        for (const call of ["fmt -p perf", "fmt -p cli", "bench -p perf", "run -p cli", "update"]) {
+        for (const call of [
+          "fmt -p perf",
+          "fmt -p cli",
+          ["bench", ...select(workspace, "perf")].join(" "),
+          ["run", ...select(workspace, "cli")].join(" "),
+          "update",
+        ]) {
           expect({ call, count: calls.filter((logged) => logged === call).length }).toEqual({
             call,
             count: 2,
@@ -586,27 +614,31 @@ describe("locked mode", () => {
       .sort();
   }
 
-  const locked = [
-    "audit",
-    "bench -p perf --locked",
-    "build -p cli --locked",
-    "build -p perf --locked",
-    "check --all-targets -p cli --locked",
-    "check --all-targets -p perf --locked",
-    "clippy --all-targets -p cli --locked",
-    "clippy --all-targets -p perf --locked",
-    "deny --locked check",
-    "doc --no-deps --workspace --locked",
-    "fmt --check -p cli",
-    "fmt --check -p perf",
-    "fmt -p cli",
-    "fmt -p perf",
-    "run -p cli --locked",
-    "test -p cli --locked",
-    "test -p perf --locked",
-    "update",
-    "update --workspace --locked",
-  ];
+  // The commands of runAll with the locked option, sorted.
+  const locked = (workspace: FixtureWorkspace): string[] => {
+    const [cli, perf] = ["cli", "perf"].map((crate) => select(workspace, crate).join(" "));
+    return [
+      "audit",
+      `bench ${perf} --locked`,
+      `build ${cli} --locked`,
+      `build ${perf} --locked`,
+      `check --all-targets ${cli} --locked`,
+      `check --all-targets ${perf} --locked`,
+      `clippy --all-targets ${cli} --locked`,
+      `clippy --all-targets ${perf} --locked`,
+      "deny --locked check",
+      "doc --no-deps --workspace --locked",
+      "fmt --check -p cli",
+      "fmt --check -p perf",
+      "fmt -p cli",
+      "fmt -p perf",
+      `run ${cli} --locked`,
+      `test ${cli} --locked`,
+      `test ${perf} --locked`,
+      "update",
+      "update --workspace --locked",
+    ].sort();
+  };
 
   it(
     "passes --locked with the locked option to every command but update and fmt",
@@ -615,7 +647,7 @@ describe("locked mode", () => {
         "crate-shapes",
         { "nx.json": pluginOptions({ locked: true }), "rust/deny.toml": "" },
         async (workspace) => {
-          expect(await runAll(workspace, {})).toEqual(locked);
+          expect(await runAll(workspace, {})).toEqual(locked(workspace));
         },
       ),
     HARNESS_TIMEOUT,
@@ -641,7 +673,9 @@ describe("locked mode", () => {
 
         const flag = passed ? ["--locked"] : [];
         expect(lockfileCalls(workspace)).toEqual([rust(["update", "--workspace", ...flag])]);
-        expect(taskCalls(workspace)).toEqual([rust(["build", "-p", "perf", ...flag])]);
+        expect(taskCalls(workspace)).toEqual([
+          rust(["build", ...select(workspace, "perf"), ...flag]),
+        ]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -824,7 +858,7 @@ describe("a mixed repository", () => {
           expect(result.output).toContain("web lint ran");
           expect(sorted(taskCalls(workspace))).toEqual(
             ["api", "codegen", "model", "testkit"].map((crate) =>
-              rust(["clippy", "--all-targets", "-p", crate]),
+              rust(["clippy", "--all-targets", ...select(workspace, crate)]),
             ),
           );
         },
