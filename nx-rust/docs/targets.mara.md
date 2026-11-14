@@ -301,7 +301,7 @@ task runs as if an option it does not know were absent, such as Jest's
 ([[REQ-UNKNOWN-OPTIONS]]):
 
 ```text
-api:test: ignoring option `coverage`, passed on the command line.
+api:test: ignoring option `coverage`, passed on the command line. Remove it, or check its spelling.
 api:test: ignoring option `passWithNoTests`, which the cargo executor does not know. It comes from the workspace's configuration: run `nx show target api:test --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by "@convesoft/nx-rust:cargo".
 ```
 
@@ -311,8 +311,8 @@ host triple only, or `--allTargets` on `build`, and for words after `--` on any
 target but `run`, which Nx hands the task as positional arguments:
 
 ```text
-api:test: ignoring option `targetTriple`, which this target does not take, passed on the command line.
-api:test: ignoring the positional arguments ["3000"] (option `_`), passed on the command line.
+api:test: ignoring option `targetTriple`, which this target does not take, passed on the command line. Remove it.
+api:test: ignoring the positional arguments ["3000"] (option `_`), passed on the command line. Remove them.
 ```
 
 A line says that an option was passed on the command line only where that is
@@ -320,7 +320,10 @@ certain: for a flag you typed, also after `--`, and on a dependency that a
 `dependsOn` entry with `params: "forward"` reaches. Any other line names the
 workspace's configuration, also for an option that a dependency gets through
 `options: "forward"`. On `run`, the arguments after `--` go to the binary
-instead: see [Running binaries](#running-binaries).
+instead: see [Running binaries](#running-binaries). There the line for an
+option that `run` does not know, or for words typed without `--`, adds that you
+can pass them to the binary after `--` or with `--args`. No other target passes
+arguments on, and the plugin has no option for arguments of a test binary.
 
 To keep a target default away from Rust targets, and so silence the warning,
 narrow the entry with a `filter`. This one assumes that your crates carry the

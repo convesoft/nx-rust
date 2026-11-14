@@ -1,8 +1,8 @@
 import type { ProjectConfiguration } from "@nx/devkit";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { cargoMetadataOf } from "../src/graph/collisions";
 import {
   compareCacheKeys,
@@ -28,10 +28,19 @@ import {
 // "Warnings where they are seen").
 // init.spec.ts checks that `init` prints it.
 
-/** The warning about `directory`, Cargo's directory in `role` for `workspaces`. */
-function directoryWarning(directory: string, role: string, workspaces: string): string {
+/**
+ * The warning about `directory`, Cargo's directory in `role` for
+ * `workspaces`, which a symbolic link on the path `written` leads to, if any.
+ */
+function directoryWarning(
+  directory: string,
+  role: string,
+  workspaces: string,
+  written?: string,
+): string {
+  const through = written === undefined ? "" : ` (reached through ${written})`;
   return [
-    `nx-rust: ${directory}, Cargo's ${role} of ${workspaces}, lies inside the repository, and no .gitignore or .nxignore leaves it out of the files that Nx reads.`,
+    `nx-rust: ${directory}${through}, Cargo's ${role} of ${workspaces}, lies inside the repository, and no .gitignore or .nxignore leaves it out of the files that Nx reads.`,
     "Nx then hashes every file that Cargo writes there, counts those inside a project's folder among the project's files, so that a build can change the cache keys of its tasks, and hands nx-rust the Cargo.toml files that `cargo package` leaves there.",
     `Add the line /${directory}/ to the .gitignore at the repository root.`,
   ].join("\n");
@@ -48,9 +57,18 @@ const rustTarget = directoryWarning(
 const unignored: FileChanges = { ".gitignore": null };
 
 /** What `nx show projects` prints in a copy of `subfolder-workspace` with `files`, with the daemon off. */
-async function showProjects(...files: FileChanges[]): Promise<string> {
+function showProjects(...files: FileChanges[]): Promise<string> {
+  return showProjectsAfter(() => {}, ...files);
+}
+
+/** As {@link showProjects}, with `prepare` run on the copy's root folder first. */
+async function showProjectsAfter(
+  prepare: (root: string) => void,
+  ...files: FileChanges[]
+): Promise<string> {
   const workspace = FixtureWorkspace.create("subfolder-workspace", ...files);
   try {
+    prepare(workspace.root);
     const { status, output } = await workspace.nx(["show", "projects"]);
     expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
     return withoutColours(output);
@@ -153,6 +171,121 @@ describe("a Cargo directory inside the repository that Nx does not ignore", () =
     },
     HARNESS_TIMEOUT,
   );
+
+  // Cargo writes to the folder that the system reaches through the path that
+  // it reports, which decides and names the directory (DES-DIAGNOSTICS).
+  describe("reached through a symbolic link", () => {
+    const targetDir = (path: string): FileChanges => ({
+      "rust/.cargo/config.toml": `[build]\ntarget-dir = ${JSON.stringify(path)}\n`,
+    });
+    // The directory of rust/'s report: cargo joins the setting to the folder
+    // that holds .cargo and normalises nothing.
+    const reported = (root: string, path: string) => `${root}/rust/${path}`;
+    const linkedWarning = (directory: string, written: string) =>
+      directoryWarning(
+        directory,
+        "build and artifact directory",
+        "the Cargo workspace in rust",
+        written,
+      );
+
+    it(
+      "draws no warning where a link inside the repository leads it outside",
+      async () => {
+        // rust/out leads to a folder beside the repository.
+        const output = await showProjectsAfter(
+          (root) => symlinkSync("../../outside", join(root, "rust", "out")),
+          unignored,
+          targetDir("out"),
+        );
+
+        expect(output).not.toContain("lies inside the repository");
+        expect(output).toContain("api");
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "draws a warning that names the folder inside the repository that a link outside it leads to",
+      async () => {
+        let root = "";
+        const output = await showProjectsAfter(
+          (folder) => {
+            root = folder;
+            symlinkSync(join(root, "rust", "out"), join(dirname(root), "outside-link"));
+          },
+          unignored,
+          targetDir("../../outside-link"),
+        );
+
+        expect(
+          occurrences(output, linkedWarning("rust/out", reported(root, "../../outside-link"))),
+        ).toBe(1);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "names the path as cargo reports it, where a .. follows a link outside the repository",
+      async () => {
+        // outer/link leads to outer/inner/child, so outer/link/../back is
+        // outer/inner/back, which leads to physical in the repository; the
+        // path outer/back, which the setting names as text, does not exist.
+        let root = "";
+        const output = await showProjectsAfter(
+          (folder) => {
+            root = folder;
+            const outer = join(dirname(root), "outer");
+            mkdirSync(join(outer, "inner", "child"), { recursive: true });
+            mkdirSync(join(root, "physical"));
+            symlinkSync("inner/child", join(outer, "link"));
+            symlinkSync(join(root, "physical"), join(outer, "inner", "back"));
+          },
+          unignored,
+          targetDir("../../outer/link/../back"),
+        );
+
+        expect(
+          occurrences(
+            output,
+            linkedWarning("physical", reported(root, "../../outer/link/../back")),
+          ),
+        ).toBe(1);
+        expect(output).not.toContain(`${dirname(root)}/outer/back`);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    // rust/link leads to deep/child, so link/../target in rust reaches
+    // deep/target, not rust/target, which the path names as text.
+    let linkedRoot = "";
+    const throughLink = (root: string) => {
+      linkedRoot = root;
+      mkdirSync(join(root, "deep", "child"), { recursive: true });
+      symlinkSync("../deep/child", join(root, "rust", "link"));
+    };
+
+    it.each<[string, FileChanges, number]>([
+      ["no ignore file covers either folder", unignored, 1],
+      [
+        "only the folder that the path names as text is ignored",
+        { ".gitignore": "/rust/target/\n" },
+        1,
+      ],
+      ["the folder that it reaches is ignored", { ".gitignore": "/deep/target/\n" }, 0],
+    ])(
+      "is judged and named by the folder inside the repository that a link leads it to, where %s",
+      async (_case, ignore, warned) => {
+        const output = await showProjectsAfter(throughLink, ignore, targetDir("link/../target"));
+
+        expect(
+          occurrences(output, linkedWarning("deep/target", reported(linkedRoot, "link/../target"))),
+        ).toBe(warned);
+        expect(output).not.toContain("nx-rust: rust/target");
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
 
   // Nx reads .git/info/exclude and the user's global git excludes file on
   // the machine where it runs (EVD-NX-24-SETUP), but neither is part of the

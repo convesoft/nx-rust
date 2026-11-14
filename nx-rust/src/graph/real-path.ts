@@ -47,6 +47,42 @@ export function repositoryFolder(
     : { inside: true, path };
 }
 
+/**
+ * One of Cargo's directories as the messages about a directory inside the
+ * repository name it (`DES-DIAGNOSTICS`, paragraph "Directories that Nx does
+ * not ignore"), or `undefined` where it lies outside the repository.
+ *
+ * `path` is the folder that the system reaches through `directory`
+ * ({@link physicalPath}), relative to the real path of `repositoryRoot`, and
+ * `.` for the root itself. Where symbolic links make that folder differ from
+ * the one that `directory` names as text, with `.` and `..` taken as text,
+ * `written` gives `directory` exactly as cargo reports it, so that a message
+ * can show the path through which the folder is reached. It is not
+ * normalised: a `..` after a link leaves the folder that the link leads to,
+ * so taking it as text could name a path that does not exist.
+ */
+export function folderInside(
+  directory: string,
+  repositoryRoot: string,
+): { path: string; written?: string } | undefined {
+  const realRoot = realPath(repositoryRoot);
+  const path = relative(realRoot, physicalPath(directory)) || ".";
+  if (leaves(path)) {
+    return undefined;
+  }
+  // Only to compare: the folder that the path names as text.
+  const asText = resolve(directory);
+  const named = [repositoryRoot, realRoot]
+    .map((root) => relative(root, asText) || ".")
+    .find((inside) => !leaves(inside));
+  return named === path ? { path } : { path, written: directory };
+}
+
+// Whether a path relative to a folder leaves that folder.
+function leaves(path: string): boolean {
+  return path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path);
+}
+
 // Linux's MAXSYMLINKS.
 const maximumLinks = 40;
 

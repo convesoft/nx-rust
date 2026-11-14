@@ -182,17 +182,26 @@ describe("the binary of a run task", () => {
   );
 
   it(
-    "gets no argument from an option that run does not know, which gets a line",
+    "gets no argument from an option that run does not know or from words before --, whose line names the ways to pass them",
     () =>
       inFixture("crate-shapes", binaries, async (workspace) => {
         const result = await runNx(workspace, ["run", "cli:run", "--coverage"]);
 
         expect(result.status).toBe(0);
-        expect(taskCalls(workspace)).toEqual([run("cli")]);
         expect(received(result.output, "cli")).toEqual([]);
         expect(linesWith(result.output, "ignoring")).toEqual([
-          "cli:run: ignoring option `coverage`, passed on the command line.",
+          "cli:run: ignoring option `coverage`, passed on the command line. Remove it or check its spelling, or pass it to the binary after `--` or with `--args`.",
         ]);
+
+        // Words without --, which Nx hands the task as positional arguments.
+        const words = await runNx(workspace, ["run", "cli:run", "serve"]);
+
+        expect(words.status).toBe(0);
+        expect(received(words.output, "cli")).toEqual([]);
+        expect(linesWith(words.output, "ignoring")).toEqual([
+          'cli:run: ignoring the positional arguments ["serve"] (option `_`), passed on the command line. Remove them, or pass them to the binary after `--` or with `--args`.',
+        ]);
+        expect(taskCalls(workspace)).toEqual([run("cli"), run("cli")]);
       }),
     HARNESS_TIMEOUT,
   );

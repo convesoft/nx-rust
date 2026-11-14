@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { cargoMetadataOf } from "../src/graph/collisions";
@@ -283,16 +283,33 @@ describe("the keys of a project's tasks", () => {
     HARNESS_TIMEOUT,
   );
 
-  // Each case: whether the projects warn, and whether the warnings' texts
-  // differ between the checkouts.
-  it.each<[string, FixtureName, FileChanges, boolean, boolean]>([
-    ["without warnings", "subfolder-workspace", {}, false, false],
+  /**
+   * subfolder-workspace whose Cargo directory is `rust/link/../target`,
+   * where `rust/link` leads to `deep/child`: the warning names `deep/target`
+   * and, in brackets, the path as cargo reports it, which is absolute.
+   */
+  const throughLink: FileChanges = {
+    ".gitignore": null,
+    "rust/.cargo/config.toml": '[build]\ntarget-dir = "link/../target"\n',
+  };
+  const makeLink = (root: string) => {
+    mkdirSync(join(root, "deep", "child"), { recursive: true });
+    symlinkSync("../deep/child", join(root, "rust", "link"));
+  };
+
+  // Each case: whether the projects warn, whether the warnings' texts differ
+  // between the checkouts, and what to do in a checkout once it exists.
+  // Every row has all six values: Jest would take a missing last one for a
+  // done callback.
+  it.each<[string, FixtureName, FileChanges, boolean, boolean, ((root: string) => void) | null]>([
+    ["without warnings", "subfolder-workspace", {}, false, false, null],
     [
       "with a warning that names files of the repository by their absolute paths",
       "cross-workspace-path",
       unreportedPathDependency,
       true,
       true,
+      null,
     ],
     [
       "with a warning about a folder outside both checkouts",
@@ -300,10 +317,19 @@ describe("the keys of a project's tasks", () => {
       {},
       true,
       false,
+      null,
+    ],
+    [
+      "with a warning that names, in brackets, the path through a link inside the repository by its absolute path",
+      "subfolder-workspace",
+      throughLink,
+      true,
+      true,
+      makeLink,
     ],
   ])(
     "are the same in two checkouts of one repository in different folders, %s",
-    async (_case, fixture, files, warns, textsDiffer) => {
+    async (_case, fixture, files, warns, textsDiffer, prepare) => {
       // The third case: an artifact directory outside the repository, named
       // by its absolute path, which is the same for both checkouts.
       const outside =
@@ -313,6 +339,8 @@ describe("the keys of a project's tasks", () => {
       const first = FixtureWorkspace.create(fixture, files);
       const second = FixtureWorkspace.create(fixture, files);
       try {
+        prepare?.(first.root);
+        prepare?.(second.root);
         expect(first.root).not.toBe(second.root);
         const graphs = [await first.graph(env), await second.graph(env)];
         const warnings = graphs.map((graph) =>
@@ -321,6 +349,11 @@ describe("the keys of a project's tasks", () => {
         expect(warnings.map((list) => list.length > 0)).toEqual([warns, warns]);
         // Where the texts differ, the digests still agree.
         expect(JSON.stringify(warnings[0]) !== JSON.stringify(warnings[1])).toBe(textsDiffer);
+        expect(
+          warnings[0].some((warning) =>
+            warning.includes(`(reached through ${first.root}/rust/link/../target)`),
+          ),
+        ).toBe(prepare === makeLink);
         const tasks = allTasks(graphs[0]);
         const [one, two] = [
           await first.hashTasks(tasks, { env }),
