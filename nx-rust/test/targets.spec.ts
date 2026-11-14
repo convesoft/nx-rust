@@ -765,11 +765,23 @@ describe("targetNames", () => {
   );
 
   it.each<[string, unknown, string]>([
-    ["a list", ["lint"], "has to be an object"],
-    ["a number for a name", { lint: 1 }, 'gives the target "lint" 1'],
-    ["an empty name", { lint: "" }, 'gives the target "lint" ""'],
+    [
+      "a list",
+      ["lint"],
+      'has to be an object that maps the default name of an inferred target to the name to use, such as { "lint": "clippy" }.',
+    ],
+    [
+      "a number for a name",
+      { lint: 1 },
+      'gives the target "lint" 1, but a target name has to be a string that is not empty.',
+    ],
+    [
+      "an empty name",
+      { lint: "" },
+      'gives the target "lint" "", but a target name has to be a string that is not empty.',
+    ],
   ])(
-    "fails graph creation when it is %s",
+    "fails graph creation, saying what it has to be, when it is %s",
     async (_case, value, expected) => {
       const message = await graphError("crate-shapes", {
         "nx.json": pluginOptions({ targetNames: value }),

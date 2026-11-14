@@ -696,6 +696,9 @@ describe("the check after cargo's call", () => {
         expect(run.output).toContain(
           "model:check: this task does not depend on the lockfile task of its Cargo workspace, in rust, so its cache key holds no digest",
         );
+        expect(run.output).toContain(
+          "Make sure that the workspace's folder is an Nx project with the plugin's lockfile target, and that no configuration replaces the dependsOn of model:check: run `nx show target model:check --json` and look under `sourceMap` for the file and entry.",
+        );
         expect(ran(workspace)).toEqual([]);
       } finally {
         workspace.remove();
