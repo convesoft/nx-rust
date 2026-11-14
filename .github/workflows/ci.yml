@@ -90,12 +90,12 @@ jobs:
           cargo --version
           pnpm nx e2e nx-rust-e2e
       # Also after a failure on stable, so that one CI run reports both
-      # toolchains. Nx caches the e2e target and the toolchain is not one of
-      # its inputs, so without `--skip-nx-cache` this run would replay the
-      # first one's result.
+      # toolchains. The e2e target's inputs include what cargo and rustup say
+      # about the toolchains (`rustToolchains` in nx.json), so this run does
+      # not replay the first one's result from the Nx cache.
       - name: Run the end-to-end tests with Cargo 1.91.0
         if: ${{ !cancelled() && steps.e2e-stable.outcome != 'skipped' }}
         run: |
           rustup default 1.91.0
           cargo --version
-          pnpm nx e2e nx-rust-e2e --skip-nx-cache
+          pnpm nx e2e nx-rust-e2e

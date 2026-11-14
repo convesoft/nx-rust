@@ -9,6 +9,41 @@
         "config": ".verdaccio/config.yml",
         "storage": "tmp/local-registry/storage"
       }
+    },
+    "lint": {
+      "executor": "@nx/oxlint:lint",
+      "cache": true,
+      "dependsOn": ["typecheck"],
+      "options": {
+        "lintFilePatterns": ["tools/scripts"]
+      },
+      "inputs": [
+        "{workspaceRoot}/tools/scripts/**/*",
+        "{workspaceRoot}/.oxlintrc.json",
+        "{workspaceRoot}/.eslintignore",
+        "{workspaceRoot}/.gitignore",
+        { "externalDependencies": ["oxlint"] }
+      ]
+    },
+    "typecheck": {
+      "command": "tsc -p tools/scripts/tsconfig.json",
+      "cache": true,
+      "inputs": [
+        "{workspaceRoot}/tools/scripts/**/*",
+        "{workspaceRoot}/nx-rust-e2e/tsconfig*.json",
+        "{workspaceRoot}/tsconfig.base.json",
+        "{workspaceRoot}/nx-rust/**/*.ts",
+        {
+          "externalDependencies": [
+            "typescript",
+            "tslib",
+            "@types/node",
+            "@types/jest",
+            "@nx/devkit",
+            "nx"
+          ]
+        }
+      ]
     }
   }
 }

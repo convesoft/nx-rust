@@ -1,0 +1,10 @@
+{
+  // The options with which Jest compiles the end-to-end global setup and
+  // teardown (nx-rust-e2e/jest.config.cts), for the `typecheck` target of the
+  // root project.
+  "extends": "../../nx-rust-e2e/tsconfig.spec.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["*.ts"]
+}
