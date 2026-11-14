@@ -345,39 +345,46 @@ function packageVersion(pkg: CargoPackage): PackageVersion {
  * through other path packages, and the crates of the workspace's `[patch]`
  * and `[replace]` entries with those behind them. A crate without a report
  * counts with its manifest alone. A `paths` override leaves no trace in the
- * lockfile and is not read.
+ * lockfile and is not read. A path names the crate at the real path of its
+ * folder, and its manifest is named there, also where the path passes a
+ * symbolic link.
  */
 function pathPackageManifests(discovery: CargoDiscovery): Map<string, string[]> {
+  const folderOf = (manifest: string) => realPath(dirname(manifest));
   const known = new Map<string, CargoPackage>();
   for (const report of [
     ...discovery.workspaces.map((workspace) => workspace.report),
     ...discovery.pathDependencyReports.map((entry) => entry.report),
   ]) {
     for (const pkg of report.packages) {
-      if (!known.has(pkg.manifest_path)) {
-        known.set(pkg.manifest_path, pkg);
+      if (!known.has(folderOf(pkg.manifest_path))) {
+        known.set(folderOf(pkg.manifest_path), pkg);
       }
     }
   }
+  const repositoryRoot = realPath(discovery.workspaceRoot);
   const result = new Map<string, string[]>();
   for (const workspace of discovery.workspaces) {
     const ids = new Set(workspace.report.workspace_members);
+    // Real folders of crates.
     const visited = new Set<string>();
     const queue: string[] = [
-      ...workspace.report.packages.filter((pkg) => ids.has(pkg.id)).map((pkg) => pkg.manifest_path),
+      ...workspace.report.packages
+        .filter((pkg) => ids.has(pkg.id))
+        .map((pkg) => folderOf(pkg.manifest_path)),
       ...workspace.redirections
         .filter((redirection) => redirection.table !== "paths")
-        .map((redirection) => join(redirection.folder, "Cargo.toml")),
+        .map((redirection) => realPath(redirection.folder)),
     ];
     while (queue.length > 0) {
-      const manifest = queue.shift() as string;
-      if (visited.has(manifest)) {
+      const folder = queue.shift() as string;
+      if (visited.has(folder)) {
         continue;
       }
-      visited.add(manifest);
-      for (const dependency of known.get(manifest)?.dependencies ?? []) {
+      visited.add(folder);
+      for (const dependency of known.get(folder)?.dependencies ?? []) {
         if (typeof dependency.path === "string") {
-          queue.push(join(dependency.path, "Cargo.toml"));
+          queue.push(realPath(dependency.path));
         }
       }
     }
@@ -385,7 +392,7 @@ function pathPackageManifests(discovery: CargoDiscovery): Map<string, string[]> 
     result.set(
       root,
       [...visited]
-        .map((manifest) => relative(discovery.workspaceRoot, manifest))
+        .map((folder) => relative(repositoryRoot, join(folder, "Cargo.toml")))
         .filter((path) => path !== "" && !path.startsWith("..") && !isAbsolute(path))
         .map((path) => `{workspaceRoot}/${path}`)
         .sort(),
