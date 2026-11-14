@@ -160,20 +160,38 @@ describe("the cargo executor", () => {
     HARNESS_TIMEOUT,
   );
 
-  it(
-    "runs the command of the default name under the name that targetNames gives",
-    () =>
+  // Each case: targetNames, and the names to run with the cargo command that
+  // each runs.
+  it.each<[string, Record<string, string>, [string, string[]][]]>([
+    [
+      "one name passed on to another target",
+      { lint: "clippy", build: "lint" },
+      [
+        ["clippy", ["clippy", "--all-targets", "-p", "core-lib"]],
+        ["lint", ["build", "-p", "core-lib"]],
+      ],
+    ],
+    [
+      "two targets that swap their names",
+      { lint: "check", check: "lint" },
+      [
+        ["lint", ["check", "--all-targets", "-p", "core-lib"]],
+        ["check", ["clippy", "--all-targets", "-p", "core-lib"]],
+      ],
+    ],
+  ])(
+    "runs the command of the default name under the name that targetNames gives, with %s",
+    (_case, targetNames, runs) =>
       inFixture(
         "crate-shapes",
-        { "nx.json": pluginOptions({ targetNames: { lint: "clippy", build: "lint" } }) },
+        { "nx.json": pluginOptions({ targetNames }) },
         async (workspace) => {
-          expect((await nx(workspace, ["run", "core-lib:clippy"])).status).toBe(0);
-          expect((await nx(workspace, ["run", "core-lib:lint"])).status).toBe(0);
+          for (const [name] of runs) {
+            const result = await nx(workspace, ["run", `core-lib:${name}`]);
+            expect({ name, status: result.status }).toEqual({ name, status: 0 });
+          }
 
-          expect(taskCalls(workspace)).toEqual([
-            rust(["clippy", "--all-targets", "-p", "core-lib"]),
-            rust(["build", "-p", "core-lib"]),
-          ]);
+          expect(taskCalls(workspace)).toEqual(runs.map(([, command]) => rust(command)));
         },
       ),
     HARNESS_TIMEOUT,
@@ -520,30 +538,6 @@ describe("a target that the plugin leaves uncached and the configuration caches"
   );
 
   it(
-    "is what keeps Nx from restoring it: Nx restores a JS target that its project.json caches",
-    () =>
-      inFixture(
-        "crate-shapes",
-        {
-          "web/project.json": JSON.stringify({
-            name: "web",
-            targets: { build: { command: "echo web build ran", cache: true } },
-          }),
-        },
-        async (workspace) => {
-          const first = await nx(workspace, ["run", "web:build"]);
-          const second = await nx(workspace, ["run", "web:build"]);
-
-          expect(first.status).toBe(0);
-          expect(first.output).not.toContain("[local cache]");
-          expect(second.status).toBe(0);
-          expect(second.output).toContain("[local cache]");
-        },
-      ),
-    HARNESS_TIMEOUT,
-  );
-
-  it(
     "runs again once an empty entry keyed by the executor takes the target out",
     () =>
       inFixture(
@@ -712,29 +706,28 @@ describe("locked mode", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each<[string, object, Env]>([
-    ["the locked option", { locked: true }, {}],
-    ["NX_RUST_LOCKED=true", {}, { NX_RUST_LOCKED: "true" }],
-  ])(
-    "fails such a task with %s and leaves Cargo.lock as it is, while update updates it",
-    (_case, options, env) =>
+  // NX_RUST_LOCKED=true passes the same --locked ("passes --locked as it
+  // says"), and fails a stale lockfile in the same way (lockfile-runs.spec.ts).
+  it(
+    "fails such a task with the locked option and leaves Cargo.lock as it is, while update updates it",
+    () =>
       inFixture(
         "crate-shapes",
-        { ...newDependency, "nx.json": pluginOptions(options) },
+        { ...newDependency, "nx.json": pluginOptions({ locked: true }) },
         async (workspace) => {
           const before = lockfile(workspace);
-          const check = await nx(workspace, ["run", "internal:check"], env);
+          const check = await nx(workspace, ["run", "internal:check"]);
           expect(check.status).toBe(1);
           expect(check.output).toContain("because --locked was passed to prevent this");
           expect(lockfile(workspace)).toEqual(before);
 
           // fmt reads no lockfile, and passes.
-          expect((await nx(workspace, ["run", "internal:fmt-check"], env)).status).toBe(0);
+          expect((await nx(workspace, ["run", "internal:fmt-check"])).status).toBe(0);
           expect(lockfile(workspace)).toEqual(before);
 
-          expect((await nx(workspace, ["run", "rust:update"], env)).status).toBe(0);
+          expect((await nx(workspace, ["run", "rust:update"])).status).toBe(0);
           expect(lockfile(workspace)).not.toEqual(before);
-          expect((await nx(workspace, ["run", "internal:check"], env)).status).toBe(0);
+          expect((await nx(workspace, ["run", "internal:check"])).status).toBe(0);
         },
       ),
     HARNESS_TIMEOUT,

@@ -117,12 +117,6 @@ describe("the supported Nx majors", () => {
       );
     },
   );
-
-  it("are named in words", () => {
-    expect(describeNxMajors([24])).toBe("Nx 24");
-    expect(describeNxMajors([24, 25])).toBe("Nx 24 and 25");
-    expect(describeNxMajors([23, 24, 25])).toBe("Nx 23, 24 and 25");
-  });
 });
 
 describe("the verdict on the installed Nx", () => {

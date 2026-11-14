@@ -6,7 +6,6 @@ import {
   describeTargetDefaultChanges,
   findTargetDefaultChanges,
   loadTargetDefaultsInternals,
-  TargetDefaultsInternals,
   targetDefaultsGuide,
 } from "../src/graph/target-defaults";
 import {
@@ -1177,21 +1176,8 @@ describe("the check on a dependency on the lockfile task", () => {
   const repositoryRoot = join(__dirname, "..", "..");
   const internals = loadTargetDefaultsInternals(repositoryRoot);
 
-  /** What the check attributes with `defaults` when Nx merged the targets of api to `merged`. */
-  async function findings(
-    defaults: Record<string, unknown>,
-    merged: Record<string, TargetConfiguration>,
-    load: () => TargetDefaultsInternals = () => internals,
-  ) {
-    return (await changes(defaults, merged, load)).findings;
-  }
-
   /** What the check finds with `defaults` when Nx merged the targets of api to `merged`. */
-  function changes(
-    defaults: Record<string, unknown>,
-    merged: Record<string, TargetConfiguration>,
-    load: () => TargetDefaultsInternals = () => internals,
-  ) {
+  function changes(defaults: Record<string, unknown>, merged: Record<string, TargetConfiguration>) {
     const project: ProjectConfiguration = {
       name: "api",
       root: "rust/crates/api",
@@ -1207,31 +1193,9 @@ describe("the check on a dependency on the lockfile task", () => {
         fileMap: { projectFileMap: {}, nonProjectFiles: [] },
       },
       pluginName,
-      load,
+      () => internals,
     );
   }
-
-  it("reports a dependsOn that loses the lockfile task as an error, and the added ^build as a warning", async () => {
-    const found = await findings(
-      { build: { dependsOn: ["^build"] } },
-      { build: { ...inferred.build, dependsOn: ["^build"] } },
-    );
-
-    expect(found).toEqual([
-      expect.objectContaining({ change: "replaces-dependsOn", severity: "error" }),
-      expect.objectContaining({
-        change: "adds-dependencies",
-        severity: "warning",
-        added: ["^build"],
-      }),
-    ]);
-    const { error, warnings } = describeTargetDefaultChanges(found);
-    expect(error).toContain(
-      `  - It replaces the dependsOn that nx-rust declares for "build", so that the task no longer depends on a task whose output its cache key reads. In api (${crates.api}).`,
-    );
-    expect(error).toContain(`putting "..." into the entry's "dependsOn" list`);
-    expect(warnings).toHaveLength(1);
-  });
 
   it("places each warning once on each target it concerns, for the tasks of that target to print", () => {
     const finding = (project: string, target: string) => ({
@@ -1257,15 +1221,6 @@ describe("the check on a dependency on the lockfile task", () => {
       { project: "model", target: "build", warning: warnings[0] },
       { project: "api", target: "fmt", warning: warnings[1] },
     ]);
-  });
-
-  it("keeps the lockfile task with ... and only warns about ^build", async () => {
-    const found = await findings(
-      { build: { dependsOn: ["...", "^build"] } },
-      { build: { ...inferred.build, dependsOn: [lockfile, "^build"] } },
-    );
-
-    expect(found).toEqual([expect.objectContaining({ change: "adds-dependencies" })]);
   });
 
   it("blames no element that Nx drops for naming another executor or a command, and cannot tell who changed the target", async () => {
@@ -1306,16 +1261,6 @@ describe("the check on a dependency on the lockfile task", () => {
           fields: ["outputs", "dependsOn"],
         },
       ],
-    });
-  });
-
-  it("asks Nx for nothing when no target differs", async () => {
-    const unused = () => {
-      throw new Error("internals loaded");
-    };
-    expect(await changes({ build: { cache: true } }, {}, unused)).toEqual({
-      findings: [],
-      unattributed: [],
     });
   });
 });

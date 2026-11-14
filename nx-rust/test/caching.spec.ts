@@ -827,6 +827,16 @@ describe("caching", () => {
         ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
       ],
       [
+        // Its folder once in the outputs.
+        "a list in Cargo's configuration that names one triple twice",
+        {
+          "rust/.cargo/config.toml":
+            '[build]\ntarget = ["x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]\n',
+        },
+        {},
+        ["x86_64-unknown-linux-gnu"],
+      ],
+      [
         "CARGO_BUILD_TARGET in the graph's environment, over a string",
         { "rust/.cargo/config.toml": '[build]\ntarget = "x86_64-unknown-linux-gnu"\n' },
         { CARGO_BUILD_TARGET: "aarch64-unknown-linux-gnu" },
