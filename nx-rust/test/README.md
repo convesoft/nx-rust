@@ -3,9 +3,9 @@
 The test infrastructure described under "How the plugin is tested" in
 [`../docs/verification.mara.md`](../docs/verification.mara.md): fixture
 repositories, a helper that loads one through the plugin and returns the
-project graph, the cache-key matrix, and a cargo wrapper that logs
-invocations. The unit tests in this folder and the end-to-end tests in
-`nx-rust-e2e` both use it.
+project graph, the cache-key matrix, a cargo wrapper that logs
+invocations, and local Cargo registries. The unit tests in this folder and the
+end-to-end tests in `nx-rust-e2e` both use it.
 
 ## Fixtures
 
@@ -110,7 +110,100 @@ does, so that the digest inputs have digests to read.
 real `cargo package`, to a registry in a temporary folder, with a Cargo home
 whose configuration puts it in place of crates.io: give commands
 `CARGO_HOME: registry.cargoHome`. `publish(crate)` adds another version, and
-`remove()` deletes it all. No network is needed.
+`remove()` deletes it all. No network is needed. It has no server and no
+publish endpoint; `SparseRegistry` has both.
+
+**`SparseRegistry.start({ indexDelay })`** starts a sparse registry with a
+publish endpoint, which stands in for crates.io where tests publish, as those
+of `VER-RELEASE` do, in this folder and in `nx-rust-e2e` alike. Its server,
+[`harness/registry-server.mts`](harness/registry-server.mts), runs in a Node
+process of its own, so that a test may run cargo or Nx synchronously, and
+listens on 127.0.0.1 on a port that the system picks, so that tests, test
+files and checkouts each run their own at once. Node runs the file without its
+types, so it holds only syntax that can be erased and imports only Node's own
+modules. The registry's folder, with the index, the `.crate` files, the logs
+and a Cargo home, lies in the test run's folder. A test starts a registry for
+itself and calls `remove()` when it is done, which stops the server and
+deletes the folder; the server also exits with the process that started it.
+
+Give cargo and Nx `testEnvironment(registry.env())`. The Cargo home names the
+registry `nx-rust-test` (`SparseRegistry.registryName`), replaces crates.io
+with it, makes it `registry.default`, so that `cargo publish` needs no
+`--registry`, and holds `registry.token`, the only token that it takes for an
+upload. The registry is also cargo's HTTP proxy and refuses every other host,
+because `cargo publish --registry crates-io` does not follow source
+replacement (`EVD-CARGO-PUBLISH`).
+
+A configuration file in a folder above the working folder, such as
+`~/.cargo/config.toml` where the temporary folder lies below the home folder,
+takes precedence over the Cargo home, and one with `[http] proxy = ""` let
+cargo reach another host. Environment variables take precedence over every
+file, so `env()` leaves out the variables of the developer's shell that would
+override these settings (`CARGO_REGISTRY_*`, `CARGO_REGISTRIES_*`,
+`CARGO_SOURCE_*`, `CARGO_HTTP_*`, `CARGO_NET_*`), and `no_proxy`, with which
+cargo bypasses the proxy, and pins:
+
+| Variable                                                        | Why                                                                                                                                                  |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CARGO_HOME`                                                    | The registry's Cargo home.                                                                                                                           |
+| `CARGO_HTTP_PROXY`                                              | Every HTTP and HTTPS request of cargo's goes to the registry, which answers only for itself.                                                         |
+| `CARGO_NET_OFFLINE=false`                                       | Cargo asks the registry.                                                                                                                             |
+| `CARGO_REGISTRY_DEFAULT`, `CARGO_REGISTRIES_NX_RUST_TEST_INDEX` | `cargo publish` without `--registry` goes to this registry.                                                                                          |
+| `CARGO_REGISTRIES_NX_RUST_TEST_TOKEN`                           | With the index pinned, cargo takes the token only from the environment.                                                                              |
+| `CARGO_REGISTRIES_NX_RUST_TEST_CREDENTIAL_PROVIDER=cargo:token` | Without it, a global credential provider of a configuration file runs, a program that could open connections of its own.                             |
+| `CARGO_NET_GIT_FETCH_WITH_CLI=true`, `GIT_ALLOW_PROTOCOL=file`  | Git and SSH transports do not go through an HTTP proxy. Cargo then fetches with the git command line, which refuses every transport but local files. |
+
+Cargo takes no source replacement from the environment, so a configuration
+file above the working folder can still replace crates.io with a source of
+its own; resolution then fails at the proxy or uses files on the machine. A
+credential provider of a configuration file for another registry does not
+run either: cargo asks that registry first, which the proxy refuses.
+
+What is guaranteed: with `env()`, no request that cargo makes itself, for an
+index, a download, an upload, a search, a login, a git fetch or any other
+registry operation, reaches a host other than the registry, whatever
+configuration files lie above the working folder or what the developer's
+shell sets for these variables. HTTP and HTTPS requests end at the registry,
+which logs those for other hosts with status 403, and git refuses `git://`,
+`ssh://`, `http://` and `https://` before it connects, while `file://` git
+repositories and path dependencies work. Not covered: programs that cargo
+or a test starts and that open connections themselves, such as build
+scripts, proc macros, a `runner` or `rustc-wrapper`, third-party cargo
+subcommands and rustup, which installs nothing under `RUSTUP_AUTO_INSTALL=0`;
+a `--config` argument that overrides a pinned setting, which only the test
+itself can write; and Nx's own requests.
+
+- `seed(crate, { crateFile })` puts a version, a `RegistryCrate` as for
+  `LocalRegistry`, into the index at once, for a newer version in the
+  registry or a version that already exists. With `crateFile`, the real
+  `cargo package` packages it and the registry serves its `.crate` file;
+  without it, the index lists it and its download fails.
+- `uploads()` returns what `cargo publish` uploaded, with the metadata as
+  cargo sent it and the `.crate` file, `index(name)` what the index lists now,
+  as cargo reads it, and `requests()` every request with its status and its
+  `Authorization` header.
+- An upload of a version that the registry has, listed or waiting to be, is
+  refused with status 400 and the message of crates.io, ``crate version
+  `0.1.0` is already uploaded``, and one without the token with 403. Cargo
+  itself refuses to upload a version that the index lists.
+- `indexDelay`, in milliseconds, or `setIndexDelay(milliseconds)` for the
+  uploads that follow, makes the index show an upload that late, and with
+  `Infinity` never. Cargo waits up to 60 seconds after an upload, and does
+  not upload a crate that depends on one it timed out on. With the variables
+  of `shortPublishTimeout(seconds)`, cargo waits that long instead, through
+  its unstable `publish.timeout`, so that a test reaches the timeout in a
+  second or two. A test that has to show the 60 seconds of a cargo as users
+  run it leaves them out and takes the time in a test file of its own, which
+  Jest runs beside the others.
+- `stop()` stops the server and keeps the files, for a test of a registry that
+  does not answer.
+
+[`sparse-registry.spec.ts`](sparse-registry.spec.ts) checks each of these
+against the real cargo of the default toolchain and of 1.91. For the
+guarantee, a listener of the test's own on the loopback interface stands in
+for another host: cargo is aimed at it through `--index`, git and SSH URLs
+and a configuration file above the working folder that switches every pinned
+setting off, and the test passes only if the listener saw no connection.
 
 **`pnpmLockfile(version, integrity)`** writes a `pnpm-lock.yaml` that lists
 the plugin's package at `version`, with `tslib` behind it, and `left-pad`
@@ -387,7 +480,8 @@ ts-jest compiles each test file on its own, as `isolatedModules` in
 with type information that took about 210 MB in every Jest process
 (nxr-2bdrk4). The `typecheck` target checks the types of the tests, the
 harness and the sources they import once, with
-`tsc --noEmit -p nx-rust/tsconfig.spec.json`, and `lint` depends on it: a type
+`tsc --noEmit -p nx-rust/tsconfig.spec.json`, the registry's server in
+`registry-server.mts` included, and `lint` depends on it: a type
 error in a test fails `lint`, and so `pnpm nx run-many -t build lint test` and
 CI, while Jest still runs that test. Code that compiles only with type
 information from other files, such as a reference to an ambient `const enum`

@@ -64,6 +64,7 @@
       "inputs": [
         "{projectRoot}/src/**/*.ts",
         "{projectRoot}/test/**/*.ts",
+        "{projectRoot}/test/**/*.mts",
         "{projectRoot}/jest.config.cts",
         "{projectRoot}/tsconfig.json",
         "{projectRoot}/tsconfig.spec.json",

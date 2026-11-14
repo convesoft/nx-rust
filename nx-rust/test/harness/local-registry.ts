@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { testEnvironment } from "./environment";
+import type { IndexEntry } from "./registry-server.mjs";
 
 /** A dependency of a {@link RegistryCrate}. */
 export interface RegistryDependency {
@@ -90,58 +91,17 @@ export class LocalRegistry {
 
   /** Packages the crate version and adds it to the registry and its index. */
   publish(crate: RegistryCrate): void {
-    const folder = join(this.base, "sources", `${crate.name}-${crate.version}`);
-    mkdirSync(join(folder, "src"), { recursive: true });
-    const dependencies = crate.dependencies ?? [];
-    writeFileSync(
-      join(folder, "Cargo.toml"),
-      [
-        "[package]",
-        `name = "${crate.name}"`,
-        `version = "${crate.version}"`,
-        'edition = "2021"',
-        'description = "A crate of the tests\' registry"',
-        'license = "MIT"',
-        "",
-        "[dependencies]",
-        ...dependencies.map(
-          (dependency) =>
-            `${dependency.name} = { version = ${JSON.stringify(dependency.req)}${dependency.package === undefined ? "" : `, package = "${dependency.package}"`}${dependency.optional ? ", optional = true" : ""} }`,
-        ),
-        "",
-        "[features]",
-        ...Object.entries(crate.features ?? {}).map(
-          ([feature, enables]) => `${feature} = ${JSON.stringify(enables)}`,
-        ),
-        "",
-      ].join("\n"),
+    const packaged = packageRegistryCrate(
+      crate,
+      join(this.base, "sources", `${crate.name}-${crate.version}`),
+      testEnvironment({ CARGO_HOME: this.cargoHome }),
     );
-    writeFileSync(join(folder, "src", "lib.rs"), crate.source ?? "");
-    execFileSync("cargo", ["package", "--allow-dirty", "--no-verify", "--quiet"], {
-      cwd: folder,
-      env: testEnvironment({ CARGO_HOME: this.cargoHome }),
-      stdio: "pipe",
-    });
-    const file = `${crate.name}-${crate.version}.crate`;
-    const crateFile = join(this.crates, file);
-    copyFileSync(join(folder, "target", "package", file), crateFile);
-    const entry = {
-      name: crate.name,
-      vers: crate.version,
-      deps: dependencies.map((dependency) => ({
-        name: dependency.name,
-        req: dependency.req,
-        features: [],
-        optional: dependency.optional ?? false,
-        default_features: true,
-        target: null,
-        kind: "normal",
-        ...(dependency.package === undefined ? {} : { package: dependency.package }),
-      })),
-      cksum: createHash("sha256").update(readFileSync(crateFile)).digest("hex"),
-      features: crate.features ?? {},
-      yanked: false,
-    };
+    const crateFile = join(this.crates, `${crate.name}-${crate.version}.crate`);
+    copyFileSync(packaged, crateFile);
+    const entry = registryIndexEntry(
+      crate,
+      createHash("sha256").update(readFileSync(crateFile)).digest("hex"),
+    );
     const indexFile = join(this.index, ...indexPath(crate.name));
     mkdirSync(dirname(indexFile), { recursive: true });
     let lines = "";
@@ -171,8 +131,74 @@ export class LocalRegistry {
   }
 }
 
-// Cargo's index layout: by the length of the lowercased name.
-function indexPath(name: string): string[] {
+/**
+ * Writes the sources of `crate` into `folder` and packages them with the real
+ * `cargo package`, without verifying them, in the environment `env`, whose
+ * Cargo home has to resolve the crate's dependencies. Returns the path of the
+ * `.crate` file.
+ */
+export function packageRegistryCrate(
+  crate: RegistryCrate,
+  folder: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  mkdirSync(join(folder, "src"), { recursive: true });
+  const dependencies = crate.dependencies ?? [];
+  writeFileSync(
+    join(folder, "Cargo.toml"),
+    [
+      "[package]",
+      `name = "${crate.name}"`,
+      `version = "${crate.version}"`,
+      'edition = "2021"',
+      'description = "A crate of the tests\' registry"',
+      'license = "MIT"',
+      "",
+      "[dependencies]",
+      ...dependencies.map(
+        (dependency) =>
+          `${dependency.name} = { version = ${JSON.stringify(dependency.req)}${dependency.package === undefined ? "" : `, package = "${dependency.package}"`}${dependency.optional ? ", optional = true" : ""} }`,
+      ),
+      "",
+      "[features]",
+      ...Object.entries(crate.features ?? {}).map(
+        ([feature, enables]) => `${feature} = ${JSON.stringify(enables)}`,
+      ),
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(join(folder, "src", "lib.rs"), crate.source ?? "");
+  execFileSync("cargo", ["package", "--allow-dirty", "--no-verify", "--quiet"], {
+    cwd: folder,
+    env,
+    stdio: "pipe",
+  });
+  return join(folder, "target", "package", `${crate.name}-${crate.version}.crate`);
+}
+
+/** The index line of `crate`, whose `.crate` file has the SHA-256 `cksum`. */
+export function registryIndexEntry(crate: RegistryCrate, cksum: string): IndexEntry {
+  return {
+    name: crate.name,
+    vers: crate.version,
+    deps: (crate.dependencies ?? []).map((dependency) => ({
+      name: dependency.name,
+      req: dependency.req,
+      features: [],
+      optional: dependency.optional ?? false,
+      default_features: true,
+      target: null,
+      kind: "normal",
+      ...(dependency.package === undefined ? {} : { package: dependency.package }),
+    })),
+    cksum,
+    features: crate.features ?? {},
+    yanked: false,
+  };
+}
+
+/** The path of a crate's index file below the index root: Cargo's layout, by the length of the lowercased name. */
+export function indexPath(name: string): string[] {
   const lower = name.toLowerCase();
   switch (lower.length) {
     case 1:

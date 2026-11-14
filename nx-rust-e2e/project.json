@@ -27,6 +27,7 @@
         "{projectRoot}/tsconfig.spec.json",
         "{workspaceRoot}/tsconfig.base.json",
         "{workspaceRoot}/nx-rust/**/*.ts",
+        "{workspaceRoot}/nx-rust/**/*.mts",
         "{workspaceRoot}/tools/scripts/*.d.ts",
         {
           "externalDependencies": [

@@ -17,6 +17,7 @@
     "src/**/*.test.ts",
     "src/**/*.spec.ts",
     "src/**/*.d.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "test/**/*.mts"
   ]
 }
