@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { PackageVersion } from "../cargo/lockfile";
 import { type PickedTriples, pickText, unnamedTripleProblem } from "../cargo/target-triples";
 import type { CargoPackage } from "../cargo/metadata";
+import { buildRecordSource, sharedRecordNames } from "./build-records";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import { workspacesWithoutRootProject } from "./entries";
 import {
@@ -49,6 +50,12 @@ export interface CacheContext extends InputContext {
    * ({@link workspacesWithoutRootProject}).
    */
   withoutLockfileTask?: ReadonlySet<string>;
+  /**
+   * The record names that targets of several crates with one artifact
+   * directory give, by the workspace's root folder (`sharedRecordNames` in
+   * `build-records.ts`), which the check of `DES-BUILD-INPUT-CHECK` does not read.
+   */
+  sharedRecordNames?: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
@@ -154,6 +161,7 @@ export async function cacheContext(
     artifactDirectories,
     warnings,
     withoutLockfileTask,
+    sharedRecordNames: sharedRecordNames(discovery.workspaces, reached),
   };
 }
 
@@ -281,6 +289,14 @@ export function configureCaching(
         metadata.tripleProblem = tripleProblem;
       }
       metadata.configuredPick = pickText(subject.workspace.configuredTriples ?? { kind: "none" });
+    }
+    if (metadata !== undefined && name === "build" && subject.pkg !== undefined) {
+      metadata.records = buildRecordSource(
+        subject.pkg,
+        subject.workspace,
+        context.sharedRecordNames?.get(subject.workspace.root) ?? [],
+        context.repositoryRoot,
+      );
     }
     const readsDigest = target.cache && cachedTargets.has(name) && name !== "fmt-check";
     if (readsDigest) {

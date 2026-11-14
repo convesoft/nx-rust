@@ -14,6 +14,7 @@ import {
   tripleSource,
   unnamedTripleProblem,
 } from "../cargo/target-triples";
+import type { BuildRecordSource } from "../graph/build-records";
 import { nxVerdictFor } from "../compatibility/nx-version";
 import { cargoMetadataOf } from "../graph/collisions";
 import {
@@ -38,6 +39,13 @@ import {
 } from "../tools/optional-tools";
 import { cargoArguments, type CargoTargetOptions, pluginVersionOption } from "./command";
 import { checkDigests, DigestCheck, DigestWrite, writeDigests } from "./digests";
+import { type BuildInputCheck, checkBuildInputs } from "./input-check";
+import {
+  NxTaskFilesError,
+  nxTaskFileParts,
+  nxTaskFiles,
+  skippedCheckWarning,
+} from "./nx-task-files";
 import { recordedNxCommand } from "./nx-command";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
 
@@ -97,6 +105,12 @@ export interface TaskInvocation extends CargoInvocation {
    * and a task whose key holds digests checks them again.
    */
   digests?: DigestStep;
+  /**
+   * On a crate's `build`: the check of the files that cargo recorded for the
+   * crate against the task's inputs, after cargo has succeeded
+   * (`DES-BUILD-INPUT-CHECK`).
+   */
+  inputCheck?: BuildInputCheck;
 }
 
 /** What a task does with digests after its cargo call ({@link TaskInvocation.digests}). */
@@ -144,18 +158,61 @@ export async function runTask(
   if (!(await runCargo(invocation))) {
     return { success: false };
   }
+  const failures = await checksAfterCargo(invocation, context);
+  for (const failure of failures) {
+    console.error(failure);
+  }
+  return { success: failures.length === 0 };
+}
+
+/**
+ * The checks of a task after its cargo call has succeeded, in one step
+ * (`DES-LOCKFILE-HASHING`, "Post-check"): first what the task does with the
+ * lockfile's digests, which the lockfile task writes and a cached task
+ * computes again, then, on a crate's `build`, the comparison of the files
+ * that cargo recorded with the task's inputs (`DES-BUILD-INPUT-CHECK`). Both
+ * run, so that a failed task names every problem at once.
+ *
+ * @returns The failure messages; the task succeeds without any.
+ */
+// @mara implements DES-LOCKFILE-HASHING
+// @mara implements DES-BUILD-INPUT-CHECK
+async function checksAfterCargo(
+  invocation: TaskInvocation,
+  context: ExecutorContext,
+): Promise<string[]> {
+  const failures: string[] = [];
   const step = invocation.digests;
-  const failure =
+  const digestFailure =
     step === undefined
       ? undefined
       : step.kind === "write"
         ? writeDigests(`${context.projectName ?? ""}:${context.targetName ?? ""}`, step)
         : checkDigests(step);
-  if (failure !== undefined) {
-    console.error(failure);
-    return { success: false };
+  if (digestFailure !== undefined) {
+    failures.push(digestFailure);
   }
-  return { success: true };
+  const check = invocation.inputCheck;
+  if (check !== undefined) {
+    // Where the installed Nx lacks a part that the check needs, which only
+    // an Nx that the plugin does not support can, the task warns and the
+    // check does not run (`DES-DIAGNOSTICS`).
+    try {
+      const parts = nxTaskFileParts(context.root);
+      const inputFailure = await checkBuildInputs(check, context.root, () =>
+        nxTaskFiles(parts, context),
+      );
+      if (inputFailure !== undefined) {
+        failures.push(inputFailure);
+      }
+    } catch (error) {
+      if (!(error instanceof NxTaskFilesError)) {
+        throw error;
+      }
+      console.warn(skippedCheckWarning(check.task, error));
+    }
+  }
+  return failures;
 }
 
 /**
@@ -328,11 +385,24 @@ export function taskInvocation(
     },
     examined.options,
   );
+  const inputCheck: BuildInputCheck | undefined =
+    metadata.target === "build" && metadata.records !== undefined && cargo.packageName !== undefined
+      ? {
+          task,
+          crate: cargo.packageName,
+          manifest: cargo.manifest,
+          records: metadata.records,
+          selection: examined.options,
+          env,
+          cwd,
+        }
+      : undefined;
   return {
     args,
     cwd,
     warnings: examined.warnings,
     ...(digests === undefined ? {} : { digests }),
+    ...(inputCheck === undefined ? {} : { inputCheck }),
   };
 }
 
@@ -561,10 +631,17 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
-  const { target, locked, uncached, triples, tripleProblem, configuredPick, members, digests } =
-    value as Partial<
-    Record<keyof TargetCargoMetadata, unknown>
-  >;
+  const {
+    target,
+    locked,
+    uncached,
+    triples,
+    tripleProblem,
+    configuredPick,
+    members,
+    digests,
+    records,
+  } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
   return (inferredTargetNames as readonly unknown[]).includes(target)
     ? {
         target: target as InferredTargetName,
@@ -577,8 +654,50 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
         ...(typeof configuredPick === "string" ? { configuredPick } : {}),
         ...(isPackageList(members) ? { members } : {}),
         ...(isPackageList(digests) ? { digests } : {}),
+        ...(isRecordSource(records) ? { records } : {}),
       }
     : undefined;
+}
+
+// Whether a value has the shape of the record source that graph creation
+// gives a crate's `build` (`buildRecordSource` in `build-records.ts`).
+function isRecordSource(value: unknown): value is BuildRecordSource {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const {
+    artifactDirectory,
+    buildDirectory,
+    library,
+    binaries,
+    features,
+    optionalDependencies,
+    shared,
+  } = value as Partial<Record<keyof BuildRecordSource, unknown>>;
+  const isStrings = (list: unknown): list is string[] =>
+    Array.isArray(list) && list.every((item) => typeof item === "string");
+  return (
+    typeof artifactDirectory === "string" &&
+    typeof buildDirectory === "string" &&
+    (library === undefined ||
+      (typeof library === "object" &&
+        library !== null &&
+        typeof (library as { name?: unknown }).name === "string" &&
+        typeof (library as { procMacro?: unknown }).procMacro === "boolean")) &&
+    Array.isArray(binaries) &&
+    binaries.every(
+      (binary) =>
+        typeof binary === "object" &&
+        binary !== null &&
+        typeof binary.name === "string" &&
+        isStrings(binary.requiredFeatures),
+    ) &&
+    typeof features === "object" &&
+    features !== null &&
+    Object.values(features).every(isStrings) &&
+    (optionalDependencies === undefined || isStrings(optionalDependencies)) &&
+    isStrings(shared)
+  );
 }
 
 function isPackageList(value: unknown): value is PackageVersion[] {

@@ -229,6 +229,29 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["rust", "other"],
     ],
   },
+  // reader depends on base; the others depend on nothing.
+  "undeclared-files": {
+    projects: {
+      base: "rust/crates/base",
+      cola: "rust/crates/cola",
+      colb: "rust/crates/colb",
+      macros: "rust/crates/macros",
+      multi: "rust/crates/multi",
+      plain: "rust/crates/plain",
+      reader: "rust/crates/reader",
+      rust: "rust",
+    },
+    edges: [
+      ["reader", "base"],
+      ["rust", "base"],
+      ["rust", "cola"],
+      ["rust", "colb"],
+      ["rust", "macros"],
+      ["rust", "multi"],
+      ["rust", "plain"],
+      ["rust", "reader"],
+    ],
+  },
 };
 
 // Without the toolchain that it pins, cargo fails in different-toolchains/pinned.

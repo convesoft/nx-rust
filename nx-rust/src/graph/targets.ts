@@ -3,6 +3,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { PackageVersion } from "../cargo/lockfile";
 import type { CargoPackage } from "../cargo/metadata";
+import type { BuildRecordSource } from "./build-records";
 import { cargoDenyConfigurationFiles } from "../tools/optional-tools";
 import { CacheContext, CacheOptions, configureCaching } from "./caching";
 import type { CargoWorkspace } from "./discovery";
@@ -115,6 +116,12 @@ export interface TargetCargoMetadata {
    * "Post-check").
    */
   digests?: PackageVersion[];
+  /**
+   * On a crate's `build`: what the executor names the dependency files of
+   * the crate's library and binaries from, which it compares with the
+   * task's inputs after cargo's call (`DES-BUILD-INPUT-CHECK`).
+   */
+  records?: BuildRecordSource;
 }
 
 /**

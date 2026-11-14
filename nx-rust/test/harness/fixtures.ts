@@ -30,6 +30,7 @@ export const fixtureNames = [
   "crate-shapes",
   "patched-workspaces",
   "declared-files",
+  "undeclared-files",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

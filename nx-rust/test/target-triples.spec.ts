@@ -206,7 +206,10 @@ describe("the triple input of build and doc", () => {
 
   /** What the command prints in the repository root, as Nx runs it, with `env`. */
   function evaluate(env: NodeJS.ProcessEnv, script?: string): string {
-    const command = tripleCommand("rust", script ?? join(pluginPackage(), "src/cargo/print-triples.js"));
+    const command = tripleCommand(
+      "rust",
+      script ?? join(pluginPackage(), "src/cargo/print-triples.js"),
+    );
     const run = spawnSync("sh", ["-c", command], {
       cwd: join(root, "repo"),
       env: { ...testEnvironment(), CARGO_HOME: join(root, "home"), ...env },
@@ -221,9 +224,9 @@ describe("the triple input of build and doc", () => {
     writeFileSync(config, '[build]\ntarget = ["b", "a", "b"]\n');
     const env = { CARGO_HOME: join(root, "home") };
     expect(pickText(pickedTriples(join(root, "repo/rust"), env))).toBe("triples a b");
-    expect(pickText(pickedTriples(join(root, "repo/rust"), { ...env, CARGO_BUILD_TARGET: "c" }))).toBe(
-      "triples a b c",
-    );
+    expect(
+      pickText(pickedTriples(join(root, "repo/rust"), { ...env, CARGO_BUILD_TARGET: "c" })),
+    ).toBe("triples a b c");
     expect(
       pickText(configuredTriples(join(root, "repo/rust"), { ...env, CARGO_BUILD_TARGET: "c" })),
     ).toBe("triples a b");
@@ -247,11 +250,16 @@ describe("the triple input of build and doc", () => {
       // The Cargo home's configuration and one above the repository count.
       rmSync(config);
       mkdirSync(join(root, "home"), { recursive: true });
-      writeFileSync(join(root, "home/config.toml"), '[build]\ntarget = "aarch64-unknown-linux-gnu"\n');
+      writeFileSync(
+        join(root, "home/config.toml"),
+        '[build]\ntarget = "aarch64-unknown-linux-gnu"\n',
+      );
       expect(evaluate({})).toBe("triples aarch64-unknown-linux-gnu\n");
       mkdirSync(join(root, ".cargo"));
       writeFileSync(join(root, ".cargo/config.toml"), '[build]\ntarget = "host-tuple"\n');
-      expect(evaluate({})).toBe('unnamed "host-tuple": cargo replaces it with the host\'s triple\n');
+      expect(evaluate({})).toBe(
+        'unnamed "host-tuple": cargo replaces it with the host\'s triple\n',
+      );
       rmSync(join(root, ".cargo"), { recursive: true });
       rmSync(join(root, "home"), { recursive: true });
       expect(evaluate({})).toBe("none\n");

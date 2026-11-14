@@ -549,12 +549,18 @@ describe("a run with the plugin's executor", () => {
       try {
         mkdirSync(dirname(config), { recursive: true });
         writeFileSync(config, `[build]\ntarget = "${hostTriple()}"\n`);
-        const first = await nx(workspace, ["run-many", "-t", "build", "doc", "-p", "cli", "rust"], env);
+        const first = await nx(
+          workspace,
+          ["run-many", "-t", "build", "doc", "-p", "cli", "rust"],
+          env,
+        );
         expect({ status: first.status, output: first.output }).toEqual({
           status: 0,
           output: expect.any(String),
         });
-        expect(existsSync(join(workspace.root, "rust/target", hostTriple(), "debug/cli"))).toBe(true);
+        expect(existsSync(join(workspace.root, "rust/target", hostTriple(), "debug/cli"))).toBe(
+          true,
+        );
         if (changed === undefined) {
           rmSync(config);
         } else {
