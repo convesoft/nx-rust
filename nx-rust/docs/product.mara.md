@@ -309,7 +309,7 @@ The directory where Cargo puts final artifacts such as binaries, set by `build.t
 :aliases: group
 :aliases: build flavour
 
-The set of tasks that the plugin serves together, with one cargo command for each step of their target: tasks of the same kind in the same Cargo workspace whose commands would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment. Where their command would pass a flag whose effect on a crate depends on which other crates it selects, or would select crates whose features cargo then resolves for that selection alone, each task forms a group of one crate ([[DES-BATCH]]).
+The set of tasks that the plugin serves together, with one cargo command for each step of their target: tasks of the same kind in the same Cargo workspace whose commands would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment. Where their command would pass a flag whose effect on a crate depends on which other crates it selects, would select crates whose features cargo then resolves for that selection alone, or would set a runner where the user may have configured one, each task forms a group of one crate ([[DES-BATCH]]). Only those cases do: a group that holds one task because the command names one crate, or because Nx restored the others from the cache, selects its crates as any group does.
 :::
 
 :::mara term TERM-FEATURE-UNIFICATION
