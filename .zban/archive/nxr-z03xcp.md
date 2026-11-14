@@ -1,11 +1,12 @@
 ---
 title: A cached doc can be restored into an artifact directory that another workspace has come to share under the Nx daemon
-status: todo
+status: cancelled
 type: bug
 priority: low
 parent: nxr-w9qa5f
 discovered_from: nxr-3tf0pz
 created_at: 2026-11-14T08:59:15Z
+closed_at: 2026-11-14T09:12:24Z
 ---
 
 Goal: a cached `doc` is never restored into an artifact directory that another Cargo workspace shares, also where the sharing began after Nx created the graph.
@@ -19,3 +20,7 @@ Found by reading the code while working on nxr-3tf0pz; not reproduced.
 - [ ] Implement it with a test that runs the real Nx with its daemon
 
 Done when: the reproduction restores no `doc` folder over the other workspace's pages, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
+
+## Reasons for Cancelling
+
+The control plane decided, at the maintainer's request that by-products be settled in the task they were found in, that this is a stated limit and needs no code. Under the daemon, once a configuration file outside the repository has made a second workspace share the first one's artifact directory, a cache hit of the first workspace's `doc` can replace the shared `doc` folder and remove pages that a plain `cargo doc` wrote there for the second workspace. No task result is wrong. The second workspace's own cached tasks already fail with the `nx reset` message (nxr-3tf0pz), and once the graph is created again `doc` is uncached for both, as `DES-OUTPUTS` says. `DES-OUTPUTS` now states this limit, in the pull request of nxr-3tf0pz, where this issue is cancelled.

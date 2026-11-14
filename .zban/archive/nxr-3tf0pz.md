@@ -40,4 +40,4 @@ Decision: the control plane's, under `GOAL-TRUSTED-CACHE`. It applies to the art
 
 Checks run: `pnpm nx run-many -t build lint test` (1002 passed, 1 todo), `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache` (30 passed; four expectations now include the extra `cargo metadata` calls), `mara schema validate` and `mara project validate` (valid, evaluation complete, no warnings), and `zban check`.
 
-Rejected: comparing only the variables (misses a stale configuration and `build-dir` templates); reading the configuration chain ourselves (`include` differs between Cargo versions). Filed nxr-z03xcp, a `doc` restored into a directory that another workspace has come to share under the daemon.
+Rejected: comparing only the variables (misses a stale configuration and `build-dir` templates); reading the configuration chain ourselves (`include` differs between Cargo versions). Filed nxr-z03xcp, a `doc` restored into a directory that another workspace has come to share under the daemon. By the control plane's decision it was cancelled in this pull request as a limit that `DES-OUTPUTS` now states.
