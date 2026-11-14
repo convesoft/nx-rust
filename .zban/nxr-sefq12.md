@@ -2,6 +2,7 @@
 title: Select a crate whose package name another package in the resolve shares
 status: todo
 type: bug
+parent: nxr-9y4eh8
 discovered_from: nxr-gqad20
 created_at: 2026-11-14T15:54:46Z
 ---
