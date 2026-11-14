@@ -35,3 +35,20 @@ Tests, in `redirections.spec.ts`, each with the real hasher and `nx show project
 Graph identity: the projects, edges and every target's inputs of all 15 fixtures and 5 redirection variants were dumped before and after the change, on `a9d583b` and again on `d633767`. They are identical. The only differences are one more cargo call for a `paths` crate without a project, and a temporary path inside `name-collision`'s expected error.
 
 Checks run: `pnpm nx run-many -t build lint test` (946 passed, 1 todo), `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache` (30 passed), `redirections.spec.ts` with the agent variables removed and `CI=true GITHUB_ACTIONS=true` (38 passed), `mara schema validate`, `mara project validate` (valid, evaluation complete, no warnings), and `zban check`. CI on the pull request runs the same suite on Linux.
+
+### Review follow-up
+
+The review found a wrong cache hit. Where the conflict rules leave out a use of a crate with a project, the member got that crate's folder and declared files but nothing of what the crate depends on. The edge would have brought those through `^default`. The control plane decided that a left-out use brings, as file inputs on the member's targets, the folder, workspace manifest and declared files of the crate and of every crate it reaches through normal and build dependencies, to any depth: path dependencies by real folder and direct redirections of the member's workspace. The walk passes no dev-dependency and ends at the member, which it never includes. This covers every left-out use, so `main` is fixed too. There, a possible use of a patched crate with a project, dropped because the two crates may only possibly use each other, kept the member's keys after a change to a crate behind it.
+
+Code: `broughtFolders` in `redirected-uses.ts` fills `RedirectedUse.brings`. `findCrateFolders` in `path-dependencies.ts` locates those crates like the others without an edge, and `caching.ts` warns for one that Nx cannot see. Mara: `DES-PROJECT-GRAPH` (Redirected crates), `DES-INPUTS` (Redirected crates, Declared files), `VER-GRAPH` and `VER-CACHE-KEYS`, with the guidance in `workspaces.mara.md`.
+
+Tests in `redirections.spec.ts`, each with the real hasher and `nx show projects --affected`, all changing `c`, on which `b` depends by path:
+- The reviewer's case: `a` and `b` may only possibly use each other, `b` behind the patched `x`.
+- The assumed variant: `a`'s use of `b` behind `x` yields to `b`'s dev-dependency on `a`.
+- The same shape with a patched `b` that has a project of its own.
+
+In each, `a`'s keys change, `d:test` is the control and stays the same, and `a` is affected. All three fail on the reviewed head and on `main`. The reviewer's reproduction now changes all five cached keys of `a` and lists `a` as affected.
+
+Lockfile digest: `a`'s digest from the reviewer's `Cargo.lock` changes when the locked `other` changes, and stays the same when an unrelated package is added, so the registry crates behind a left-out use are covered. Graph comparison on `2338187`, before and after: all 15 fixtures and 5 redirection variants are identical. Two variants with left-out uses gain inputs only: the `types` folder and `shared/Cargo.toml`, which the left-out crate reaches through a direct redirection.
+
+Filed: nxr-00e2fw, because the fallback does not carry the `envInputs` and `runtimeInputs` of those crates.

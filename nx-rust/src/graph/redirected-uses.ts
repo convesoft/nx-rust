@@ -47,12 +47,19 @@ export interface RedirectedUse {
   kind: "direct" | "possible" | "assumed";
   /**
    * Whether the member gets an edge to the crate's project. Otherwise its
-   * targets get the crate's folder as an input: where the crate has no
-   * project, where a possible or assumed use would close a cycle with real
+   * targets get the crate's folder as an input, and for a crate with a
+   * project those of the crates behind it ({@link RedirectedUse.brings}):
+   * where the crate has no project, where a possible or assumed use would close a cycle with real
    * dependencies, where two crates may only possibly use each other, and
    * where an assumed use meets another edge in the opposite direction.
    */
   edge: boolean;
+  /**
+   * For a crate with a project whose edge is left out: the real paths of the
+   * folders whose files the member's targets get in place of the edge
+   * ({@link broughtFolders}), the crate's own first.
+   */
+  brings?: string[];
 }
 
 /**
@@ -86,6 +93,10 @@ export interface RedirectedUse {
  *   ({@link projectsReachedByPath}), a direct, possible or other assumed
  *   use.
  *
+ * A use of a crate with a project whose edge is left out brings, in
+ * {@link RedirectedUse.brings}, what the edge would have brought: the crate
+ * and every crate that cargo builds with it ({@link broughtFolders}).
+ *
  * A requirement that the plugin cannot evaluate, or a source it cannot
  * match to the entry, makes a declaration possible, not direct.
  *
@@ -108,9 +119,13 @@ export function redirectedUses(
     }
   }
   const uses: RedirectedUse[] = [];
+  // How cargo resolves a dependency in each workspace that redirects.
+  const resolvers = new Map<CargoWorkspace, Resolver>();
   for (const workspace of graph.discovery.workspaces) {
     if (workspace.redirections.length > 0) {
-      uses.push(...workspaceUses(workspace, known, rootByFolder));
+      const found = workspaceUses(workspace, known, rootByFolder);
+      uses.push(...found.uses);
+      resolvers.set(workspace, found.resolved);
     }
   }
   // An assumed use gives way to every other edge in the opposite direction.
@@ -128,8 +143,75 @@ export function redirectedUses(
       use.edge = false;
     }
   }
+  for (const use of uses) {
+    if (!use.edge && use.projectRoot !== undefined) {
+      use.brings = broughtFolders(
+        use.folder,
+        folderOf(use.member),
+        known,
+        resolvers.get(use.workspace),
+      );
+    }
+  }
   return uses;
 }
+
+/**
+ * The crates whose files a member's targets get in place of a left-out edge
+ * to the crate with a project in `folder` (DES-INPUTS, "Redirected crates"):
+ * what the edge would have brought through `^` inputs, by the real paths of
+ * their folders. That is the crate itself and every crate that it reaches
+ * through dependencies of kind normal or build, to any depth, with or
+ * without a project: path dependencies, matched by real folder, and the
+ * dependencies that a redirection of the member's workspace resolves
+ * directly, since cargo builds the crate for the member in that workspace.
+ * Cargo builds the dev-dependencies of none of them for the member.
+ *
+ * The walk ends at the member, which is never among them, so that it stops
+ * where a cycle would lead back to the member and on to the crates that
+ * depend on it; at a crate it has met before; and at a crate that no report
+ * describes, whose folder counts alone because what it depends on is not
+ * known. Registry and git crates that a crate on the way depends on are no
+ * folders: the member's lockfile digest covers them (DES-LOCKFILE-HASHING).
+ */
+function broughtFolders(
+  folder: string,
+  member: string,
+  known: Map<string, CargoPackage>,
+  resolved: Resolver,
+): string[] {
+  const folders = [folder];
+  const visited = new Set<string>([member, folder]);
+  const start = known.get(folder);
+  const queue = start === undefined ? [] : [start];
+  while (queue.length > 0) {
+    const pkg = queue.shift();
+    for (const dependency of pkg.dependencies) {
+      if (dependency.kind === "dev") {
+        continue;
+      }
+      const next =
+        typeof dependency.path === "string"
+          ? [realPath(dependency.path)]
+          : resolved(dependency).map((target) => folderOf(target));
+      for (const reached of next) {
+        if (visited.has(reached)) {
+          continue;
+        }
+        visited.add(reached);
+        folders.push(reached);
+        const behind = known.get(reached);
+        if (behind !== undefined) {
+          queue.push(behind);
+        }
+      }
+    }
+  }
+  return folders;
+}
+
+/** The crates that cargo resolves a dependency to in a workspace. */
+type Resolver = (dependency: CargoDependency) => CargoPackage[];
 
 // Whether `pkg` has an edge to the crate in `folder`, which has a project,
 // through its path dependencies: directly, or through crates without a
@@ -165,7 +247,7 @@ function workspaceUses(
   workspace: CargoWorkspace,
   known: Map<string, CargoPackage>,
   rootByFolder: Map<string, string>,
-): RedirectedUse[] {
+): { uses: RedirectedUse[]; resolved: Resolver } {
   const targets = redirectedCrates(workspace, known, rootByFolder);
   const byName = new Map<string, Target[]>();
   for (const target of targets.values()) {
@@ -174,7 +256,7 @@ function workspaceUses(
     }
   }
   // The crates that cargo resolves a dependency to, in this workspace.
-  const resolved = (dependency: CargoDependency): CargoPackage[] => {
+  const resolved: Resolver = (dependency) => {
     if (typeof dependency.path === "string") {
       const pkg = known.get(realPath(dependency.path));
       return pkg ? [pkg] : [];
@@ -244,7 +326,7 @@ function workspaceUses(
       use.edge = false;
     }
   }
-  return uses;
+  return { uses, resolved };
 }
 
 // The crates that the workspace's entries name, by real folder: the crate

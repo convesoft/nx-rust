@@ -1068,6 +1068,136 @@ describe("crates with a project behind a redirected crate without one", () => {
   );
 });
 
+describe("the crates that cargo builds with a crate whose edge is left out", () => {
+  const crate = (name: string, ...lines: string[]) =>
+    [`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n`, ...lines, ""].join("\n");
+  // In place of patched-workspaces' crates, rust has the members a, b, c and
+  // d, and b depends on c by path. The graph and the keys need no registry
+  // for the registry crates.
+  const members: FileChanges = {
+    rust: null,
+    shared: null,
+    third_party: null,
+    "rust/Cargo.toml": '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n',
+    "rust/crates/a/Cargo.toml": crate("a"),
+    "rust/crates/a/src/lib.rs": "",
+    "rust/crates/b/Cargo.toml": crate("b", "[dependencies]", 'c = { path = "../c" }'),
+    "rust/crates/b/src/lib.rs": "",
+    "rust/crates/c/Cargo.toml": crate("c"),
+    "rust/crates/c/src/lib.rs": "",
+    "rust/crates/d/Cargo.toml": crate("d"),
+    "rust/crates/d/src/lib.rs": "",
+  };
+  // x, which nx.json excludes, depends on b by path.
+  const x: FileChanges = {
+    "third_party/x/Cargo.toml": crate(
+      "x",
+      "[workspace]",
+      "[dependencies]",
+      'b = { path = "../../rust/crates/b" }',
+    ),
+    "third_party/x/src/lib.rs": "",
+  };
+  const cSource = "rust/crates/c/src/lib.rs";
+  // d uses nothing, so its key is the control.
+  const tasks = ["a:test", "a:build", "a:check", "b:test", "d:test"];
+
+  it.each<[string, FileChanges]>([
+    [
+      // a may use x through the registry crate wrapper, and b, behind x, may
+      // use a through other: two possible uses in opposite directions. Cargo
+      // builds a -> wrapper -> x -> b -> c.
+      "a's possible use of b behind x yields to b's possible use of a",
+      {
+        ...x,
+        "rust/Cargo.toml": rootManifest(
+          "[patch.crates-io]",
+          'x = { path = "../third_party/x" }',
+          'a = { path = "crates/a" }',
+        ),
+        "rust/crates/a/Cargo.toml": crate("a", "[dependencies]", 'wrapper = "0.1"'),
+        "rust/crates/b/Cargo.toml": (manifest) => `${manifest}other = "0.1"\n`,
+      },
+    ],
+    [
+      // a may use x only through leaf, a crate of a directory source without
+      // a report; b dev-depends on a, so a's assumed use of b behind x gives
+      // way. Cargo builds a -> leaf -> x -> b -> c.
+      "a's assumed use of b behind x yields to b's dev-dependency on a",
+      {
+        ...x,
+        "rust/Cargo.toml": rootManifest("[patch.crates-io]", 'x = { path = "../third_party/x" }'),
+        "rust/crates/a/Cargo.toml": crate(
+          "a",
+          "[dependencies]",
+          'leaf = { path = "../../../third_party/leaf" }',
+        ),
+        "third_party/leaf/Cargo.toml": crate("leaf", "[dependencies]", 'x = "0.1"'),
+        "third_party/leaf/src/lib.rs": "",
+        "third_party/leaf/.cargo-checksum.json": '{"files":{},"package":null}\n',
+        "rust/crates/b/Cargo.toml": (manifest) =>
+          `${manifest}\n[dev-dependencies]\na = { path = "../a" }\n`,
+      },
+    ],
+    [
+      // rust redirects a and b to themselves, and each may use the other
+      // through a registry crate. Cargo can build a -> wrapper -> b -> c.
+      "a's possible use of the redirected b yields to b's possible use of a",
+      {
+        "rust/Cargo.toml": rootManifest(
+          "[patch.crates-io]",
+          'a = { path = "crates/a" }',
+          'b = { path = "crates/b" }',
+        ),
+        "rust/crates/a/Cargo.toml": crate("a", "[dependencies]", 'wrapper = "0.1"'),
+        "rust/crates/b/Cargo.toml": (manifest) => `${manifest}other = "0.1"\n`,
+      },
+    ],
+  ])(
+    "give the member what lies behind the crate, where %s",
+    async (_case, files) => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", members, files);
+      try {
+        const graph = await workspace.graph();
+        const before = await workspace.hashTasks(tasks);
+        applyFileChanges(workspace.root, { [cSource]: (current) => `${current}// changed\n` });
+        const after = await workspace.hashTasks(tasks);
+        const { status, output } = await runNx(workspace, [
+          "show",
+          "projects",
+          "--affected",
+          `--files=${cSource}`,
+          "--json",
+        ]);
+
+        expect(edges(graph)).not.toContainEqual(["a", "b"]);
+        expect(edges(graph)).toContainEqual(["b", "c"]);
+        expect(graph.projects.a.targets.check.inputs).toEqual(
+          expect.arrayContaining([
+            "{workspaceRoot}/rust/crates/b/**/*",
+            "{workspaceRoot}/rust/crates/c/**/*",
+          ]),
+        );
+        expect(
+          Object.fromEntries(tasks.map((task) => [task, before[task].value !== after[task].value])),
+        ).toEqual({
+          "a:test": true,
+          "a:build": true,
+          "a:check": true,
+          "b:test": true,
+          "d:test": false,
+        });
+        expect(status).toBe(0);
+        // The JSON is the last line, after any warning of graph creation.
+        expect(JSON.parse(output.trim().split("\n").pop()).sort()).toEqual(["a", "b", "c", "rust"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
 // The folders of the crates that `cargo tree` shows for a package with all
 // three kinds of dependency, offline and from the lockfile.
 function cargoTree(cwd: string, pkg: string): string[] {

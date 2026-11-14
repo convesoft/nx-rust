@@ -45,8 +45,10 @@ export interface CrateFolders {
   /**
    * The crates with a project that a redirection may put in place of a
    * dependency of the crate, or that lie behind a redirected crate without a
-   * project, but whose edge from it `redirectedUses` leaves out. Their
-   * folders and workspace manifests go onto the crate's targets.
+   * project, but whose edge from it `redirectedUses` leaves out, each
+   * followed by the crates that cargo builds with it, with a project or
+   * without (`RedirectedUse.brings`). Their folders and workspace manifests
+   * go onto the crate's targets.
    */
   leftOutEdges: Map<string, PathDependency[]>;
   /**
@@ -125,6 +127,8 @@ export async function findCrateFolders(
   type Reached = { name: string; folder: string; via: PathDependency["via"] };
   const reached = new Map<string, Reached[]>();
   const leftOutEdges = new Map<string, PathDependency[]>();
+  // The crates behind those of the left-out edges, by the member's manifest path.
+  const behindLeftOut = new Map<string, Reached[]>();
   for (const workspace of discovery.workspaces) {
     for (const crate of workspace.members) {
       reached.set(
@@ -152,6 +156,14 @@ export async function findCrateFolders(
           declared: declaredOf(use.folder),
         },
       ]);
+      behindLeftOut.set(member, [
+        ...(behindLeftOut.get(member) ?? []),
+        ...(use.brings ?? []).slice(1).map((folder): Reached => ({
+          name: byRealFolder.get(folder)?.name ?? basename(folder),
+          folder,
+          via: "redirection",
+        })),
+      ]);
       continue;
     }
     const pkg = use.reported ? byRealFolder.get(use.folder) : undefined;
@@ -164,25 +176,11 @@ export async function findCrateFolders(
     reached.set(member, [...(reached.get(member) ?? []), ...crates]);
   }
 
-  // Each folder once per crate, relative to the repository root where it lies inside.
-  const located = new Map<string, (Reached & { inside?: string })[]>();
-  for (const [manifest, crates] of reached) {
-    const seenFolders = new Set<string>();
-    located.set(
-      manifest,
-      crates.flatMap((crate) => {
-        const folder = realPath(crate.folder);
-        if (seenFolders.has(folder)) {
-          return [];
-        }
-        seenFolders.add(folder);
-        return [{ ...crate, folder, inside: inside(repositoryRoot, folder) }];
-      }),
-    );
-  }
+  const located = locate(reached);
+  const locatedBehind = locate(behindLeftOut);
   const seen = await foldersNxSees(workspaceRoot, [
     ...new Set(
-      [...located.values()]
+      [...located.values(), ...locatedBehind.values()]
         .flat()
         .map((crate) => crate.inside)
         .filter((path): path is string => path !== undefined),
@@ -190,20 +188,13 @@ export async function findCrateFolders(
   ]);
   const withoutProject = new Map<string, PathDependency[]>();
   for (const [manifest, crates] of located) {
-    withoutProject.set(
-      manifest,
-      crates.map((crate) => {
-        const isSeen = crate.inside !== undefined && seen.has(crate.inside);
-        return {
-          name: crate.name,
-          folder: crate.inside ?? crate.folder,
-          seen: isSeen,
-          via: crate.via,
-          workspaceManifest: ownWorkspaceManifest(crate.folder),
-          declared: isSeen ? declaredOf(crate.folder) : [],
-        };
-      }),
-    );
+    withoutProject.set(manifest, crates.map(pathDependency));
+  }
+  for (const [manifest, crates] of locatedBehind) {
+    leftOutEdges.set(manifest, [
+      ...(leftOutEdges.get(manifest) ?? []),
+      ...crates.map(pathDependency),
+    ]);
   }
   for (const [manifest, crates] of leftOutEdges) {
     const folders = new Set<string>();
@@ -213,6 +204,40 @@ export async function findCrateFolders(
     );
   }
   return { withoutProject, leftOutEdges, problems: [...problems] };
+
+  // Each folder once per crate, relative to the repository root where it
+  // lies inside.
+  function locate(crates: Map<string, Reached[]>): Map<string, (Reached & { inside?: string })[]> {
+    const found = new Map<string, (Reached & { inside?: string })[]>();
+    for (const [manifest, list] of crates) {
+      const seenFolders = new Set<string>();
+      found.set(
+        manifest,
+        list.flatMap((crate) => {
+          const folder = realPath(crate.folder);
+          if (seenFolders.has(folder)) {
+            return [];
+          }
+          seenFolders.add(folder);
+          return [{ ...crate, folder, inside: inside(repositoryRoot, folder) }];
+        }),
+      );
+    }
+    return found;
+  }
+
+  // The entry for a located crate, with its declared files where Nx sees it.
+  function pathDependency(crate: Reached & { inside?: string }): PathDependency {
+    const isSeen = crate.inside !== undefined && seen.has(crate.inside);
+    return {
+      name: crate.name,
+      folder: crate.inside ?? crate.folder,
+      seen: isSeen,
+      via: crate.via,
+      workspaceManifest: ownWorkspaceManifest(crate.folder),
+      declared: isSeen ? declaredOf(crate.folder) : [],
+    };
+  }
 
   // The filesets for the files that the crate in `folder`, a real path,
   // declares, read once per crate from its report; none without one.
