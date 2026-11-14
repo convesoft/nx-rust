@@ -14,9 +14,9 @@ command lines on your `PATH`. The rules below add to the guide.
 
 nx-rust (`@convesoft/nx-rust`) is an Nx plugin that makes Cargo workspaces
 first-class Nx projects while Cargo stays the build tool. It is written first
-for Nx monorepos that mix JS/TS and Rust. The design is specified in Mara; the
-implementation has not started. v1 is delivered in 0.x milestones, each of them
-an epic in zban.
+for Nx monorepos that mix JS/TS and Rust. The design is specified in Mara.
+Milestone 0.1 is implemented on `main` and not published to npm yet. v1 is
+delivered in 0.x milestones, each of them an epic in zban.
 
 The principles every change has to respect:
 

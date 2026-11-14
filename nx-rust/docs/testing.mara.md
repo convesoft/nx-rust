@@ -1,8 +1,12 @@
 # Testing
 
-> **Status:** `test` runs `cargo test` for its crate. The `testRunner` and
-> `affectedTests` settings are not read yet; nextest and affected tests arrive
-> with milestone 0.3.
+> **Status:** `test` runs `cargo test` for its crate. The plugin reads and
+> checks `testRunner` and `affectedTests`, hashes nextest's configuration for
+> `testRunner = "nextest"`, and fails graph creation for `affectedTests = true`
+> among the options of `test` in a workspace without the setting. The rest of
+> this page arrives with milestone 0.3: nextest and its doctests, affected
+> tests and `NX_RUST_TEST_MODE`, the error for `affectedTests` without
+> nextest, and the check of `--affectedTests=true` on the command line.
 
 Every crate has one `test` target. Which runner it uses, and whether it runs
 the whole suite or only the tests a change can affect, are settings. You never

@@ -1,11 +1,10 @@
 # Targets
 
-> **Status:** the plugin infers the targets of this page, apart from the
-> artifact and release targets, `targetNames` renames them, and they run the
-> commands below, each task with a cargo call of its own until the batching
-> of milestone 0.2. Without cargo-audit or
-> cargo-deny, `audit` and `deny` fail with cargo's own message for an unknown
-> command.
+> **Status:** the plugin infers the targets of this page apart from
+> `napi-build` and `wasm-build`, which arrive with milestone 0.4, the coverage
+> baseline of milestone 0.3 and the release targets of milestone 0.5. `test`
+> runs `cargo test`; nextest arrives with milestone 0.3. Each task runs a
+> cargo call of its own until the batching of milestone 0.2.
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.

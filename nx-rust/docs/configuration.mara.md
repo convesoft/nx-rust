@@ -1,16 +1,13 @@
 # Configuration
 
-> **Status:** the plugin reads and checks every setting of this page, in the
-> metadata tables and in the plugin options, and `NX_RUST_LOCKED`. Project
-> names, `namePrefix`, tags, `implicitDependencies`, `targetNames`, `locked`,
-> the `targets` tables, `envInputs`, `runtimeInputs` and `fileInputs` take
-> effect. The others are read but have no effect yet: `testRunner`, apart
-> from the nextest configuration as a cache input, and
-> `affectedTests` until milestone 0.3, `featureUnification` until milestones
-> 0.2 and 0.3, and `artifacts` until milestone 0.4. Until the plugin detects
-> cargo-hakari configurations (nxr-k64tm5), the check of several entries
-> treats an entry without `featureUnification` as agreeing with one that sets
-> `hakari` or `workspace-build`.
+> **Status:** the plugin reads and checks every setting of this page, but four
+> have no effect yet: `testRunner`, apart from nextest's configuration as a
+> cache input, and `affectedTests` until milestone 0.3, `featureUnification`
+> until milestones 0.2 and 0.3, and `artifacts` until milestone 0.4.
+> `NX_RUST_TEST_MODE` is not read until milestone 0.3. Until the plugin
+> detects cargo-hakari configurations in milestone 0.2, the check of several
+> entries treats an entry without `featureUnification` as agreeing with one
+> that sets `hakari` or `workspace-build`.
 
 Most repositories need no configuration. When a crate or workspace needs
 something other than the default, you say so in the `Cargo.toml` that already
