@@ -116,7 +116,8 @@ export type IgnoredBecause = "unknown" | "not-taken";
 /**
  * The warning line for an option that a task ignores. It names the task and
  * the option and says either that the option was passed on the command line,
- * when {@link passedOnCommandLine} is sure of it, or that it comes from the
+ * when {@link passedOnCommandLine} is sure of it, with what to do about the
+ * flag or words ({@link commandLineRemedy}), or that it comes from the
  * workspace's configuration, with the command that shows where and the two
  * fixes for a `targetDefaults` entry.
  *
@@ -131,24 +132,49 @@ export function ignoredOptionLine(
   because: IgnoredBecause,
 ): string {
   const { task, executor } = subject;
-  const option =
-    name === "_" && Array.isArray(value)
-      ? `the positional arguments ${JSON.stringify(value.map(String))} (option \`_\`)`
-      : `option \`${name}\``;
+  const words = name === "_" && Array.isArray(value);
+  const option = words
+    ? `the positional arguments ${JSON.stringify(value.map(String))} (option \`_\`)`
+    : `option \`${name}\``;
   const reason =
     because === "unknown"
       ? `which the ${executor.shortName} executor does not know`
       : "which this target does not take";
   if (passedOnCommandLine(subject, name, value)) {
+    const remedy = commandLineRemedy(subject.target, words ? "words" : because);
     return because === "unknown"
-      ? `${task}: ignoring ${option}, passed on the command line.`
-      : `${task}: ignoring ${option}, ${reason}, passed on the command line.`;
+      ? `${task}: ignoring ${option}, passed on the command line. ${remedy}`
+      : `${task}: ignoring ${option}, ${reason}, passed on the command line. ${remedy}`;
   }
   return [
     `${task}: ignoring ${option}, ${reason}.`,
     `It comes from the workspace's configuration: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry.`,
     `If it is a \`targetDefaults\` entry in nx.json, add a \`filter\` to it or add an empty entry keyed by "${executor.name}".`,
   ].join(" ");
+}
+
+/**
+ * What the line for a flag or words typed on the command line tells the user
+ * to do (`DES-UNKNOWN-OPTIONS`, paragraph "Source"): to remove an option that
+ * the executor does not know or check its spelling, to remove one that the
+ * target does not take, and to remove positional words. Only `run` passes
+ * arguments on, to its binary, so on `run` the line for an unknown option or
+ * for words also names the two ways to do that; `test` has no option for
+ * arguments of the test binary.
+ */
+function commandLineRemedy(target: InferredTargetName, what: IgnoredBecause | "words"): string {
+  switch (what) {
+    case "words":
+      return target === "run"
+        ? "Remove them, or pass them to the binary after `--` or with `--args`."
+        : "Remove them.";
+    case "not-taken":
+      return "Remove it.";
+    case "unknown":
+      return target === "run"
+        ? "Remove it or check its spelling, or pass it to the binary after `--` or with `--args`."
+        : "Remove it, or check its spelling.";
+  }
 }
 
 /**

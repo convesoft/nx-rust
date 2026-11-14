@@ -555,10 +555,10 @@ describe("@convesoft/nx-rust", () => {
           );
 
           expect(output).toContain(
-            "api:build: ignoring option `coverage`, passed on the command line.",
+            "api:build: ignoring option `coverage`, passed on the command line. Remove it, or check its spelling.",
           );
           expect(output).toContain(
-            "api:build: ignoring option `allTargets`, which this target does not take, passed on the command line.",
+            "api:build: ignoring option `allTargets`, which this target does not take, passed on the command line. Remove it.",
           );
           // Words after -- reach the task as positional arguments, which the
           // executor compares with Nx's own parse of the command line.
@@ -572,7 +572,7 @@ describe("@convesoft/nx-rust", () => {
             ]),
           );
           expect(positional).toContain(
-            'api:build: ignoring the positional arguments ["3000"] (option `_`), passed on the command line.',
+            'api:build: ignoring the positional arguments ["3000"] (option `_`), passed on the command line. Remove them.',
           );
           expect(cargo.calls(projectDirectory)).toEqual([
             readRustWorkspace,

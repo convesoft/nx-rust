@@ -1,6 +1,6 @@
 ---
 title: Bring the init failures that VER-SETUP lists in line with the diagnostics table
-status: todo
+status: in-progress
 type: task
 priority: low
 tags:

@@ -1,6 +1,6 @@
 ---
 title: Judge whether Nx ignores Cargo's directories by the folder that the system reaches
-status: todo
+status: in-progress
 type: bug
 priority: low
 parent: nxr-w9qa5f

@@ -1,6 +1,6 @@
 ---
 title: Say what to do in the unknown-option line for an option passed on the command line
-status: todo
+status: in-progress
 type: bug
 parent: nxr-w9qa5f
 discovered_from: nxr-wwm6br
