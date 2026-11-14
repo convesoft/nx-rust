@@ -9,7 +9,7 @@ blocked_by:
 created_at: 2026-11-12T18:20:01Z
 ---
 
-Version and publish crates through Nx release. The mechanism is not designed yet: `nx-rust/docs/release.mara.md` holds only the draft items `REQ-RELEASE` and `DES-RELEASE`.
+Version and publish crates through Nx release. Specified in `nx-rust/docs/release.mara.md` (`REQ-RELEASE`, `DES-RELEASE`) with `ADR-BATCHED-PUBLISH` and `ADR-RELEASE-DEPENDENTS`; verification: `VER-RELEASE`. Publishing rests on the batch executor of milestone 0.2 (nxr-s12cpg), and the hack-crate guard on the detection of cargo-hakari configurations that milestone 0.2 brings (nxr-k64tm5).
 
 - [ ] All child issues are closed
 - [ ] The verification written with the release specification passes

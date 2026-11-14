@@ -94,6 +94,9 @@ With `hakari`, the plugin adds what hakari alone does not cover:
 - A crate can stop declaring a feature it needs because the hack crate enables
   it. An optional strict per-crate build check catches this.
 - A cached workspace-level check fails early when the hack crate is stale.
+- The hack crate is never published, and publishing a crate that depends on an
+  unpublished hack crate stops early with guidance
+  ([Releasing](release.mara.md#dependencies-that-are-not-published)).
 
 ## Feature sets and target triples
 
@@ -177,7 +180,7 @@ The `hakari` strategy adds four things to what hakari does:
 - **Features between workspace crates.** When one member enables a feature of another member, which the `cargo metadata` report shows, the plugin falls back to `workspace-build` for that workspace.
 - **Masked missing features.** A crate can stop declaring a feature it needs because the hack crate enables it. An optional strict per-crate build target catches this.
 - **Drift.** A cached workspace-level check fails early when the hack crate is stale.
-- **Publishing.** The release flow has to handle the dependency on the hack crate ([[REQ-RELEASE]]).
+- **Publishing.** The plugin never publishes the hack crate. Publishing a crate that depends on a hack crate with `publish = false` fails before cargo runs and points to cargo-hakari's ways of publishing such a crate ([[DES-RELEASE]]).
 
 cargo-hakari unifies neither the features of workspace members nor those of a third-party crate that depends on a member through normal or build dependencies, and a feature that only a platform-specific dependency table asks for it unifies only on the platforms that its configuration lists ([[EVD-HAKARI-UNIFICATION]], [[RISK-HAKARI-GAPS]]).
 :::

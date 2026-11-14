@@ -326,7 +326,7 @@ Cargo's merging of the features requested for a shared dependency across all the
 :status: accepted
 :aliases: workspace-hack crate
 
-The crate that cargo-hakari generates and every workspace member depends on. It depends on the workspace's third-party dependencies with the union of the features that the members ask for, so those dependencies are compiled with the same features whichever members are built. It leaves out the members themselves, third-party crates that depend on a member through normal or build dependencies, and platform-specific dependencies on platforms that its configuration does not list ([[EVD-HAKARI-UNIFICATION]]).
+The crate that cargo-hakari generates and every workspace member depends on. It depends on the workspace's third-party dependencies with the union of the features that the members ask for, so those dependencies are compiled with the same features whichever members are built. It leaves out the members themselves, third-party crates that depend on a member through normal or build dependencies, and platform-specific dependencies on platforms that its configuration does not list ([[EVD-HAKARI-UNIFICATION]]). The workspace's cargo-hakari configuration names it. The plugin never publishes it, and [[DES-RELEASE]] says what happens to the crates that depend on it when they are published.
 :::
 
 :::mara term TERM-EXTERNAL-NODE

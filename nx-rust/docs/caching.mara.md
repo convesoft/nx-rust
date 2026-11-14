@@ -322,13 +322,13 @@ settings, such as `[alias]`, `[net]` or `[registries]`, draws none.
 
 ## What is stored
 
-| Target                                                            | Cached | Stored                                                            |
-| ----------------------------------------------------------------- | ------ | ----------------------------------------------------------------- |
-| `check`, `lint`, `fmt-check`, `test`                              | Yes    | Nothing but the result and the terminal output                    |
-| `build`                                                           | Yes    | Final artifacts only: executables, `cdylib` and `staticlib` files |
-| `doc`, on the workspace project                                   | Yes    | The workspace's whole doc folder                                  |
-| `lockfile`, on the workspace project                              | No     | Nothing; its digests stay in `.nx/workspace-data`                 |
-| `fmt`, `bench`, `run`, `audit`, `deny`, `update`, release publish | No     | Nothing                                                           |
+| Target                                                                 | Cached | Stored                                                            |
+| ---------------------------------------------------------------------- | ------ | ----------------------------------------------------------------- |
+| `check`, `lint`, `fmt-check`, `test`                                   | Yes    | Nothing but the result and the terminal output                    |
+| `build`                                                                | Yes    | Final artifacts only: executables, `cdylib` and `staticlib` files |
+| `doc`, on the workspace project                                        | Yes    | The workspace's whole doc folder                                  |
+| `lockfile`, on the workspace project                                   | No     | Nothing; its digests stay in `.nx/workspace-data`                 |
+| `fmt`, `bench`, `run`, `audit`, `deny`, `update`, `nx-release-publish` | No     | Nothing                                                           |
 
 A cache hit on `test` means "these tests passed for exactly these inputs", and
 nothing is copied. A cache hit on `build` restores the binary. It does not
@@ -618,13 +618,13 @@ The executor checks a `build` task after every cargo call that builds the task's
 :status: accepted
 :satisfies: REQ-CACHE-OUTPUTS
 
-| Target                                                            | Cached | Outputs                                                                                                                                   |
-| ----------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `check`, `lint`, `fmt-check`, `test`                              | Yes    | None; the result only                                                                                                                     |
-| `build`                                                           | Yes    | Final artifacts only, in the [[TERM-ARTIFACT-DIR]]: the executables of `bin` targets and the `cdylib` and `staticlib` files of a library  |
-| `doc`, on the workspace project                                   | Yes    | The whole `doc` folder of the workspace's [[TERM-ARTIFACT-DIR]] ([[DES-WORKSPACE-TARGETS]])                                               |
-| `lockfile`, on the workspace project                              | No     | The crates' digests, in `.nx/workspace-data/nx-rust/lockfile/`, declared so that the crate tasks can hash them ([[DES-LOCKFILE-HASHING]]) |
-| `fmt`, `bench`, `run`, `audit`, `deny`, `update`, release publish | No     | None                                                                                                                                      |
+| Target                                                                 | Cached | Outputs                                                                                                                                   |
+| ---------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `check`, `lint`, `fmt-check`, `test`                                   | Yes    | None; the result only                                                                                                                     |
+| `build`                                                                | Yes    | Final artifacts only, in the [[TERM-ARTIFACT-DIR]]: the executables of `bin` targets and the `cdylib` and `staticlib` files of a library  |
+| `doc`, on the workspace project                                        | Yes    | The whole `doc` folder of the workspace's [[TERM-ARTIFACT-DIR]] ([[DES-WORKSPACE-TARGETS]])                                               |
+| `lockfile`, on the workspace project                                   | No     | The crates' digests, in `.nx/workspace-data/nx-rust/lockfile/`, declared so that the crate tasks can hash them ([[DES-LOCKFILE-HASHING]]) |
+| `fmt`, `bench`, `run`, `audit`, `deny`, `update`, `nx-release-publish` | No     | None                                                                                                                                      |
 
 `build` does not list `rlib` or `dylib` files or other files that only Cargo consumes, so a cache hit never puts such files back ([[ADR-RESULTS-ONLY-CACHE]]).
 
