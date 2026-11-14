@@ -4,8 +4,6 @@
  * It is meant to be called in jest's globalSetup.
  */
 
-/// <reference path="registry.d.ts" />
-
 import { workspaceRoot } from "@nx/devkit";
 import { rmSync } from "fs";
 import { join } from "path";

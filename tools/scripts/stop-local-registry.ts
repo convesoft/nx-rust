@@ -4,8 +4,6 @@
  * It is meant to be called in jest's globalTeardown.
  */
 
-/// <reference path="registry.d.ts" />
-
 import { endTestRun } from "../../nx-rust/test/harness/test-run";
 
 export default async () => {
