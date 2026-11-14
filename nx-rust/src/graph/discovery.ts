@@ -69,8 +69,8 @@ export interface CargoDiscovery {
   /**
    * The reports requested on top of one per workspace: one for each crate
    * that a member reaches through path dependencies or that a workspace's
-   * `[patch]` or `[replace]` table redirects to, that has no project and that
-   * no workspace report covers.
+   * `[patch]`, `[replace]` or `paths` entry redirects to, that has no project
+   * and that no workspace report covers.
    */
   pathDependencyReports: PathDependencyReport[];
   /** What graph creation has to tell the user without failing, one message each. */
@@ -105,10 +105,10 @@ export interface CargoDiscovery {
  * cargo enrol it ({@link isDirectorySourcePackage}).
  *
  * Afterwards, every path dependency without a project, and every crate
- * without a project that `[patch]` or `[replace]` redirects to, whose crate
- * no report covers yet gets a report of its own, so that the path
- * dependencies behind it are known. A package of a directory source gets
- * none.
+ * without a project that `[patch]`, `[replace]` or `paths` redirects to,
+ * whose crate no report covers yet gets a report of its own, so that the
+ * path dependencies behind it are known. A package of a directory source
+ * gets none.
  *
  * @param manifests The `Cargo.toml` files, relative to `workspaceRoot`.
  * @param workspaceRoot The absolute path of the repository root.
@@ -229,9 +229,11 @@ export function describeWorkspaces(folders: string[]): string {
 /**
  * Requests a report for each crate that the members reach through path
  * dependencies, directly or through other such crates, and for each crate
- * that a workspace's `[patch]` or `[replace]` table redirects to, that has
- * no project and that no report covers yet; then for the crates that those
- * reach through path dependencies. Cargo starts in the root folder of the
+ * that a workspace's `[patch]` or `[replace]` entry redirects to, or that
+ * lies in the folder of a `paths` entry, that has no project and that no
+ * report covers yet; then for the crates that those reach through path
+ * dependencies. A crate deeper below the folder of a `paths` entry gets
+ * none. Cargo starts in the root folder of the
  * workspace whose member the walk started from, or whose table redirects to
  * the crate: there the member's tasks run, and so there plain cargo reads
  * the crate. A redirection to a folder without a `Cargo.toml` gets no
@@ -354,9 +356,9 @@ async function readPathDependencies(
   }
   await drain();
   for (const workspace of workspaces) {
-    for (const { table, folder, file } of workspace.redirections) {
+    for (const { folder, file } of workspace.redirections) {
       const manifest = join(folder, "Cargo.toml");
-      if (table === "paths" || !existsSync(manifest)) {
+      if (!existsSync(manifest)) {
         continue;
       }
       await reach(

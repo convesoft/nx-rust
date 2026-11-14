@@ -44,8 +44,9 @@ export interface CrateFolders {
   withoutProject: Map<string, PathDependency[]>;
   /**
    * The crates with a project that a redirection may put in place of a
-   * dependency of the crate, but whose edge from it `redirectedUses` leaves
-   * out. Their folders and workspace manifests go onto the crate's targets.
+   * dependency of the crate, or that lie behind a redirected crate without a
+   * project, but whose edge from it `redirectedUses` leaves out. Their
+   * folders and workspace manifests go onto the crate's targets.
    */
   leftOutEdges: Map<string, PathDependency[]>;
   /**
@@ -67,8 +68,10 @@ export interface CrateFolders {
  * where a report describes it; without a report, as for such a package or
  * one whose report failed, its folder counts alone. A crate with a project
  * behind such crates is no folder here: the crate has an edge to it
- * (`projectsReachedByPath` in `reached-projects.ts`), and its
- * input, with what lies behind it, reaches the crate through `^` inputs.
+ * (`projectsReachedByPath` in `reached-projects.ts`, and `redirectedUses`
+ * behind a redirected crate), and its input, with what lies behind it,
+ * reaches the crate through `^` inputs; where `redirectedUses` leaves that
+ * edge out, its folder is among the left-out edges.
  * A path names the crate at the real path of its folder, symbolic links
  * resolved, so a path through a link to a crate with a project is that
  * project's.

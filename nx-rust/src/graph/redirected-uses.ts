@@ -5,13 +5,14 @@ import type { Redirection } from "../cargo/redirections";
 import { satisfies } from "../cargo/version-req";
 import type { CargoWorkspace } from "./discovery";
 import type { CargoGraph } from "./projects";
-import { knownPackages, projectsReachedByPath } from "./reached-projects";
+import { knownPackages, projectsBehindDependency, projectsReachedByPath } from "./reached-projects";
 import { realPath as resolveRealPath } from "./real-path";
 
 /**
  * A crate that a member of a workspace uses, or may use, because a
  * `[patch]`, `[replace]` or `paths` entry of the workspace puts it in place
- * of a registry or git dependency.
+ * of a registry or git dependency, or because it is a crate with a project
+ * behind such a crate without a project, which cargo builds with it.
  *
  * This is the one place that says which members get an edge to such a
  * crate and which get its files as an input instead.
@@ -38,7 +39,10 @@ export interface RedirectedUse {
    * satisfies. `possible` where the member only has a registry or git
    * dependency that may lead there. `assumed` where the member has none that
    * a report shows, but reaches a path crate that no report describes, whose
-   * dependencies may lead there.
+   * dependencies may lead there. A crate with a project behind a redirected
+   * crate without one has the kind of the member's use of that crate, and
+   * the strongest of them where several lead there or the crate is
+   * redirected itself.
    */
   kind: "direct" | "possible" | "assumed";
   /**
@@ -55,6 +59,12 @@ export interface RedirectedUse {
  * The crates that the members of each workspace use, or may use, through the
  * workspace's redirections (DES-PROJECT-GRAPH).
  *
+ * - Behind a redirected crate without a project, the member uses each crate
+ *   with a project that cargo builds with it, through its normal and build
+ *   path dependencies and any number of crates without a project
+ *   ({@link projectsBehindDependency}), with the kind of its use of the
+ *   redirected crate. Each such use weighs as a use of that kind of a
+ *   redirected crate with a project, below.
  * - A direct use is always an edge, cycles included, as for a path
  *   dependency.
  * - A member with a registry or git dependency, of its own or of a path
@@ -139,6 +149,10 @@ function pair(from: string, to: string): string {
   return JSON.stringify([from, to]);
 }
 
+// How strong each kind of use is: a member that uses a crate in two ways
+// uses it in the stronger.
+const strength: Record<RedirectedUse["kind"], number> = { assumed: 0, possible: 1, direct: 2 };
+
 /** A crate that a workspace's entries redirect to. */
 interface Target {
   folder: string;
@@ -169,33 +183,50 @@ function workspaceUses(
       .filter((target) => redirects(target, dependency))
       .map((target) => target.pkg);
   };
+  // The crates with a project behind each redirected crate without one, by
+  // the redirected crate's folder.
+  const hasProject = (folder: string) => rootByFolder.has(folder);
+  const behind = new Map<string, string[]>();
+  for (const target of targets.values()) {
+    if (target.projectRoot === undefined && target.pkg !== undefined) {
+      behind.set(target.folder, projectsBehindDependency(target.pkg, hasProject, known, realPath));
+    }
+  }
   const members = new Set(workspace.members.map((pkg) => folderOf(pkg)));
   const uses: RedirectedUse[] = [];
   for (const member of workspace.members) {
     const own = folderOf(member);
     const direct = directTargets(member, own, members, targets, resolved);
     const external = reachesExternal(member, known);
-    for (const target of targets.values()) {
-      if (target.folder === own) {
-        continue;
-      }
-      const base = {
-        member,
-        workspace,
-        folder: target.folder,
-        projectRoot: target.projectRoot,
-        reported: target.pkg !== undefined,
-      };
-      if (direct.has(target.folder)) {
-        uses.push({ ...base, kind: "direct", edge: target.projectRoot !== undefined });
-      } else if (external !== undefined) {
-        const cycle = target.pkg !== undefined && reaches(target.pkg, own, resolved);
-        uses.push({
-          ...base,
-          kind: external,
-          edge: target.projectRoot !== undefined && !cycle,
+    // The member's strongest use of each crate, by its folder.
+    const used = new Map<string, Omit<RedirectedUse, "edge">>();
+    const use = (folder: string, kind: RedirectedUse["kind"], projectRoot: string | undefined) => {
+      const earlier = used.get(folder);
+      if (folder !== own && (earlier === undefined || strength[kind] > strength[earlier.kind])) {
+        used.set(folder, {
+          member,
+          workspace,
+          folder,
+          projectRoot,
+          reported: known.has(folder),
+          kind,
         });
       }
+    };
+    for (const target of targets.values()) {
+      const kind = direct.has(target.folder) ? "direct" : external;
+      if (target.folder === own || kind === undefined) {
+        continue;
+      }
+      use(target.folder, kind, target.projectRoot);
+      for (const folder of behind.get(target.folder) ?? []) {
+        use(folder, kind, rootByFolder.get(folder));
+      }
+    }
+    for (const found of used.values()) {
+      const pkg = known.get(found.folder);
+      const cycle = found.kind !== "direct" && pkg !== undefined && reaches(pkg, own, resolved);
+      uses.push({ ...found, edge: found.projectRoot !== undefined && !cycle });
     }
   }
   // Two crates that may only possibly use each other.
