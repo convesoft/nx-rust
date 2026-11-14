@@ -344,9 +344,11 @@ function workspaceUses(
 // of a `[patch]` or `[replace]` entry; for a `paths` entry, every crate at
 // or below its folder that a report describes or that has a project, but
 // no folder whose report shows a virtual manifest (`virtualRoots`), whose
-// project is a workspace project, and every crate that discovery found
-// there as cargo finds them (`CargoWorkspace.pathsCrates`), with or without
-// a report; or that folder itself where it holds none.
+// project is a workspace project, and every crate that discovery says the
+// entry can redirect to (`CargoWorkspace.pathsCrates`): those that cargo
+// finds below the folder and their path dependencies of every kind, inside
+// or outside the folder, with or without a report; or that folder itself
+// where it holds none.
 function redirectedCrates(
   workspace: CargoWorkspace,
   known: Map<string, CargoPackage>,

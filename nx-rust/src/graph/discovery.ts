@@ -35,11 +35,13 @@ export interface CargoWorkspace {
    */
   redirections: Redirection[];
   /**
-   * The folders of the crates that cargo takes from the folder of each
-   * `paths` entry among {@link redirections}, by that folder as the entry
-   * names it: real paths, found as cargo finds them
-   * ({@link cratesBelowPathsFolder}), without those whose report shows a
-   * virtual manifest. Absent where the workspace has no `paths` entry.
+   * The folders of the crates that each `paths` entry among
+   * {@link redirections} can redirect to, by the entry's folder as the entry
+   * names it: real paths of the crates that cargo finds below the folder
+   * ({@link cratesBelowPathsFolder}) and of their path dependencies of every
+   * kind, to any depth ({@link pathsCandidates}), without those whose report
+   * shows a virtual manifest. Absent where the workspace has no `paths`
+   * entry.
    */
   pathsCrates?: ReadonlyMap<string, readonly string[]>;
   /**
@@ -126,7 +128,8 @@ export interface CargoDiscovery {
  * path dependencies behind it are known. A package of a directory source
  * gets none. The crates of a `paths` entry are found below its folder as
  * cargo finds them, once per folder, and only where a workspace has such an
- * entry ({@link cratesBelowPathsFolder}).
+ * entry ({@link cratesBelowPathsFolder}), together with their path
+ * dependencies of every kind ({@link pathsCandidates}).
  *
  * @param manifests The `Cargo.toml` files, relative to `workspaceRoot`.
  * @param workspaceRoot The absolute path of the repository root.
@@ -180,7 +183,7 @@ export async function discoverWorkspaces(
   }
   const unreportedPathDependencies = new Map<string, string>();
   const pathsFolders = pathsFolderCrates(workspaces);
-  const { pathDependencyReports, noCrate } = await readPathDependencies(
+  const { pathDependencyReports, candidates } = await readPathDependencies(
     workspaces,
     workspaceRoot,
     reports,
@@ -192,10 +195,7 @@ export async function discoverWorkspaces(
     const paths = workspace.redirections.filter((redirection) => redirection.table === "paths");
     if (paths.length > 0) {
       workspace.pathsCrates = new Map(
-        paths.map(({ folder }) => [
-          folder,
-          (pathsFolders.get(realPath(folder)) ?? []).filter((crate) => !noCrate.has(crate)),
-        ]),
+        paths.map(({ folder }) => [folder, candidates.get(realPath(folder)) ?? []]),
       );
     }
   }
@@ -259,36 +259,61 @@ export function describeWorkspaces(folders: string[]): string {
 }
 
 /**
- * The folders of the crates that cargo takes from the folder of each
+ * The folders of the crates that cargo finds below the folder of each
  * `paths` entry of the workspaces ({@link cratesBelowPathsFolder}), by the
- * real path of the entry's folder, each folder walked once. The walk enters
- * no artifact or build directory of a workspace. Without a `paths` entry,
- * nothing is walked.
+ * real path of the entry's folder, each folder walked once. Without a
+ * `paths` entry, nothing is walked.
  */
 // @mara implements DES-METADATA-REPORT
 function pathsFolderCrates(workspaces: CargoWorkspace[]): Map<string, string[]> {
   const found = new Map<string, string[]>();
-  const folders = workspaces.flatMap((workspace) =>
-    workspace.redirections
-      .filter((redirection) => redirection.table === "paths")
-      .map((redirection) => redirection.folder),
-  );
-  if (folders.length === 0) {
-    return found;
-  }
-  const skipped = new Set(
-    workspaces
-      .flatMap((workspace) => [workspace.report.target_directory, workspace.report.build_directory])
-      .filter((directory): directory is string => typeof directory === "string")
-      .map((directory) => realPath(directory)),
-  );
-  for (const folder of folders) {
-    const real = realPath(folder);
-    if (!found.has(real)) {
-      found.set(real, cratesBelowPathsFolder(real, skipped));
+  for (const workspace of workspaces) {
+    for (const redirection of workspace.redirections) {
+      const real = realPath(redirection.folder);
+      if (redirection.table === "paths" && !found.has(real)) {
+        found.set(real, cratesBelowPathsFolder(real));
+      }
     }
   }
   return found;
+}
+
+/**
+ * The crates that a `paths` entry can redirect to, by real folder: those
+ * that cargo finds below its folder (`found`) and, as cargo takes them as
+ * well, the path dependencies of each, of every kind, dev-dependencies and
+ * those for other platforms included, to any depth, inside or outside the
+ * folder, through crates with a project or without
+ * (`EVD-CARGO-REDIRECTIONS`). A crate that no report describes counts,
+ * but what it depends on is not known.
+ *
+ * This is not the walk that says what cargo builds with a crate, which
+ * takes normal and build dependencies only (`projectsBehindDependency` in
+ * `reached-projects.ts`): cargo takes these crates as candidates whether or
+ * not it compiles the crate that names them.
+ */
+// @mara implements DES-METADATA-REPORT
+function pathsCandidates(
+  found: readonly string[],
+  known: ReadonlyMap<string, CargoPackage>,
+): string[] {
+  const candidates: string[] = [];
+  const visited = new Set<string>();
+  const queue = [...found];
+  while (queue.length > 0) {
+    const folder = queue.shift() as string;
+    if (visited.has(folder)) {
+      continue;
+    }
+    visited.add(folder);
+    candidates.push(folder);
+    for (const dependency of known.get(folder)?.dependencies ?? []) {
+      if (typeof dependency.path === "string") {
+        queue.push(realPath(dependency.path));
+      }
+    }
+  }
+  return candidates;
 }
 
 /**
@@ -297,19 +322,20 @@ function pathsFolderCrates(workspaces: CargoWorkspace[]): Map<string, string[]> 
  * that a workspace's `[patch]` or `[replace]` entry redirects to, or that
  * cargo takes from the folder of a `paths` entry (`pathsFolders`), that has
  * no project and that no report covers yet; then for the crates that those
- * reach through path dependencies. A folder below a `paths` entry whose
- * report describes no package there holds a virtual manifest and no crate,
- * and so does the root folder of a workspace whose report lists no package
- * there; such folders are returned in `noCrate`. Cargo starts in the root
- * folder of the workspace whose member the walk started from, or whose
- * table redirects to the crate: there the member's tasks run, and so there
- * plain cargo reads the crate. A redirection to a folder without a
- * `Cargo.toml` gets no report: cargo fails when it applies one, and the
- * plugin leaves that failure to the cargo of the tasks. A crate, whether a path or a
- * redirection names it, is compared with the crates that have projects and
- * with those that a report describes by the real path of its folder,
- * through symbolic links, so a path through a link to a crate with a
- * project asks for no report.
+ * reach through path dependencies, of every kind. Then it returns, by the
+ * real path of each `paths` folder, the crates that the entry can redirect
+ * to ({@link pathsCandidates}), without a folder whose report describes no
+ * package there, which holds a virtual manifest and no crate, as the root
+ * folder of a workspace whose report lists no package there does. Cargo
+ * starts in the root folder of the workspace whose member the walk started
+ * from, or whose table redirects to the crate: there the member's tasks
+ * run, and so there plain cargo reads the crate. A redirection to a folder
+ * without a `Cargo.toml` gets no report: cargo fails when it applies one,
+ * and the plugin leaves that failure to the cargo of the tasks. A crate,
+ * whether a path or a redirection names it, is compared with the crates
+ * that have projects and with those that a report describes by the real
+ * path of its folder, through symbolic links, so a path through a link to a
+ * crate with a project asks for no report.
  *
  * When cargo fails for a redirected crate, as for a crate inside a
  * workspace's folder that is not its member, which cargo builds as a patch
@@ -335,7 +361,10 @@ async function readPathDependencies(
   warnings: string[],
   unreported: Map<string, string>,
   pathsFolders: ReadonlyMap<string, readonly string[]>,
-): Promise<{ pathDependencyReports: PathDependencyReport[]; noCrate: Set<string> }> {
+): Promise<{
+  pathDependencyReports: PathDependencyReport[];
+  candidates: Map<string, string[]>;
+}> {
   // Crates by the real paths of their folders: a path names the crate at
   // the real path of its folder, also where it passes a symbolic link.
   const folderOf = (manifest: string) => realPath(dirname(manifest));
@@ -456,7 +485,14 @@ async function readPathDependencies(
       }
     }
   }
-  return { pathDependencyReports, noCrate };
+  const candidates = new Map<string, string[]>();
+  for (const [folder, found] of pathsFolders) {
+    candidates.set(
+      folder,
+      pathsCandidates(found, known).filter((crate) => !noCrate.has(crate)),
+    );
+  }
+  return { pathDependencyReports, candidates };
 }
 
 /**
@@ -552,8 +588,8 @@ async function readPathDependency(
       return [
         `nx-rust: \`cargo metadata\` failed for ${shown}, ${subject}: ${error.message}.`,
         ...(output === "" ? [] : [output]),
-        "nx-rust goes on without its report, so it does not follow the path dependencies behind that crate; the crates that may use it take its whole folder into their cache keys.",
-        `To have them followed, fix what cargo reports, so that \`cargo metadata --no-deps --manifest-path ${shown}\` succeeds in ${folder}.`,
+        "nx-rust goes on without its report, so it does not follow the crates that this crate depends on by path: the crates that use it take only its own folder into their cache keys, and a change in a crate behind it can leave their keys unchanged.",
+        `To have those crates followed, fix what cargo reports, so that \`cargo metadata --no-deps --manifest-path ${shown}\` succeeds in ${folder}, or declare their files with fileInputs in the [package.metadata.nx] or [workspace.metadata.nx] table of the crates that use it.`,
       ].join("\n");
     }
     throw new Error(
