@@ -1,7 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
+import { cratesBelowPathsFolder } from "../src/cargo/paths-crates";
 import { readRedirections } from "../src/cargo/redirections";
 import { cargoMetadataOf } from "../src/graph/collisions";
 import {
@@ -211,12 +220,137 @@ function rootManifest(...lines: string[]): string {
   return ['[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n', ...lines].join("\n") + "\n";
 }
 
+/**
+ * The committed edges as `paths = ["crates/model"]` changes them: cargo
+ * takes model's path dependencies util, a normal one, and harness, a
+ * dev-dependency, from the entry as well. api and viaw, which have registry
+ * dependencies and which neither reaches, may use both. util and harness
+ * may only possibly use each other, and so may harness and model now, so
+ * none of these uses is an edge: harness gets model's files as inputs in
+ * place of its edge to model, while model keeps its dev-dependency edge to
+ * harness.
+ */
+function withModelPathDependencies(committed: [string, string][]): [string, string][] {
+  const added: [string, string][] = [
+    ["api", "harness"],
+    ["api", "util"],
+    ["viaw", "harness"],
+    ["viaw", "util"],
+  ];
+  return [...committed.filter(([from, to]) => from !== "harness" || to !== "model"), ...added].sort(
+    (a, b) => compare(a[0], b[0]) || compare(a[1], b[1]),
+  );
+}
+
 /** The [patch.crates-io] table of the fixture without model. */
 const patchWithoutModel = [
   "[patch.crates-io]",
   'types = { path = "../shared/crates/types" }',
   'fork = { path = "../third_party/fork" }',
 ];
+
+describe("finding the crates below a paths folder", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-paths-crates-")));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function crate(
+    folder: string,
+    manifest = '[package]\nname = "model"\nversion = "0.1.0"\n',
+  ): void {
+    mkdirSync(join(root, folder), { recursive: true });
+    writeFileSync(join(root, folder, "Cargo.toml"), manifest);
+  }
+
+  /** The crates found below `folder`, relative to the temporary root. */
+  function found(folder: string): string[] {
+    return cratesBelowPathsFolder(join(root, folder)).map((crate) => relative(root, crate));
+  }
+
+  it("takes every crate to any depth, as cargo does, also below another crate and in a nested workspace", () => {
+    crate("local/model");
+    crate("local/a/b/c/d/e/model");
+    crate("local/outer");
+    crate("local/outer/inner");
+    crate("local/nested", '[workspace]\nmembers = ["member"]\n');
+    crate("local/nested/member");
+    crate("local/broken", "not toml [\n");
+    crate("local/vendored");
+    writeFileSync(join(root, "local/vendored/.cargo-checksum.json"), "{}\n");
+    crate("local/target/model");
+
+    expect(found("local")).toEqual([
+      "local/a/b/c/d/e/model",
+      "local/broken",
+      "local/model",
+      "local/nested",
+      "local/nested/member",
+      "local/outer",
+      "local/outer/inner",
+      // No Cargo.toml beside this target folder.
+      "local/target/model",
+      "local/vendored",
+    ]);
+  });
+
+  it("skips what cargo skips: hidden folders, folders holding .git and target beside a manifest", () => {
+    crate("local/.hidden/model");
+    crate("local/repository/model");
+    mkdirSync(join(root, "local/repository/.git"));
+    crate("local/submodule/model");
+    writeFileSync(join(root, "local/submodule/.git"), "gitdir: ../.git/modules/submodule\n");
+    crate("local/kept");
+    crate("local/kept/target/model");
+    crate("local/kept/deeper/target/model");
+    crate("local/target/model");
+    writeFileSync(join(root, "local/Cargo.toml"), '[package]\nname = "top"\nversion = "0.1.0"\n');
+
+    expect(found("local")).toEqual(["local", "local/kept", "local/kept/deeper/target/model"]);
+  });
+
+  it("follows a symbolic link given as the folder and none below it, as cargo does", () => {
+    crate("elsewhere/inner/model");
+    symlinkSync("elsewhere", join(root, "local"));
+    crate("other/model");
+    symlinkSync("../other", join(root, "elsewhere/link"));
+
+    expect(found("local")).toEqual(["elsewhere/inner/model"]);
+  });
+
+  it("enters node_modules and Cargo's artifact directories, as cargo does, and skips a folder it cannot read", () => {
+    crate("local/node_modules/package/model");
+    crate("local/out/package/model-0.1.0");
+    writeFileSync(
+      join(root, "local/out/CACHEDIR.TAG"),
+      "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n",
+    );
+    crate("local/locked/model");
+    chmodSync(join(root, "local/locked"), 0o000);
+    try {
+      expect(found("local")).toEqual(
+        process.getuid?.() === 0
+          ? [
+              "local/locked/model",
+              "local/node_modules/package/model",
+              "local/out/package/model-0.1.0",
+            ]
+          : ["local/node_modules/package/model", "local/out/package/model-0.1.0"],
+      );
+    } finally {
+      chmodSync(join(root, "local/locked"), 0o755);
+    }
+  });
+
+  it("finds nothing for a folder that does not exist", () => {
+    expect(found("missing")).toEqual([]);
+  });
+});
 
 describe("edges to redirected crates", () => {
   let committed: [string, string][];
@@ -260,19 +394,51 @@ describe("edges to redirected crates", () => {
         ),
       },
     ],
-    [
-      "paths in the workspace's .cargo/config.toml",
-      {
-        "rust/Cargo.toml": rootManifest(...patchWithoutModel),
-        "rust/.cargo/config.toml": 'paths = ["crates/model"]\n',
-      },
-    ],
   ])(
     "are the same with model redirected through %s",
     async (_how, files) => {
       const graph = await loadFixtureGraph("patched-workspaces", { files });
 
       expect(edges(graph)).toEqual(committed);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "come from paths in the workspace's .cargo/config.toml also for the path dependencies of the crate it names",
+    async () => {
+      const graph = await loadFixtureGraph("patched-workspaces", {
+        files: {
+          "rust/Cargo.toml": rootManifest(...patchWithoutModel),
+          "rust/.cargo/config.toml": 'paths = ["crates/model"]\n',
+        },
+      });
+
+      expect(edges(graph)).toEqual(withModelPathDependencies(committed));
+      expect(graph.projects.harness.targets.check.inputs).toEqual(
+        expect.arrayContaining(["{workspaceRoot}/rust/crates/model/**/*"]),
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "go to no workspace project of a virtual workspace below the folder of a paths entry",
+    async () => {
+      // shared, a virtual workspace with the project shared, lies in the
+      // folder of the entry; cargo takes only its member types from there,
+      // which rust's [patch] redirects already.
+      const graph = await loadFixtureGraph("patched-workspaces", {
+        files: { "rust/.cargo/config.toml": 'paths = ["../shared"]\n' },
+      });
+
+      expect(edges(graph)).toEqual(committed);
+      for (const member of ["api", "harness", "model", "util", "viaw"]) {
+        expect({ member, inputs: graph.projects[member].targets.check.inputs }).toEqual({
+          member,
+          inputs: expect.not.arrayContaining(["{workspaceRoot}/shared/**/*"]),
+        });
+      }
     },
     HARNESS_TIMEOUT,
   );
@@ -590,7 +756,7 @@ describe("edges to redirected crates", () => {
         expect(shown.output).toContain("`cargo metadata` failed for rust/local/Cargo.toml");
         expect(shown.output).toContain("believes it's in a workspace");
         expect(shown.output).toContain(
-          "To have them followed, fix what cargo reports, so that `cargo metadata --no-deps --manifest-path rust/local/Cargo.toml` succeeds in rust.",
+          "To have those crates followed, fix what cargo reports, so that `cargo metadata --no-deps --manifest-path rust/local/Cargo.toml` succeeds in rust, or declare their files with fileInputs in the [package.metadata.nx] or [workspace.metadata.nx] table of the crates that use it.",
         );
         // The projects of rust, whose [patch] names the crate, repeat it at
         // the start of their tasks, and those of shared do not.
@@ -803,7 +969,7 @@ describe("edges to redirected crates", () => {
         const graph = await workspace.graph();
         const shown = await workspace.nx(["show", "projects"]);
 
-        expect(edges(graph)).toEqual(committed);
+        expect(edges(graph)).toEqual(withModelPathDependencies(committed));
         expect(shown.status).toBe(0);
       } finally {
         workspace.remove();
@@ -988,6 +1154,87 @@ describe("crates with a project behind a redirected crate without one", () => {
       {},
     ],
     [
+      // The reproduction of nxr-8sf4xw: cargo takes fork from below the
+      // folder of the entry, not from the folder itself.
+      "paths, with the crate below the entry's folder",
+      {
+        "rust/Cargo.toml": rootManifest(
+          "[patch.crates-io]",
+          'model = { path = "crates/model" }',
+          'types = { path = "../shared/crates/types" }',
+        ),
+        "rust/.cargo/config.toml": 'paths = ["../third_party"]\n',
+      },
+      {},
+    ],
+    // Cargo walks node_modules, a folder it tagged as its cache directory and
+    // the artifact and build directories too (the review of nxr-8sf4xw).
+    ...(
+      [
+        ["in node_modules", "node_modules/pkg", {}],
+        [
+          "in a folder that cargo tagged as its cache directory",
+          "cache",
+          {
+            "third_party/cache/CACHEDIR.TAG":
+              "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n",
+          },
+        ],
+        [
+          "in the workspace's artifact directory",
+          "artifacts",
+          {
+            "rust/.cargo/config.toml":
+              'paths = ["../third_party"]\n\n[build]\ntarget-dir = "../third_party/artifacts"\n',
+          },
+        ],
+        [
+          "in the workspace's build directory",
+          "builds",
+          {
+            "rust/.cargo/config.toml":
+              'paths = ["../third_party"]\n\n[build]\nbuild-dir = "../third_party/builds"\n',
+          },
+        ],
+      ] as const
+    ).map(([where, folder, more]): [string, FileChanges, Record<string, string>] => [
+      `paths, with the crate ${where} below the entry's folder`,
+      {
+        "rust/Cargo.toml": rootManifest(
+          "[patch.crates-io]",
+          'model = { path = "crates/model" }',
+          'types = { path = "../shared/crates/types" }',
+        ),
+        "rust/.cargo/config.toml": 'paths = ["../third_party"]\n',
+        "third_party/fork": null,
+        [`third_party/${folder}/fork/Cargo.toml`]: `${crate("fork")}\n[dependencies]\nplain = { path = "${relative(`third_party/${folder}/fork`, "rust/crates/plain")}" }\n`,
+        [`third_party/${folder}/fork/src/lib.rs`]: "",
+        ...more,
+      },
+      {},
+    ]),
+    [
+      // Cargo also takes the path dependencies, of every kind, of each crate
+      // it finds below the folder, wherever they lie: here fork, which seed
+      // only names as a dev-dependency (the review of nxr-8sf4xw).
+      "paths, with the crate a dev-dependency, outside the entry's folder, of a crate below it",
+      {
+        "rust/Cargo.toml": rootManifest(
+          "[patch.crates-io]",
+          'model = { path = "crates/model" }',
+          'types = { path = "../shared/crates/types" }',
+        ),
+        "rust/.cargo/config.toml": 'paths = ["../third_party"]\n',
+        "third_party/fork": null,
+        "third_party/seed/Cargo.toml": `${crate("seed")}\n[dev-dependencies]\nfork = { path = "../../outside/fork" }\n`,
+        "third_party/seed/src/lib.rs": "",
+        "outside/fork/Cargo.toml": `${crate("fork")}\n[dependencies]\nplain = { path = "../../rust/crates/plain" }\n`,
+        "outside/fork/src/lib.rs": "",
+        "nx.json": `${JSON.stringify({ plugins: [{ plugin: "@convesoft/nx-rust", exclude: ["third_party/**", "outside/**"] }] })}\n`,
+      },
+      {},
+    ],
+    [
       "a chain of two crates without a project",
       {
         "third_party/fork/Cargo.toml": (manifest) =>
@@ -1073,6 +1320,138 @@ describe("crates with a project behind a redirected crate without one", () => {
         "types:test": false,
       });
       expect(affected).toEqual(expect.arrayContaining(["api", "harness", "lone"]));
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // rust's [patch] keeps model and types; fork comes from below the folder
+  // of paths, as in the reproduction of nxr-8sf4xw.
+  const pathsAbove: FileChanges = {
+    "rust/Cargo.toml": rootManifest(
+      "[patch.crates-io]",
+      'model = { path = "crates/model" }',
+      'types = { path = "../shared/crates/types" }',
+    ),
+    "rust/.cargo/config.toml": 'paths = ["../third_party"]\n',
+  };
+
+  it(
+    "request a report for each crate that cargo takes from below a paths folder, and warn for one that cargo cannot read or report",
+    async () => {
+      // Besides fork and leaf, third_party holds a manifest that is no valid
+      // TOML, a crate in a virtual workspace that does not list it, rust's
+      // artifact directory, a node_modules folder and a hidden folder, each
+      // with a crate. Cargo walks all of them but the hidden folder.
+      const workspace = FixtureWorkspace.create("patched-workspaces", forkUsesPlain, pathsAbove, {
+        "rust/.cargo/config.toml":
+          'paths = ["../third_party"]\n\n[build]\ntarget-dir = "../third_party/out"\n',
+        "third_party/broken/Cargo.toml": "not toml [\n",
+        "third_party/group/Cargo.toml": "[workspace]\nmembers = []\n",
+        "third_party/group/refused/Cargo.toml": crate("refused"),
+        "third_party/group/refused/src/lib.rs": "",
+        "third_party/out/package/copy/Cargo.toml": crate("copy"),
+        "third_party/out/package/copy/src/lib.rs": "",
+        "third_party/node_modules/js/Cargo.toml": crate("js"),
+        "third_party/node_modules/js/src/lib.rs": "",
+        "third_party/.hidden/h/Cargo.toml": crate("h"),
+      });
+      try {
+        const graph = await workspace.graph();
+        const reports = workspace
+          .cargoCalls()
+          .filter((call) => call.args[0] === "metadata")
+          .map((call) => [call.cwd, call.args.at(-1)]);
+        const shown = await workspace.nx(["show", "projects"]);
+        const failed = (manifest: string) =>
+          `To have those crates followed, fix what cargo reports, so that \`cargo metadata --no-deps --manifest-path ${manifest}\` succeeds in rust, or declare their files with fileInputs in the [package.metadata.nx] or [workspace.metadata.nx] table of the crates that use it.`;
+
+        // leaf holds .cargo-checksum.json and gets no report.
+        expect(reports).toEqual([
+          ["rust", "{workspaceRoot}/rust/Cargo.toml"],
+          ["shared", "{workspaceRoot}/shared/Cargo.toml"],
+          ["rust", "{workspaceRoot}/third_party/broken/Cargo.toml"],
+          ["rust", "{workspaceRoot}/third_party/fork/Cargo.toml"],
+          ["rust", "{workspaceRoot}/third_party/group/Cargo.toml"],
+          ["rust", "{workspaceRoot}/third_party/group/refused/Cargo.toml"],
+          ["rust", "{workspaceRoot}/third_party/node_modules/js/Cargo.toml"],
+          ["rust", "{workspaceRoot}/third_party/out/package/copy/Cargo.toml"],
+        ]);
+        expect(edges(graph)).toContainEqual(["api", "plain"]);
+        expect(shown.status).toBe(0);
+        expect(shown.output).toContain("`cargo metadata` failed for third_party/broken/Cargo.toml");
+        expect(shown.output).toContain(failed("third_party/broken/Cargo.toml"));
+        // A crate that cargo refuses to report keeps its folder and loses
+        // what lies behind it, and the warning says so and what to do.
+        expect(shown.output).toContain(
+          "`cargo metadata` failed for third_party/group/refused/Cargo.toml",
+        );
+        expect(shown.output).toContain("believes it's in a workspace when it's not");
+        expect(shown.output).toContain(
+          "nx-rust goes on without its report, so it does not follow the crates that this crate depends on by path: the crates that use it take only its own folder into their cache keys, and a change in a crate behind it can leave their keys unchanged.",
+        );
+        expect(shown.output).toContain(failed("third_party/group/refused/Cargo.toml"));
+        for (const manifest of [
+          "third_party/broken/Cargo.toml",
+          "third_party/group/refused/Cargo.toml",
+        ]) {
+          expect({
+            manifest,
+            warned: warnedProjects(graph, `nx-rust: \`cargo metadata\` failed for ${manifest}`),
+          }).toEqual({ manifest, warned: [...rustProjects, "lone"].sort() });
+        }
+        // The crates without a project join the named input of api, which
+        // may use them; Nx sees no file in node_modules, so js joins none.
+        expect(graph.projects.api.namedInputs.default).toEqual(
+          expect.arrayContaining([
+            "{workspaceRoot}/third_party/group/refused/**/*",
+            "{workspaceRoot}/third_party/out/package/copy/**/*",
+          ]),
+        );
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "reach the members through a crate added below a paths folder after the Nx daemon created the graph",
+    async () => {
+      const workspace = FixtureWorkspace.create("patched-workspaces", forkUsesPlain, pathsAbove, {
+        "third_party/fork": null,
+      });
+      const daemon = { NX_DAEMON: "true" };
+      const affected = async () => {
+        const { status, output } = await runNx(
+          workspace,
+          ["show", "projects", "--affected", `--files=${plainSource}`, "--json"],
+          daemon,
+        );
+        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+        // The JSON is the last line, after any warning of graph creation.
+        return JSON.parse(output.trim().split("\n").pop()).sort();
+      };
+      try {
+        expect(await affected()).toEqual(["plain", "rust"]);
+        applyFileChanges(workspace.root, {
+          "third_party/fork/Cargo.toml": `${crate("fork")}\n[dependencies]\nplain = { path = "../../rust/crates/plain" }\n`,
+          "third_party/fork/src/lib.rs": "",
+        });
+
+        expect(await affected()).toEqual([
+          "api",
+          "harness",
+          "lone",
+          "model",
+          "plain",
+          "rust",
+          "util",
+          "viaw",
+        ]);
+      } finally {
+        await workspace.nx(["daemon", "--stop"], daemon);
+        workspace.remove();
+      }
     },
     HARNESS_TIMEOUT,
   );
@@ -1203,6 +1582,61 @@ describe("the crates that cargo builds with a crate whose edge is left out", () 
       } finally {
         workspace.remove();
       }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "give the member each variable and command that the crates behind it add once, as for a path dependency without a project",
+    async () => {
+      // As in the first case above: a has no edge to b, which depends on c.
+      // b and c add variables and a command, some twice and some that a has
+      // already through its workspace's table or its targets. d depends by
+      // path on p, which nx.json excludes, and both add SHARED.
+      const table = (envInputs: string[], runtimeInputs: string[] = []) =>
+        `\n[package.metadata.nx]\nenvInputs = ${JSON.stringify(envInputs)}\nruntimeInputs = ${JSON.stringify(runtimeInputs)}\n`;
+      const workspace = FixtureWorkspace.create("patched-workspaces", members, x, {
+        "rust/Cargo.toml": `${rootManifest(
+          "[patch.crates-io]",
+          'x = { path = "../third_party/x" }',
+          'a = { path = "crates/a" }',
+        )}\n[workspace.metadata.nx]\nenvInputs = ["WORKSPACE"]\n`,
+        "rust/crates/a/Cargo.toml": crate("a", "[dependencies]", 'wrapper = "0.1"'),
+        "rust/crates/b/Cargo.toml": (manifest) =>
+          `${manifest}other = "0.1"\n${table(["SHARED", "B"], ["echo b"])}`,
+        "rust/crates/c/Cargo.toml": (manifest) =>
+          `${manifest}${table(["SHARED", "RUSTFLAGS", "WORKSPACE"], ["echo b"])}`,
+        "rust/crates/d/Cargo.toml": (manifest) =>
+          `${manifest}\n[dependencies]\np = { path = "../../../third_party/p" }\n${table(["SHARED"])}`,
+        "third_party/p/Cargo.toml": `${crate("p", "[workspace]")}${table(["SHARED", "P"], ["echo p"])}`,
+        "third_party/p/src/lib.rs": "",
+      });
+      let graph: FixtureGraph;
+      try {
+        graph = await workspace.graph();
+      } finally {
+        workspace.remove();
+      }
+      const { a, d } = graph.projects;
+      const times = (inputs: unknown[], entry: object) =>
+        inputs.filter((input) => JSON.stringify(input) === JSON.stringify(entry)).length;
+      const added = [
+        { env: "SHARED" },
+        { env: "B" },
+        { env: "RUSTFLAGS" },
+        { env: "WORKSPACE" },
+        { runtime: "echo b" },
+      ];
+
+      expect(edges(graph)).not.toContainEqual(["a", "b"]);
+      expect(
+        added.map((entry) => times([...a.namedInputs.default, ...a.targets.check.inputs], entry)),
+      ).toEqual(added.map(() => 1));
+      expect(
+        [{ env: "SHARED" }, { env: "P" }, { env: "WORKSPACE" }, { runtime: "echo p" }].map(
+          (entry) => times(d.namedInputs.default, entry),
+        ),
+      ).toEqual([1, 1, 1, 1]);
     },
     HARNESS_TIMEOUT,
   );
