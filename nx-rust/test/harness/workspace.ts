@@ -416,8 +416,8 @@ export async function loadFixtureGraph(
 const colourCode = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
 /**
- * `text` without the colour codes that Nx writes when the environment asks
- * for colours, as `nx run-many` does for the tests it runs.
+ * `text` without the colour codes that Nx writes into the output of every
+ * command that the harness runs ({@link testEnvironment}).
  */
 export function withoutColours(text: string): string {
   return text.replace(colourCode, "");
