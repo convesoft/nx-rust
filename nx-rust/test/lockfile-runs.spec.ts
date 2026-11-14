@@ -597,7 +597,8 @@ describe("the check after cargo's call", () => {
     "fails a task whose key holds another lockfile's digest because another nx command rewrote the digests meanwhile, and Nx stores nothing for it",
     async () => {
       // The reviewer's race: model's test passes only with zzlib 1.0.1, and
-      // the lockfile locks 1.0.0 when Nx computes the task's key.
+      // the lockfile locks 1.0.0 when Nx computes the task's key. The hooks
+      // that give each command its id run in plugin workers, as by default.
       const workspace = await subfolder();
       const hold = holdCargo("test");
       try {
@@ -606,12 +607,15 @@ describe("the check after cargo's call", () => {
             `${source}\n#[test]\nfn version_probe() {\n    assert_eq!(zzlib::value(), "1.0.1");\n}\n`,
         });
         const lockfile = read(workspace, "rust/Cargo.lock");
-        const first = nx(workspace, ["run", "model:test"], hold.env);
+        const first = nx(workspace, ["run", "model:test"], { ...hold.env, ...pluginWorkers });
         await hold.held();
         // Meanwhile the lockfile moves to 1.0.1, and another command's
         // lockfile task writes the digests of that.
         cargo(workspace, "rust", "update", "-p", "zzlib", "--precise", "1.0.1");
-        const other = await runNx(workspace, ["run", "rust:lockfile"], env);
+        const other = await runNx(workspace, ["run", "rust:lockfile"], {
+          ...env,
+          ...pluginWorkers,
+        });
         expect(other.status).toBe(0);
         hold.release();
         const raced = await first;
@@ -626,7 +630,7 @@ describe("the check after cargo's call", () => {
 
         // Back on 1.0.0, the task runs again, and fails as plain cargo does.
         writeFileSync(join(workspace.root, "rust", "Cargo.lock"), lockfile);
-        const again = await nx(workspace, ["run", "model:test"]);
+        const again = await nx(workspace, ["run", "model:test"], pluginWorkers);
         expect(restored(again.output, "model:test")).toBe(false);
         expect(again.status).toBe(1);
         expect(again.output).toContain("version_probe");
@@ -642,12 +646,14 @@ describe("the check after cargo's call", () => {
   it(
     "passes the tasks of two nx commands that run at the same time on an unchanged lockfile, and removes each command's private digests when it ends",
     async () => {
+      // The hooks that give each command its id and remove its private
+      // digests run in plugin workers, as by default.
       const workspace = await subfolder();
       const hold = holdCargo("check");
       try {
-        const first = nx(workspace, ["run", "model:check"], hold.env);
+        const first = nx(workspace, ["run", "model:check"], { ...hold.env, ...pluginWorkers });
         await hold.held();
-        const second = await runNx(workspace, ["run", "api:check"], env);
+        const second = await runNx(workspace, ["run", "api:check"], { ...env, ...pluginWorkers });
         expect(second.status).toBe(0);
         hold.release();
         const held = await first;
@@ -656,7 +662,7 @@ describe("the check after cargo's call", () => {
         expect(held.output).not.toContain("changed while the run went on");
         // Both results were stored.
         for (const task of ["model:check", "api:check"]) {
-          const repeat = await nx(workspace, ["run", task]);
+          const repeat = await nx(workspace, ["run", task], pluginWorkers);
           expect({ task, restored: restored(repeat.output, task) }).toEqual({
             task,
             restored: true,

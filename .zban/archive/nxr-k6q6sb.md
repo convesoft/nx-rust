@@ -146,3 +146,27 @@ What is left of a short command: `NX_PERF_LOGGING` puts `createProjectGraphAsync
 Checks run on the final state, merged with `origin/main` at 6b09a45: `pnpm nx run-many -t build lint test --skip-nx-cache` passed (30 suites, 893 tests passed, 1 todo), `pnpm nx format:check --all` passed, `pnpm nx e2e nx-rust-e2e --skip-nx-cache` passed (30 tests), `mara schema validate` and `mara project validate` reported valid, and `zban check` passed. CI on pull request #58 covers what is left: the duration of its step `pnpm nx run-many -t build lint test` against 10m41s on `main`.
 
 Rejected approaches: a `test` target that depends on `build` (a stale `dist` whenever Jest starts outside Nx, and ES2015 stack traces without function names); compiling through the TypeScript API inside Jest's main process (250 MB more for the whole run); calling executors directly; merging the `nx show projects` and graph calls of `target-defaults`; a long-lived helper process.
+
+
+## CI
+
+The step `pnpm nx run-many -t build lint test` took 3m56s on the pull request's head bd2d58a (run 43522807295), against 15m20s on `main` at 6b09a45 (run 43520192212) and 10m41s on `main` before (run 43505726435). These are wall times on CI's own runner.
+
+## Tests in Nx's default mode
+
+After the review of pull request #58, every piece of state that the plugin carries between `createNodes`, `createDependencies`, the `preTasksExecution` and `postTasksExecution` hooks and the executors has at least one test with the plugins in workers, as Nx runs them by default. The other module-level values (the executors' declared options, the supported Nx majors, the plugin's own entry points, Nx's argument parser) are read from the package's own files and are the same in every mode.
+
+| What crosses a boundary | Tests with plugin workers |
+| --- | --- |
+| The registration of each entry, from `createNodes` to `createDependencies` | `graph.spec.ts`: "give the workspace project an edge to every member in plugin workers", "name collisions across two plugin entries in plugin workers", "name collisions after renames and with other projects, in plugin workers"; `discovery.spec.ts`: "two plugin entries in plugin workers"; `configuration.spec.ts`: "with plugin isolation" |
+| The reports shared within one graph computation | `discovery.spec.ts`: "two plugin entries in plugin workers"; `caching.spec.ts`: "names the directory of the workspace root, where the tasks run cargo, in plugin workers" |
+| The `pluginVersion` check in `createDependencies` and its attribution | `plugin-version.spec.ts`: "from a targetDefaults entry keyed by the executors", "from a project.json, naming the file, and from a targetDefaults entry beside it", "from another plugin" (added in this round) |
+| The `targetDefaults` guard in `createDependencies` | `target-defaults.spec.ts`: "turns on caching for build, keyed by the target's name, where the plugin leaves build uncached because Cargo's configuration chooses the triple" (added) |
+| The `affectedTests` check in `createDependencies` | `configuration.spec.ts`: "fails for affectedTests = true on test from targetDefaults, without the setting" (added) |
+| The command's arguments, set by `preTasksExecution` | `unknown-options.spec.ts`: "is said to be, also after -- and as positional words, without the daemon"; `run-arguments.spec.ts`: the three "without the daemon" cases |
+| The run id of a run that excludes task dependencies | `lockfile-runs.spec.ts`: "a run that excludes task dependencies …, without the daemon" and "nx affected after a change to Cargo.lock …, without the daemon" |
+| The command id, and the cleanup of the private digests in `postTasksExecution` | `lockfile-runs.spec.ts`: "fails a task whose key holds another lockfile's digest because another nx command rewrote the digests meanwhile" and "passes the tasks of two nx commands that run at the same time on an unchanged lockfile, and removes each command's private digests when it ends" (added) |
+| An option given only on the command line, checked by the executors | `plugin-version.spec.ts`: "a pluginVersion that only the run gives" (added) |
+| Graph creation's warnings, repeated at the start of a task | `cargo-directories.spec.ts` and `compatibility.spec.ts`: the "without the daemon" cases; `compatibility.spec.ts`: "succeeds with a newer major … in a plugin worker" |
+
+Every test with `NX_DAEMON=true` keeps Nx's default as well: in `cargo-directories`, `compatibility`, `configuration`, `fixture-workspace`, `lockfile-runs`, `redirections`, `run-arguments` and `unknown-options`.
