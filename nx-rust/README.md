@@ -4,8 +4,14 @@ An Nx plugin that makes Cargo workspaces first-class Nx projects while Cargo
 stays the build tool. It is written for monorepos where Rust crates sit beside
 JS and TS projects.
 
-> **Status:** the design is specified and the implementation has not started.
-> This package does nothing useful yet.
+> **Status:** milestone 0.1 is implemented on the
+> [`main` branch](https://github.com/convesoft/nx-rust): the crates of Cargo
+> workspaces become Nx projects, with the dependency graph between them,
+> inferred targets and caching of task results. It is not published to npm
+> yet. Next on the
+> [roadmap](https://github.com/convesoft/nx-rust/blob/main/nx-rust/docs/product.mara.md#roadmap):
+> batching (0.2), nextest and affected tests (0.3), napi and wasm artifacts
+> (0.4) and releasing crates (0.5).
 
 - **Nothing to describe twice.** Projects, targets and dependencies come from
   `cargo metadata`. No crate needs a `project.json`.
@@ -13,7 +19,8 @@ JS and TS projects.
   without the plugin.
 - **A cache you can trust.** Nx stores task results and final artifacts, never
   Cargo's intermediate files.
-- **Few cargo invocations.** One cargo call per group of tasks.
+- **Few cargo invocations**, from milestone 0.2: one cargo call per group of
+  tasks.
 - **Rust and JS in one graph.** `nx affected -t lint test build` covers both.
 
 ## Requirements
@@ -24,7 +31,7 @@ CI yet.
 ## Usage
 
 ```sh
-nx add @convesoft/nx-rust
+nx add @convesoft/nx-rust        # once 0.1 is on npm
 nx affected -t lint test build
 ```
 
