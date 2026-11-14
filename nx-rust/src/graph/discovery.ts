@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { CargoMetadata, CargoPackage } from "../cargo/metadata";
 import { ConfiguredTools, configuredTools } from "../cargo/configured-tools";
 import { cratesBelowPathsFolder } from "../cargo/paths-crates";
-import { readRedirections, Redirection } from "../cargo/redirections";
+import { ConfigFile, readRedirections, Redirection } from "../cargo/redirections";
 import { configuredTriples, PickedTriples, pickedTriples } from "../cargo/target-triples";
 import { CargoError } from "../cargo/run-cargo";
 import { UnsupportedCargoError } from "../compatibility/cargo-version";
@@ -70,14 +70,25 @@ export interface CargoWorkspace {
    */
   configIncludes: string[];
   /**
+   * Every configuration file that cargo reads for the workspace and that
+   * exists, with the keys it sets ({@link readRedirections}).
+   */
+  configFiles: ConfigFile[];
+  /**
    * The warnings, also in {@link CargoDiscovery.warnings}, about the
-   * workspace's redirections: an included file that is no valid TOML, a
-   * file with redirections whose changes Nx does not see, because it lies
-   * outside the repository or is ignored, and a redirected crate that
-   * `cargo metadata` fails for. The projects of the workspace repeat them at
-   * the start of their tasks.
+   * workspace's redirections: an included file that is no valid TOML and a
+   * redirected crate that `cargo metadata` fails for. The projects of the
+   * workspace repeat them at the start of their tasks, and their keys hold
+   * a digest of them.
    */
   warnings: string[];
+  /**
+   * The warnings, also in {@link CargoDiscovery.warnings}, about the files
+   * that cargo reads for the workspace and that Nx does not hash
+   * ({@link unhashedConfigurationWarnings}). Only the lockfile task of the
+   * workspace project repeats them, and no key holds them.
+   */
+  configurationWarnings: string[];
 }
 
 /** The report of a crate without a project that a member may use. */
@@ -190,7 +201,9 @@ export async function discoverWorkspaces(
       configuredTriples: configuredTriples(report.workspace_root, process.env),
       configuredTools: configuredTools(report.workspace_root, process.env),
       configIncludes: found.includedFiles,
+      configFiles: found.configFiles,
       warnings: [...new Set(found.warnings)],
+      configurationWarnings: [],
     });
   }
   const unreportedPathDependencies = new Map<string, string>();
@@ -211,7 +224,7 @@ export async function discoverWorkspaces(
       );
     }
   }
-  warnings.push(...(await unwatchedRedirectionWarnings(workspaces, workspaceRoot)));
+  warnings.push(...(await unhashedConfigurationWarnings(workspaces, workspaceRoot)));
   return {
     workspaceRoot,
     workspaces,
@@ -222,30 +235,69 @@ export async function discoverWorkspaces(
 }
 
 /**
- * One warning for each file that redirects dependencies of a workspace and
- * whose changes Nx does not see: a configuration file outside the
- * repository, and a configuration file or root manifest inside it that an
- * ignore rule, such as one in `.gitignore` or `.nxignore`, leaves out of the
- * files that Nx reads ({@link filesNxSees}). The plugin applies such a file,
- * but the Nx daemon does not create the graph again when it changes, so a
- * change reaches the graph only once Nx creates the graph again for another
- * reason (`EVD-CARGO-REDIRECTIONS`). Each warning also joins the
- * {@link CargoWorkspace.warnings} of the workspaces it names.
+ * The top-level keys of a Cargo configuration file whose settings can
+ * change what cargo builds or checks: the compiler, its flags and the
+ * linker, the profiles, the environment, the sources and the unstable
+ * features (`DES-DIAGNOSTICS`). `[resolver]`, `[registry]` and
+ * `[registries]` change only what `Cargo.lock` records, which the keys
+ * follow through the lockfile task's digests.
+ */
+const buildTables = [
+  "build",
+  "target",
+  "host",
+  "profile",
+  "env",
+  "patch",
+  "source",
+  "paths",
+  "unstable",
+  "doc",
+];
+
+/**
+ * One warning for each file that cargo reads for a workspace, that Nx does
+ * not hash, and that sets something that can change a build or a check
+ * ({@link buildTables}) or redirects dependencies: a configuration file
+ * outside the repository, such as the Cargo home's, and a configuration
+ * file or root manifest inside it that an ignore rule, such as one in
+ * `.gitignore` or `.nxignore`, leaves out of the files that Nx reads
+ * ({@link filesNxSees}). A result cached before a change to such a file can
+ * be restored after it, and where the file redirects dependencies, the Nx
+ * daemon keeps the graph's edges until it creates the graph again for
+ * another reason (`EVD-CARGO-REDIRECTIONS`, `RISK-HOST-ENVIRONMENT`).
+ *
+ * Each warning joins the {@link CargoWorkspace.configurationWarnings} of
+ * the workspaces it names, and stays out of their projects' keys, so that a
+ * Cargo configuration of one machine gives no keys of their own.
  */
 // @mara implements DES-DIAGNOSTICS
-async function unwatchedRedirectionWarnings(
+async function unhashedConfigurationWarnings(
   workspaces: CargoWorkspace[],
   workspaceRoot: string,
 ): Promise<string[]> {
-  const byFile = new Map<string, { concerned: CargoWorkspace[]; tables: Set<string> }>();
+  const byFile = new Map<
+    string,
+    { concerned: CargoWorkspace[]; tables: Set<string>; redirects: Set<string> }
+  >();
+  const entry = (file: string, workspace: CargoWorkspace) => {
+    const found = byFile.get(file) ?? { concerned: [], tables: new Set(), redirects: new Set() };
+    if (!found.concerned.includes(workspace)) {
+      found.concerned.push(workspace);
+    }
+    byFile.set(file, found);
+    return found;
+  };
   for (const workspace of workspaces) {
-    for (const { file, table } of workspace.redirections) {
-      const entry = byFile.get(file) ?? { concerned: [], tables: new Set<string>() };
-      if (!entry.concerned.includes(workspace)) {
-        entry.concerned.push(workspace);
+    for (const { file, keys } of workspace.configFiles) {
+      const counted = keys.filter((key) => buildTables.includes(key));
+      if (counted.length > 0) {
+        const found = entry(file, workspace);
+        counted.forEach((key) => found.tables.add(key));
       }
-      entry.tables.add(table);
-      byFile.set(file, entry);
+    }
+    for (const { file, table } of workspace.redirections) {
+      entry(file, workspace).redirects.add(table);
     }
   }
   const inside = [...byFile.keys()]
@@ -253,33 +305,64 @@ async function unwatchedRedirectionWarnings(
     .map((file) => repositoryPath(workspaceRoot, file));
   const seen = await filesNxSees(workspaceRoot, inside);
   const messages: string[] = [];
-  for (const [file, { concerned, tables }] of byFile) {
+  for (const [file, { concerned, tables, redirects }] of byFile) {
     const outside = isOutside(workspaceRoot, file);
     if (!outside && seen.has(repositoryPath(workspaceRoot, file))) {
       continue;
     }
-    const through = ["patch", "replace", "paths"]
-      .filter((table) => tables.has(table))
-      .map((table) => (table === "paths" ? table : `[${table}]`))
-      .join(" and ");
-    const message = [
-      `nx-rust: ${displayPath(workspaceRoot, file)} redirects dependencies of ${describeWorkspaces(concerned.map((workspace) => workspace.root))} through ${through}, so nx-rust gives the crates that may use the redirected crates edges to them.`,
-      ...(outside
+    const shown = displayPath(workspaceRoot, file);
+    const subject = describeWorkspaces(concerned.map((workspace) => workspace.root));
+    const through = tableList(
+      ["patch", "replace", "paths"].filter((table) => redirects.has(table)),
+    );
+    const graph = `with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (\`nx reset\`)`;
+    // A root manifest sets nothing else that this warning names.
+    const message = (
+      tables.size === 0
         ? [
-            "The file lies outside the repository, so Nx does not see when it changes: with the Nx daemon, the graph keeps these edges until a file in the repository changes or the daemon restarts (`nx reset`).",
-            "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository.",
+            `nx-rust: ${shown} redirects dependencies of ${subject} through ${through}, so nx-rust gives the crates that may use the redirected crates edges to them.`,
+            outside
+              ? `The file lies outside the repository, so Nx does not see when it changes: ${graph}.`
+              : `An ignore rule, such as one in .gitignore or .nxignore, leaves the file out of the files that Nx reads, so Nx does not see when it changes: ${graph}.`,
+            outside
+              ? "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository."
+              : "To let Nx follow the redirections, stop ignoring the file, or run `nx reset` after each change to it.",
           ]
         : [
-            "An ignore rule, such as one in .gitignore or .nxignore, leaves the file out of the files that Nx reads, so Nx does not see when it changes: with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (`nx reset`).",
-            "To let Nx follow the redirections, stop ignoring the file, or run `nx reset` after each change to it.",
-          ]),
-    ].join("\n");
+            `nx-rust: ${shown} sets ${tableList(buildTables.filter((table) => tables.has(table)))} for ${subject}, and Nx does not hash it: ${outside ? "it lies outside the repository" : "an ignore rule, such as one in .gitignore or .nxignore, leaves it out of the files that Nx reads"}. A result that Nx cached before a change to the file can therefore be restored after it.`,
+            ...(redirects.size === 0
+              ? []
+              : [
+                  `It redirects dependencies through ${through}, so nx-rust gives the crates that may use the redirected crates edges to them; ${graph}.`,
+                ]),
+            "After changing the file, run `nx reset`. Running a command with --skip-nx-cache instead covers that command alone: Nx stores none of its results, so a later run can still restore a result from before the change.",
+            ...(outside
+              ? redirects.size === 0
+                ? []
+                : [
+                    "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository.",
+                  ]
+              : [
+                  `To have Nx hash the file${redirects.size === 0 ? "" : " and follow its redirections"}, stop ignoring it.`,
+                ]),
+          ]
+    ).join("\n");
     for (const workspace of concerned) {
-      addWarning(workspace, message);
+      if (!workspace.configurationWarnings.includes(message)) {
+        workspace.configurationWarnings.push(message);
+      }
     }
     messages.push(message);
   }
   return messages;
+}
+
+// "[build]", "[build] and paths", or "[build], [env] and paths".
+function tableList(tables: string[]): string {
+  const named = tables.map((table) => (table === "paths" ? table : `[${table}]`));
+  return named.length <= 1
+    ? named.join("")
+    : `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
 }
 
 // Adds a warning to those that the workspace's projects repeat, once.

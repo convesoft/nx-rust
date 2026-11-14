@@ -24,7 +24,6 @@ import {
   pinnedToolchainAvailable,
   runNx,
   testEnvironment,
-  withoutColours,
 } from "./harness";
 
 // Checks the parts of VER-GRAPH about crates that [patch], [replace] and
@@ -197,6 +196,23 @@ function roots(graph: FixtureGraph): Record<string, string> {
   return Object.fromEntries(
     Object.entries(graph.projects).map(([name, project]) => [name, project.root]),
   );
+}
+
+/**
+ * Runs `task` and says whether its own output, after its header and below
+ * what graph creation printed, holds `text`.
+ */
+async function printedByTask(
+  workspace: FixtureWorkspace,
+  task: string,
+  text: string,
+  env: Record<string, string> = {},
+): Promise<{ task: string; status: number | null; warned: boolean }> {
+  const { status, output } = await runNx(workspace, ["run", task], env);
+  const header = output.indexOf(`> nx run ${task}`);
+  const next = output.indexOf("> nx run ", header + 1);
+  const own = header < 0 ? "" : output.slice(header, next < 0 ? undefined : next);
+  return { task, status, warned: own.includes(text) };
 }
 
 /**
@@ -486,18 +502,29 @@ describe("edges to redirected crates", () => {
         expect(edges(graph)).toEqual(committed);
         expect(before.output).not.toContain("outside the repository");
         expect(after.status).toBe(0);
-        expect(after.output).toContain(`nx-rust: ${config} redirects dependencies`);
         // The Cargo home applies to both workspaces; shared has no member
         // with a registry dependency, so it gets no edge.
-        expect(after.output).toContain("the Cargo workspaces in rust and shared through [patch]");
-        expect(after.output).toContain("outside the repository");
-        expect(after.output).toContain(
+        for (const text of [
+          `nx-rust: ${config} sets [patch] for the Cargo workspaces in rust and shared, and Nx does not hash it: it lies outside the repository. A result that Nx cached before a change to the file can therefore be restored after it.`,
+          "It redirects dependencies through [patch], so nx-rust gives the crates that may use the redirected crates edges to them; with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (`nx reset`).",
+          "After changing the file, run `nx reset`. Running a command with --skip-nx-cache instead covers that command alone: Nx stores none of its results, so a later run can still restore a result from before the change.",
           "To let Nx follow the redirections, move them into the root Cargo.toml of the workspace that needs them or into a .cargo/config.toml inside the repository.",
-        );
-        // Every project of both workspaces repeats it at the start of its tasks.
-        expect(warnedProjects(graph, `nx-rust: ${config} redirects dependencies`)).toEqual(
-          Object.keys(graph.projects).sort(),
-        );
+        ]) {
+          expect(after.output).toContain(text);
+        }
+        // The lockfile task of each workspace repeats it, and a task of a
+        // crate does not (DES-DIAGNOSTICS).
+        for (const [task, warned] of [
+          ["rust:lockfile", true],
+          ["shared:lockfile", true],
+          ["api:fmt-check", false],
+        ] as const) {
+          expect(await printedByTask(workspace, task, `nx-rust: ${config} sets`, env)).toEqual({
+            task,
+            status: 0,
+            warned,
+          });
+        }
       } finally {
         workspace.remove();
       }
@@ -525,7 +552,21 @@ describe("edges to redirected crates", () => {
             }
           : {},
       );
-      const warning = `nx-rust: ${file} redirects dependencies of the Cargo workspace in rust through [patch], so nx-rust gives the crates that may use the redirected crates edges to them.`;
+      // A configuration file names what it sets; the root manifest, whose
+      // workspace has no lockfile task then, only its redirections.
+      const texts = config
+        ? [
+            "nx-rust: rust/.cargo/config.toml sets [patch] for the Cargo workspace in rust, and Nx does not hash it: an ignore rule, such as one in .gitignore or .nxignore, leaves it out of the files that Nx reads. A result that Nx cached before a change to the file can therefore be restored after it.",
+            "It redirects dependencies through [patch], so nx-rust gives the crates that may use the redirected crates edges to them; with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (`nx reset`).",
+            "After changing the file, run `nx reset`. Running a command with --skip-nx-cache instead covers that command alone: Nx stores none of its results, so a later run can still restore a result from before the change.",
+            "To have Nx hash the file and follow its redirections, stop ignoring it.",
+          ]
+        : [
+            "nx-rust: rust/Cargo.toml redirects dependencies of the Cargo workspace in rust through [patch], so nx-rust gives the crates that may use the redirected crates edges to them.",
+            "An ignore rule, such as one in .gitignore or .nxignore, leaves the file out of the files that Nx reads, so Nx does not see when it changes: with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (`nx reset`).",
+            "To let Nx follow the redirections, stop ignoring the file, or run `nx reset` after each change to it.",
+          ];
+      const start = `nx-rust: ${file} `;
       try {
         const seen = await workspace.nx(["show", "projects"]);
         applyFileChanges(workspace.root, ignore);
@@ -533,21 +574,23 @@ describe("edges to redirected crates", () => {
         const shown = await workspace.nx(["show", "projects"]);
 
         // Without its root manifest, the workspace has no project of its own.
-        const projects = config ? rustProjects : rustProjects.filter((name) => name !== "rust");
         expect(edges(graph)).toEqual(
           committed.filter(([source, target]) => config || ![source, target].includes("rust")),
         );
         expect(seen.status).toBe(0);
-        expect(seen.output).not.toContain(warning);
+        expect(seen.output).not.toContain(start);
         expect(shown.status).toBe(0);
-        expect(shown.output).toContain(warning);
-        expect(shown.output).toContain(
-          "An ignore rule, such as one in .gitignore or .nxignore, leaves the file out of the files that Nx reads, so Nx does not see when it changes: with the Nx daemon, the graph keeps these edges until a file that Nx reads changes or the daemon restarts (`nx reset`).",
-        );
-        expect(shown.output).toContain(
-          "To let Nx follow the redirections, stop ignoring the file, or run `nx reset` after each change to it.",
-        );
-        expect(warnedProjects(graph, `nx-rust: ${file} redirects dependencies`)).toEqual(projects);
+        for (const text of texts) {
+          expect(shown.output).toContain(text);
+        }
+        // The lockfile task of rust repeats it, and that of shared does not.
+        const tasks: [string, boolean][] = [
+          ...(config ? ([["rust:lockfile", true]] as [string, boolean][]) : []),
+          ["shared:lockfile", false],
+        ];
+        for (const [task, warned] of tasks) {
+          expect(await printedByTask(workspace, task, start)).toEqual({ task, status: 0, warned });
+        }
       } finally {
         workspace.remove();
       }
@@ -556,7 +599,7 @@ describe("edges to redirected crates", () => {
   );
 
   it(
-    "warn about configuration outside the repository again at the start of a task, where the Nx daemon keeps graph creation's output in its log",
+    "warn about configuration outside the repository again in the lockfile tasks, where the Nx daemon keeps graph creation's output in its log",
     async () => {
       const workspace = FixtureWorkspace.create("patched-workspaces", {
         "rust/Cargo.toml": rootManifest(...patchWithoutModel),
@@ -569,17 +612,12 @@ describe("edges to redirected crates", () => {
         `[patch.crates-io]\nmodel = { path = "${basename(workspace.root)}/rust/crates/model" }\n`,
       );
       const env = { CARGO_HOME: cargoHome, NX_DAEMON: "true" };
-      const warning = `nx-rust: ${config} redirects dependencies`;
+      const warning = `nx-rust: ${config} sets [patch]`;
       try {
-        for (const task of ["types:fmt-check", "api:fmt-check"]) {
-          const { status, output } = await workspace.nx(
-            ["run", task, "--output-style=static"],
-            env,
-          );
-
-          expect({ task, status }).toEqual({ task, status: 0 });
-          expect({ task, warned: withoutColours(output).includes(warning) }).toEqual({
+        for (const task of ["shared:lockfile", "rust:lockfile"]) {
+          expect(await printedByTask(workspace, task, warning, env)).toEqual({
             task,
+            status: 0,
             warned: true,
           });
         }

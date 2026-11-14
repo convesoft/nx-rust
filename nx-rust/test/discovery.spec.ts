@@ -17,6 +17,7 @@ import {
   pinnedToolchain,
   pinnedToolchainAvailable,
   ProbeRecord,
+  runNx,
   testEnvironment,
   withoutColours,
 } from "./harness";
@@ -504,23 +505,32 @@ describe("failed discovery", () => {
             workspaceCall("backend"),
             metadataCall("backend", "shared/crates/model/Cargo.toml"),
           ]);
-          // The executor prints it again at the start of each task of server.
-          const warnings: string[] = graph.projects.server.metadata.cargo.warnings;
-          const [warning] = warnings.filter((message) => message.includes("`cargo metadata`"));
-          expect(warning).toContain(
-            "`cargo metadata` failed for shared/crates/model/Cargo.toml, a path dependency of backend/crates/server/Cargo.toml that has no project of its own",
-          );
-          expect(warning).toContain(message);
-          expect(warning).toContain(
-            "so it does not follow the crates that this crate depends on by path: the crates that use it take only its own folder into their cache keys, and a change in a crate behind it can leave their keys unchanged.",
-          );
-          expect(warning).toContain(
-            "To have those crates followed, fix what cargo reports, so that `cargo metadata --no-deps --manifest-path shared/crates/model/Cargo.toml` succeeds in backend, or declare their files with fileInputs in the [package.metadata.nx] or [workspace.metadata.nx] table of the crates that use it.",
-          );
-          expect(graph.projects.backend.metadata.cargo.warnings ?? []).not.toContain(warning);
-          // Graph creation prints it once.
+          // Graph creation prints the warning once, and the executor again at
+          // the start of a task of server, which builds model all the same:
+          // after the task's header, below what graph creation printed.
+          const task = await runNx(workspace, ["run", "server:check"]);
+          const printed = withoutColours(shown.output);
+          const ofTask = task.output.slice(task.output.indexOf("> nx run server:check"));
+          const first =
+            "nx-rust: `cargo metadata` failed for shared/crates/model/Cargo.toml, a path dependency of backend/crates/server/Cargo.toml that has no project of its own";
           expect(shown.status).toBe(0);
-          expect(withoutColours(shown.output).split(warning)).toHaveLength(2);
+          expect(printed.split(first)).toHaveLength(2);
+          expect({
+            status: task.status,
+            header: task.output.includes("> nx run server:check"),
+          }).toEqual({
+            status: 0,
+            header: true,
+          });
+          for (const text of [
+            first,
+            message,
+            "so it does not follow the crates that this crate depends on by path: the crates that use it take only its own folder into their cache keys, and a change in a crate behind it can leave their keys unchanged.",
+            "To have those crates followed, fix what cargo reports, so that `cargo metadata --no-deps --manifest-path shared/crates/model/Cargo.toml` succeeds in backend, or declare their files with fileInputs in the [package.metadata.nx] or [workspace.metadata.nx] table of the crates that use it.",
+          ]) {
+            expect(printed).toContain(text);
+            expect(ofTask).toContain(text);
+          }
         } finally {
           workspace.remove();
         }

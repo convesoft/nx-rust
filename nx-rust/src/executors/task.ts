@@ -149,7 +149,7 @@ export async function runTask(
   options: CargoTargetOptions,
   context: ExecutorContext,
 ): Promise<{ success: boolean }> {
-  for (const warning of projectWarnings(context)) {
+  for (const warning of projectWarnings(context, executor.shortName === "lockfile")) {
     console.warn(warning);
   }
   let invocation: TaskInvocation;
@@ -787,12 +787,19 @@ function checkArtifactDirectory(
 // The warnings that graph creation recorded for the task's project, whose
 // digest the task's key holds, then those that `createDependencies` found
 // for the task's target, each once (`DES-DIAGNOSTICS`, "Warnings where they
-// are seen").
+// are seen"). The lockfile task, which is never cached, also prints those
+// about its workspace's Cargo configuration that Nx does not hash, which no
+// key holds.
 // @mara implements DES-DIAGNOSTICS
-function projectWarnings(context: ExecutorContext): string[] {
+function projectWarnings(context: ExecutorContext, lockfileTask: boolean): string[] {
   const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];
   const cargo = project === undefined ? undefined : cargoMetadataOf(project);
-  const warnings: unknown[] = Array.isArray(cargo?.warnings) ? cargo.warnings : [];
+  const warnings: unknown[] = [
+    ...(Array.isArray(cargo?.warnings) ? cargo.warnings : []),
+    ...(lockfileTask && Array.isArray(cargo?.configurationWarnings)
+      ? cargo.configurationWarnings
+      : []),
+  ];
   const targetWarnings: unknown[] = Array.isArray(cargo?.targetWarnings)
     ? cargo.targetWarnings
     : [];

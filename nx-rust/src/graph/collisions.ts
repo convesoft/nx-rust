@@ -35,6 +35,12 @@ export interface ProjectCargoMetadata {
    */
   warnings?: string[];
   /**
+   * On a workspace project, the warnings about Cargo configuration files of
+   * its workspace that Nx does not hash, which only its lockfile task prints
+   * and which no key holds (`DES-DIAGNOSTICS`); absent without any.
+   */
+  configurationWarnings?: string[];
+  /**
    * The warnings that `createDependencies` found for targets of the project,
    * which `createMetadata` adds, so that the executor prints each at the
    * start of a task of its target (`DES-TARGET-DEFAULT-GUARD`); absent

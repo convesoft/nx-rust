@@ -252,6 +252,17 @@ are those at the workspace root and above it.
 - A toolchain or configuration file **inside a member crate** applies only to a
   `cargo` you start in that crate's folder. It does not apply to Nx runs,
   although a change to it still changes the cache key.
+- **Cargo configuration that Nx does not hash** is outside the key: a
+  `.cargo/config.toml` above the repository or in your Cargo home, and one that
+  `.gitignore` or `.nxignore` hides. If such a file sets something that can
+  change a build, such as `[build]`, `[target]`, `[profile]` or `[env]`, the
+  plugin warns, because a result cached before you change the file can be
+  restored afterwards. After changing it, run `nx reset`; `--skip-nx-cache`
+  helps only the command you give it to, since Nx stores nothing from that
+  run. Inside the repository, stop ignoring the file to have Nx hash it. The
+  warning appears when Nx builds the graph without the daemon and in the
+  workspace's `lockfile` task, which Nx shows with `--verbose` or
+  `--output-style=static`.
 - The toolchain in the key is whatever `rustc -Vv` reports in the workspace
   root. `RUSTUP_TOOLCHAIN`, `rustup override` and a toolchain installed without
   rustup are all respected. Nx runs `rustc -Vv` with each task's environment, so
