@@ -105,6 +105,21 @@ export const HARNESS_TIMEOUT = 120_000;
  *   page for every command: `NX_TASK_TARGET_PROJECT`, by which Nx tells a
  *   nested run, is among the `NX_` variables left out.
  *
+ * The variables from which Nx 24.0.6 concludes that it runs in an agent's
+ * sandbox (`isSandbox()`: `SANDBOX_RUNTIME`, `GEMINI_SANDBOX`,
+ * `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED` and `CURSOR_SANDBOX`)
+ * are passed on. Unlike the agent variables, they describe a real
+ * restriction of the session, and Nx reads them only after something has
+ * failed: where a plugin worker cannot start, Nx loads the plugins into its
+ * own process with a warning instead of failing graph creation; where the
+ * daemon fails with an internal error, Nx turns the daemon off for that
+ * command only instead of until `nx reset`; and its errors about sockets
+ * advise on the sandbox's settings. Where nothing fails, a command prints
+ * and does the same with them as without, and leaving them out would turn
+ * a run that Nx degrades in a sandbox that refuses sockets into a failing
+ * one. `nx init` and `nx configure-ai-agents`, which no test runs, read
+ * them as well, and `nx init` only together with an agent.
+ *
  * `NX_USE_LOCAL` keeps an Nx daemon from installing `nx@latest`. Outside CI,
  * a daemon that starts asks the latest Nx whether to offer Nx Console and
  * whether the workspace's AI agent configuration is outdated, and for that
