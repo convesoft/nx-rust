@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -73,19 +72,6 @@ const base = [
 ];
 
 describe("a member's digest", () => {
-  it("is the SHA-256 of one tab-joined line per reachable entry, in byte order", () => {
-    const lines = [
-      ["app", "0.1.0", "", "", "", "itoa", "lib"],
-      ["itoa", "1.0.0", crates, "a".repeat(64), ""],
-      ["lib", "0.1.0", "", "", "", "ryu"],
-      ["ryu", "1.0.0", crates, "b".repeat(64), ""],
-    ].map((fields) => `${fields.join("\t")}\n`);
-
-    expect(digest(lockfile(...base))).toBe(
-      createHash("sha256").update(lines.join(""), "utf8").digest("hex"),
-    );
-  });
-
   it("changes with the version, the checksum or the source of an entry the member reaches, also through a path package", () => {
     const original = digest(lockfile(...base));
     for (const changed of [

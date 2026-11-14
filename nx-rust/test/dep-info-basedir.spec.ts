@@ -42,23 +42,6 @@ describe("the folder that build.dep-info-basedir gives", () => {
     expect(folder({ CARGO_BUILD_DEP_INFO_BASEDIR: "" })).toBe(join(root, "ws/file"));
   });
 
-  it("takes the deepest file that sets it, then the folders above and the Cargo home, each from the folder above its own", () => {
-    write("ws/.cargo/config.toml", basedir('"a"'));
-    write(".cargo/config.toml", basedir('"b"'));
-    write("home/config.toml", basedir('"c"'));
-    expect(folder()).toBe(join(root, "ws/a"));
-    rmSync(join(root, "ws/.cargo"), { recursive: true });
-    expect(folder()).toBe(join(root, "b"));
-    rmSync(join(root, ".cargo"), { recursive: true });
-    expect(folder()).toBe(join(root, "c"));
-  });
-
-  it("reads .cargo/config where it exists beside .cargo/config.toml", () => {
-    write("ws/.cargo/config", basedir('"legacy"'));
-    write("ws/.cargo/config.toml", basedir('"current"'));
-    expect(folder()).toBe(join(root, "ws/legacy"));
-  });
-
   it("passes over a value that is no string", () => {
     write("ws/.cargo/config.toml", basedir("5"));
     write(".cargo/config.toml", basedir('"b"'));

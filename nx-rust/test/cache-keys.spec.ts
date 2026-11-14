@@ -503,6 +503,23 @@ const pluginEntryOptions =
     return JSON.stringify(nxJson);
   };
 
+/**
+ * Two entries of the plugin in the `nx.json` of two-workspaces: one for the
+ * workspace at the root, and one with `options` for the workspace in tools/.
+ */
+const toolsEntryOptions =
+  (options: object) =>
+  (text: string | undefined): string => {
+    const nxJson = JSON.parse(text ?? "{}");
+    const [entry] = nxJson.plugins;
+    const plugin = typeof entry === "string" ? entry : entry.plugin;
+    nxJson.plugins = [
+      { plugin, include: ["Cargo.toml", "crates/**"] },
+      { plugin, include: ["tools/**"], options },
+    ];
+    return JSON.stringify(nxJson);
+  };
+
 describeCacheKeyMatrix("keys with what the repository adds", [
   ...(
     [
@@ -549,6 +566,37 @@ describeCacheKeyMatrix("keys with what the repository adds", [
       "testkit:test": "must not differ",
     },
   },
+  // In two-workspaces, tools is the crate of tools/'s root manifest, with the
+  // member scaffold; app and util belong to the workspace at the root.
+  ...(
+    [
+      [
+        "the plugin options of the entry that receives the workspace, for its crates and not those of another entry",
+        { "nx.json": toolsEntryOptions({ runtimeInputs: ["echo $REVIEW_RUNTIME"] }) },
+      ],
+      [
+        "the workspace table, for its members and not those of another workspace",
+        {
+          "tools/Cargo.toml": appended(
+            '\n[workspace.metadata.nx]\nruntimeInputs = ["echo $REVIEW_RUNTIME"]\n',
+          ),
+        },
+      ],
+    ] as const
+  ).map(([where, files]): CacheKeyRow => ({
+    change: `a change of the output of a command that runtimeInputs adds in ${where}`,
+    fixture: "two-workspaces",
+    base: { files },
+    before: { env: { REVIEW_RUNTIME: "a" } },
+    after: { env: { REVIEW_RUNTIME: "b" } },
+    keys: {
+      "tools:test": "must differ",
+      "tools:build": "must differ",
+      "scaffold:test": "must differ",
+      "app:test": "must not differ",
+      "util:test": "must not differ",
+    },
+  })),
   {
     change:
       "a change of a variable that the workspace table adds, for a crate that adds one of its own",
