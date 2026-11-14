@@ -687,11 +687,12 @@ describe("caching", () => {
       HARNESS_TIMEOUT,
     );
 
-    it.each<[string, FileChanges, Record<string, string>, string[]]>([
+    it.each<[string, FileChanges, Record<string, string>, string[], string[]]>([
       [
         "a string in Cargo's configuration",
         { "rust/.cargo/config.toml": '[build]\ntarget = "x86_64-unknown-linux-gnu"\n' },
         {},
+        ["x86_64-unknown-linux-gnu"],
         ["x86_64-unknown-linux-gnu"],
       ],
       [
@@ -702,24 +703,30 @@ describe("caching", () => {
         },
         {},
         ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
+        ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
       ],
       [
         "CARGO_BUILD_TARGET in the graph's environment, over a string",
         { "rust/.cargo/config.toml": '[build]\ntarget = "x86_64-unknown-linux-gnu"\n' },
         { CARGO_BUILD_TARGET: "aarch64-unknown-linux-gnu" },
         ["aarch64-unknown-linux-gnu"],
+        ["x86_64-unknown-linux-gnu"],
       ],
       [
         "CARGO_BUILD_TARGET in the graph's environment, beside a list",
         { "rust/.cargo/config.toml": '[build]\ntarget = ["x86_64-unknown-linux-gnu"]\n' },
         { CARGO_BUILD_TARGET: "aarch64-unknown-linux-gnu" },
         ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
+        ["x86_64-unknown-linux-gnu"],
       ],
     ])(
       "name the folder of each triple that %s picks in the outputs of build and doc, behind the targetTriple option",
-      async (_case, files, env, triples) => {
+      async (_case, files, env, triples, configured) => {
         const graph = await loadFixtureGraph("crate-shapes", { files, env });
         const { cli, rust } = graph.projects;
+        const tripleInput = expect.stringMatching(
+          /^\{ cd '\.\/rust' && '[^']+' '[^']+\/src\/cargo\/print-triples\.js' 2>\/dev\/null \|\| od -An -N16 -tx1 \/dev\/urandom; \}; true$/,
+        );
         const folders = triples.map(
           (triple) => `{workspaceRoot}/rust/target/{options.targetTriple ?? ${triple}}`,
         );
@@ -735,8 +742,19 @@ describe("caching", () => {
         for (const target of [cli.targets.build, rust.targets.doc]) {
           expect(target.metadata.cargo.triples).toEqual(triples);
           expect(target.metadata.cargo.tripleProblem).toBeUndefined();
+          expect(target.inputs).toContainEqual({ runtime: tripleInput });
         }
+        // What the configuration alone picks, without CARGO_BUILD_TARGET.
+        expect(cli.targets.build.metadata.cargo.configuredPick).toBe(
+          `triples ${[...configured].sort().join(" ")}`,
+        );
         expect(cli.targets.check.metadata.cargo.triples).toBeUndefined();
+        for (const name of ["check", "lint", "test", "fmt-check", "run"]) {
+          expect({ name, inputs: cli.targets[name].inputs }).not.toEqual({
+            name,
+            inputs: expect.arrayContaining([{ runtime: tripleInput }]),
+          });
+        }
         expect(cli.metadata.cargo.warnings ?? []).toEqual([]);
       },
       HARNESS_TIMEOUT,
@@ -779,6 +797,8 @@ describe("caching", () => {
           expect(target.metadata.cargo.uncached).toBe(
             `${problem}; give the triple as the targetTriple option instead`,
           );
+          // An uncached target has no triple input.
+          expect(JSON.stringify(target.inputs)).not.toContain("print-triples");
         }
         for (const name of ["check", "lint", "test", "fmt-check"]) {
           expect(cli.targets[name].cache).toBe(true);

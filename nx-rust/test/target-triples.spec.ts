@@ -10,8 +10,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { type PickedTriples, pickedTriples } from "../src/cargo/target-triples";
-import { HARNESS_TIMEOUT, testEnvironment } from "./harness";
+import {
+  configuredTriples,
+  type PickedTriples,
+  pickedTriples,
+  pickText,
+} from "../src/cargo/target-triples";
+import { tripleCommand } from "../src/graph/inputs";
+import { HARNESS_TIMEOUT, loadsCompiledPlugin, pluginPackage, testEnvironment } from "./harness";
 
 // Checks the rule of DES-OUTPUTS ("Paths") by which the plugin names the
 // triples that cargo builds for without --target, from build.target in
@@ -183,6 +189,80 @@ describe("the triples that cargo picks without --target", () => {
     write("ws/.cargo/one.toml", target('["a"]'));
     write("ws/.cargo/two.toml", target('["c"]'));
     expect(pick()).toMatchObject({ kind: "unnamed", reason: versions });
+  });
+});
+
+describe("the triple input of build and doc", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-triple-input-")));
+    mkdirSync(join(root, "repo/rust/.cargo"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /** What the command prints in the repository root, as Nx runs it, with `env`. */
+  function evaluate(env: NodeJS.ProcessEnv, script?: string): string {
+    const command = tripleCommand("rust", script ?? join(pluginPackage(), "src/cargo/print-triples.js"));
+    const run = spawnSync("sh", ["-c", command], {
+      cwd: join(root, "repo"),
+      env: { ...testEnvironment(), CARGO_HOME: join(root, "home"), ...env },
+      encoding: "utf8",
+    });
+    expect(run.status).toBe(0);
+    return run.stdout;
+  }
+
+  it("writes each kind of pick as text without paths, and names the configuration alone without the variable", () => {
+    const config = join(root, "repo/rust/.cargo/config.toml");
+    writeFileSync(config, '[build]\ntarget = ["b", "a", "b"]\n');
+    const env = { CARGO_HOME: join(root, "home") };
+    expect(pickText(pickedTriples(join(root, "repo/rust"), env))).toBe("triples a b");
+    expect(pickText(pickedTriples(join(root, "repo/rust"), { ...env, CARGO_BUILD_TARGET: "c" }))).toBe(
+      "triples a b c",
+    );
+    expect(
+      pickText(configuredTriples(join(root, "repo/rust"), { ...env, CARGO_BUILD_TARGET: "c" })),
+    ).toBe("triples a b");
+    writeFileSync(config, '[build]\ntarget = "host-tuple"\n');
+    expect(pickText(pickedTriples(join(root, "repo/rust"), env))).toBe(
+      'unnamed "host-tuple": cargo replaces it with the host\'s triple',
+    );
+    rmSync(config);
+    expect(pickText(pickedTriples(join(root, "repo/rust"), env))).toBe("none");
+  });
+
+  (loadsCompiledPlugin() ? it : it.skip)(
+    "prints the pick of the workspace root with the task's environment, as graph creation reads it",
+    () => {
+      const config = join(root, "repo/rust/.cargo/config.toml");
+      writeFileSync(config, '[build]\ntarget = ["x86_64-unknown-linux-gnu"]\n');
+      expect(evaluate({})).toBe("triples x86_64-unknown-linux-gnu\n");
+      expect(evaluate({ CARGO_BUILD_TARGET: "aarch64-unknown-linux-gnu" })).toBe(
+        "triples aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu\n",
+      );
+      // The Cargo home's configuration and one above the repository count.
+      rmSync(config);
+      mkdirSync(join(root, "home"), { recursive: true });
+      writeFileSync(join(root, "home/config.toml"), '[build]\ntarget = "aarch64-unknown-linux-gnu"\n');
+      expect(evaluate({})).toBe("triples aarch64-unknown-linux-gnu\n");
+      mkdirSync(join(root, ".cargo"));
+      writeFileSync(join(root, ".cargo/config.toml"), '[build]\ntarget = "host-tuple"\n');
+      expect(evaluate({})).toBe('unnamed "host-tuple": cargo replaces it with the host\'s triple\n');
+      rmSync(join(root, ".cargo"), { recursive: true });
+      rmSync(join(root, "home"), { recursive: true });
+      expect(evaluate({})).toBe("none\n");
+    },
+  );
+
+  it("prints a new random value at each evaluation where the script cannot run", () => {
+    const missing = join(root, "missing/print-triples.js");
+    const first = evaluate({}, missing);
+    expect(first).toMatch(/^( [0-9a-f]{2}){16}\n$/);
+    expect(evaluate({}, missing)).not.toBe(first);
   });
 });
 

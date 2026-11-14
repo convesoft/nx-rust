@@ -9,11 +9,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  pluginWorkers,
   taskCalls as harnessTaskCalls,
   testEnvironment,
   withoutColours,
@@ -512,6 +513,79 @@ describe("a run with the plugin's executor", () => {
         );
         expect(taskCalls(workspace)).toHaveLength(1);
       } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // The Nx daemon keeps its graph until a file that it watches changes, so
+  // a change to a Cargo configuration file outside the repository leaves
+  // outputs that name the old triple's folder; the triple input changes the
+  // key, and the executor stops the task before cargo runs.
+  it.each<[string, (cargoHome: string, root: string) => string, string | undefined]>([
+    [
+      "the Cargo home's configuration picks another triple",
+      (cargoHome) => join(cargoHome, "config.toml"),
+      secondTriple,
+    ],
+    [
+      "a configuration above the repository picks another triple",
+      (_cargoHome, root) => join(root, "..", ".cargo", "config.toml"),
+      secondTriple,
+    ],
+    [
+      "the setting is removed from the Cargo home's configuration",
+      (cargoHome) => join(cargoHome, "config.toml"),
+      undefined,
+    ],
+  ])(
+    "with the Nx daemon, fails a cached build and doc before cargo runs and restores nothing when %s after graph creation, and caches them again once the graph is created afresh",
+    async (_case, file, changed) => {
+      const workspace = FixtureWorkspace.create("crate-shapes");
+      const cargoHome = join(workspace.root, "..", "cargo-home");
+      const config = file(cargoHome, workspace.root);
+      const env = { ...pluginWorkers, NX_DAEMON: "true", CARGO_HOME: cargoHome };
+      try {
+        mkdirSync(dirname(config), { recursive: true });
+        writeFileSync(config, `[build]\ntarget = "${hostTriple()}"\n`);
+        const first = await nx(workspace, ["run-many", "-t", "build", "doc", "-p", "cli", "rust"], env);
+        expect({ status: first.status, output: first.output }).toEqual({
+          status: 0,
+          output: expect.any(String),
+        });
+        expect(existsSync(join(workspace.root, "rust/target", hostTriple(), "debug/cli"))).toBe(true);
+        if (changed === undefined) {
+          rmSync(config);
+        } else {
+          writeFileSync(config, `[build]\ntarget = "${changed}"\n`);
+        }
+        rmSync(join(workspace.root, "rust/target"), { recursive: true });
+        const calls = taskCalls(workspace).length;
+
+        for (const task of ["cli:build", "rust:doc"]) {
+          const stale = await nx(workspace, ["run", task], env);
+          expect({ task, status: stale.status }).toEqual({ task, status: 1 });
+          expect(stale.output).not.toMatch(new RegExp(hit));
+          expect(stale.output).toContain(
+            `${task}: Cargo's configuration has changed since Nx created the project graph:`,
+          );
+          expect(stale.output).toContain(
+            "Run `nx reset`, or stop the daemon with `nx daemon --stop`, and run the task again.",
+          );
+        }
+        // Nothing of the old triple came back, and cargo did not run.
+        expect(existsSync(join(workspace.root, "rust/target"))).toBe(false);
+        expect(taskCalls(workspace)).toHaveLength(calls);
+
+        // A graph created afresh names the new folders, and the result is
+        // stored and restored there.
+        if (changed === undefined || secondTripleInstalled()) {
+          await workspace.nx(["daemon", "--stop"], env);
+          await expectRestored(workspace, env, [changed ?? "."]);
+        }
+      } finally {
+        await workspace.nx(["daemon", "--stop"], env);
         workspace.remove();
       }
     },
