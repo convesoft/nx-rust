@@ -979,7 +979,11 @@ describe("keys with the toolchain", () => {
       beforeEach(() => {
         links = CompilerLinks.create(pinnedToolchain);
         // A test of a replaced compiler needs two different ones.
-        expect(programVersion(toolchainProgram("rustc"))).not.toBe(programVersion(links.rustc));
+        if (programVersion(toolchainProgram("rustc")) === programVersion(links.rustc)) {
+          throw new Error(
+            `rustup's default toolchain is ${pinnedToolchain}, which these tests replace`,
+          );
+        }
       });
       afterEach(() => links.remove());
 

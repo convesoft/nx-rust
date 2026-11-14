@@ -841,6 +841,7 @@ function hostTriple(): string {
      * Runs `tools:build`, applies `change` and deletes the binary, runs the
      * task again and expects it to have been built anew, not restored, by
      * the compiler that `expected` names, and by `old` the first time.
+     * The caller checks that both runs called cargo.
      */
     async function expectBuiltAgain(
       workspace: FixtureWorkspace,
@@ -865,7 +866,6 @@ function hostTriple(): string {
         output: expect.not.stringMatching(new RegExp(`nx run tools:build\\s+${hit}`)),
       });
       expect(builtBy(workspace)).toBe(expected());
-      expect(taskCalls(workspace)).toEqual(["build -p tools", "build -p tools"]);
     }
 
     it(
@@ -883,6 +883,7 @@ function hostTriple(): string {
             () => programVersion(links.rustc),
           );
           expect(programVersion(links.rustc)).not.toBe(old);
+          expect(taskCalls(workspace)).toEqual(["build -p tools", "build -p tools"]);
         } finally {
           workspace.remove();
           links.remove();
@@ -909,6 +910,7 @@ function hostTriple(): string {
             programVersion(toolchainProgram("rustc")),
             () => programVersion(pinned),
           );
+          expect(taskCalls(workspace)).toEqual(["build -p tools", "build -p tools"]);
         } finally {
           workspace.remove();
           rmSync(cargoHome, { recursive: true, force: true });
