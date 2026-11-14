@@ -588,7 +588,7 @@ function checkPickedTriples(
   }
   const end = "The task does not run, so that Nx stores no result for it.";
   const configured = configuredTriples(cwd, env);
-  if (metadata.configuredPick !== undefined && pickText(configured) !== metadata.configuredPick) {
+  if (pickText(configured) !== (metadata.configuredPick ?? "none")) {
     const source =
       configured.kind === "none"
         ? "no file sets build.target any more"

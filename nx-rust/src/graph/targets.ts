@@ -98,7 +98,8 @@ export interface TargetCargoMetadata {
   /**
    * On `build` and `doc`, the triples that Cargo's configuration alone
    * picked when the graph was created, without `CARGO_BUILD_TARGET`, as
-   * `pickText` in `target-triples.ts` writes them. The executor tells by it
+   * `pickText` in `target-triples.ts` writes them; absent where it picked
+   * none. The executor tells by it
    * whether a cached task's triples differ because the configuration
    * changed after graph creation or because of the task's environment
    * (`DES-OUTPUTS`).

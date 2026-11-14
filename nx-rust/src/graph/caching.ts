@@ -288,7 +288,10 @@ export function configureCaching(
       if (tripleProblem !== undefined) {
         metadata.tripleProblem = tripleProblem;
       }
-      metadata.configuredPick = pickText(subject.workspace.configuredTriples ?? { kind: "none" });
+      const configuredPick = pickText(subject.workspace.configuredTriples ?? { kind: "none" });
+      if (configuredPick !== "none") {
+        metadata.configuredPick = configuredPick;
+      }
     }
     if (metadata !== undefined && name === "build" && subject.pkg !== undefined) {
       metadata.records = buildRecordSource(
