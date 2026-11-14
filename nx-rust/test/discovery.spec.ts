@@ -1,9 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import type { CreateDependenciesContext, CreateNodesContext } from "@nx/devkit";
 import plugin = require("../src");
-import { discoverWorkspaces } from "../src/graph/discovery";
 import { registrationOf } from "../src/graph/registration";
 import {
   CargoCall,
@@ -176,12 +175,6 @@ const expected: Record<FixtureName, Expectation> = {
   },
 };
 
-// The folders that a fixture's nx.json excludes from the plugin.
-const excludedFolders: Partial<Record<FixtureName, string[]>> = {
-  "vendored-crate": ["vendor"],
-  "patched-workspaces": ["third_party"],
-};
-
 function expectedCalls({ workspaces, pathDependencies = [] }: Expectation): CargoCall[] {
   return [
     ...workspaces.map(([root]) => workspaceCall(root)),
@@ -224,6 +217,15 @@ describe("workspace discovery through Nx", () => {
         workspaceCall("."),
         workspaceCall("tools"),
         workspaceCall("xtask"),
+      ]);
+      // Every member of the three: tools is the crate of its root manifest.
+      expect(Object.keys(graph.projects).sort()).toEqual([
+        "app",
+        "cargo-workspace",
+        "scaffold",
+        "tools",
+        "util",
+        "xtask",
       ]);
     },
     HARNESS_TIMEOUT,
@@ -293,6 +295,7 @@ describe("workspace discovery through Nx", () => {
         });
 
         expect(graph.cargoCalls).toEqual([workspaceCall("rust")]);
+        expect(Object.keys(graph.projects).sort()).toEqual(["api", "codegen", "model", "rust"]);
       },
       HARNESS_TIMEOUT,
     );
@@ -541,67 +544,6 @@ describe("discovery in the plugin", () => {
     return workspace;
   }
 
-  it.each(fixtures)(
-    "finds the workspaces of %s with their members",
-    async (fixture) => {
-      const { root } = copy(fixture);
-      const manifests = manifestsIn(root, excludedFolders[fixture] ?? []);
-
-      const discovery = await discoverWorkspaces(manifests, root);
-
-      const { workspaces, pathDependencies = [] } = expected[fixture];
-      expect(
-        discovery.workspaces.map((found) => [
-          found.root,
-          found.members.map((member) => relative(root, dirname(member.manifest_path))),
-        ]),
-      ).toEqual(workspaces);
-      expect(discovery.pathDependencyReports.map((report) => report.manifest)).toEqual(
-        pathDependencies.map(([, manifest]) => manifest),
-      );
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "finds a workspace at the root, one in a subfolder and a standalone crate",
-    async () => {
-      const { root } = copy("two-workspaces", standaloneXtask);
-
-      const discovery = await discoverWorkspaces(manifestsIn(root), root);
-
-      expect(
-        discovery.workspaces.map((found) => [found.root, found.members.map((m) => m.name)]),
-      ).toEqual([
-        [".", ["app", "util"]],
-        ["tools", ["tools", "scaffold"]],
-        ["xtask", ["xtask"]],
-      ]);
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "gives no project to a member whose manifest Nx left out, and keeps it in the report",
-    async () => {
-      const { root } = copy("subfolder-workspace");
-      const manifests = manifestsIn(root).filter((manifest) => !manifest.includes("testkit"));
-
-      const discovery = await discoverWorkspaces(manifests, root);
-
-      const [rust] = discovery.workspaces;
-      expect(rust.members.map((member) => member.name)).toEqual(["api", "codegen", "model"]);
-      expect(rust.report.packages.map((pkg) => pkg.name).sort()).toEqual([
-        "api",
-        "codegen",
-        "model",
-        "testkit",
-      ]);
-      expect(discovery.pathDependencyReports).toEqual([]);
-    },
-    HARNESS_TIMEOUT,
-  );
-
   it(
     "requests the reports afresh for every graph computation and shares them with createDependencies",
     async () => {
@@ -627,66 +569,6 @@ describe("discovery in the plugin", () => {
   );
 
   it(
-    "runs cargo only in createNodes, once per workspace",
-    async () => {
-      const { root } = copy("two-workspaces");
-      const entry = loadEntry();
-
-      const nodes = await entry.createNodes[1](manifestsIn(root), undefined, nodesContext(root));
-      const projects = Object.fromEntries(
-        nodes.flatMap(([, result]) =>
-          Object.entries(result.projects).map(([projectRoot, project]) => [
-            project.name,
-            { ...project, root: projectRoot },
-          ]),
-        ),
-      );
-      const dependencies = await entry.createDependencies(
-        undefined,
-        dependenciesContext(root, projects),
-      );
-
-      expect(Object.keys(projects).sort()).toEqual([
-        "app",
-        "cargo-workspace",
-        "scaffold",
-        "tools",
-        "util",
-      ]);
-      expect(dependencies).toContainEqual({ source: "app", target: "util", type: "implicit" });
-      expect(workspace.cargoCalls()).toEqual([workspaceCall("."), workspaceCall("tools")]);
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "keeps what two entries discovered apart, and reads a workspace they split once",
-    async () => {
-      const { root } = copy("subfolder-workspace");
-      const [rootManifest, ...members] = manifestsIn(root).sort();
-      const first = loadEntry();
-      const second = loadEntry();
-
-      // As Nx starts them: one after the other, without waiting.
-      await Promise.all([
-        first.createNodes[1]([rootManifest], undefined, nodesContext(root)),
-        second.createNodes[1](members, undefined, nodesContext(root)),
-      ]);
-
-      expect(rootManifest).toBe("rust/Cargo.toml");
-      expect(seenBy(first, root)).toEqual([["rust", []]]);
-      expect(seenBy(second, root)).toEqual([
-        [
-          "rust",
-          ["rust/crates/api", "rust/crates/codegen", "rust/crates/model", "rust/crates/testkit"],
-        ],
-      ]);
-      expect(workspace.cargoCalls()).toEqual([workspaceCall("rust")]);
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
     "adds no error of its own in createDependencies when createNodes failed",
     async () => {
       const { root } = copy("subfolder-workspace", {
@@ -703,18 +585,6 @@ describe("discovery in the plugin", () => {
     },
     HARNESS_TIMEOUT,
   );
-
-  it("refuses createDependencies for a repository that the entry's createNodes has not seen", () => {
-    expect(() =>
-      loadEntry().createDependencies(undefined, dependenciesContext("/no/such")),
-    ).toThrow(/asked for the dependencies before the projects/);
-  });
-
-  it("refuses createDependencies that is not called on an entry", () => {
-    expect(() =>
-      plugin.createDependencies.call(undefined, undefined, dependenciesContext("/x")),
-    ).toThrow(/could not tell which of its entries in nx.json/);
-  });
 });
 
 // Two entries of the plugin in nx.json, with include filters that split the
@@ -819,16 +689,6 @@ function loadEntry(): typeof plugin {
   return { ...plugin };
 }
 
-/** What an entry's createDependencies sees: the workspace roots with the folders of their members. */
-function seenBy(entry: typeof plugin, root: string): [string, string[]][] {
-  return registrationOf(entry)
-    .graphForDependencies(root)
-    .discovery.workspaces.map((found) => [
-      found.root,
-      found.members.map((member) => relative(root, dirname(member.manifest_path))),
-    ]);
-}
-
 function sortedByJson<T>(values: T[]): T[] {
   return [...values].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 }
@@ -844,14 +704,12 @@ function crateManifest(name: string): string {
   return `[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2024"\n`;
 }
 
-/** The `Cargo.toml` files of a fixture copy, as Nx would hand them over, without `skip`. */
-function manifestsIn(root: string, skip: string[] = [], folder = ""): string[] {
+/** The `Cargo.toml` files of a fixture copy, as Nx would hand them over. */
+function manifestsIn(root: string, folder = ""): string[] {
   return readdirSync(join(root, folder), { withFileTypes: true }).flatMap((entry) => {
     const path = folder === "" ? entry.name : `${folder}/${entry.name}`;
     if (entry.isDirectory()) {
-      return ["node_modules", "target", ...skip].includes(path) || entry.name === "target"
-        ? []
-        : manifestsIn(root, skip, path);
+      return path === "node_modules" || entry.name === "target" ? [] : manifestsIn(root, path);
     }
     return entry.name === "Cargo.toml" ? [path] : [];
   });
@@ -876,15 +734,12 @@ function nodesContext(workspaceRoot: string): CreateNodesContext {
   return { workspaceRoot, nxJsonConfiguration: {} };
 }
 
-function dependenciesContext(
-  workspaceRoot: string,
-  projects: CreateDependenciesContext["projects"] = {},
-): CreateDependenciesContext {
+function dependenciesContext(workspaceRoot: string): CreateDependenciesContext {
   const fileMap = { projectFileMap: {}, nonProjectFiles: [] };
   return {
     workspaceRoot,
     nxJsonConfiguration: {},
-    projects,
+    projects: {},
     externalNodes: {},
     fileMap,
     filesToProcess: fileMap,

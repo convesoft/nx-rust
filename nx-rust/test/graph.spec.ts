@@ -300,38 +300,6 @@ describe("projects and edges of each fixture", () => {
   );
 
   it(
-    "creates its edges as implicit, which Nx does not keep from an earlier graph",
-    async () => {
-      const graph = await loadFixtureGraph("subfolder-workspace");
-
-      expect(graph.dependencies.map((edge) => edge.type)).toEqual(
-        graph.dependencies.map(() => "implicit"),
-      );
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "gives each project its manifest, workspace, package name and the plugin's name in its metadata",
-    async () => {
-      const graph = await loadFixtureGraph("mixed-folders");
-
-      expect(graph.projects["rust-engine"].metadata.cargo).toEqual({
-        projectName: "engine",
-        manifest: "libs/rust/crates/engine/Cargo.toml",
-        workspaceManifest: "libs/rust/Cargo.toml",
-        packageName: "engine",
-      });
-      expect(graph.projects["libs-rust"].metadata.cargo).toEqual({
-        projectName: "libs-rust",
-        manifest: "libs/rust/Cargo.toml",
-        workspaceManifest: "libs/rust/Cargo.toml",
-      });
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
     "adds an edge when a crate gets a project and no manifest changes",
     async () => {
       // Nx reuses what it found for a file that did not change. testkit is

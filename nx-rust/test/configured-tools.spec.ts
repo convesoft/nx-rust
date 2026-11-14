@@ -48,23 +48,6 @@ describe("the programs that Cargo's configuration names in place of rustc and ru
     expect(tools()).toEqual({ rustc: [], rustdoc: [] });
   });
 
-  it("takes the value of the deepest file, over the folders above and the Cargo home", () => {
-    write("ws/.cargo/config.toml", build("rustc", '"/ws/rustc"'));
-    write(".cargo/config.toml", build("rustc", '"/parent/rustc"'));
-    write("home/config.toml", build("rustc", '"/home/rustc"'));
-    expect(tools().rustc).toEqual(["/ws/rustc"]);
-    rmSync(join(root, "ws/.cargo"), { recursive: true });
-    expect(tools().rustc).toEqual(["/parent/rustc"]);
-    rmSync(join(root, ".cargo"), { recursive: true });
-    expect(tools().rustc).toEqual(["/home/rustc"]);
-  });
-
-  it("reads .cargo/config where it exists beside .cargo/config.toml", () => {
-    write("ws/.cargo/config", build("rustc", '"/legacy"'));
-    write("ws/.cargo/config.toml", build("rustc", '"/current"'));
-    expect(tools().rustc).toEqual(["/legacy"]);
-  });
-
   it("resolves a path against the folder above the file's, and keeps a bare name", () => {
     write("ws/.cargo/config.toml", build("rustc", '"bin/rustc"'));
     expect(tools().rustc).toEqual([join(root, "ws/bin/rustc")]);

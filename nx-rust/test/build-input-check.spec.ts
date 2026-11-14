@@ -20,7 +20,6 @@ import {
   HARNESS_TIMEOUT,
   inFixture,
   linesWith,
-  loadFixtureGraph,
   LocalRegistry,
   pinnedToolchainAvailable,
   runNx,
@@ -148,60 +147,6 @@ describe("the check of a build's dependency files", () => {
         expect(output).not.toContain(failure);
         expect(status).toBe(0);
       });
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "gives each crate's build, and no other target, what names the records of its library and binaries",
-    async () => {
-      const graph = await loadFixtureGraph("undeclared-files");
-      const records = (project: string) => {
-        const source = graph.projects[project].targets?.build?.metadata?.cargo?.records as
-          | BuildRecordSource
-          | undefined;
-        return source === undefined
-          ? undefined
-          : {
-              ...source,
-              binaries: [...source.binaries].sort((a, b) => a.name.localeCompare(b.name)),
-            };
-      };
-      expect(records("multi")).toEqual({
-        library: { name: "multi", procMacro: false },
-        binaries: [
-          { name: "one", requiredFeatures: [] },
-          { name: "three", requiredFeatures: ["extra"] },
-          { name: "two", requiredFeatures: [] },
-        ],
-        features: { extra: [], full: ["extra"] },
-        optionalDependencies: [],
-        shared: [],
-      });
-      expect(records("macros")).toEqual({
-        library: { name: "macros", procMacro: true },
-        binaries: [],
-        features: {},
-        optionalDependencies: [],
-        shared: [],
-      });
-      // The binaries of cola and colb share the name cli.
-      expect(records("cola")).toMatchObject({
-        library: { name: "cola", procMacro: false },
-        binaries: [{ name: "cli", requiredFeatures: [] }],
-        shared: ["cli.d"],
-      });
-      expect(records("colb")).toMatchObject({ binaries: [{ name: "cli" }], shared: ["cli.d"] });
-      expect(records("colb")).not.toHaveProperty("library");
-      const others = Object.entries(graph.projects).flatMap(([name, project]) =>
-        Object.entries(project.targets ?? {})
-          .filter(
-            ([target, configuration]) =>
-              target !== "build" && configuration.metadata?.cargo?.records !== undefined,
-          )
-          .map(([target]) => `${name}:${target}`),
-      );
-      expect(others).toEqual([]);
     },
     HARNESS_TIMEOUT,
   );

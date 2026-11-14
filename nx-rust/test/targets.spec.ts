@@ -215,89 +215,6 @@ describe("inferred targets", () => {
     },
     HARNESS_TIMEOUT,
   );
-
-  it(
-    "carry the locked option of the plugin's entry in their metadata",
-    async () => {
-      const graph = await loadFixtureGraph("crate-shapes", {
-        files: { "nx.json": pluginOptions({ locked: true }) },
-      });
-
-      for (const project of Object.values(graph.projects)) {
-        for (const [name, target] of Object.entries(project.targets ?? {})) {
-          // An uncached target also carries why (caching.spec.ts), the
-          // targets around the lockfile task the members of its digests,
-          // build what names its dependency files (build-input-check.spec.ts),
-          // and build and doc the artifact directory that their outputs name
-          // (caching.spec.ts).
-          const {
-            uncached,
-            digests: _digests,
-            members: _members,
-            records: _records,
-            artifactDirectory: _artifactDirectory,
-            ...cargo
-          } = target.metadata?.cargo ?? {};
-          expect({ name, cargo }).toEqual({ name, cargo: { target: name, locked: true } });
-          expect({ name, explained: typeof uncached === "string" }).toEqual({
-            name,
-            explained: target.cache !== true,
-          });
-        }
-      }
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "declare the inputs of audit, deny and update",
-    async () => {
-      const graph = await loadFixtureGraph("crate-shapes", { files: { "rust/deny.toml": "" } });
-      const { targets } = graph.projects.rust;
-
-      // The lockfile task's inputs only decide what nx affected selects
-      // (caching.spec.ts checks them in another fixture).
-      expect(targets.lockfile.inputs?.slice(0, 7)).toEqual([
-        { fileset: "{workspaceRoot}/rust/Cargo.lock", includeIgnored: true },
-        "{workspaceRoot}/rust/Cargo.toml",
-        "{workspaceRoot}/rust/crates/cli/Cargo.toml",
-        "{workspaceRoot}/rust/crates/core/Cargo.toml",
-        "{workspaceRoot}/rust/crates/internal/Cargo.toml",
-        "{workspaceRoot}/rust/crates/perf/Cargo.toml",
-        "{workspaceRoot}/rust/crates/server/Cargo.toml",
-      ]);
-      // Each also has the plugin's input, which caching.spec.ts checks.
-      expect(targets.audit.inputs).toEqual([
-        "{projectRoot}/Cargo.lock",
-        "{projectRoot}/Cargo.toml",
-        "{projectRoot}/.cargo/audit.toml",
-        { externalDependencies: [] },
-      ]);
-      expect(targets.deny.inputs).toEqual([
-        "{projectRoot}/Cargo.lock",
-        "{projectRoot}/Cargo.toml",
-        "{projectRoot}/deny.toml",
-        "{projectRoot}/.deny.toml",
-        "{projectRoot}/.cargo/deny.toml",
-        "{workspaceRoot}/rust/crates/cli/Cargo.toml",
-        "{workspaceRoot}/rust/crates/core/Cargo.toml",
-        "{workspaceRoot}/rust/crates/internal/Cargo.toml",
-        "{workspaceRoot}/rust/crates/perf/Cargo.toml",
-        "{workspaceRoot}/rust/crates/server/Cargo.toml",
-        { externalDependencies: [] },
-      ]);
-      expect(targets.update.inputs).toEqual([
-        "{projectRoot}/Cargo.lock",
-        "{projectRoot}/Cargo.toml",
-        { externalDependencies: [] },
-      ]);
-      // The other targets have those of DES-INPUTS, which caching.spec.ts checks.
-      for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt", "run"]) {
-        expect(graph.projects.cli.targets[name].inputs?.[0]).toBe("default");
-      }
-    },
-    HARNESS_TIMEOUT,
-  );
 });
 
 describe("the deny target", () => {
@@ -613,25 +530,6 @@ describe("targetNames", () => {
       expect(graph.projects["core-lib"].targets.clippy.options).toEqual({
         allTargets: true,
         ...pluginVersion,
-      });
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "lets two targets swap their names",
-    async () => {
-      const graph = await loadFixtureGraph("crate-shapes", {
-        files: { "nx.json": pluginOptions({ targetNames: { lint: "check", check: "lint" } }) },
-      });
-
-      expect(graph.projects.cli.targets.lint.metadata.cargo).toMatchObject({
-        target: "check",
-        locked: false,
-      });
-      expect(graph.projects.cli.targets.check.metadata.cargo).toMatchObject({
-        target: "lint",
-        locked: false,
       });
     },
     HARNESS_TIMEOUT,

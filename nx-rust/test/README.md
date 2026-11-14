@@ -223,13 +223,14 @@ both:
   into the workspace's `node_modules/.bin`, which comes before Node's folder
   wherever Node and cargo are installed.
 
-[`cargo-wrapper.spec.ts`](cargo-wrapper.spec.ts) and the end-to-end tests
-check each way: an `nx:run-commands` task, an executor and a batched executor
-all show up in the log, and the `nx:run-commands` task finds the copy in
-`node_modules/.bin`. The executor is a stand-in for the plugin's own:
-`cargoProbeProject(name)` writes a `project.json` with a target of each kind,
-and `installProbeExecutor(root)` installs the stand-in into
-`root/node_modules`.
+[`cargo-wrapper.spec.ts`](cargo-wrapper.spec.ts) checks each way: an
+`nx:run-commands` task, an executor and a batched executor all show up in the
+log, and the `nx:run-commands` task finds the copy in `node_modules/.bin`. The
+executor is a stand-in for the plugin's own: `cargoProbeProject(name)` writes
+a `project.json` with a target of each kind, and `installProbeExecutor(root)`
+installs the stand-in into `root/node_modules`. The end-to-end tests count
+the calls of the installed plugin's own executor, which is the way its targets
+take.
 
 The log, and so `cargoCalls`, holds exactly the calls that resolve to the
 wrapper. These do not, and run without being logged:
