@@ -74,6 +74,8 @@ interface InspectResult {
   error?: string;
   graph?: ProjectGraph;
   hashes?: Record<string, TaskHash>;
+  files?: Record<string, string[]>;
+  globbed?: string[];
 }
 
 /**
@@ -251,6 +253,36 @@ export class FixtureWorkspace {
       throw new Error(`Hashing ${tasks.join(", ")} in ${this.fixture} failed:\n${result.error}`);
     }
     return result.hashes;
+  }
+
+  /**
+   * The files that Nx hashes for each of `tasks`, by their paths relative to
+   * the repository root, as its `HashPlanInspector` lists them, without the
+   * daemon.
+   */
+  async taskFiles(tasks: string[]): Promise<Record<string, string[]>> {
+    const result = await this.inspect({ command: "files", tasks }, { NX_DAEMON: "false" });
+    if (!result.ok || result.files === undefined) {
+      throw new Error(
+        `Listing the files of ${tasks.join(", ")} in ${this.fixture} failed:\n${result.error}`,
+      );
+    }
+    return result.files;
+  }
+
+  /**
+   * The files of the workspace that Nx's own glob, the engine of its
+   * filesets, finds for `globs`, whatever project holds them, by their paths
+   * relative to the repository root. No project graph is created for it.
+   */
+  async glob(globs: string[]): Promise<string[]> {
+    const result = await this.inspect({ command: "glob", globs }, { NX_DAEMON: "false" });
+    if (!result.ok || result.globbed === undefined) {
+      throw new Error(
+        `Nx's glob of ${globs.join(", ")} in ${this.fixture} failed:\n${result.error}`,
+      );
+    }
+    return result.globbed;
   }
 
   /**
