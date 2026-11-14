@@ -51,7 +51,10 @@ the graph is created, and `--affectedTests=true` on the command line fails the
 task before cargo runs: the workspace setting turns selection on.
 
 Doctests always run when nextest is the runner: nextest does not run them, so
-the plugin runs `cargo test --doc` as a second step.
+the plugin runs `cargo test --doc` as a second step. A group of `test` tasks
+([Batching and features](execution.mara.md)) therefore takes two cargo calls
+with nextest, one for the tests and one for the doctests, and three in affected
+mode, where the selection of tests comes first. With `cargo test` it takes one.
 
 ## Affected tests
 
@@ -191,15 +194,17 @@ Nx evaluates the command afresh for every task of every run, also under the Nx d
 :satisfies: REQ-AFFECTED-TESTS
 :satisfies: REQ-SELECTION-SAFETY
 
-With the `cargo` runner, a group's test tasks run as `cargo test` for the selected crates. With `nextest`, one run of a group in affected mode ([[DES-TEST-MODE]]) has five steps:
+With the `cargo` runner, a group's test tasks run as one `cargo test` for the selected crates, which also runs their doctests. With `nextest`, one run of a group in affected mode ([[DES-TEST-MODE]]) has five steps, of which steps 1, 3 and 5 are each one cargo command for the whole group ([[DES-BATCH]]):
 
 1. Ask cargo-affected for the selection only: `cargo affected status --report-json <path> --report-detail full`. The report lists each selected test by binary and name, and its `cache.status` says whether selection happened or why not.
 2. Add whole crates where a file that cargo-affected cannot see has changed: `build.rs`, toolchain files, `.cargo/config.toml`, proc-macro source, and non-Rust files read by tests.
 3. Run one `cargo nextest run` for the group. The selection is passed through a generated configuration file, so a long list never hits the command-line length limit.
 4. Map nextest's per-test results back to crates, so each Nx task gets its own result and cache entry.
-5. Run doctests with `cargo test --doc` as a second step, because nextest does not run them.
+5. Run the doctests with one `cargo test --doc`, because nextest does not run them. It selects crates as step 3 does; cargo skips crates without a library, and the step is left out where none has one. Its results are attributed to crates as those of `cargo test` are, below.
 
-In mode `full`, and in a workspace without `affectedTests`, steps 1 and 2 are skipped and step 3 runs every test of the selected crates. When cargo-affected falls back to the full suite, the task output says so and gives the reason.
+In mode `full`, and in a workspace without `affectedTests`, steps 1 and 2 are skipped and step 3 runs every test of the selected crates. When cargo-affected falls back to the full suite, the task output says so and gives the reason. The doctests are not narrowed: in affected mode too, each task that runs also runs all doctests of its crate.
+
+**Attributing the output of `cargo test`.** `cargo test` with the `cargo` runner and the doctest step pass `--no-fail-fast`. When a test has failed, cargo then ends with a list of the failed targets, each with the `-p <package>` and the target flag that rerun it, such as `` `-p other --doc` ``, and it prints the same after each failing target. The list identifies the package: members of a workspace have distinct package names, and the list names a member by its bare name even where a crate outside the workspace has the same name. The headers of the blocks do not identify it: `Running unittests src/lib.rs (…/good-…)` and `Doc-tests good` name the library or test target, which two packages can share ([[EVD-CARGO-BATCH-FAILURES]]). A task passes the step when cargo exits successfully, or when cargo has printed that list and the list names no target of the task's package. Otherwise, as after a compile error, the output shows no result for the task, and it fails ([[DES-BATCH]]). A task is never reported successful when the output cannot show that its own package's tests passed: where the output cannot tell which of several packages a result belongs to, every task it could belong to fails, and the message says why. A block of output that the plugin cannot attribute to one package goes into the terminal output of every task it could belong to.
 
 cargo-affected only selects. nextest runs the tests, and the selector is a replaceable step ([[ADR-TEST-SELECTOR]]). A crate that opts out of selection, with `affectedTests = false` among the options of its `test` target ([[DES-PLUGIN-OPTIONS]]), always contributes all its tests. Rules for non-Rust inputs such as SQL files, snapshots and templates can be added per repository; there are none by default.
 

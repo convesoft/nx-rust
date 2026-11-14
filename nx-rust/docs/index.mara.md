@@ -19,7 +19,7 @@ for users, followed by the requirements and design that govern that topic.
 | [Configuration](configuration.mara.md)        | Overrides in `Cargo.toml`, plugin options and target names                                             |
 | [Targets](targets.mara.md)                    | The targets of crates and workspaces, and why crates have no `^build`                                  |
 | [Caching](caching.mara.md)                    | What goes into a cache key, what is stored, and Cargo's two directories                                |
-| [Batching and features](execution.mara.md)    | One cargo call per group, and feature unification                                                      |
+| [Batching and features](execution.mara.md)    | A few cargo commands per group of tasks instead of one per crate, and feature unification              |
 | [Testing](testing.mara.md)                    | Test runners, affected tests and how the cache stays honest                                            |
 | [napi and wasm artifacts](artifacts.mara.md)  | Node addons and wasm packages for JS consumers                                                         |
 | [Releasing](release.mara.md)                  | Versioning and publishing crates with Nx release                                                       |

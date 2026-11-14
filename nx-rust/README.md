@@ -19,8 +19,8 @@ JS and TS projects.
   without the plugin.
 - **A cache you can trust.** Nx stores task results and final artifacts, never
   Cargo's intermediate files.
-- **Few cargo invocations**, from milestone 0.2: one cargo call per group of
-  tasks.
+- **Few cargo invocations**, from milestone 0.2: a few cargo commands per group
+  of tasks, one for most targets, instead of one per crate.
 - **Rust and JS in one graph.** `nx affected -t lint test build` covers both.
 
 ## Requirements

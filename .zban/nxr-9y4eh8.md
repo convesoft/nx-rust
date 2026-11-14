@@ -9,7 +9,7 @@ blocked_by:
 created_at: 2026-11-12T18:20:01Z
 ---
 
-Run the tasks of a group as one cargo call, with features resolved for the whole workspace on every run.
+Run the tasks of a group with one cargo call for each step of their target, not one per crate, with features resolved for the whole workspace on every run.
 
 Specified in `nx-rust/docs/execution.mara.md`: `REQ-BATCHING`, `REQ-STABLE-FEATURES`, `DES-BATCH`, `DES-UNIFICATION`, `DES-FEATURE-SETS`. Verification: `VER-BATCHING`.
 

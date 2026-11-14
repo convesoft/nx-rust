@@ -22,7 +22,8 @@ they are:
   of its dependencies, the toolchain and a fixed list of environment variables.
   Nx stores task results and final artifacts, never Cargo's intermediate files.
 - **Few cargo invocations.** Nx schedules one task per crate, and the plugin
-  runs them as one cargo call per group.
+  runs each group of tasks with one cargo command per step of their target: one
+  for most targets, a few for a test run with nextest, never one per crate.
 - **Rust and JS in one graph.** `nx affected -t lint test build` covers both
   languages, and napi and wasm crates produce artifacts that JS projects depend
   on.
@@ -53,8 +54,9 @@ Rust-only repositories work too, but they do not drive priorities.
   Cargo workspace: [Targets](targets.mara.md).
 - Cache keys and outputs that keep Cargo's build directory out of the Nx cache:
   [Caching](caching.mara.md).
-- One cargo call per group of tasks, with features resolved the same way on
-  every run: [Batching and features](execution.mara.md).
+- A few cargo commands per group of tasks instead of one per crate, with
+  features resolved the same way on every run:
+  [Batching and features](execution.mara.md).
 - `cargo test` or nextest, and optional selection of affected tests:
   [Testing](testing.mara.md).
 - Node addons and wasm packages as targets that JS projects depend on:
@@ -307,7 +309,7 @@ The directory where Cargo puts final artifacts such as binaries, set by `build.t
 :aliases: group
 :aliases: build flavour
 
-The set of tasks that one cargo invocation can serve: tasks of the same kind in the same Cargo workspace whose invocations would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment.
+The set of tasks that the plugin serves together, with one cargo command for each step of their target: tasks of the same kind in the same Cargo workspace whose commands would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment.
 :::
 
 :::mara term TERM-FEATURE-UNIFICATION

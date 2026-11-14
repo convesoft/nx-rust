@@ -28,8 +28,9 @@ or caching that cuts corners. nx-rust reads the Cargo workspaces as they are:
   variables. Nx stores task results and final artifacts, never Cargo's
   intermediate files.
 - **Few cargo invocations**, from milestone 0.2. Nx schedules one task per
-  crate, and the plugin runs them as one cargo call per group. Until then each
-  task runs a cargo call of its own.
+  crate, and the plugin runs each group of tasks with one cargo command per step
+  of their target: one for most targets, a few for a test run with nextest,
+  never one per crate. Until then each task runs a cargo call of its own.
 - **Rust and JS in one graph.** `nx affected -t lint test build` covers both
   languages. From milestone 0.4, napi and wasm crates produce artifacts that JS
   projects depend on.
