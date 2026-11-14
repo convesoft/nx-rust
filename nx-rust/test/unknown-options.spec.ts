@@ -23,17 +23,20 @@ import {
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 
+// The lines for the command line, on every target but run, whose lines
+// run-arguments.spec.ts checks.
+
 /** The line for an option that the executor does not know, typed on the command line. */
 const fromCommandLine = (task: string, option: string) =>
-  `${task}: ignoring option \`${option}\`, passed on the command line.`;
+  `${task}: ignoring option \`${option}\`, passed on the command line. Remove it, or check its spelling.`;
 
 /** The line for positional words typed on the command line. */
 const wordsFromCommandLine = (task: string, words: string[]) =>
-  `${task}: ignoring the positional arguments ${JSON.stringify(words)} (option \`_\`), passed on the command line.`;
+  `${task}: ignoring the positional arguments ${JSON.stringify(words)} (option \`_\`), passed on the command line. Remove them.`;
 
 /** The line for a declared option that the target does not take, typed on the command line. */
 const notTakenFromCommandLine = (task: string, option: string) =>
-  `${task}: ignoring option \`${option}\`, which this target does not take, passed on the command line.`;
+  `${task}: ignoring option \`${option}\`, which this target does not take, passed on the command line. Remove it.`;
 
 /** The line for an option that the executor does not know, from the workspace's configuration. */
 const fromConfiguration = (task: string, option: string, executor = "cargo") =>

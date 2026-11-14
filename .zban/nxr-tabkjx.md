@@ -14,7 +14,7 @@ Goal: with `affectedTests` on, a `test` task runs the selected tests, widened wh
 
 Implements `REQ-AFFECTED-TESTS`, `REQ-SELECTION-SAFETY` and steps 1 and 2 of `DES-TEST-RUN` (`nx-rust/docs/testing.mara.md`). Checked by `VER-TESTING`.
 
-- [ ] The graph-time error for `affectedTests` without nextest
+- [ ] The graph-time error for `affectedTests` without nextest, with a case in `nx-rust/test/init.spec.ts` in which `init` fails with it (`VER-SETUP`)
 - [ ] Ask cargo-affected for the selection and read its report
 - [ ] Add whole crates for `build.rs`, toolchain files, `.cargo/config.toml`, proc-macro source and non-Rust test inputs
 - [ ] Pass the selection to nextest through a generated configuration file
