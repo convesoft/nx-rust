@@ -409,20 +409,23 @@ describe("a run with the plugin's executor", () => {
     HARNESS_TIMEOUT,
   );
 
-  (secondTripleInstalled() ? it : it.skip)(
-    "caches build and doc in the folder of each triple of a list in Cargo's configuration, and restores what the run wrote",
-    async () => {
-      const workspace = FixtureWorkspace.create("crate-shapes", {
-        "rust/.cargo/config.toml": `[build]\ntarget = ["${hostTriple()}", "${secondTriple}"]\n`,
-      });
-      try {
-        await expectRestored(workspace, {}, [hostTriple(), secondTriple]);
-      } finally {
-        workspace.remove();
-      }
-    },
-    HARNESS_TIMEOUT,
-  );
+  if (secondTripleInstalled()) {
+    it(
+      "caches build and doc in the folder of each triple of a list in Cargo's configuration, and restores what the run wrote",
+      async () => {
+        const workspace = FixtureWorkspace.create("crate-shapes", {
+          "rust/.cargo/config.toml": `[build]\ntarget = ["${hostTriple()}", "${secondTriple}"]\n`,
+        });
+        try {
+          await expectRestored(workspace, {}, [hostTriple(), secondTriple]);
+          expect(taskCalls(workspace)).toEqual(["build -p cli", "doc --no-deps --workspace"]);
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+  }
 
   it.each([
     [

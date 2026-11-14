@@ -238,9 +238,8 @@ describe("the triple input of build and doc", () => {
     expect(pickText(pickedTriples(join(root, "repo/rust"), env))).toBe("none");
   });
 
-  (loadsCompiledPlugin() ? it : it.skip)(
-    "prints the pick of the workspace root with the task's environment, as graph creation reads it",
-    () => {
+  if (loadsCompiledPlugin()) {
+    it("prints the pick of the workspace root with the task's environment, as graph creation reads it", () => {
       const config = join(root, "repo/rust/.cargo/config.toml");
       writeFileSync(config, '[build]\ntarget = ["x86_64-unknown-linux-gnu"]\n');
       expect(evaluate({})).toBe("triples x86_64-unknown-linux-gnu\n");
@@ -263,8 +262,8 @@ describe("the triple input of build and doc", () => {
       rmSync(join(root, ".cargo"), { recursive: true });
       rmSync(join(root, "home"), { recursive: true });
       expect(evaluate({})).toBe("none\n");
-    },
-  );
+    });
+  }
 
   it("prints a new random value at each evaluation where the script cannot run", () => {
     const missing = join(root, "missing/print-triples.js");
