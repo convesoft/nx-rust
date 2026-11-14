@@ -19,17 +19,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CargoCall, CargoWrapper } from "./cargo-wrapper";
+import { loadsCompiledPlugin, pluginEntry, pluginPackage } from "./compiled-plugin";
 import { testEnvironment } from "./environment";
 import { testRunSocketFolder } from "./test-run";
 import { fakeNxPackage } from "./nx-package";
-import {
-  copyFixture,
-  FileChanges,
-  FixtureName,
-  pluginPackageDirectory,
-  pluginPackageName,
-  pluginSourceEntry,
-} from "./fixtures";
+import { copyFixture, FileChanges, FixtureName, pluginPackageName } from "./fixtures";
 
 /** The project graph that Nx built for a fixture, arranged for comparison. */
 export interface FixtureGraph {
@@ -84,14 +78,17 @@ interface InspectResult {
 
 /**
  * A copy of a fixture in a temporary folder, set up as an Nx workspace that
- * loads the plugin from its TypeScript source, with a {@link CargoWrapper}
- * that sees every cargo invocation of the commands the harness runs there.
- * Its `node_modules`, which Nx ignores, links to this repository's Nx and to
- * the plugin's package folder, whose generators `nx g` then runs from source,
- * and holds a copy of the wrapper in `.bin`, ahead of Node's folder on the
- * `PATH` that `nx:run-commands` builds for its tasks.
+ * loads the plugin ({@link pluginEntry}: the test run's compiled copy, or the
+ * TypeScript source without one), with a {@link CargoWrapper} that sees every
+ * cargo invocation of the commands the harness runs there. Its
+ * `node_modules`, which Nx ignores, links to this repository's Nx and to the
+ * plugin's package ({@link pluginPackage}), where Nx finds the executors and
+ * `nx g` the generators, and holds a copy of the wrapper in `.bin`, ahead of
+ * Node's folder on the `PATH` that `nx:run-commands` builds for its tasks.
  *
- * Its Nx keeps its sockets in a folder of their own ({@link socketFolder}).
+ * Its Nx keeps its sockets in a folder of their own ({@link socketFolder}),
+ * and loads the plugins into its own process unless a command asks for
+ * plugin workers or the daemon ({@link pluginsInNxProcess}).
  *
  * Remove it with {@link FixtureWorkspace.remove} when the test is done.
  * Setting `NX_RUST_KEEP_FIXTURES=1` keeps every workspace for inspection.
@@ -144,24 +141,26 @@ export class FixtureWorkspace {
    */
   reset(...files: (FileChanges | undefined)[]): void {
     rmSync(this.root, { recursive: true, force: true });
-    // Nx compiles a TypeScript plugin only where the workspace root has a
-    // tsconfig; this one compiles it as the plugin's build does. It comes
-    // before `files`, so that a test can replace it.
+    // Nx compiles a TypeScript plugin, such as the plugin's source or the
+    // discovery probe, only where the workspace root has a tsconfig; this one
+    // compiles it as the plugin's build does. It comes before `files`, so
+    // that a test can replace it.
     const tsconfig = {
       "tsconfig.base.json": `${JSON.stringify({ extends: join(__dirname, "..", "..", "tsconfig.lib.json") }, null, 2)}\n`,
     };
     copyFixture(this.fixture, this.root, {
-      plugin: pluginSourceEntry,
+      plugin: pluginEntry(),
       files: [tsconfig, ...files],
     });
     const modules = join(this.root, "node_modules");
     this.cargo.placeIn(join(modules, ".bin"));
     symlinkSync(nxPackage, join(modules, "nx"), "dir");
-    // Lets `nx g @convesoft/nx-rust:<generator>` find the generators, which
-    // Nx then loads from their TypeScript source.
+    // Lets Nx find the executors of the plugin's targets and
+    // `nx g @convesoft/nx-rust:<generator>` the generators, in the package
+    // whose entry point nx.json names.
     const pluginLink = join(modules, ...pluginPackageName.split("/"));
     mkdirSync(dirname(pluginLink), { recursive: true });
-    symlinkSync(pluginPackageDirectory, pluginLink, "dir");
+    symlinkSync(pluginPackage(), pluginLink, "dir");
     this.cargo.clear();
   }
 
@@ -317,12 +316,50 @@ export class FixtureWorkspace {
 
   // The environment of every command the harness runs in the workspace.
   private environment(env: Record<string, string | undefined>): NodeJS.ProcessEnv {
-    // The plugin is CommonJS written in TypeScript, which Node's own type
-    // stripping cannot load; Nx then uses swc instead.
-    return this.cargo.environment(
-      testEnvironment({ NX_PREFER_NODE_STRIP_TYPES: "false", NX_SOCKET_DIR: this.sockets, ...env }),
-    );
+    // The plugin's source and the discovery probe are CommonJS written in
+    // TypeScript, which Node's own type stripping cannot load; Nx then uses
+    // swc instead.
+    const base = testEnvironment({
+      NX_PREFER_NODE_STRIP_TYPES: "false",
+      NX_SOCKET_DIR: this.sockets,
+      ...pluginsInNxProcess(env),
+      ...env,
+    });
+    if (loadsCompiledPlugin()) {
+      // Stack traces of the compiled plugin name the lines of its source.
+      base.NODE_OPTIONS = [base.NODE_OPTIONS, "--enable-source-maps"].filter(Boolean).join(" ");
+    }
+    return this.cargo.environment(base);
   }
+}
+
+/**
+ * The variables that have a fixture's Nx run its plugins as Nx does by
+ * default, each entry of `nx.json` in a plugin worker of its own, where
+ * {@link pluginsInNxProcess} would load them into Nx's own process. A test
+ * passes them to keep a case in the default mode beside the same case with
+ * the daemon or without plugin isolation.
+ */
+export const pluginWorkers: Readonly<Record<string, string>> = { NX_ISOLATE_PLUGINS: "true" };
+
+/**
+ * `NX_ISOLATE_PLUGINS=false` for a command whose variables set neither it nor
+ * `NX_DAEMON=true`: Nx then loads the plugins into its own process instead of
+ * starting a plugin worker for each entry of `nx.json`, which took about
+ * 200 ms of each graph creation. Besides that choice, Nx 24 reads the
+ * variable only where it runs a `preTasksExecution` hook, to carry the
+ * changes that the hook makes to `process.env` from a worker to the `nx`
+ * process; in Nx's own process the hook makes them there directly, and the
+ * tasks get them either way.
+ *
+ * The daemon keeps Nx's default, and so do the cases that pass
+ * {@link pluginWorkers}, and the end-to-end tests, whose commands do not run
+ * through this harness.
+ */
+function pluginsInNxProcess(env: Record<string, string | undefined>): Record<string, string> {
+  return env.NX_DAEMON === "true" || "NX_ISOLATE_PLUGINS" in env
+    ? {}
+    : { NX_ISOLATE_PLUGINS: "false" };
 }
 
 /** The longest name Nx gives a socket, as in `p<pid>-<counter>-<8 hex digits>.sock`. */

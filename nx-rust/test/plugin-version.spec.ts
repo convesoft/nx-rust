@@ -2,10 +2,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type CargoCall,
+  type Env,
   type FileChanges,
   HARNESS_TIMEOUT,
   inFixture,
   lockfileCalls,
+  pluginWorkers,
   pnpmLockfile,
   runNx,
   taskCalls,
@@ -35,36 +37,50 @@ const crateTargets = '"build", "check", "lint", "test", "fmt-check" and "fmt"';
 
 const options = { options: { pluginVersion: "0.0.0" } };
 
-/** Graph creation in `subfolder-workspace` with `files`; returns its exit status and output. */
-async function showProjects(
-  ...files: FileChanges[]
-): Promise<{ status: number | null; output: string }> {
-  let result = { status: null as number | null, output: "" };
-  await inFixture("subfolder-workspace", Object.assign({}, ...files), async (workspace) => {
-    const { status, output } = await workspace.nx(["show", "projects"]);
-    result = { status, output: withoutColours(output) };
-  });
-  return result;
+/** Graph creation in `subfolder-workspace`, with the variables `env`. */
+function graphCreation(env: Env = {}) {
+  /** Graph creation with `files`; returns its exit status and output. */
+  async function showProjects(
+    ...files: FileChanges[]
+  ): Promise<{ status: number | null; output: string }> {
+    let result = { status: null as number | null, output: "" };
+    await inFixture("subfolder-workspace", Object.assign({}, ...files), async (workspace) => {
+      const { status, output } = await workspace.nx(["show", "projects"], env);
+      result = { status, output: withoutColours(output) };
+    });
+    return result;
+  }
+
+  /** Graph creation fails; returns the plugin's message. */
+  async function failed(...files: FileChanges[]): Promise<string> {
+    const { status, output } = await showProjects(...files);
+    expect({
+      status,
+      failedIn: output.includes("threw an error while creating dependencies"),
+    }).toEqual({
+      status: 1,
+      failedIn: true,
+    });
+    return output;
+  }
+
+  return { showProjects, failed };
 }
 
-/** Graph creation fails; returns the plugin's message. */
-async function failed(...files: FileChanges[]): Promise<string> {
-  const { status, output } = await showProjects(...files);
-  expect({
-    status,
-    failedIn: output.includes("threw an error while creating dependencies"),
-  }).toEqual({
-    status: 1,
-    failedIn: true,
-  });
-  return output;
-}
+const { showProjects, failed } = graphCreation();
+
+/**
+ * Graph creation with the plugin in a worker, as in Nx's default mode, for
+ * one case of each origin: the check in createDependencies reads what
+ * createNodes recorded.
+ */
+const inPluginWorkers = graphCreation(pluginWorkers);
 
 describe("a pluginVersion that the plugin did not set fails graph creation", () => {
   it(
     "from a targetDefaults entry keyed by the executors, naming the entry and every target it reaches",
     async () => {
-      const output = await failed({
+      const output = await inPluginWorkers.failed({
         "nx.json": withTargetDefaults({
           [cargoExecutor]: options,
           [runExecutor]: options,
@@ -119,7 +135,7 @@ describe("a pluginVersion that the plugin did not set fails graph creation", () 
   it(
     "from a project.json, naming the file, and from a targetDefaults entry beside it",
     async () => {
-      const output = await failed(
+      const output = await inPluginWorkers.failed(
         { "nx.json": withTargetDefaults({ test: options }) },
         {
           "rust/crates/api/project.json": JSON.stringify({
@@ -175,7 +191,7 @@ describe("a pluginVersion that the plugin did not set fails graph creation", () 
   it(
     "from another plugin, with the command that shows where it comes from",
     async () => {
-      const output = await failed({
+      const output = await inPluginWorkers.failed({
         "other.cjs": `exports.name = "other";
 exports.createNodes = [
   "**/Cargo.toml",
@@ -244,13 +260,13 @@ describe("a pluginVersion that only the run gives", () => {
   it(
     "fails the task before cargo runs, and the plugin's own value or the words after -- for run do not",
     () =>
+      // With the plugin in a worker, as in Nx's default mode.
       inFixture("crate-shapes", undefined, async (workspace) => {
-        const failedRun = await runNx(workspace, [
-          "run",
-          "core-lib:check",
-          "--pluginVersion=0.0.0",
-          "--skip-nx-cache",
-        ]);
+        const failedRun = await runNx(
+          workspace,
+          ["run", "core-lib:check", "--pluginVersion=0.0.0", "--skip-nx-cache"],
+          pluginWorkers,
+        );
         expect(failedRun.status).toBe(1);
         expect(failedRun.output).toContain(
           'core-lib:check: this run gives the option "pluginVersion" the value "0.0.0", but only @convesoft/nx-rust sets that option, to carry its version into the cache key. The value comes from the command line, such as --pluginVersion, or from a task that forwards its options to this one: leave it out. The task does not run, so that Nx stores no result for it.',
@@ -259,36 +275,33 @@ describe("a pluginVersion that only the run gives", () => {
 
         // The lockfile task, which has an executor of its own, alike.
         workspace.cargo.clear();
-        const lockfileRun = await runNx(workspace, [
-          "run",
-          "rust:lockfile",
-          "--pluginVersion=0.0.0",
-        ]);
+        const lockfileRun = await runNx(
+          workspace,
+          ["run", "rust:lockfile", "--pluginVersion=0.0.0"],
+          pluginWorkers,
+        );
         expect(lockfileRun.status).toBe(1);
         expect(lockfileRun.output).toContain(
           'rust:lockfile: this run gives the option "pluginVersion" the value "0.0.0", but only @convesoft/nx-rust sets that option',
         );
         expect(lockfileCalls(workspace)).toEqual([]);
 
-        const ownValue = await runNx(workspace, [
-          "run",
-          "core-lib:check",
-          `--pluginVersion=${pluginVersion}`,
-          "--skip-nx-cache",
-        ]);
+        const ownValue = await runNx(
+          workspace,
+          ["run", "core-lib:check", `--pluginVersion=${pluginVersion}`, "--skip-nx-cache"],
+          pluginWorkers,
+        );
         expect(ownValue.status).toBe(0);
         expect(taskCalls(workspace)).toEqual<CargoCall[]>([
           { cwd: "rust", args: ["check", "--all-targets", "-p", "core-lib"] },
         ]);
 
         workspace.cargo.clear();
-        const forwarded = await runNx(workspace, [
-          "run",
-          "cli:run",
-          "--skip-nx-cache",
-          "--",
-          "--pluginVersion=0.0.0",
-        ]);
+        const forwarded = await runNx(
+          workspace,
+          ["run", "cli:run", "--skip-nx-cache", "--", "--pluginVersion=0.0.0"],
+          pluginWorkers,
+        );
         expect(forwarded.status).toBe(0);
         expect(taskCalls(workspace)).toEqual<CargoCall[]>([
           { cwd: "rust", args: ["run", "-p", "cli", "--", "--pluginVersion=0.0.0"] },
