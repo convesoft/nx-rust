@@ -1,12 +1,20 @@
 import type { ExecutorContext, Task } from "@nx/devkit";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import {
+  type CargoDirectories,
+  DirectoryReportError,
+  directoryVariableNames,
+  directoryVariables,
+  reportedDirectories,
+} from "../cargo/directories";
 import type { PackageVersion } from "../cargo/lockfile";
 import {
   configuredTriples,
   describeFolders,
   describeTriples,
+  optionTripleReason,
   type PickedTriples,
   pickedTriples,
   pickText,
@@ -24,6 +32,7 @@ import {
   runIdVariable,
 } from "../graph/lockfile-task";
 import { uncachedByDesign } from "../graph/outputs";
+import { physicalPath, repositoryFolder } from "../graph/real-path";
 import {
   cachedTargets,
   type InferredTargetName,
@@ -228,8 +237,11 @@ async function checksAfterCargo(
  *   uncached in this project, when `build` or `doc` gets the profile `dev`,
  *   `test` or `bench`, or is cached while its options name no triple and
  *   the task's environment and Cargo's configuration pick a triple whose
- *   folder the plugin cannot name or other triples than its outputs name
- *   (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
+ *   folder the plugin cannot name or other triples than its outputs name,
+ *   or is cached while its `targetTriple` option is `host-tuple` or a
+ *   target specification file, or while cargo reports another artifact
+ *   directory for the task than the one its outputs name, or cannot report
+ *   one (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
  *   `false`, when `args` does not split into words, when the run gives
  *   `pluginVersion` another value than the target's (`DES-PLUGIN-OPTIONS`),
  *   when a task whose target hashes digests does not depend on its
@@ -280,6 +292,11 @@ export function taskInvocation(
       throw new TaskError(
         `${task}: the profile ${options.profile} puts cargo's artifacts in the folder of another profile, which @convesoft/nx-rust cannot name for the cache. Build with ${replacement}.`,
       );
+    }
+    // The outputs take the option's value for the triple's folder, which
+    // cargo names otherwise for some values (`DES-OUTPUTS`).
+    if (context.target?.cache === true && namesTriple(options)) {
+      checkOptionTriple(task, metadata.target, options.targetTriple as string, context, env);
     }
     // The outputs name the folder of the triple in the option, and else of
     // what the configuration and the graph's environment picked, unless
@@ -337,6 +354,17 @@ export function taskInvocation(
   ) {
     checkPickedTriples(task, metadata, cwd, context.root, env);
   }
+  // Cargo's directories for this task, with its environment, which a dotenv
+  // file that Nx loads only for the task can change (`DES-OUTPUTS`,
+  // `DES-BUILD-INPUT-CHECK`).
+  let directories: CargoDirectories | undefined;
+  if (
+    (metadata.target === "build" || metadata.target === "doc") &&
+    context.target?.cache === true &&
+    metadata.artifactDirectory !== undefined
+  ) {
+    directories = checkArtifactDirectory(task, metadata, cwd, context.root, env);
+  }
   const lockfile = join(cwd, "Cargo.lock");
   const folder = join(context.root, digestFolder(workspaceRoot));
   // The private copies of this nx command's lockfile tasks.
@@ -392,6 +420,7 @@ export function taskInvocation(
           crate: cargo.packageName,
           manifest: cargo.manifest,
           records: metadata.records,
+          directories: directories ?? taskDirectories(task, cwd, env),
           selection: examined.options,
           env,
           cwd,
@@ -616,6 +645,153 @@ function checkPickedTriples(
   );
 }
 
+// Fails a cached `build` or `doc` whose `targetTriple` option is a value
+// for which cargo writes to another folder than the outputs name, which
+// interpolate the option as the triple's folder (`DES-OUTPUTS`):
+// `host-tuple`, for which cargo uses the host's triple, and a target
+// specification file. The option arrives with the task, when Nx has decided
+// to cache it already.
+// @mara implements DES-OUTPUTS
+// @mara implements DES-DIAGNOSTICS
+function checkOptionTriple(
+  task: string,
+  target: InferredTargetName,
+  triple: string,
+  context: ExecutorContext,
+  env: NodeJS.ProcessEnv,
+): void {
+  const reason = optionTripleReason(triple);
+  if (reason === undefined) {
+    return;
+  }
+  const cause = `${task}: the targetTriple option of this run of the cached ${target} is ${JSON.stringify(triple)}, and @convesoft/nx-rust cannot name the folder that cargo writes to for this value: ${reason}. The task does not run, so that Nx stores no result for it.`;
+  if (triple === "host-tuple") {
+    const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];
+    const workspaceManifest =
+      project === undefined ? undefined : cargoMetadataOf(project)?.workspaceManifest;
+    const host = hostTriple(
+      join(context.root, workspaceManifest === undefined ? "." : dirname(workspaceManifest)),
+      env,
+    );
+    throw new TaskError(
+      host === undefined
+        ? `${cause} Pass the host's triple itself in place of host-tuple, the value that \`rustc -vV\` prints after "host:".`
+        : `${cause} Pass the host's triple itself in place of host-tuple: --targetTriple=${host}.`,
+    );
+  }
+  const table =
+    target === "doc"
+      ? "[workspace.metadata.nx.project.targets.doc] of the workspace's Cargo.toml"
+      : "[package.metadata.nx.targets.build] of the crate's Cargo.toml";
+  throw new TaskError(
+    `${cause} Build with a built-in triple, or run the target uncached: set cache = false in ${table}, or in the target's configuration in a project.json.`,
+  );
+}
+
+// The host's triple, as `rustc -vV` names it in the folder where the task's
+// cargo starts, with the task's environment; undefined where it fails.
+function hostTriple(cwd: string, env: NodeJS.ProcessEnv): string | undefined {
+  const run = spawnSync("rustc", ["-vV"], {
+    cwd,
+    env: { ...env, RUSTUP_AUTO_INSTALL: "0" },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return run.status === 0 ? /^host: (\S+)$/m.exec(run.stdout ?? "")?.[1] : undefined;
+}
+
+// Cargo's directories for a task, which cargo reports with the task's
+// environment in the folder where it will run, as physical paths: the
+// artifact directory that it writes to, and the build directory, whose
+// files the check of `DES-BUILD-INPUT-CHECK` leaves out.
+// @mara implements DES-BUILD-INPUT-CHECK
+function taskDirectories(task: string, cwd: string, env: NodeJS.ProcessEnv): CargoDirectories {
+  try {
+    const reported = reportedDirectories(cwd, env);
+    return { artifact: physicalPath(reported.artifact), build: physicalPath(reported.build) };
+  } catch (error) {
+    if (!(error instanceof DirectoryReportError)) {
+      throw error;
+    }
+    const stderr = error.stderr.trim();
+    throw new TaskError(
+      [
+        `${task}: \`cargo metadata\` could not report Cargo's directories for this task, so @convesoft/nx-rust cannot tell where cargo puts its files: ${error.message}.`,
+        ...(stderr === "" ? [] : [stderr]),
+        "The task does not run, so that Nx stores no result for it. Correct what cargo reports, such as a manifest or a configuration file that it cannot read, and run the task again.",
+      ].join("\n"),
+    );
+  }
+}
+
+// Fails a cached `build` or `doc` for which cargo reports, with the task's
+// environment, another artifact directory than the one whose folders its
+// outputs name, which graph creation recorded: cargo would write elsewhere,
+// and Nx would store what lies at the declared paths, an older artifact or
+// nothing, under the task's key (`DES-OUTPUTS`). Where the variables that
+// move the directory, `CARGO_TARGET_DIR`, `CARGO_BUILD_TARGET_DIR` and
+// `CARGO_HOME`, have the values that graph creation saw, or those values
+// give another directory as well, Cargo's configuration has changed since
+// graph creation, as a file that Nx does not watch can under the Nx daemon;
+// otherwise the task's environment moves it, as a dotenv file of the task
+// does. Returns the task's directories where they agree.
+// @mara implements DES-OUTPUTS
+// @mara implements DES-DIAGNOSTICS
+function checkArtifactDirectory(
+  task: string,
+  metadata: TargetCargoMetadata,
+  cwd: string,
+  root: string,
+  env: NodeJS.ProcessEnv,
+): CargoDirectories {
+  const directories = taskDirectories(task, cwd, env);
+  const named = metadata.artifactDirectory as string;
+  const now = repositoryFolder(directories.artifact, root);
+  if (now.inside && now.path === named) {
+    return directories;
+  }
+  const end = "The task does not run, so that Nx stores no result for it.";
+  const graphVariables = metadata.directoryVariables ?? {};
+  const taskVariables = directoryVariables(env);
+  const moved = directoryVariableNames.filter(
+    (name) => taskVariables[name] !== graphVariables[name],
+  );
+  const graphEnv: NodeJS.ProcessEnv = { ...env };
+  for (const name of directoryVariableNames) {
+    if (graphVariables[name] === undefined) {
+      delete graphEnv[name];
+    } else {
+      graphEnv[name] = graphVariables[name];
+    }
+  }
+  const byVariables =
+    moved.length === 0
+      ? undefined
+      : repositoryFolder(taskDirectories(task, cwd, graphEnv).artifact, root);
+  if (byVariables === undefined || !byVariables.inside || byVariables.path !== named) {
+    throw new TaskError(
+      [
+        `${task}: Cargo's configuration has changed since Nx created the project graph: cargo now puts the artifacts of this run in ${now.path}${now.inside ? "" : ", outside the repository"}, while the outputs of the cached ${metadata.target} name the artifact directory ${named}.`,
+        `Nx does not watch a configuration file outside the repository, such as the Cargo home's, so the graph that the Nx daemon keeps is out of date. ${end} Run \`nx reset\`, or stop the daemon with \`nx daemon --stop\`, and run the task again.`,
+      ].join("\n"),
+    );
+  }
+  const shown = (value: string | undefined) =>
+    value === undefined ? "unset" : JSON.stringify(value);
+  const variables = moved
+    .map(
+      (name) =>
+        `${name} is ${shown(taskVariables[name])} in the task's environment and was ${shown(graphVariables[name])} when Nx created the graph`,
+    )
+    .join(", and ");
+  throw new TaskError(
+    [
+      `${task}: cargo puts the artifacts of this run of the cached ${metadata.target} in ${now.path}${now.inside ? "" : ", outside the repository"}, but its outputs name the artifact directory ${named}: ${variables}.`,
+      `A variable that only a dotenv file of the task sets, such as a .env file in the crate's or the workspace's folder or a root .env.build, .env.doc or .env.<configuration>, is unknown when Nx creates the graph. ${end} Set the variable in the environment of the nx command or in the repository's root .env file, or set the folder as build.target-dir in a .cargo/config.toml of the workspace instead.`,
+    ].join("\n"),
+  );
+}
+
 // The warnings that graph creation recorded for the task's project.
 // @mara implements DES-DIAGNOSTICS
 function projectWarnings(context: ExecutorContext): string[] {
@@ -638,6 +814,8 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
     triples,
     tripleProblem,
     configuredPick,
+    artifactDirectory,
+    directoryVariables: variables,
     members,
     digests,
     records,
@@ -652,6 +830,12 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
           : {}),
         ...(typeof tripleProblem === "string" ? { tripleProblem } : {}),
         ...(typeof configuredPick === "string" ? { configuredPick } : {}),
+        ...(typeof artifactDirectory === "string" ? { artifactDirectory } : {}),
+        ...(typeof variables === "object" &&
+        variables !== null &&
+        Object.values(variables).every((entry) => typeof entry === "string")
+          ? { directoryVariables: variables as Record<string, string> }
+          : {}),
         ...(isPackageList(members) ? { members } : {}),
         ...(isPackageList(digests) ? { digests } : {}),
         ...(isRecordSource(records) ? { records } : {}),
@@ -665,20 +849,12 @@ function isRecordSource(value: unknown): value is BuildRecordSource {
   if (typeof value !== "object" || value === null) {
     return false;
   }
-  const {
-    artifactDirectory,
-    buildDirectory,
-    library,
-    binaries,
-    features,
-    optionalDependencies,
-    shared,
-  } = value as Partial<Record<keyof BuildRecordSource, unknown>>;
+  const { library, binaries, features, optionalDependencies, shared } = value as Partial<
+    Record<keyof BuildRecordSource, unknown>
+  >;
   const isStrings = (list: unknown): list is string[] =>
     Array.isArray(list) && list.every((item) => typeof item === "string");
   return (
-    typeof artifactDirectory === "string" &&
-    typeof buildDirectory === "string" &&
     (library === undefined ||
       (typeof library === "object" &&
         library !== null &&

@@ -1,7 +1,5 @@
-import { isAbsolute, relative } from "node:path";
 import type { CargoPackage, CargoTarget } from "../cargo/metadata";
 import type { CargoWorkspace } from "./discovery";
-import { physicalPath, realPath } from "./real-path";
 
 /**
  * What the executor of `build` needs to name the dependency files that
@@ -9,15 +7,10 @@ import { physicalPath, realPath } from "./real-path";
  * without asking cargo (`DES-BUILD-INPUT-CHECK`, points 1 and 2). Graph
  * creation takes it from the `cargo metadata` report and puts it into the
  * metadata of the crate's `build` target, which Nx keeps out of task hashes.
+ * Cargo's directories are not part of it: the executor asks cargo for them
+ * with the task's environment, which a dotenv file of the task can change.
  */
 export interface BuildRecordSource {
-  /**
-   * Cargo's artifact directory, as the system reaches it: relative to the
-   * repository's real path where it lies inside it, absolute otherwise.
-   */
-  artifactDirectory: string;
-  /** Cargo's build directory, in the same form. */
-  buildDirectory: string;
   /** The crate's library, if it has one. */
   library?: {
     /** The library's name as Cargo reports it. */
@@ -102,29 +95,12 @@ export function sharedRecordNames(
  *
  * @param shared The record names that targets of several crates with the
  *   crate's artifact directory give ({@link sharedRecordNames}).
- * @param repositoryRoot The absolute path of the repository root.
  */
 // @mara implements DES-BUILD-INPUT-CHECK
-export function buildRecordSource(
-  pkg: CargoPackage,
-  workspace: Pick<CargoWorkspace, "report">,
-  shared: readonly string[],
-  repositoryRoot: string,
-): BuildRecordSource {
-  const realRoot = realPath(repositoryRoot);
-  const shown = (directory: string) => {
-    const reached = physicalPath(directory);
-    const path = relative(realRoot, reached);
-    return path === "" || path === ".." || path.startsWith("../") || isAbsolute(path)
-      ? reached
-      : path;
-  };
-  const { target_directory: artifacts, build_directory: build } = workspace.report;
+export function buildRecordSource(pkg: CargoPackage, shared: readonly string[]): BuildRecordSource {
   const library = pkg.targets.find(isLibrary);
   const own = new Set(recordNames(pkg));
   return {
-    artifactDirectory: shown(artifacts),
-    buildDirectory: shown(build ?? artifacts),
     ...(library === undefined
       ? {}
       : { library: { name: library.name, procMacro: library.kind.includes("proc-macro") } }),

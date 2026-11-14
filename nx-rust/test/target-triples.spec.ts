@@ -6,6 +6,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +17,7 @@ import {
   pickedTriples,
   pickText,
 } from "../src/cargo/target-triples";
-import { tripleCommand } from "../src/graph/inputs";
+import { artifactFoldersCommand } from "../src/graph/inputs";
 import { HARNESS_TIMEOUT, loadsCompiledPlugin, pluginPackage, testEnvironment } from "./harness";
 
 // Checks the rule of DES-OUTPUTS ("Paths") by which the plugin names the
@@ -192,12 +193,18 @@ describe("the triples that cargo picks without --target", () => {
   });
 });
 
-describe("the triple input of build and doc", () => {
+describe("the artifact input of build and doc", () => {
   let root: string;
 
   beforeEach(() => {
-    root = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-triple-input-")));
+    root = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-artifact-input-")));
     mkdirSync(join(root, "repo/rust/.cargo"), { recursive: true });
+    mkdirSync(join(root, "repo/rust/src"), { recursive: true });
+    writeFileSync(
+      join(root, "repo/rust/Cargo.toml"),
+      '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2021"\n',
+    );
+    writeFileSync(join(root, "repo/rust/src/lib.rs"), "");
   });
 
   afterEach(() => {
@@ -206,9 +213,9 @@ describe("the triple input of build and doc", () => {
 
   /** What the command prints in the repository root, as Nx runs it, with `env`. */
   function evaluate(env: NodeJS.ProcessEnv, script?: string): string {
-    const command = tripleCommand(
+    const command = artifactFoldersCommand(
       "rust",
-      script ?? join(pluginPackage(), "src/cargo/print-triples.js"),
+      script ?? join(pluginPackage(), "src/cargo/print-artifact-folders.js"),
     );
     const run = spawnSync("sh", ["-c", command], {
       cwd: join(root, "repo"),
@@ -242,9 +249,9 @@ describe("the triple input of build and doc", () => {
     it("prints the pick of the workspace root with the task's environment, as graph creation reads it", () => {
       const config = join(root, "repo/rust/.cargo/config.toml");
       writeFileSync(config, '[build]\ntarget = ["x86_64-unknown-linux-gnu"]\n');
-      expect(evaluate({})).toBe("triples x86_64-unknown-linux-gnu\n");
+      expect(evaluate({})).toBe("triples x86_64-unknown-linux-gnu\nartifacts rust/target\n");
       expect(evaluate({ CARGO_BUILD_TARGET: "aarch64-unknown-linux-gnu" })).toBe(
-        "triples aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu\n",
+        "triples aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu\nartifacts rust/target\n",
       );
       // The Cargo home's configuration and one above the repository count.
       rmSync(config);
@@ -253,24 +260,67 @@ describe("the triple input of build and doc", () => {
         join(root, "home/config.toml"),
         '[build]\ntarget = "aarch64-unknown-linux-gnu"\n',
       );
-      expect(evaluate({})).toBe("triples aarch64-unknown-linux-gnu\n");
+      expect(evaluate({})).toBe("triples aarch64-unknown-linux-gnu\nartifacts rust/target\n");
       mkdirSync(join(root, ".cargo"));
       writeFileSync(join(root, ".cargo/config.toml"), '[build]\ntarget = "host-tuple"\n');
       expect(evaluate({})).toBe(
-        'unnamed "host-tuple": cargo replaces it with the host\'s triple\n',
+        'unnamed "host-tuple": cargo replaces it with the host\'s triple\nartifacts rust/target\n',
       );
       rmSync(join(root, ".cargo"), { recursive: true });
       rmSync(join(root, "home"), { recursive: true });
-      expect(evaluate({})).toBe("none\n");
+      expect(evaluate({})).toBe("none\nartifacts rust/target\n");
+    });
+
+    it("prints the artifact directory that cargo reports with the task's environment, relative to the repository and as the system reaches it", () => {
+      const config = join(root, "repo/rust/.cargo/config.toml");
+      const artifacts = (env: NodeJS.ProcessEnv = {}) => evaluate(env).split("\n")[1];
+      expect(artifacts()).toBe("artifacts rust/target");
+      // A variable relative to the folder that cargo starts in, the workspace root.
+      expect(artifacts({ CARGO_TARGET_DIR: "out" })).toBe("artifacts rust/out");
+      expect(artifacts({ CARGO_BUILD_TARGET_DIR: "../shared" })).toBe("artifacts shared");
+      expect(artifacts({ CARGO_TARGET_DIR: "a", CARGO_BUILD_TARGET_DIR: "b" })).toBe(
+        "artifacts rust/a",
+      );
+      // The configuration of the workspace, and that of a Cargo home that
+      // only the environment names.
+      writeFileSync(config, '[build]\ntarget-dir = "../built"\n');
+      expect(artifacts()).toBe("artifacts built");
+      rmSync(config);
+      mkdirSync(join(root, "other-home"));
+      writeFileSync(
+        join(root, "other-home/config.toml"),
+        `[build]\ntarget-dir = "${join(root, "repo/from-home")}"\n`,
+      );
+      expect(artifacts({ CARGO_HOME: join(root, "other-home") })).toBe("artifacts from-home");
+      // A symbolic link followed by .., which cargo leaves as text.
+      mkdirSync(join(root, "repo/deep/child"), { recursive: true });
+      symlinkSync("../deep/child", join(root, "repo/rust/link"));
+      writeFileSync(config, '[build]\ntarget-dir = "link/../target"\n');
+      expect(artifacts()).toBe("artifacts deep/target");
+      // Outside the repository, without a path of the machine.
+      writeFileSync(config, `[build]\ntarget-dir = "${join(root, "outside")}"\n`);
+      expect(artifacts()).toBe("artifacts outside the repository");
+      // build.build-dir moves no artifact.
+      writeFileSync(config, '[build]\nbuild-dir = "../build"\n');
+      expect(artifacts()).toBe("artifacts rust/target");
     });
   }
 
   it("prints a new random value at each evaluation where the script cannot run", () => {
-    const missing = join(root, "missing/print-triples.js");
+    const missing = join(root, "missing/print-artifact-folders.js");
     const first = evaluate({}, missing);
     expect(first).toMatch(/^( [0-9a-f]{2}){16}\n$/);
     expect(evaluate({}, missing)).not.toBe(first);
   });
+
+  if (loadsCompiledPlugin()) {
+    it("prints a new random value at each evaluation where cargo cannot report the directories", () => {
+      writeFileSync(join(root, "repo/rust/Cargo.toml"), "not a manifest\n");
+      const first = evaluate({});
+      expect(first).toMatch(/^( [0-9a-f]{2}){16}\n$/);
+      expect(evaluate({})).not.toBe(first);
+    });
+  }
 });
 
 describe("the folders that the plugin names for cargo's picks", () => {
