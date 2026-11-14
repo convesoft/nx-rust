@@ -52,7 +52,7 @@ Import them from [`./harness`](harness/index.ts).
 
 **`loadFixtureGraph(fixture, { files, env })`** copies a fixture into a
 temporary folder, has Nx build the project graph there with the plugin
-loaded from `src/index.ts`, and returns the projects by name, the edges and
+(see `compilePlugin()` below), and returns the projects by name, the edges and
 the external nodes, together with `cargoCalls`, the cargo invocations it
 took. A failed graph creation throws a `GraphCreationError` whose message
 holds every error that Nx and the plugin reported.
@@ -119,13 +119,28 @@ makes npm nodes of them, as in a repository that installs the plugin.
 runs the Nx command line there and returns its status and output,
 `cargoCalls()`, `files()`, which returns every file outside `node_modules`
 and `.nx` with its content, `reset(files)` and `remove()`. Besides the fixture, the copy
-has a `tsconfig.base.json` that lets Nx compile the plugin's TypeScript
-source, and a `node_modules`, which Nx ignores, with a link to this
-repository's Nx and a copy of the cargo wrapper in `.bin`. Its Nx keeps
+has a `tsconfig.base.json` that lets Nx compile a plugin written in
+TypeScript, such as the plugin's source or the discovery probe, and a
+`node_modules`, which Nx ignores, with a link to this repository's Nx and a
+copy of the cargo wrapper in `.bin`. Its Nx keeps
 its sockets in a folder of their own in the test run's socket folder (see
 `startTestRun()` below), which `remove()` deletes. If creating it fails,
 nothing is left behind. Set `NX_RUST_KEEP_FIXTURES=1` to keep the copies for
 inspection.
+
+The commands that the copy runs, and its graph and hash calls, load the
+plugins of `nx.json` into Nx's own process (`NX_ISOLATE_PLUGINS=false`)
+instead of starting a plugin worker for each entry, unless the command sets
+`NX_ISOLATE_PLUGINS` itself or runs with the daemon (`NX_DAEMON=true`).
+Besides that choice, Nx 24 reads the variable only where it runs a
+`preTasksExecution` hook, to carry the changes that the hook makes to
+`process.env` from a worker to the `nx` process; in Nx's own process the hook
+makes them there directly. The tests that compare plugin isolation on and off
+set the variable themselves. The case without the daemon of each test that
+compares it with the daemon passes **`pluginWorkers`**, which keeps Nx's
+default of a worker per entry. Commands with the daemon keep Nx's default too,
+and the end-to-end tests, which do not use the copy, run as a repository that
+installs the plugin does.
 
 **`useNx(version)`** links the copy's `node_modules/nx` to a copy of this
 repository's Nx whose `package.json` gives `version`, written by
@@ -140,12 +155,30 @@ tests that set `NX_DAEMON=true` and stop the daemon with `nx daemon --stop`
 when they are done.
 
 **`nx(args, env, cwd)`** runs Nx in the subfolder `cwd` of the copy when it is
-given. The copy's `node_modules` also links to the plugin's package folder, so
-that `nx g @convesoft/nx-rust:<generator>` runs the generators from source.
-Graph creation cannot load the plugin by its package name from that link,
-because the package names its built entry point: a test that runs a
-generator on an `nx.json` that lists `@convesoft/nx-rust` passes
-`--skipProjectGraph`, and the end-to-end tests cover the installed package.
+given. The copy's `node_modules` also links to the plugin's package that the
+copy loads (`pluginPackage()`), where Nx finds the executors of the plugin's
+targets and `nx g @convesoft/nx-rust:<generator>` the generators. A test that
+runs a generator on an `nx.json` that lists `@convesoft/nx-rust` passes
+`--skipProjectGraph`, so that it does not depend on which package the copy
+links to: the package in this repository names a built entry point that only
+the compiled copy has. The end-to-end tests cover graph creation with the
+installed package.
+
+**`compilePlugin()`**, which the unit tests' global setup calls after
+`startTestRun()`, compiles the plugin's source into the test run's folder,
+laid out as its built package, and every fixture copy of the run loads that
+copy: `nx.json` names its `src/index.js` (**`pluginEntry()`**), and the copy's
+`node_modules` links to it (**`pluginPackage()`**). Nx would otherwise compile
+the source with swc in every process that loads the plugin, its executors or
+its generators, which took about 110 ms of each graph creation and about
+170 ms of each task. `tsc` compiles the copy in a process of its own, in about
+a second, with the options of `tsconfig.lib.json` but for the target ES2021
+and inline source maps, as Nx compiles the source, and without the type check,
+which `nx build` and the editor do; a source that does not parse fails the
+setup. The fixtures' commands run with `--enable-source-maps`, so that a stack
+trace names the lines of the source. Without the global setup, such as in a
+script that imports the harness, the fixtures load the source, `src/index.ts`
+(**`pluginSourceEntry`**).
 
 **`repositoryFiles(root)`** returns every file below `root` with its content,
 leaving out `node_modules` and `.nx`, and **`changedFiles(before, after)`**

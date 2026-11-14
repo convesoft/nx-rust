@@ -7,6 +7,7 @@ import { nxGraphInternals } from "../src/graph/nx-internals";
 import type { CargoProject } from "../src/graph/projects";
 import { registrationOf } from "../src/graph/registration";
 import {
+  type Env,
   FileChanges,
   FixtureGraph,
   FixtureName,
@@ -14,6 +15,7 @@ import {
   GraphCreationError,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
+  pluginWorkers,
   testEnvironment,
   withoutColours,
 } from "./harness";
@@ -691,13 +693,19 @@ describe("graph-creation errors", () => {
   it(
     "fails for affectedTests = true on test from targetDefaults, without the setting",
     async () => {
-      const message = await graphError("subfolder-workspace", {
-        "nx.json": (json) =>
-          JSON.stringify({
-            ...JSON.parse(json),
-            targetDefaults: { test: { options: { affectedTests: true } } },
-          }),
-      });
+      // With the plugin in a worker, as in Nx's default mode: the check in
+      // createDependencies reads what createNodes recorded.
+      const message = await graphError(
+        "subfolder-workspace",
+        {
+          "nx.json": (json) =>
+            JSON.stringify({
+              ...JSON.parse(json),
+              targetDefaults: { test: { options: { affectedTests: true } } },
+            }),
+        },
+        pluginWorkers,
+      );
 
       expect(message).toContain(
         'The target "test" of the project "model" (rust/crates/model/Cargo.toml) sets "affectedTests" to true among its options, but the Cargo workspace in rust/Cargo.toml does not use the selection of affected tests',
@@ -1609,9 +1617,13 @@ function pluginEntries(...entries: object[]): (nxJson: string) => string {
   };
 }
 
-/** The message that graph creation fails with. */
-async function graphError(fixture: FixtureName, files: FileChanges): Promise<string> {
-  return loadFixtureGraph(fixture, { files }).then(
+/** The message that graph creation with the variables `env` fails with. */
+async function graphError(
+  fixture: FixtureName,
+  files: FileChanges,
+  env: Env = {},
+): Promise<string> {
+  return loadFixtureGraph(fixture, { files, env }).then(
     () => {
       throw new Error("Graph creation succeeded");
     },

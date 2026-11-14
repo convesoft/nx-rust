@@ -8,6 +8,7 @@ import {
   inFixture,
   linesWith,
   lockfileCalls,
+  pluginWorkers,
   runNx as runNxWithCache,
   sortedCalls,
   taskCalls,
@@ -313,7 +314,7 @@ describe("an option passed on the command line", () => {
   });
 
   it.each<[string, Env]>([
-    ["without the daemon", {}],
+    ["without the daemon", pluginWorkers],
     ["with the daemon", { NX_DAEMON: "true" }],
     ["without plugin isolation", { NX_ISOLATE_PLUGINS: "false" }],
     [

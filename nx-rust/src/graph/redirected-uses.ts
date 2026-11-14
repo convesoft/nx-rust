@@ -5,6 +5,7 @@ import type { Redirection } from "../cargo/redirections";
 import { satisfies } from "../cargo/version-req";
 import type { CargoWorkspace } from "./discovery";
 import type { CargoGraph } from "./projects";
+import { knownPackages, projectsReachedByPath } from "./reached-projects";
 import { realPath as resolveRealPath } from "./real-path";
 
 /**
@@ -71,7 +72,9 @@ export interface RedirectedUse {
  *   another edge. Its own edge is left out where the redirected crate
  *   reaches the member through real dependencies of kind normal or build,
  *   and where any other edge between the two projects points the opposite
- *   way: a path dependency, a direct, possible or other assumed use.
+ *   way: a path dependency, also one through crates without a project
+ *   ({@link projectsReachedByPath}), a direct, possible or other assumed
+ *   use.
  *
  * A requirement that the plugin cannot evaluate, or a source it cannot
  * match to the entry, makes a declaration possible, not direct.
@@ -86,7 +89,7 @@ export function redirectedUses(
 ): RedirectedUse[] {
   realPaths = new Map();
   const { workspaceRoot } = graph.discovery;
-  const known = knownPackages(graph);
+  const known = knownPackages(graph, realPath);
   const rootByFolder = new Map<string, string>();
   for (const root of projectRoots) {
     const folder = realPath(join(workspaceRoot, root));
@@ -104,12 +107,13 @@ export function redirectedUses(
   const edges = new Set(
     uses.filter((use) => use.edge).map((use) => pair(folderOf(use.member), use.folder)),
   );
+  const hasProject = (folder: string) => rootByFolder.has(folder);
   for (const use of uses) {
     if (
       use.kind === "assumed" &&
       use.edge &&
       (edges.has(pair(use.folder, folderOf(use.member))) ||
-        dependsByPath(known.get(use.folder), folderOf(use.member)))
+        reachesByPath(known.get(use.folder), folderOf(use.member), hasProject, known))
     ) {
       use.edge = false;
     }
@@ -117,17 +121,22 @@ export function redirectedUses(
   return uses;
 }
 
-function pair(from: string, to: string): string {
-  return JSON.stringify([from, to]);
+// Whether `pkg` has an edge to the crate in `folder`, which has a project,
+// through its path dependencies: directly, or through crates without a
+// project.
+function reachesByPath(
+  pkg: CargoPackage | undefined,
+  folder: string,
+  hasProject: (folder: string) => boolean,
+  known: Map<string, CargoPackage>,
+): boolean {
+  return (
+    pkg !== undefined && projectsReachedByPath(pkg, hasProject, known, realPath).includes(folder)
+  );
 }
 
-// Whether `pkg` has a path dependency of any kind on the crate in `folder`.
-function dependsByPath(pkg: CargoPackage | undefined, folder: string): boolean {
-  return (
-    pkg?.dependencies.some(
-      (dependency) => typeof dependency.path === "string" && realPath(dependency.path) === folder,
-    ) ?? false
-  );
+function pair(from: string, to: string): string {
+  return JSON.stringify([from, to]);
 }
 
 /** A crate that a workspace's entries redirect to. */
@@ -404,25 +413,6 @@ function reachesExternal(
     }
   }
   return unreported ? "assumed" : undefined;
-}
-
-// Every package that a report of the graph computation describes, by the
-// real path of its folder.
-function knownPackages(graph: CargoGraph): Map<string, CargoPackage> {
-  const known = new Map<string, CargoPackage>();
-  const reports = [
-    ...graph.discovery.workspaces.map((workspace) => workspace.report),
-    ...graph.discovery.pathDependencyReports.map((entry) => entry.report),
-  ];
-  for (const report of reports) {
-    for (const pkg of report.packages) {
-      const folder = folderOf(pkg);
-      if (!known.has(folder)) {
-        known.set(folder, pkg);
-      }
-    }
-  }
-  return known;
 }
 
 // The real path of a package's folder.
