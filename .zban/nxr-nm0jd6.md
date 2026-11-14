@@ -13,7 +13,7 @@ blocked_by:
 created_at: 2026-11-12T18:20:01Z
 ---
 
-1.0 is released once the assumptions the design rests on are checked and the plugin has been validated on a real repository. The assumptions are the risks in `nx-rust/docs/decisions.mara.md` whose text says "To check", "To measure" or "To track"; the spikes for them sit in the milestone that needs each answer.
+1.0 is released once the assumptions the design rests on are checked and the plugin has been validated on a real repository; the decision whether and when to publish the package to npm is taken here (`ADR-PUBLISHING-AT-1-0`). The assumptions are the risks in `nx-rust/docs/decisions.mara.md` whose text says "To check", "To measure" or "To track"; the spikes for them sit in the milestone that needs each answer.
 
 - [ ] All child issues are closed
 - [ ] No draft item is left in `nx-rust/docs/`, or each remaining one is explicitly moved past 1.0

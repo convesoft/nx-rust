@@ -340,6 +340,14 @@ The cost is that a toolchain or configuration file inside a member crate changes
 GitHub's hosted macOS runners are in short supply in November 2026, so jobs on them wait long or do not start. The plugin is a JavaScript package with no platform-specific build, so only test runs are affected: this repository's CI runs its unit and end-to-end tests on Linux only for the moment. macOS stays a supported host ([[ADR-COMPATIBILITY]]), and code must not assume Linux. What is deferred is the check: no macOS run backs the claim until the jobs are added, and [[VER-SETUP]] says so. When macOS runners are usable again, the macOS jobs are added to the workflow, the macOS part of the verification is restored, and this decision and its risk are retired.
 :::
 
+:::mara decision ADR-PUBLISHING-AT-1-0
+:mid: 01M7D7W01MEC0ER974G0K2G8M1
+:title: Complete the milestones on main and decide on publishing at 1.0
+:status: accepted
+
+The maintainer's decision of 14 November 2026. The milestones of the [roadmap](product.mara.md#roadmap) are completed on `main` one after another, and no 0.x milestone is published to npm on its own: whether and when `@convesoft/nx-rust` is published is decided at 1.0. A 0.x milestone is complete when its own checks pass on `main`, and publishing is not one of them; whether publishing is a check of 1.0 is part of what is decided there. Until a version is published, `nx add @convesoft/nx-rust` cannot install the plugin, and the status notes say so. Publishing each 0.x milestone once it is complete, as the milestones were first planned, was rejected.
+:::
+
 :::mara decision ADR-UNKNOWN-OPTIONS
 :mid: 01M7A93PSWEZZPRGCDQCJ8DHE4
 :title: Run tasks without options the executor does not know and say so in their output

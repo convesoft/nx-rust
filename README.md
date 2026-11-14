@@ -7,11 +7,11 @@ where Rust crates sit beside JS and TS projects.
 > **Status:** milestone 0.1 is implemented on `main`: the crates of your Cargo
 > workspaces become Nx projects, with the dependency graph between them,
 > inferred targets and caching of task results. It is not published to npm
-> yet. Batching and feature unification (0.2), nextest and affected tests
-> (0.3), napi and wasm artifacts (0.4) and releasing crates (0.5) are still to
-> come, as the [roadmap](#roadmap) shows. The specification is in
-> [`nx-rust/docs/`](nx-rust/docs/index.mara.md), and progress is tracked in
-> [`.zban/`](.zban/).
+> yet; publishing is decided at 1.0. Batching and feature unification (0.2),
+> nextest and affected tests (0.3), napi and wasm artifacts (0.4) and releasing
+> crates (0.5) are still to come, as the [roadmap](#roadmap) shows. The
+> specification is in [`nx-rust/docs/`](nx-rust/docs/index.mara.md), and
+> progress is tracked in [`.zban/`](.zban/).
 
 ## Why
 
@@ -38,8 +38,8 @@ See what nx-rust [deliberately does not do](nx-rust/docs/product.mara.md#what-nx
 
 ## What it looks like
 
-`nx add` installs the package from npm, so the first line works only once 0.1
-is published there.
+`nx add` installs the package from npm, so the first line works only once the
+package is published there.
 
 ```sh
 nx add @convesoft/nx-rust        # register the plugin; nothing is written into crates

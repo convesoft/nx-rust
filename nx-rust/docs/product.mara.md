@@ -65,8 +65,10 @@ Rust-only repositories work too, but they do not drive priorities.
 
 ## Roadmap
 
-v1 is delivered in stages. Each milestone can be released on its own, and the
-work is tracked as one epic per milestone in [`.zban/`](../../.zban/).
+v1 is delivered in stages, completed on `main` one after another, and the work
+is tracked as one epic per milestone in [`.zban/`](../../.zban/). No 0.x
+milestone is published to npm on its own: whether and when the package is
+published is decided at 1.0 ([[ADR-PUBLISHING-AT-1-0]]).
 
 | Milestone | Contents                                                                                                |
 | --------- | ------------------------------------------------------------------------------------------------------- |

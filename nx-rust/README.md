@@ -8,7 +8,7 @@ JS and TS projects.
 > [`main` branch](https://github.com/convesoft/nx-rust): the crates of Cargo
 > workspaces become Nx projects, with the dependency graph between them,
 > inferred targets and caching of task results. It is not published to npm
-> yet. Next on the
+> yet; publishing is decided at 1.0. Next on the
 > [roadmap](https://github.com/convesoft/nx-rust/blob/main/nx-rust/docs/product.mara.md#roadmap):
 > batching (0.2), nextest and affected tests (0.3), napi and wasm artifacts
 > (0.4) and releasing crates (0.5).
@@ -31,7 +31,7 @@ CI yet.
 ## Usage
 
 ```sh
-nx add @convesoft/nx-rust        # once 0.1 is on npm
+nx add @convesoft/nx-rust        # once the package is on npm
 nx affected -t lint test build
 ```
 

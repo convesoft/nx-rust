@@ -15,5 +15,5 @@ Specified in `nx-rust/docs/execution.mara.md`: `REQ-BATCHING`, `REQ-STABLE-FEATU
 
 - [ ] All child issues are closed
 - [ ] `VER-BATCHING` passes
-- [ ] 0.2 is published to npm
+- ~~0.2 is published to npm~~ Cancelled on 14 November 2026: no 0.x milestone is published on its own; publishing is decided at 1.0 (maintainer, `ADR-PUBLISHING-AT-1-0`).
 - [ ] The status note of `execution.mara.md` is updated

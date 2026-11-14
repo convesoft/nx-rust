@@ -15,5 +15,5 @@ Specified in `nx-rust/docs/testing.mara.md` and `ci.mara.md`: `REQ-TEST-RUNNER`,
 
 - [ ] All child issues are closed
 - [ ] `VER-TESTING` passes
-- [ ] 0.3 is published to npm
+- ~~0.3 is published to npm~~ Cancelled on 14 November 2026: no 0.x milestone is published on its own; publishing is decided at 1.0 (maintainer, `ADR-PUBLISHING-AT-1-0`).
 - [ ] The status notes of `testing.mara.md` and `ci.mara.md` are updated

@@ -13,5 +13,5 @@ Version and publish crates through Nx release. The mechanism is not designed yet
 
 - [ ] All child issues are closed
 - [ ] The verification written with the release specification passes
-- [ ] 0.5 is published to npm
+- ~~0.5 is published to npm~~ Cancelled on 14 November 2026: no 0.x milestone is published on its own; publishing is decided at 1.0 (maintainer, `ADR-PUBLISHING-AT-1-0`).
 - [ ] The status note of `release.mara.md` is updated

@@ -15,5 +15,5 @@ Specified in `nx-rust/docs/artifacts.mara.md`: `REQ-ARTIFACT-TARGETS`, `REQ-ARTI
 
 - [ ] All child issues are closed
 - [ ] `VER-ARTIFACTS` passes
-- [ ] 0.4 is published to npm
+- ~~0.4 is published to npm~~ Cancelled on 14 November 2026: no 0.x milestone is published on its own; publishing is decided at 1.0 (maintainer, `ADR-PUBLISHING-AT-1-0`).
 - [ ] The status note of `artifacts.mara.md` is updated
