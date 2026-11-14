@@ -1,12 +1,14 @@
 "use strict";
 
-// The body of the `cargo` wrapper that cargo-wrapper.ts puts on PATH:
+// The part of the `cargo` wrapper that runs in Node, for the calls that the
+// wrapper's shell script, log-cargo.sh, does not take itself:
 //
 //   node log-cargo.cjs <real cargo> <log file> [cargo arguments...]
 //
 // It appends one JSON line with the folder, the arguments and the recorded
 // variables of this call to the log, then runs the real cargo with the same
 // arguments, folder, standard streams and environment, and exits as cargo did.
+// log-cargo.sh writes the same line and environment for the calls it takes.
 //
 // One change to the environment: the real cargo's folder comes first on PATH.
 // Cargo runs the `rustc` it finds on PATH, and Nx's run-commands puts Node's
@@ -32,7 +34,7 @@ const { appendFileSync, existsSync, writeFileSync } = require("node:fs");
 const { delimiter, dirname, join } = require("node:path");
 
 // The variables of this call's environment that the log records, each null
-// where it is unset. cargo-wrapper.ts names the same ones.
+// where it is unset. cargo-wrapper.ts and log-cargo.sh name the same ones.
 const recordedVariables = ["RUSTUP_AUTO_INSTALL"];
 
 const [realCargo, logFile, ...args] = process.argv.slice(2);

@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, relative, resolve } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { findExecutable, testEnvironment } from "./environment";
 
 /** One cargo invocation, as the wrapper logged it. */
@@ -51,7 +51,9 @@ export function workspaceCall(root: string): CargoCall {
  * cargo found on `PATH` in the same folder, with the real cargo's folder
  * first on `PATH` so that it runs the matching `rustc`. Rustup's proxies
  * still choose the toolchain, because the real cargo starts in the folder the
- * wrapper was started in.
+ * wrapper was started in. The wrapper is the shell script `log-cargo.sh`,
+ * which hands the calls that it does not take itself to `log-cargo.cjs` in
+ * Node.
  *
  * To count what the plugin, Nx or a task runs, the wrapper has to come first
  * wherever cargo is looked up:
@@ -100,18 +102,23 @@ export class CargoWrapper {
    * workspace's `node_modules/.bin`, where Nx's `nx:run-commands` looks first.
    */
   placeIn(folder: string): void {
-    const script = join(__dirname, "log-cargo.cjs");
+    const paths = new Map([
+      ["NODE", process.execPath],
+      ["SCRIPT", join(__dirname, "log-cargo.cjs")],
+      ["CARGO", this.realCargo],
+      ["CARGO_FOLDER", dirname(this.realCargo)],
+      ["LOG", this.logFile],
+    ]);
+    const template = readFileSync(join(__dirname, "log-cargo.sh"), "utf8");
+    const script = template.replace(/@([A-Z_]+)@/g, (placeholder, name: string) => {
+      const path = paths.get(name);
+      if (path === undefined) {
+        throw new Error(`log-cargo.sh has an unknown placeholder: ${placeholder}`);
+      }
+      return shellQuote(path);
+    });
     mkdirSync(folder, { recursive: true });
-    writeFileSync(
-      join(folder, "cargo"),
-      [
-        "#!/bin/sh",
-        "# Written by the nx-rust test harness (cargo-wrapper.ts).",
-        `exec ${[process.execPath, script, this.realCargo, this.logFile].map(shellQuote).join(" ")} "$@"`,
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
+    writeFileSync(join(folder, "cargo"), script, { mode: 0o755 });
   }
 
   /** `env` with the wrapper first on `PATH`. */

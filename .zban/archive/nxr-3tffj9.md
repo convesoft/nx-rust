@@ -1,0 +1,45 @@
+---
+title: The test harness's cargo wrapper starts Node for every cargo call
+status: done
+type: task
+tags:
+  - tests
+discovered_from: nxr-28k2vk
+created_at: 2026-11-14T13:35:25Z
+closed_at: 2026-11-14T15:01:55Z
+---
+
+Goal: the cargo wrapper of the test harness (`nx-rust/test/harness/cargo-wrapper.ts`, `log-cargo.cjs`) logs each cargo call without starting Node first, so that a unit run no longer spends about 17 ms of Node start-up on each of its cargo calls, and every check of the wrapper keeps passing.
+
+Context: found by the spike nxr-28k2vk on 14 November 2026 (`EVD-NX-24-PROCESS-STATE`, "Where the time of the unit tests goes"). The `cargo` that the harness puts first on `PATH` is a shell script that `exec`s `node log-cargo.cjs`, which appends a JSON line and then runs the real cargo. A full unit run on `main` e8958bb started it 4680 times; a wrapped `cargo --version` took 23 ms against 4 ms for the real cargo, so the wrapper adds roughly 80 s to the 588 s that the unit run's files take summed over the Jest workers, more than a long-lived Nx session per fixture would save in the whole suite. The plugin's artifact folder input also calls cargo through it, 1179 times in that run.
+
+`log-cargo.cjs` does more than log: it records the value of `RUSTUP_AUTO_INSTALL`, pretends to be an older Cargo with `NX_RUST_TEST_CARGO_VERSION` (`--version`, `-V`, `version`, and `cargo metadata` without `build_directory`), and holds a call for `holdCargo`. A replacement has to keep all of that, and the JSON it writes has to quote every argument exactly (`CargoWrapper.calls` parses it); the rare paths may stay in Node as long as a plain call does not start it.
+
+- [x] Measure a wrapped call against the real cargo, and the number of wrapped calls in a unit run, on current `main`
+- [x] Write the plain path (log and `exec` the real cargo) without Node, keeping the JSON exact for arguments with quotes, backslashes, newlines and non-ASCII text, and the rare paths in Node or equivalent
+- [x] Check `cargo-wrapper.spec.ts`, the version and hold tests and the end-to-end tests, which use the wrapper through `placeIn`
+- [x] Update `nx-rust/test/README.md` and measure the unit run before and after
+
+Done when: the plain path starts no Node, the measurements are recorded here, and `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e` and `pnpm nx format:check --all` pass.
+
+## Summary of Changes
+
+The `cargo` that `CargoWrapper.placeIn` writes is now `nx-rust/test/harness/log-cargo.sh` with its paths filled in. A plain call appends its line with one `printf` and then `exec`s the real cargo with the real cargo's folder first on `PATH`, so it starts no Node. Every other call execs `node log-cargo.cjs` as every call did before. A call is plain when six things hold. None of the script's own variables (`nx_rust_*`) is set in its environment, which is checked before the script assigns anything. Neither `NX_RUST_TEST_CARGO_VERSION` nor `NX_RUST_TEST_HOLD_CARGO` has a value. The absolute folder the script was started from is an entry of `PATH`, so the call found the wrapper through `PATH` and an unset or empty `PATH` goes to Node. `PWD`, every argument and `RUSTUP_AUTO_INSTALL` hold only printable ASCII other than `"` and `\`, checked against an explicit list of characters. `PWD` is absolute and normalised, has no symbolic link in it, and names the folder the process is in (`test -ef`), which exists and can be read. And the line, with its newline, takes at most 512 bytes. That limit keeps lines whole: a line shorter than the shell's output buffer goes out with one `write(2)`, which with `O_APPEND` keeps lines from interleaving, as Node's `appendFileSync` does. The buffers seen were 1008 bytes in bash 3.2.57 with its own allocator, 4096 in bash 5.3 and more in dash; 512 bytes is the least POSIX allows for `PIPE_BUF`. `nx-rust/test/README.md` and the comments of both scripts describe this.
+
+Measurements, on a 32-core machine with nothing else running beside them:
+
+- One call (hyperfine, 300 runs): the real `cargo --version` took 3.2 ms, through the old wrapper 18.8 ms, and through the new one 3.9 ms.
+- Calls per unit run: on `main` be233c8, 4681 wrapped calls, all through Node, with lines of 118 to 306 bytes. After the change, 4750 calls, the new tests included: 4725 through the shell and 25 through Node. The 25 are the suite's 12 calls under `NX_RUST_TEST_CARGO_VERSION` or `holdCargo` and 13 of the new tests.
+- Full unit run (`pnpm nx test @convesoft/nx-rust --skip-nx-cache`, `NX_DAEMON=false`, three Jest workers): before, 198.7 s (cold Jest cache) and 198.0 s by Jest's clock (200.1 s wall); after, 180.3 s and 180.2 s (182.4 s and 182.3 s wall), and 179.2 s in the final `run-many` on the tree merged with the local `main`.
+
+The old and new wrapper were compared call by call, with a fake real cargo that records its raw argv, folder and environment from `/proc`. The 52 cases covered arguments with spaces, quotes, backslashes, newlines, other control characters, DEL, non-ASCII text, invalid UTF-8, empty arguments, `%s`, globs and lines just under and over the limit; folders with a space or non-ASCII characters; folders reached through a link, by `cd` or with a `PWD` holding `.`, `..`, `//` or a trailing slash; `PWD` unset; `RUSTUP_AUTO_INSTALL` unset, empty or unusual; `PATH` empty; and the version and hold variables. There were also 200 calls at once with short lines, 200 with lines of nearly 1024 bytes, and 60 mixing both paths. The runs used bash 5.3, bash 3.2.57 in sh mode (as macOS runs it) and dash 0.5.12, each in the C and a UTF-8 locale. Logs, argv, folder, exit status and output were equal byte for byte in every case. The environment was equal under dash; under bash it differed only in `_`, which bash stops exporting once it has run a command, so cargo no longer gets an inherited `_`.
+
+Checks: `cargo-wrapper.spec.ts` has four new tests, one each for arguments of every kind (logged and passed on), a folder reached through a link, the environment cargo gets, and calls started together. Each was seen to fail with the wrapper broken for it: an argument dropped from the log or from cargo's arguments, the link check removed, a variable added or dropped, the Node path logging one argument fewer, and a line written in two parts, which failed five runs out of five. On the tree merged with the local `main`: `pnpm nx run-many -t build lint test` passed (1144 unit tests, the version tests of `compatibility.spec.ts` and `init.spec.ts`, the `holdCargo` tests of `lockfile-runs.spec.ts` and the `RUSTUP_AUTO_INSTALL` tests among them), as did `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache` (26 tests through `placeIn`), `zban check` and shellcheck 0.11 on `log-cargo.sh`. No Mara file changed. The figures of `EVD-NX-24-PROCESS-STATE` describe e8958bb and stay.
+
+Rejected approaches: escaping JSON in the shell, which would depend on the locale and leaves invalid UTF-8 unhandled, so such calls stay in Node; `$(pwd -P)`, which costs a fork on every call, so the shell takes `PWD` as it is and sends any folder whose `PWD` it cannot vouch for to Node.
+
+After the review of 0b7a548, four differences found by the reviewer's 501 comparisons were fixed by sending such calls to Node, as described above: a 1024-byte line that bash 3.2 with its own allocator wrote in two parts, an unset `PATH`, variables named like the script's own, and a deleted folder. The comparison of old and new was extended to 186 cases with the wrappers found through `PATH`, and runs under bash 5.3, bash 3.2.57 in both allocator configurations and dash 0.5.12 (two builds), in the C and a UTF-8 locale. It was equal in every run, apart from bash's `_`. With the limit put back to 1024, the reviewer's case interleaved in three runs of three under bash 3.2 with its own allocator. `cargo-wrapper.spec.ts` gained tests for an unset or empty `PATH` and for a deleted folder; the environment test now also sets the script's variable names; and the concurrency test uses lines of 512 bytes and a few of 300 kB. Each was seen to fail with its fix removed; the concurrency test failed 7 runs of 8 under bash 5.3 with the limit raised.
+
+New numbers: one call took 4.2 ms, against 3.2 ms for the real cargo and 19.0 ms through the old wrapper. A unit run made 4743 wrapped calls: 4716 through the shell, and 27 through Node, which are the suite's 6 calls under `NX_RUST_TEST_CARGO_VERSION`, its 6 under `holdCargo` and 15 of the new tests. So the 512-byte limit sends none of the suite's own calls to Node; its longest line is 306 bytes. The unit run took 181.8 s by Jest's clock in the final `run-many`, with other agents' processes on the machine. A counting run while another worktree ran `scip-typescript` took 195.7 s.
+
+Checks on the tree merged with the local `main` at 3445ae7: `cargo-wrapper.spec.ts` (12 tests), `pnpm nx run-many -t build lint test` (1146 unit tests), `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache` (26 tests), `zban check` and shellcheck 0.11 passed.

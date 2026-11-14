@@ -235,9 +235,31 @@ both:
   into the workspace's `node_modules/.bin`, which comes before Node's folder
   wherever Node and cargo are installed.
 
+The wrapper is the shell script [`harness/log-cargo.sh`](harness/log-cargo.sh)
+with the paths filled in. It logs a plain call itself and then replaces itself
+with the real cargo, so that the about 4700 cargo calls of a unit run start no
+Node process. A call goes to [`harness/log-cargo.cjs`](harness/log-cargo.cjs)
+in Node instead, which logs it in the same way, where its environment sets
+`NX_RUST_TEST_CARGO_VERSION` or `NX_RUST_TEST_HOLD_CARGO` (below) or one of the
+script's own variables, `nx_rust_*`; where it did not find the wrapper through
+`PATH`, as with no `PATH` or an empty one; where its folder, an argument or
+`RUSTUP_AUTO_INSTALL` holds a character that JSON escapes or that is not ASCII;
+where its `PWD` reaches the folder through a symbolic link or does not name the
+folder it runs in, such as one that was deleted; or where its line would be
+longer than 512 bytes, below the output buffer of every shell seen, so that
+the shell writes each line at once. The script needs only a POSIX `/bin/sh`, as
+on Linux and macOS.
+
 [`cargo-wrapper.spec.ts`](cargo-wrapper.spec.ts) checks each way: an
 `nx:run-commands` task, an executor and a batched executor all show up in the
-log, and the `nx:run-commands` task finds the copy in `node_modules/.bin`. The
+log, and the `nx:run-commands` task finds the copy in `node_modules/.bin`. It
+also checks, with a stand-in for the real cargo, that arguments of every kind
+are logged and passed on as given, that a folder reached through a symbolic
+link is logged by its real path, that cargo gets the environment it was given
+with its own folder first on `PATH`, and only that folder where the caller
+has no `PATH` or an empty one, that a call from a deleted folder is neither
+logged nor run, and that calls started at the same moment each get a line of
+their own. The
 executor is a stand-in for the plugin's own: `cargoProbeProject(name)` writes
 a `project.json` with a target of each kind, and `installProbeExecutor(root)`
 installs the stand-in into `root/node_modules`. The end-to-end tests count
