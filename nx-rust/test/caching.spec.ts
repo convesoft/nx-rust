@@ -161,8 +161,12 @@ describe("caching", () => {
       expect(envInputs(api.targets["fmt-check"])).toEqual([...environmentVariables]);
 
       for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt"]) {
+        // build, whose outputs depend on the triple, also has the triple input.
         expect(inputsOf(api.targets[name], "runtime")).toEqual([
           { runtime: toolchainCommand("rust") },
+          ...(name === "build"
+            ? [{ runtime: expect.stringMatching(/\/src\/cargo\/print-triples\.js'/) }]
+            : []),
         ]);
         expect(inputsOf(api.targets[name], "externalDependencies")).toEqual([
           { externalDependencies: [] },
@@ -176,7 +180,7 @@ describe("caching", () => {
   );
 
   it(
-    "gives bench and run the inputs of the targets that compile, so that nx affected selects them, with Cargo.lock in place of the digest",
+    "gives bench and run the inputs of the targets that compile, so that nx affected selects them, with Cargo.lock in place of the digest and without the triple input",
     async () => {
       const graph = await loadFixtureGraph("crate-shapes");
 
@@ -194,7 +198,8 @@ describe("caching", () => {
           graph.projects[project].targets.build.inputs?.flatMap((input) =>
             JSON.stringify(input) === JSON.stringify(digest)
               ? [{ fileset: "{workspaceRoot}/rust/Cargo.lock", includeIgnored: true }]
-              : JSON.stringify(input) === JSON.stringify({ env: "NX_RUST_RUN_ID" })
+              : JSON.stringify(input) === JSON.stringify({ env: "NX_RUST_RUN_ID" }) ||
+                  JSON.stringify(input).includes("print-triples.js")
                 ? []
                 : [input],
           ),
