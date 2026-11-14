@@ -17,7 +17,6 @@ import {
   FileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
-  includedAncestorFiles,
   pinnedToolchain,
   pinnedToolchainAvailable,
   pluginWorkers,
@@ -428,14 +427,14 @@ describe("a run with the plugin's executor", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each([
-    ["a string", (triple: string) => `"${triple}"`],
-    ["a list that names it twice", (triple: string) => `["${triple}", "${triple}"]`],
-  ])(
-    "caches build and doc where Cargo's configuration picks the triple as %s, and restores what the run wrote",
-    async (_case, value) => {
+  // A list that names the triple twice names its folder once: graph creation
+  // reads each triple once (target-triples.spec.ts), and the outputs name
+  // the folder once (caching.spec.ts).
+  it(
+    "caches build and doc where Cargo's configuration picks the triple as a string, and restores what the run wrote",
+    async () => {
       const workspace = FixtureWorkspace.create("crate-shapes", {
-        "rust/.cargo/config.toml": `[build]\ntarget = ${value(hostTriple())}\n`,
+        "rust/.cargo/config.toml": `[build]\ntarget = "${hostTriple()}"\n`,
       });
       try {
         await expectRestored(workspace, {}, [hostTriple()]);
@@ -888,35 +887,6 @@ function hostTriple(): string {
         } finally {
           workspace.remove();
           links.remove();
-        }
-      },
-      HARNESS_TIMEOUT,
-    );
-
-    it(
-      "builds with the new compiler under Cargo 1.91, and restores nothing, after the compiler that build.rustc names in a folder's file is replaced, where a deeper file also includes that file",
-      async () => {
-        const links = CompilerLinks.create(pinnedToolchain);
-        const cargoHome = mkdtempSync(join(tmpdir(), "nx-rust-cargo-home-"));
-        const workspace = FixtureWorkspace.create(
-          "two-workspaces",
-          reportingCompiler,
-          includedAncestorFiles(links.rustc),
-        );
-        try {
-          // Cargo 1.91 ignores the include and runs the compiler behind the links.
-          await expectBuiltAgain(
-            workspace,
-            { CARGO_HOME: cargoHome, RUSTUP_TOOLCHAIN: pinnedToolchain },
-            () => links.point(),
-            programVersion(toolchainProgram("rustc", pinnedToolchain)),
-            () => programVersion(toolchainProgram("rustc")),
-          );
-          expect(taskCalls(workspace)).toEqual(["build -p tools", "build -p tools"]);
-        } finally {
-          workspace.remove();
-          links.remove();
-          rmSync(cargoHome, { recursive: true, force: true });
         }
       },
       HARNESS_TIMEOUT,

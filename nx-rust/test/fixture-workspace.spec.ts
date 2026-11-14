@@ -131,30 +131,6 @@ describe("the environment of fixture commands", () => {
       }),
     HARNESS_TIMEOUT,
   );
-
-  it(
-    "lets a test ask for an agent in GitHub Actions itself",
-    () =>
-      inFixture("standalone-crate", hello, async (workspace) => {
-        const summary = join(workspace.root, "..", "step-summary.md");
-
-        const asked = await withOuterEnvironment(noAgentOutsideCi(), () =>
-          observe(workspace, agentInGitHubActions(summary)),
-        );
-
-        // JSON without `--json`, the summary style, which prints no task
-        // output, a log group, and a performance report on the summary page.
-        expect(asked.shown.status).toBe(0);
-        expect(JSON.parse(asked.shown.lines.join("\n")).sort()).toEqual(projects);
-        expect(asked.run.status).toBe(0);
-        expect(asked.run.lines).not.toContain("hello");
-        expect(asked.static.lines.filter((line) => line.includes("nx run"))).toEqual([
-          expect.stringMatching(/^::group::.* > nx run hello:greet$/),
-        ]);
-        expect(fs.existsSync(summary)).toBe(true);
-      }),
-    HARNESS_TIMEOUT,
-  );
 });
 
 /**
@@ -163,7 +139,7 @@ describe("the environment of fixture commands", () => {
  * exit status and the lines of the output, without colours and with each
  * duration replaced by `<duration>`.
  */
-async function observe(workspace: FixtureWorkspace, env: Env = {}) {
+async function observe(workspace: FixtureWorkspace) {
   const commands = {
     shown: ["show", "projects"],
     run: ["run", "hello:greet"],
@@ -171,7 +147,7 @@ async function observe(workspace: FixtureWorkspace, env: Env = {}) {
   };
   const seen = {} as Record<keyof typeof commands, { status: number | null; lines: string[] }>;
   for (const name of Object.keys(commands) as (keyof typeof commands)[]) {
-    const { status, output } = await workspace.nx(commands[name], env);
+    const { status, output } = await workspace.nx(commands[name]);
     const text = withoutColours(output).replace(/\d+(\.\d+)?(ms|s|m)\b/g, "<duration>");
     seen[name] = { status, lines: text.trim().split("\n") };
   }

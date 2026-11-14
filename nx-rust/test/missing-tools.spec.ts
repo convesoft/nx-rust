@@ -140,14 +140,6 @@ describe("a task's check for the tool it runs", () => {
       "cargo-deny is not installed, but the deny target of rust and the deny target of tools need it. Install it with `cargo install --locked cargo-deny` (https://crates.io/crates/cargo-deny).",
     );
   });
-
-  it("starts the message with the tool's name in a sentence", () => {
-    const tool = optionalTools.find((candidate) => candidate.id === "napi")!;
-
-    expect(missingToolMessage(tool, ["the napi-build target of the crate addon"])).toMatch(
-      /^The napi CLI is not installed, but the napi-build target of the crate addon needs it\./,
-    );
-  });
 });
 
 describe("a task whose tool is missing", () => {

@@ -88,7 +88,7 @@ describe("the triples that cargo picks without --target", () => {
     expect(pick()).toMatchObject({ triples: ["legacy"], files: ["ws/.cargo/config"] });
   });
 
-  it("joins the lists of several files, each triple once, and builds for none with an empty list", () => {
+  it("joins the lists of several files, each triple once, also where one list names it twice, and builds for none with an empty list", () => {
     write("ws/.cargo/config.toml", target('["a", "b"]'));
     write(".cargo/config.toml", target('["c", "a"]'));
     const picked = pick();
@@ -96,6 +96,14 @@ describe("the triples that cargo picks without --target", () => {
     expect(picked).toMatchObject({ files: ["ws/.cargo/config.toml", ".cargo/config.toml"] });
 
     rmSync(join(root, ".cargo"), { recursive: true });
+    write("ws/.cargo/config.toml", target('["a", "a"]'));
+    expect(pick()).toEqual({
+      kind: "triples",
+      triples: ["a"],
+      files: ["ws/.cargo/config.toml"],
+      fromEnv: false,
+    });
+
     write("ws/.cargo/config.toml", target("[]"));
     expect(pick()).toEqual({
       kind: "triples",
