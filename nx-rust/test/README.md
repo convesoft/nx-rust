@@ -297,7 +297,11 @@ leaves out the variables from which Nx concludes that an agent runs it
 agent would make `nx show` print JSON and `nx run` print no task output by
 default; CI turns off the daemon, sync generators before tasks and the
 daemon's start-up questions; and in GitHub Actions Nx wraps each task's
-output in a log group and writes to the job's summary page. It also leaves
+output in a log group and writes to the job's summary page. It passes on the
+variables from which Nx concludes that it runs in an agent's sandbox, such as
+`SANDBOX_RUNTIME`: they describe a real restriction of the session, and Nx
+reads them only after something has failed, to fall back where it can and
+to advise on the sandbox's settings. It also leaves
 out `FORCE_COLOR`, `NO_COLOR` and `NODE_DISABLE_COLORS`: Nx gives its tasks
 `FORCE_COLOR`, and beside an inherited `NO_COLOR` every Node process warns
 that `NO_COLOR` is ignored, in lines that `withoutColours` leaves in. Nx then
@@ -316,9 +320,11 @@ temporary folder (`testRunFolder()`) for Node's compile cache, and one in
 `XDG_RUNTIME_DIR` (`testRunSocketFolder()`), where there is one, for the
 fixtures' socket folders, because a socket's path has to stay short. Nx
 would otherwise leave a socket folder for every fixture in
-`/tmp/.nx/<uid>/sockets`. A plugin worker that outlives its `nx` command can
-still write into a fixture's socket folder while `remove()` deletes it; the
-end of the run removes what such a worker left.
+`/tmp/.nx/<uid>/sockets`. Nx's plugin workers and daemon outlive the command
+that ends them by up to a second and remove their sockets on the way out, so
+`remove()` waits, for five seconds at most, until a fixture's socket folder
+is empty before it deletes it; the end of the run removes what is left after
+that.
 
 **`discoveryProbeEntry`** is the path of a plugin that behaves as the plugin
 under test and also appends, for each call of an entry's

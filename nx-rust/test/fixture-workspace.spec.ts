@@ -1,6 +1,7 @@
 // The module object itself, which the harness calls through.
+import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   agentVariables,
   Env,
@@ -39,6 +40,34 @@ describe("fixture workspace", () => {
     folders = mkdtemp.mock.results.map((result) => result.value as string);
     expect(folders).toHaveLength(testRunSocketFolder() === undefined ? 1 : 2);
     expect(folders.filter((folder) => fs.existsSync(folder))).toEqual([]);
+  });
+
+  it("removes its socket folder once the process that listens there has removed its socket", async () => {
+    if (testRunSocketFolder() === undefined) {
+      // Nx keeps the sockets in its own folder, which the copy leaves alone.
+      return;
+    }
+    const mkdtemp = jest.spyOn(fs, "mkdtempSync");
+    const workspace = FixtureWorkspace.create("standalone-crate");
+    const sockets = mkdtemp.mock.results
+      .map((result) => result.value as string)
+      .find((folder) => folder.startsWith(`${testRunSocketFolder()}/`));
+    folders = [dirname(workspace.root), sockets];
+    // Stands in for a plugin worker whose `nx` command has ended: it
+    // removes its socket a moment later, and fails where it is gone.
+    const socket = join(sockets, "p1-0-00000000.sock");
+    fs.writeFileSync(socket, "");
+    const worker = spawn(
+      process.execPath,
+      ["-e", `setTimeout(() => require("node:fs").unlinkSync(${JSON.stringify(socket)}), 300)`],
+      { stdio: "ignore" },
+    );
+    const exited = new Promise<number | null>((resolve) => worker.on("exit", resolve));
+
+    workspace.remove();
+
+    expect(fs.existsSync(sockets)).toBe(false);
+    expect(await exited).toBe(0);
   });
 
   it(
