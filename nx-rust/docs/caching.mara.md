@@ -1,12 +1,9 @@
 # Caching
 
-> **Status:** each task's cargo command starts in the workspace root, and
-> locked mode works as [Where cargo runs](#where-cargo-runs) describes. The
-> inferred targets declare the inputs and outputs of this page, those that it
-> caches are cached, and the `lockfile` task keys each crate on the packages
-> it reaches in `Cargo.lock`. `envInputs`, `runtimeInputs` and `fileInputs`
-> work, and `build` checks its dependency files against its inputs. Every
-> workspace counts as using the `workspace-build` strategy (nxr-k64tm5).
+> **Status:** the `hakari` and `cargo` feature-unification strategies arrive
+> with milestone 0.2. Until then every workspace counts as using
+> `workspace-build`, so a crate's key holds the manifests of every member of
+> its workspace.
 
 Nx caches the **result** of a Rust task and, for a few targets, its **final
 artifacts**. It never stores or restores Cargo's intermediate files: Cargo owns

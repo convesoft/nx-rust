@@ -1,22 +1,10 @@
 # Setup and compatibility
 
-> **Status:** `nx add`, the `library` and `binary` generators and the checks
-> of the Nx and Cargo versions are implemented. `init` stops for each error
-> that graph creation reports. Of the tools below it counts only cargo-deny as
-> needed by your settings. Graph creation and `init` print the
-> warnings for a newer Nx with `NX_RUST_ALLOW_UNSUPPORTED_NX`, for
-> redirections and path dependencies that reach a crate whose files Nx cannot
-> see or that cargo does not report, for redirections from configuration
-> outside the repository or from a file that Nx ignores, and for included
-> configuration files that cannot be read, for `targetDefaults` entries that change the inferred targets, for an
-> artifact directory outside the repository or shared by two workspaces, for
-> a target triple whose folder the plugin cannot name, and for Cargo's build or
-> artifact directory inside the repository where Nx does not ignore it. A task
-> prints again the warning for a newer Nx and those that concern its crate or
-> workspace, and those about `targetDefaults` that concern its target, and
-> its cache key follows them. The
-> `audit` and `deny` tasks fail before cargo runs when cargo-audit or
-> cargo-deny is missing. The package is not published to npm yet.
+> **Status:** milestone 0.1 is implemented on `main` but not published to npm
+> yet, so `nx add @convesoft/nx-rust` cannot install it before the release. Of
+> the tools below, tasks run only cargo-audit and cargo-deny so far. The
+> features that need the others arrive with milestones 0.2 to 0.4, and until
+> then `init` reports those tools as not needed by your settings.
 
 ## What you need
 

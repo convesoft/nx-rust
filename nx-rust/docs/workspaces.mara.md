@@ -1,15 +1,5 @@
 # Workspaces and projects
 
-> **Status:** the plugin finds the Cargo workspaces and creates a project for
-> each crate and each workspace, named as this page describes, with an edge
-> for each path dependency. The projects have the targets that the status note of
-> [Targets](targets.mara.md) names. A crate gets edges to the crates that `[patch]`,
-> `[replace]` and `paths` redirect its workspace's dependencies to, and to the
-> crates with a project that such a crate without a project depends on by
-> path, so `nx affected` follows them. Where such an edge is left out to avoid a cycle,
-> and for a redirected crate without a project, the crate's files are inputs
-> of the crate's targets ([Caching](caching.mara.md)).
-
 nx-rust finds every Cargo workspace in the repository and turns each member
 crate into an Nx project. You do not list crates anywhere: the plugin asks
 Cargo.
@@ -80,7 +70,8 @@ workspace of 600 crates that takes about 0.2 seconds on a fast machine.
   in that folder to install it. Plain `cargo` still installs it as before.
 
 Everything Cargo scopes to a workspace stays per workspace: the lockfile, the
-build directory, the toolchain file, the batches and the coverage baseline. That is
+build directory and the toolchain file, and so will the batches of milestone
+0.2 and the coverage baseline of milestone 0.3. That is
 why a cache input is a real path such as `rust/Cargo.lock`, never one
 repository-wide name for "the lockfile".
 
@@ -124,7 +115,8 @@ incomplete; Nx's error always names every folder.
 ## Workspace-level tasks
 
 Some tasks belong to a workspace, not to one crate: documentation, `cargo audit`,
-`cargo deny`, lockfile updates and coverage collection. Each workspace has one
+`cargo deny` and lockfile updates, and from milestone 0.3 the coverage
+baseline, in a workspace with `affectedTests`. Each workspace has one
 project for them, rooted at the workspace folder and depending on every member.
 If the root `Cargo.toml` also defines a crate, that crate's project hosts these
 targets and no extra project appears. Formatting is per crate: every crate has
@@ -133,8 +125,9 @@ its own `fmt` and `fmt-check`. The targets are listed under
 
 That project also has the `lockfile` task. It lets cargo bring the
 workspace's `Cargo.lock` up to date and turns it into one digest per crate.
-Every cached task of a crate waits for it and reads the crate's digest, so a
-dependency update reruns only the crates it reaches
+Every cached task of a crate except `fmt-check`, which reads no lockfile,
+waits for it and reads the crate's digest, so a dependency update reruns only
+the crates it reaches
 ([Caching](caching.mara.md#lockfile-changes)).
 
 The workspace project is named after its folder's path from the root of the Nx
