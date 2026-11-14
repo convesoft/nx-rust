@@ -10,7 +10,8 @@
 // The result is { "ok": true, "graph": ... }, { "ok": true, "hashes": { [task]: { value, details } } },
 // { "ok": true, "files": { [task]: [path] } }, { "ok": true, "globbed": [path] }
 // or { "ok": false, "error": "...", "errors": ["..."] }. Only "glob" creates
-// no project graph.
+// no project graph. nx-session.cjs answers the same requests with `inspect`,
+// in a process that stays up.
 //
 // Graph and hashes come from the functions that `nx graph` and `nx run` call,
 // so a hash is the one a real run of the task would compute. These are
@@ -18,23 +19,14 @@
 
 const { readFileSync, writeFileSync } = require("node:fs");
 
-async function main() {
-  const [requestFile, resultFile] = process.argv.slice(2);
-  let result;
+/** Answers one request in the current folder. It never throws. */
+async function inspect(request) {
   try {
-    const request = JSON.parse(readFileSync(requestFile, "utf8"));
     if (request.command === "glob") {
       // The files of the workspace that Nx's own glob, the engine of its
       // filesets, finds, whatever project holds them.
       const { globWithWorkspaceContextSync } = require("nx/src/utils/workspace-context");
-      writeFileSync(
-        resultFile,
-        JSON.stringify({
-          ok: true,
-          globbed: globWithWorkspaceContextSync(process.cwd(), request.globs),
-        }),
-      );
-      return;
+      return { ok: true, globbed: globWithWorkspaceContextSync(process.cwd(), request.globs) };
     }
     // As the nx command line does: it loads the root dotenv files when it
     // starts, and `nx run` lets each task load its own dotenv files, which
@@ -45,15 +37,19 @@ async function main() {
     }
     const { createProjectGraphAsync } = require("nx/src/project-graph/project-graph");
     const graph = await createProjectGraphAsync({ exitOnError: false });
-    result =
-      request.command === "hash"
-        ? { ok: true, hashes: await hashTasks(graph, request.tasks, request.overrides ?? {}) }
-        : request.command === "files"
-          ? { ok: true, files: await taskFiles(graph, request.tasks) }
-          : { ok: true, graph };
+    return request.command === "hash"
+      ? { ok: true, hashes: await hashTasks(graph, request.tasks, request.overrides ?? {}) }
+      : request.command === "files"
+        ? { ok: true, files: await taskFiles(graph, request.tasks) }
+        : { ok: true, graph };
   } catch (error) {
-    result = { ok: false, error: describeError(error), errors: ownErrors(error) };
+    return { ok: false, error: describeError(error), errors: ownErrors(error) };
   }
+}
+
+async function main() {
+  const [requestFile, resultFile] = process.argv.slice(2);
+  const result = await inspect(JSON.parse(readFileSync(requestFile, "utf8")));
   writeFileSync(resultFile, JSON.stringify(result));
 }
 
@@ -205,10 +201,14 @@ function ownErrors(error) {
   return [...new Set(messages)];
 }
 
-main().then(
-  () => process.exit(0),
-  (error) => {
-    console.error(error);
-    process.exit(1);
-  },
-);
+module.exports = { inspect };
+
+if (require.main === module) {
+  main().then(
+    () => process.exit(0),
+    (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
+}

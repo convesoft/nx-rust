@@ -25,6 +25,7 @@ import {
   pluginSourceEntry,
   pnpmLockfile,
   programVersion,
+  SharedWorkspace,
   TaskHash,
   testEnvironment,
   toolchainProgram,
@@ -38,6 +39,13 @@ import {
 // (nxr-jb6g5y), the test modes and the artifact targets are left to those
 // issues. declared-files.spec.ts checks the rows for declared files that are
 // ignored or linked, together with what nx affected selects.
+
+// The rows and the tests that hash one fixture state after another share a
+// workspace and its Nx session (SharedWorkspace); the tests that change what
+// lies outside the repository or load the plugin from its source have
+// workspaces of their own.
+const shared = new SharedWorkspace();
+afterAll(() => shared.remove());
 
 const appended = (text: string) => (current: string | undefined) => `${current ?? ""}${text}`;
 const changed = appended("// changed\n");
@@ -343,7 +351,7 @@ describeCacheKeyMatrix("keys must differ after", [
     // testkit depends on no other crate.
     keys: { "testkit:test": "must differ", "testkit:build": "must differ" },
   },
-]);
+], shared);
 
 describeCacheKeyMatrix("keys must not differ after", [
   {
@@ -400,7 +408,7 @@ describeCacheKeyMatrix("keys must not differ after", [
     after: { files: { "README.md": appended("changed\n") } },
     keys: { ...all(apiTasks, "must not differ"), "rust:doc": "must not differ" },
   },
-]);
+], shared);
 
 describe("keys with the environment", () => {
   // The environment list of DES-INPUTS, typed here rather than taken from
@@ -450,8 +458,8 @@ describe("keys with the environment", () => {
   it(
     "differ after a change of each variable in the list, CARGO_BUILD_WARNINGS on the targets that compile and CLIPPY_CONF_DIR on lint",
     async () => {
-      const workspace = FixtureWorkspace.create("subfolder-workspace");
-      try {
+      const workspace = shared.reset("subfolder-workspace");
+      {
         const tasks = [...apiTasks, "rust:doc"];
         const base = await workspace.hashTasks(tasks);
         const failures: string[] = [];
@@ -496,8 +504,6 @@ describe("keys with the environment", () => {
           }
         }
         expect(failures).toEqual([]);
-      } finally {
-        workspace.remove();
       }
     },
     HARNESS_TIMEOUT,
@@ -506,10 +512,10 @@ describe("keys with the environment", () => {
     "differ after a profile or target variable in a crate's .env, for that crate only, and after CARGO_TARGET_DIR there for its build only",
     async () => {
       // A .env that Git ignores, so that only the environment changes for Nx.
-      const workspace = FixtureWorkspace.create("subfolder-workspace", {
+      const workspace = shared.reset("subfolder-workspace", {
         ".gitignore": appended(".env\n"),
       });
-      try {
+      {
         const tasks = ["api:build", "api:test", "model:build"];
         const base = await workspace.hashTasks(tasks);
         const differs = async (dotenv: string) => {
@@ -537,8 +543,6 @@ describe("keys with the environment", () => {
           "api:test": false,
           "model:build": false,
         });
-      } finally {
-        workspace.remove();
       }
     },
     HARNESS_TIMEOUT,
@@ -683,7 +687,7 @@ describeCacheKeyMatrix("keys with what the repository adds", [
     after: { env: { REVIEW_ADDED: "b" } },
     keys: { "server:test": "must differ", "model:test": "must differ" },
   },
-]);
+], shared);
 
 // In declared-files, the workspace table declares proto/**/*.proto for every
 // member, and api's own table declares docs/banner.txt. app depends on api;
@@ -753,7 +757,7 @@ describeCacheKeyMatrix("keys with declared files", [
       "model:test": "must differ",
     },
   },
-]);
+], shared);
 
 // The files that a crate declares travel with its folder where another
 // crate's inputs name the folder beside an edge.
@@ -812,7 +816,7 @@ describeCacheKeyMatrix("keys with the declared files of a crate without an edge"
     after: { files: { "schema/model.sql": appended("-- changed\n") } },
     keys: { "util:test": "must differ", "plain:test": "must not differ" },
   },
-]);
+], shared);
 
 // The variables and commands that a crate adds with envInputs and
 // runtimeInputs travel with its folder as its declared files do. In
@@ -964,7 +968,7 @@ describeCacheKeyMatrix("keys with the variables and commands of a crate without 
       "d:test": "must not differ",
     },
   })),
-]);
+], shared);
 
 describeCacheKeyMatrix("keys without declared files", [
   {
@@ -985,7 +989,7 @@ describeCacheKeyMatrix("keys without declared files", [
       "must not differ",
     ),
   },
-]);
+], shared);
 
 /** `nx.json` with `namedInputs` of the repository's own. */
 const repositoryInputs =
@@ -1052,7 +1056,7 @@ describeCacheKeyMatrix("keys with the repository's own default named input", [
       "rust:doc": "must not differ",
     },
   },
-]);
+], shared);
 
 describe("keys with the toolchain", () => {
   /**
@@ -1083,7 +1087,7 @@ describe("keys with the toolchain", () => {
     "differ after a toolchain update for the tasks of the workspace that uses it, and only for those",
     async () => {
       const rustc = fakeRustc("backend");
-      const workspace = FixtureWorkspace.create("cross-workspace-path");
+      const workspace = shared.reset("cross-workspace-path");
       try {
         const tasks = ["server:test", "server:build", "model:test", "model:build"];
         const before = await workspace.hashTasks(tasks, {
@@ -1103,7 +1107,6 @@ describe("keys with the toolchain", () => {
           "model:build": false,
         });
       } finally {
-        workspace.remove();
         rustc.remove();
       }
     },
@@ -1116,10 +1119,10 @@ describe("keys with the toolchain", () => {
       "differ after RUSTUP_TOOLCHAIN chooses another toolchain, also through a crate's .env, for that crate only",
       async () => {
         // A .env that Git ignores, so that only the toolchain changes for Nx.
-        const workspace = FixtureWorkspace.create("subfolder-workspace", {
+        const workspace = shared.reset("subfolder-workspace", {
           ".gitignore": appended(".env\n"),
         });
-        try {
+        {
           const tasks = ["api:test", "model:test", "testkit:test"];
           const base = await workspace.hashTasks(tasks);
           const shell = await workspace.hashTasks(tasks, {
@@ -1146,8 +1149,6 @@ describe("keys with the toolchain", () => {
             "model:test": false,
             "testkit:test": false,
           });
-        } finally {
-          workspace.remove();
         }
       },
       HARNESS_TIMEOUT,
@@ -1159,10 +1160,10 @@ describe("keys with the toolchain", () => {
     async () => {
       // A toolchain that rustup cannot have; the harness also sets
       // RUSTUP_AUTO_INSTALL=0, as the input's command does itself.
-      const workspace = FixtureWorkspace.create("subfolder-workspace", {
+      const workspace = shared.reset("subfolder-workspace", {
         ".gitignore": appended(".env\n"),
       });
-      try {
+      {
         const tasks = ["api:test", "model:test"];
         const first = await workspace.hashTasks(tasks);
         const second = await workspace.hashTasks(tasks);
@@ -1178,8 +1179,6 @@ describe("keys with the toolchain", () => {
         expect(third["api:test"].value).not.toBe(fourth["api:test"].value);
         expect(third["model:test"].value).toBe(first["model:test"].value);
         expect(fourth["model:test"].value).toBe(first["model:test"].value);
-      } finally {
-        workspace.remove();
       }
     },
     HARNESS_TIMEOUT,
@@ -1188,8 +1187,8 @@ describe("keys with the toolchain", () => {
   it(
     "never repeat where RUSTC or CARGO_BUILD_RUSTC is empty or names no program, or build.rustc names one that does not exist, on which cargo fails too",
     async () => {
-      const workspace = FixtureWorkspace.create("subfolder-workspace");
-      try {
+      const workspace = shared.reset("subfolder-workspace");
+      {
         const tasks = ["api:build", "api:test"];
         const missing = join(workspace.root, "no-such-rustc");
         const repeats = async (env: Record<string, string> = {}) => {
@@ -1213,8 +1212,6 @@ describe("keys with the toolchain", () => {
           "rust/.cargo/config.toml": `[build]\nrustc = ${JSON.stringify(missing)}\n`,
         });
         expect(await repeats()).toEqual(never);
-      } finally {
-        workspace.remove();
       }
     },
     HARNESS_TIMEOUT,
@@ -1515,7 +1512,7 @@ describe("keys with the plugin's version", () => {
       after: { files: installed({ leftPad: `sha512-${"9".repeat(86)}==` }) },
       keys: { "api:test": "must not differ", "rust:doc": "must not differ" },
     },
-  ]);
+  ], shared);
 });
 
 // The accepted limit of DES-INPUTS, "A project at the repository root": a
@@ -1629,5 +1626,5 @@ describe("keys of a project at the repository root", () => {
         ...all(["util:test", "tools:test", "tools:doc"], "must not differ"),
       },
     },
-  ]);
+  ], shared);
 });

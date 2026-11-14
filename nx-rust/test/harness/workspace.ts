@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { CargoCall, CargoWrapper } from "./cargo-wrapper";
 import { loadsCompiledPlugin, pluginEntry, pluginPackage } from "./compiled-plugin";
 import { testEnvironment } from "./environment";
+import { differingPaths, NxSession, sessionMode, sessionModeVariable } from "./nx-session";
 import { testRunSocketFolder } from "./test-run";
 import { fakeNxPackage } from "./nx-package";
 import { copyFixture, FileChanges, FixtureName, pluginPackageName } from "./fixtures";
@@ -99,6 +100,9 @@ interface InspectResult {
  * and loads the plugins into its own process unless a command asks for
  * plugin workers or the daemon ({@link pluginsInNxProcess}).
  *
+ * Each graph, hash, file and glob request runs in a fresh process, unless
+ * the test asks for a session ({@link FixtureWorkspace.useSession}).
+ *
  * Remove it with {@link FixtureWorkspace.remove} when the test is done.
  * Setting `NX_RUST_KEEP_FIXTURES=1` keeps every workspace for inspection.
  */
@@ -108,6 +112,8 @@ export class FixtureWorkspace {
   /** The wrapper that logs the cargo invocations in this workspace. */
   readonly cargo: CargoWrapper;
   private requests = 0;
+  private wantsSession = false;
+  private session: NxSession | undefined;
 
   private constructor(
     readonly fixture: FixtureName,
@@ -171,6 +177,31 @@ export class FixtureWorkspace {
     mkdirSync(dirname(pluginLink), { recursive: true });
     symlinkSync(pluginPackage(), pluginLink, "dir");
     this.cargo.clear();
+  }
+
+  /**
+   * Answers the workspace's graph, hash, file and glob requests from here on
+   * from one Nx session, a process in the workspace's root that stays up
+   * (`nx-session.cjs`), instead of a fresh process for each, and returns the
+   * workspace. The session loads Nx and the plugin afresh for each request
+   * and gives the answers that a fresh process gives
+   * (EVD-NX-24-PROCESS-STATE).
+   *
+   * It answers only requests with the environment it started with in every
+   * variable that starts with `NX_` or `NODE_`: a request with the daemon,
+   * plugin workers ({@link pluginWorkers}) or other Nx settings runs in a
+   * fresh process as before. {@link FixtureWorkspace.nx} always starts a
+   * fresh process, so that tests of the command line, of real task runs, of
+   * what Nx restores from its cache and of `nx affected` keep testing Nx as
+   * it runs for a user. {@link FixtureWorkspace.reset} keeps the session,
+   * and {@link FixtureWorkspace.remove} ends it.
+   *
+   * {@link sessionModeVariable} set to `off` sends every request to a fresh
+   * process anyway, and `check` sends it to both and fails where they differ.
+   */
+  useSession(): this {
+    this.wantsSession = true;
+    return this;
   }
 
   /**
@@ -319,6 +350,8 @@ export class FixtureWorkspace {
    * stopped ({@link removeSocketFolder}).
    */
   remove(): void {
+    this.session?.end();
+    this.session = undefined;
     if (this.sockets !== undefined) {
       removeSocketFolder(this.sockets);
     }
@@ -329,12 +362,62 @@ export class FixtureWorkspace {
     rmSync(this.base, { recursive: true, force: true });
   }
 
-  // Runs inspect-workspace.cjs in the workspace. Request and result live
-  // outside the workspace, so that Nx does not see them.
+  // Answers a request of inspect-workspace.cjs in the workspace, from the
+  // session if the test asked for one and the session can answer it.
   private async inspect(
     request: object,
     env: Record<string, string | undefined>,
   ): Promise<InspectResult> {
+    const environment = this.environment(env);
+    const mode = this.wantsSession ? sessionMode() : "off";
+    if (mode === "off") {
+      return this.inspectFresh(request, environment);
+    }
+    this.session ??= NxSession.start(this.root, this.environment({}));
+    const reply = await this.session.request(request, environment);
+    if ("refused" in reply) {
+      return this.inspectFresh(request, environment);
+    }
+    if (reply.damaged !== undefined) {
+      this.session.end();
+      this.session = undefined;
+    }
+    const result = reply.result as InspectResult;
+    if (mode === "check") {
+      await this.checkSessionResult(request, environment, result);
+    }
+    return result;
+  }
+
+  // Fails unless a fresh process gives `result` for `request` too, in every
+  // value that two fresh processes agree on: some inputs never repeat by
+  // design, such as the toolchain's while the compiler is missing.
+  private async checkSessionResult(
+    request: object,
+    env: NodeJS.ProcessEnv,
+    result: InspectResult,
+  ): Promise<void> {
+    // The fresh processes repeat the cargo calls; the log keeps those of the session only.
+    const fresh = () => this.cargo.keepingLog(() => this.inspectFresh(request, env));
+    const first = await fresh();
+    let differences = differingPaths(first, result);
+    if (differences.length > 0) {
+      const repeatable = new Set(differences);
+      for (const path of differingPaths(first, await fresh())) {
+        repeatable.delete(path);
+      }
+      differences = [...repeatable];
+    }
+    if (differences.length > 0) {
+      throw new Error(
+        `The Nx session and a fresh process answered ${JSON.stringify(request)} in ${this.fixture} differently (${sessionModeVariable}=check). Differing values: ${differences.join(", ")}`,
+      );
+    }
+  }
+
+  // Runs inspect-workspace.cjs in a fresh process in the workspace. Request
+  // and result live outside the workspace, so that Nx does not see them.
+  private async inspectFresh(request: object, env: NodeJS.ProcessEnv): Promise<InspectResult> {
     const directory = join(this.base, "requests");
     mkdirSync(directory, { recursive: true });
     const number = ++this.requests;
@@ -344,7 +427,7 @@ export class FixtureWorkspace {
     const { status, output } = await run(
       process.execPath,
       [inspectScript, requestFile, resultFile],
-      { cwd: this.root, env: this.environment(env) },
+      { cwd: this.root, env },
     );
     if (!existsSync(resultFile)) {
       throw new Error(
@@ -370,6 +453,46 @@ export class FixtureWorkspace {
       base.NODE_OPTIONS = [base.NODE_OPTIONS, "--enable-source-maps"].filter(Boolean).join(" ");
     }
     return this.cargo.environment(base);
+  }
+}
+
+/**
+ * One workspace with a session ({@link FixtureWorkspace.useSession}) that
+ * the tests of a file share, for those that ask Nx about one fixture state
+ * after another: {@link SharedWorkspace.reset} puts it into a fixture's
+ * state, as {@link FixtureWorkspace.create} would create one, and the same
+ * session answers there, until a test asks for another fixture, which
+ * replaces the workspace. So at most one session of the file is up at a
+ * time. A test does not remove what it gets; the file removes the workspace
+ * with {@link SharedWorkspace.remove} in `afterAll`.
+ */
+export class SharedWorkspace {
+  private current: FixtureWorkspace | undefined;
+
+  /** The workspace, with the fixture `fixture` and `files` applied in order. */
+  reset(fixture: FixtureName, ...files: (FileChanges | undefined)[]): FixtureWorkspace {
+    if (this.current?.fixture === fixture) {
+      this.current.reset(...files);
+      return this.current;
+    }
+    this.remove();
+    this.current = FixtureWorkspace.create(fixture, ...files).useSession();
+    return this.current;
+  }
+
+  /** As {@link inFixture}, in the shared workspace. */
+  async inFixture(
+    fixture: FixtureName,
+    files: FileChanges | undefined,
+    test: (workspace: FixtureWorkspace) => Promise<void>,
+  ): Promise<void> {
+    await test(this.reset(fixture, files));
+  }
+
+  /** Removes the workspace and ends its session. */
+  remove(): void {
+    this.current?.remove();
+    this.current = undefined;
   }
 }
 
