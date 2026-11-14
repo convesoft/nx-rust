@@ -38,6 +38,13 @@ Entries of the `default` named input in your `nx.json` that are not patterns
 under `{projectRoot}`, such as `sharedGlobals`, count for every crate as well.
 A crate's own folder counts whole whatever your `default` says about it.
 
+Nx also puts into every key what no input names: `nx.json`, and the
+configuration of the crate's project and of the crates it depends on, such as
+the options of each of their targets. A changed option of one target, also one
+from a `project.json` or `targetDefaults`, runs every task of that crate and
+of the crates that depend on it again, and any change to `nx.json` runs them
+all again. That costs time, never a stale result.
+
 A crate that `[patch]`, `[replace]` or `paths` may put in place of a
 dependency counts as a dependency of every crate that may use it
 ([The dependency graph](workspaces.mara.md#the-dependency-graph)).
@@ -69,6 +76,17 @@ runtimeInputs = ["protoc --version"]
 also reaches the keys of the crates that depend on it, because they compile it
 too. An input that you add to one target's `inputs` stays with that target
 ([Configuration](configuration.mara.md#changing-an-inferred-target)).
+
+`nx affected` selects tasks by changed files only. A change that reaches a
+task only through an environment variable or a command's output, such as a new
+`RUSTFLAGS` or a toolchain update without a change to a `rust-toolchain.toml`,
+changes the keys but selects no task. No stale result is restored, because a
+task that runs misses the cache, but the tasks that the change reaches do not
+run. After such a change, for example when your pipeline moves to a new
+toolchain, run the targets for every project with `nx run-many` instead of
+`nx affected`: the tasks whose keys stayed the same are restored from the
+cache. A toolchain pinned to a version in `rust-toolchain.toml` changes only
+with a commit, which `nx affected` sees.
 
 ## Files outside the crate
 
@@ -190,10 +208,16 @@ Rust task after any change to the JS lockfile, and those whose keys did not
 change are restored from the cache. With `auto`, Nx selects them only when the
 change reaches nx-rust or what it depends on.
 
-A Cargo workspace at the repository root is the exception: Nx counts the JS
-lockfile as configuration of the project there, so any change to it selects
-that project's tasks and the tasks of its crates. The crate tasks are restored
-from the cache, and only the uncached `lockfile` task runs.
+A Cargo workspace or crate at the repository root is the exception, because it
+shares its folder with your JS package. Nx counts the JS lockfile as
+configuration of the project there, so any change to it selects that project's
+tasks and the tasks of its crates. The folder is also an input, `package.json`
+and the JS lockfile with it, and Nx links the project to the npm packages that
+`package.json` lists. A change to either file therefore changes the keys of
+every cached target of a crate at the root and of `doc` on a workspace project
+there: those tasks run, and so does the uncached `lockfile` task. The tasks of
+the crates in subfolders are restored from the cache. A Cargo workspace in a
+subfolder, such as `rust/`, avoids both.
 
 ## Where cargo runs
 
@@ -427,6 +451,10 @@ The environment list:
 **Named input.** The crate-file input is the project's named input `default`, which its targets name as `default` and `^default`. Every Nx project has a `default`, Nx's own or the one in `nx.json`, and a `^` input fails the hash of a task whose project depends on a project without that named input ([[EVD-NX-24-INPUTS-OUTPUTS]]), as a crate can depend on a JS project. A JS project that depends on a crate and hashes `^default` thereby hashes the crate's input. Besides the crate's folder, it holds the root manifest of the crate's workspace, from which the crate inherits fields such as its edition and lints also where another workspace builds it ([[EVD-CARGO-DEPENDENCY-SIDE]]).
 
 **The repository's `default`.** A crate's `default` replaces the one in `nx.json` for the crate's project, so it keeps every entry of the repository's `default` but its file sets under `{projectRoot}`, negated or not: named inputs such as `sharedGlobals`, `env`, `runtime` and `externalDependencies` entries and file sets under `{workspaceRoot}` reach the crate's key and its dependents'. What a crate hashes of its own folder is the whole folder, which only the crate's own configuration of a target can narrow. The plugin's targets name no other named input, so `production` and the like reach no Rust target.
+
+**Beyond the declared inputs.** Nx puts two parts into every task's key that no input names: the file `nx.json`, and the project's configuration, which is, for each of the project's targets, its executor, `inputs`, `outputs`, `options`, `configurations` and `parallelism`, and the project's root, named inputs and tags ([[EVD-NX-OPTION-VALIDATION]], "Cache key"). A key also holds the configuration of each project whose named input it hashes through `^` inputs ([[EVD-NX-24-PLUGIN-VERSION]]). Any change to `nx.json`, also one that reaches no Rust target, therefore changes every key. A changed option or configuration of one target of a crate, also from a `project.json`, a `package.json` or `targetDefaults`, changes the keys of every task of that crate and of the crates that depend on it, and so does a changed script in a `package.json` of the crate's folder that Nx reads, because Nx hashes the script with its `nx:run-script` target. A change to a target's `metadata`, `cache` or `dependsOn` changes no key. The plugin cannot take these parts out of a key. They make tasks run more often than their inputs require, never less.
+
+**A project at the repository root.** A crate or a workspace project at the repository root shares its folder with the repository's JS package. Its crate-file input, the whole folder, then covers the root `package.json` and the JS lockfile, and Nx's JS plugin gives the project, which owns that `package.json`, an edge to each npm package it lists, so that the `^default` of the project's targets hashes those packages and the packages behind them, beside what the plugin input names ([[EVD-NX-24-EXTERNAL-NODES]], [[EVD-NX-24-PLUGIN-VERSION]]). Any change to either file, also outside the plugin's package, therefore changes the key of every cached target of a crate at the repository root and of `doc` on a workspace project there. The lockfile task, whose inputs name neither the folder nor `^default`, keeps its key, and so do the tasks of the crates in other folders. A workspace in a subfolder shares no folder with the JS package, and its keys follow the JS lockfile only through the plugin input. This limit is accepted: the tasks it reaches run after a change that cannot affect them, and none is restored with a stale result. What `nx affected` selects in this layout is in [[DES-LOCKFILE-HASHING]].
 
 **Redirected uses.** Nx asks for a plugin's targets before it merges the projects of every plugin and entry, so the plugin works out the redirected uses for the inputs with the projects of its own entry. A redirected crate that another entry gives a project counts there as one without a project, and its folder joins the member's inputs beside the edge that the dependencies of the merged graph add.
 
