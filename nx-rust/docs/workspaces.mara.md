@@ -1,15 +1,5 @@
 # Workspaces and projects
 
-> **Status:** the plugin finds the Cargo workspaces and creates a project for
-> each crate and each workspace, named as this page describes, with an edge
-> for each path dependency. The projects have the targets that the status note of
-> [Targets](targets.mara.md) names. A crate gets edges to the crates that `[patch]`,
-> `[replace]` and `paths` redirect its workspace's dependencies to, and to the
-> crates with a project that such a crate without a project depends on by
-> path, so `nx affected` follows them. Where such an edge is left out to avoid a cycle,
-> and for a redirected crate without a project, the crate's files are inputs
-> of the crate's targets ([Caching](caching.mara.md)).
-
 nx-rust finds every Cargo workspace in the repository and turns each member
 crate into an Nx project. You do not list crates anywhere: the plugin asks
 Cargo.

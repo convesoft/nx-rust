@@ -5,8 +5,9 @@ These pages are both the user guide and the engineering specification of
 projects while Cargo stays the build tool. Each topic page opens with guidance
 for users, followed by the requirements and design that govern that topic.
 
-> **Status:** the plugin is specified here and not implemented yet. Each page
-> says so at the top until its feature works.
+> **Status:** milestone 0.1, the project graph, inferred targets and caching,
+> is implemented on `main` and not published to npm yet. A page whose feature
+> is not implemented, or only in part, says so at the top.
 
 ## For users
 

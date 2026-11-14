@@ -1,8 +1,6 @@
 # Continuous integration
 
-> **Status:** `NX_RUST_LOCKED` and the `lockfile` task that checks
-> `Cargo.lock` in every run work. The coverage baseline arrives with milestone
-> 0.3.
+> **Status:** the coverage baseline arrives with milestone 0.3.
 
 v1 targets a single machine: all Rust tasks of a pipeline run on one runner.
 JS tasks can be distributed as before.

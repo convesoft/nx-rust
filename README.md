@@ -4,8 +4,12 @@
 Nx projects while Cargo stays the build tool.** It is written for monorepos
 where Rust crates sit beside JS and TS projects.
 
-> **Status:** the design is specified and the implementation has not started.
-> The package is not published to npm yet. The specification is in
+> **Status:** milestone 0.1 is implemented on `main`: the crates of your Cargo
+> workspaces become Nx projects, with the dependency graph between them,
+> inferred targets and caching of task results. It is not published to npm
+> yet. Batching and feature unification (0.2), nextest and affected tests
+> (0.3), napi and wasm artifacts (0.4) and releasing crates (0.5) are still to
+> come, as the [roadmap](#roadmap) shows. The specification is in
 > [`nx-rust/docs/`](nx-rust/docs/index.mara.md), and progress is tracked in
 > [`.zban/`](.zban/).
 
@@ -23,15 +27,19 @@ or caching that cuts corners. nx-rust reads the Cargo workspaces as they are:
   sources of its dependencies, the toolchain and a fixed list of environment
   variables. Nx stores task results and final artifacts, never Cargo's
   intermediate files.
-- **Few cargo invocations.** Nx schedules one task per crate, and the plugin
-  runs them as one cargo call per group.
+- **Few cargo invocations**, from milestone 0.2. Nx schedules one task per
+  crate, and the plugin runs them as one cargo call per group. Until then each
+  task runs a cargo call of its own.
 - **Rust and JS in one graph.** `nx affected -t lint test build` covers both
-  languages, and napi and wasm crates produce artifacts that JS projects depend
-  on.
+  languages. From milestone 0.4, napi and wasm crates produce artifacts that JS
+  projects depend on.
 
 See what nx-rust [deliberately does not do](nx-rust/docs/product.mara.md#what-nx-rust-deliberately-does-not-do).
 
-## What it will look like
+## What it looks like
+
+`nx add` installs the package from npm, so the first line works only once 0.1
+is published there.
 
 ```sh
 nx add @convesoft/nx-rust        # register the plugin; nothing is written into crates
