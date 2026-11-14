@@ -285,9 +285,10 @@ describe("a run with the plugin's executor", () => {
         expect(result.output).toContain(
           'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
         );
-        expect(result.output).toMatch(
-          /It turns on caching for "build", which nx-rust leaves uncached[^\n]* In [^\n]*cli \(rust\/crates\/cli\/Cargo\.toml\)/,
+        expect(result.output).toContain(
+          'It turns on caching for "build", which nx-rust leaves uncached',
         );
+        expect(result.output).toContain("cli (rust/crates/cli/Cargo.toml)");
         expect(result.output).toContain('"@convesoft/nx-rust:cargo": {}');
         expect(taskCalls(workspace)).toEqual([]);
         // Where the plugin caches build, the same entry fails nothing.

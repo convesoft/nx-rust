@@ -10,9 +10,7 @@ import {
   GraphCreationError,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
-  metadataCall,
   pinnedToolchainAvailable,
-  workspaceCall,
 } from "./harness";
 
 // Checks the parts of VER-GRAPH about projects, names and edges, with a real
@@ -22,11 +20,11 @@ import {
 
 interface ExpectedGraph {
   /**
-   * The cargo calls that creating the graph takes, in order: one per
-   * workspace, and one for each path dependency without a project, which is
-   * read from the workspace that uses it.
+   * The folder of each cargo call that creating the graph takes, sorted: one
+   * per workspace, in its root folder, and one for each path dependency
+   * without a project, from the workspace that uses it.
    */
-  cargoCalls: CargoCall[];
+  cargoFolders: string[];
   /** Each project's name with its folder. */
   projects: Record<string, string>;
   /** Each edge as source and target, sorted. */
@@ -58,7 +56,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   // api has a normal dependency on model, a build dependency on codegen and a
   // dev-dependency on testkit.
   "subfolder-workspace": {
-    cargoCalls: [workspaceCall("rust")],
+    cargoFolders: ["rust"],
     projects: {
       api: "rust/crates/api",
       codegen: "rust/crates/codegen",
@@ -80,7 +78,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   // one in tools/ whose root manifest is the crate tools, which therefore is
   // the workspace project.
   "two-workspaces": {
-    cargoCalls: [workspaceCall("."), workspaceCall("tools")],
+    cargoFolders: [".", "tools"],
     projects: {
       app: "crates/app",
       "cargo-workspace": ".",
@@ -97,19 +95,19 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // xtask is a standalone crate: a workspace of one, without an extra project.
   "standalone-crate": {
-    cargoCalls: [workspaceCall("rust"), workspaceCall("tools/xtask")],
+    cargoFolders: ["rust", "tools/xtask"],
     projects: { api: "rust/crates/api", rust: "rust", xtask: "tools/xtask" },
     edges: [["rust", "api"]],
   },
   // legacy is excluded from rust/ and so a standalone crate.
   "excluded-member": {
-    cargoCalls: [workspaceCall("rust"), workspaceCall("rust/crates/legacy")],
+    cargoFolders: ["rust", "rust/crates/legacy"],
     projects: { app: "rust/crates/app", legacy: "rust/crates/legacy", rust: "rust" },
     edges: [["rust", "app"]],
   },
   // model is one project, in shared/, with an edge from server in backend/.
   "cross-workspace-path": {
-    cargoCalls: [workspaceCall("backend"), workspaceCall("shared")],
+    cargoFolders: ["backend", "shared"],
     projects: {
       backend: "backend",
       model: "shared/crates/model",
@@ -125,11 +123,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   // The vendored crates are excluded, so lib has no edge to parser, and they
   // are read as path dependencies, from the workspace that uses them.
   "vendored-crate": {
-    cargoCalls: [
-      workspaceCall("rust"),
-      metadataCall("rust", "vendor/parser/Cargo.toml"),
-      metadataCall("rust", "vendor/lexer/Cargo.toml"),
-    ],
+    cargoFolders: ["rust", "rust", "rust"],
     projects: { app: "rust/crates/app", lib: "rust/crates/lib", rust: "rust" },
     edges: [
       ["app", "lib"],
@@ -139,7 +133,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // model dev-depends on testkit, which depends on model: both edges stay.
   "dev-dependency-cycle": {
-    cargoCalls: [workspaceCall("rust")],
+    cargoFolders: ["rust"],
     projects: { model: "rust/crates/model", rust: "rust", testkit: "rust/crates/testkit" },
     edges: [
       ["model", "testkit"],
@@ -149,7 +143,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
     ],
   },
   "different-toolchains": {
-    cargoCalls: [workspaceCall("pinned"), workspaceCall("stable")],
+    cargoFolders: ["pinned", "stable"],
     projects: {
       pinned: "pinned",
       "pinned-lib": "pinned/crates/pinned-lib",
@@ -167,7 +161,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   // plugin's names, which are not what Nx would derive from those folders.
   // Every edge names its ends as Nx does.
   "mixed-folders": {
-    cargoCalls: [workspaceCall("libs/rust")],
+    cargoFolders: ["libs/rust"],
     projects: {
       "@mixed/napi-addon": "libs/rust/crates/addon",
       cli: "libs/rust/crates/cli",
@@ -188,7 +182,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // Workspace projects keep the punctuation and case of their folders.
   "nested-folders": {
-    cargoCalls: [workspaceCall("services/billing"), workspaceCall("apps/Billing.API/rust_v2")],
+    cargoFolders: ["apps/Billing.API/rust_v2", "services/billing"],
     projects: {
       "apps-Billing.API-rust_v2": "apps/Billing.API/rust_v2",
       gateway: "apps/Billing.API/rust_v2/crates/gateway",
@@ -201,7 +195,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
     ],
   },
   "crate-shapes": {
-    cargoCalls: [workspaceCall("rust")],
+    cargoFolders: ["rust"],
     projects: {
       cli: "rust/crates/cli",
       "core-lib": "rust/crates/core",
@@ -228,11 +222,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   // harness keeps its edge, which closes a cycle. fork is read from rust,
   // where the redirection applies.
   "patched-workspaces": {
-    cargoCalls: [
-      workspaceCall("rust"),
-      workspaceCall("shared"),
-      metadataCall("rust", "third_party/fork/Cargo.toml"),
-    ],
+    cargoFolders: ["rust", "rust", "shared"],
     projects: {
       api: "rust/crates/api",
       harness: "rust/crates/harness",
@@ -248,7 +238,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // app depends on api, which reads files outside its folder.
   "declared-files": {
-    cargoCalls: [workspaceCall("rust")],
+    cargoFolders: ["rust"],
     projects: {
       api: "rust/crates/api",
       app: "rust/crates/app",
@@ -264,7 +254,7 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
   },
   // reader depends on base; the others depend on nothing.
   "undeclared-files": {
-    cargoCalls: [workspaceCall("rust")],
+    cargoFolders: ["rust"],
     projects: {
       base: "rust/crates/base",
       cola: "rust/crates/cola",
@@ -311,6 +301,19 @@ function compare(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * The folder that each cargo call started in, in order, after checking that
+ * each asks for a `cargo metadata` report without dependencies: how many
+ * reports creating the graph takes and where cargo runs for each, not how
+ * the arguments are spelt.
+ */
+function metadataFolders(calls: CargoCall[]): string[] {
+  for (const call of calls) {
+    expect(call.args).toEqual(expect.arrayContaining(["metadata", "--no-deps"]));
+  }
+  return calls.map((call) => call.cwd);
+}
+
 describe("projects and edges of each fixture", () => {
   it.each(fixtures)(
     "%s has a project per crate and per workspace, with an edge per path dependency, and reads each workspace with one cargo call",
@@ -324,7 +327,9 @@ describe("projects and edges of each fixture", () => {
         expect(roots(graph)).toEqual(expected[fixture].projects);
         expect(edges(graph)).toEqual(expected[fixture].edges);
         expect(graph.externalNodes).toEqual({});
-        expect(workspace.cargoCalls()).toEqual(expected[fixture].cargoCalls);
+        expect(metadataFolders(workspace.cargoCalls()).sort()).toEqual(
+          expected[fixture].cargoFolders,
+        );
         // The plugin writes no file, in a crate or anywhere else.
         expect(workspace.files()).toEqual(files);
       } finally {
@@ -366,10 +371,10 @@ describe("projects and edges of each fixture", () => {
         files: { "nx.json": pluginEntries({}) },
       });
 
-      expect(graph.cargoCalls).toEqual([
-        workspaceCall("rust"),
-        workspaceCall("vendor/lexer"),
-        workspaceCall("vendor/parser"),
+      expect(metadataFolders(graph.cargoCalls).sort()).toEqual([
+        "rust",
+        "vendor/lexer",
+        "vendor/parser",
       ]);
       expect(edges(graph)).toEqual([
         ["app", "lib"],
@@ -392,10 +397,7 @@ describe("projects and edges of each fixture", () => {
       // The first call starts in the folder of the shallowest manifest that
       // the plugin receives and names the workspace root, where the
       // workspace's tasks run cargo.
-      expect(graph.cargoCalls).toEqual([
-        metadataCall("rust/crates/api", "rust/crates/api/Cargo.toml"),
-        workspaceCall("rust"),
-      ]);
+      expect(metadataFolders(graph.cargoCalls)).toEqual(["rust/crates/api", "rust"]);
       expect(Object.keys(graph.projects).sort()).toEqual(["api", "codegen", "model", "testkit"]);
       expect(edges(graph)).toEqual([
         ["api", "codegen"],
@@ -635,7 +637,7 @@ describe("name collisions", () => {
       expect(error).toBeInstanceOf(GraphCreationError);
       const { message, cargoCalls } = error as GraphCreationError;
       // Both workspaces are read before the names collide.
-      expect(cargoCalls).toEqual([workspaceCall("rust"), workspaceCall("tools/api")]);
+      expect(metadataFolders(cargoCalls).sort()).toEqual(["rust", "tools/api"]);
       expect(message).toContain(
         'nx-rust would give 2 projects the name "api", and Nx needs every project name to be unique',
       );

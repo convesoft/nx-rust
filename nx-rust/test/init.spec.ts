@@ -23,6 +23,7 @@ import {
   FileChanges,
   FixtureName,
   FixtureWorkspace,
+  GraphCreationError,
   HARNESS_TIMEOUT,
   repositoryFiles,
   testEnvironment,
@@ -93,25 +94,6 @@ async function runInit(
 /** The one line of tools that are missing and that nothing needs, or `undefined`. */
 function notNeededLine(output: string): string | undefined {
   return output.split("\n").find((line) => line.includes("not needed by your settings"));
-}
-
-/**
- * The lines that Nx prints for a failed graph creation in `output`, between
- * its heading and its hint about `--verbose`, without blank lines and with
- * the plugin, which `entry` names in nx.json, named by its package, as init
- * names it.
- */
-function graphCreationErrors(output: string, entry: string): string[] {
-  const lines = output.split("\n");
-  const start = lines.findIndex((line) => line.includes("Failed to process project graph."));
-  const end = lines.findIndex((line, index) => index > start && line.startsWith("Pass --verbose"));
-  if (start < 0 || end < 0) {
-    return [];
-  }
-  return lines
-    .slice(start + 1, end)
-    .filter((line) => line.trim() !== "")
-    .map((line) => line.split(entry).join(pluginName));
 }
 
 describe("init", () => {
@@ -612,43 +594,54 @@ describe("init", () => {
       HARNESS_TIMEOUT,
     );
 
-    // One case for each way graph creation can fail. Init checks the graph
-    // as graph creation does, so for each of them it stops, writes nothing
-    // and prints what graph creation prints for the same files. What each
-    // message says, the remedy included, is checked where that error's own
-    // case is, in the spec of the part of the plugin that reports it.
-    it.each<[string, FileChanges, object | undefined]>([
-      [
-        "a problem in a manifest, such as an unknown key in a metadata table",
-        {
-          "rust/Cargo.toml": (manifest) =>
-            `${manifest}\n[workspace.metadata.nx]\ntestrunner = "nextest"\n`,
+    // One case for each way graph creation can fail: in createNodes, the
+    // plugin's options, cargo or a manifest; Nx's merge and createDependencies
+    // on the projects together; createDependencies on the configuration that
+    // Nx merged over the inferred targets. (The Nx version, checked when the
+    // plugin loads, has tests of its own above.) Init checks the graph as
+    // graph creation does, so for each way it stops, writes nothing and
+    // prints what graph creation reports for the same files. The target
+    // table is the last check of createNodes and the targetDefaults entry
+    // the last of createDependencies, so those cases show that init runs each
+    // hook to its end. What each message says, the remedy included, is
+    // checked where that error's own case is, in the spec of the part of the
+    // plugin that reports it.
+    it.each<{ way: string; files: FileChanges; options?: object; targetDefaults?: object }>([
+      {
+        way: 'a problem in a manifest, such as an inputs list without "..." in a crate\'s target table',
+        files: {
+          "rust/crates/model/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx.targets.test]\ninputs = ["default"]\n`,
         },
-        undefined,
-      ],
-      [
-        "a problem between projects, such as a crate that gets the name of its workspace's workspace project",
-        {
+      },
+      {
+        way: "a problem between projects, such as a crate that gets the name of its workspace's workspace project",
+        files: {
           "rust/crates/model/Cargo.toml": (manifest) =>
             `${manifest}\n[package.metadata.nx]\nname = "rust"\n`,
         },
-        undefined,
-      ],
+      },
       // Only an nx.json that registers the plugin can give its entry options,
       // as a second run of init finds it.
-      [
-        "a problem in the options of the plugin's entry, such as an option that nx-rust does not know",
-        {},
-        { namePrefix: "rust-" },
-      ],
-      [
-        "cargo itself, such as on a configuration file that it reads and that is no valid TOML",
-        { "rust/.cargo/config.toml": "paths = [\n" },
-        undefined,
-      ],
+      {
+        way: "a problem in the options of the plugin's entry, such as an option that nx-rust does not know",
+        files: {},
+        options: { namePrefix: "rust-" },
+      },
+      {
+        way: "cargo itself, such as on a configuration file that it reads and that is no valid TOML",
+        files: { "rust/.cargo/config.toml": "paths = [\n" },
+      },
+      // Init keeps an entry keyed by the plugin's executor as it is, so that
+      // it changes the inferred targets once Nx has merged them.
+      {
+        way: 'a check of the configuration that Nx merged over the inferred targets, such as a targetDefaults entry whose inputs leave out "..."',
+        files: {},
+        targetDefaults: { [`${pluginName}:cargo`]: { inputs: ["default"] } },
+      },
     ])(
-      "stops where graph creation fails on %s, prints what graph creation prints, and writes nothing",
-      async (_case, files, options) => {
+      "stops where graph creation fails on $way, prints what graph creation reports, and writes nothing",
+      async ({ files, options, targetDefaults }) => {
         // The harness registers the plugin by its path for graph creation.
         const workspace = FixtureWorkspace.create("subfolder-workspace", files, {
           "nx.json": (nxJson) => {
@@ -659,24 +652,31 @@ describe("init", () => {
                 plugin: typeof entry === "string" ? entry : entry.plugin,
                 ...(options === undefined ? {} : { options }),
               })),
+              ...(targetDefaults === undefined ? {} : { targetDefaults }),
             });
           },
         });
         const tools = new ToolFolders();
         try {
-          const entry: string = JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))
-            .plugins[0].plugin;
-          const graph = await workspace.nx(["show", "projects"], { NX_DAEMON: "false" });
-          const printed = graphCreationErrors(withoutColours(graph.output), entry);
-          expect({ status: graph.status, printed }).toEqual({
-            status: 1,
-            printed: expect.arrayContaining([expect.any(String)]),
-          });
+          const failure = await workspace.graph().then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          expect(failure).toBeInstanceOf(GraphCreationError);
+          // What the plugin and Nx said, each line, without Nx's headings.
+          const reported = (failure as GraphCreationError).errors
+            .flatMap((message) => message.split("\n"))
+            .map((line) => line.trim())
+            .filter((line) => line !== "");
+          expect(reported).not.toEqual([]);
 
           // Then without the plugin, or with its entry as init finds it.
           writeFileSync(
             join(workspace.root, "nx.json"),
-            `${JSON.stringify(options === undefined ? {} : { plugins: [{ plugin: pluginName, options }] })}\n`,
+            `${JSON.stringify({
+              ...(options === undefined ? {} : { plugins: [{ plugin: pluginName, options }] }),
+              ...(targetDefaults === undefined ? {} : { targetDefaults }),
+            })}\n`,
           );
           const before = repositoryFiles(workspace.root);
           const { status, output } = await workspace.nx(
@@ -691,7 +691,7 @@ describe("init", () => {
               ? "nx-rust was not added to nx.json: Nx could not create the project graph with it."
               : "Nx cannot create the project graph with nx-rust as nx.json registers it.",
           );
-          for (const line of printed) {
+          for (const line of reported) {
             expect(shown).toContain(line);
           }
           expect(shown).toContain(
