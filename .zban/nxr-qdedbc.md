@@ -1,6 +1,6 @@
 ---
 title: Name the right folder, or refuse, when the targetTriple option is host-tuple or a target specification file
-status: todo
+status: in-progress
 type: bug
 parent: nxr-w9qa5f
 discovered_from: nxr-3svm6z

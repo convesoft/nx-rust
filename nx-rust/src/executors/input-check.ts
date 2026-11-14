@@ -26,6 +26,11 @@ export interface BuildInputCheck {
   manifest: string;
   /** What graph creation reported for the crate's records. */
   records: BuildRecordSource;
+  /**
+   * Cargo's artifact and build directories for the task, as physical
+   * paths, which cargo reports with the task's environment.
+   */
+  directories: { artifact: string; build: string };
   /** The task's feature, profile and triple options. */
   selection: BuildSelection;
   /** The task's environment, for `CARGO_BUILD_TARGET` and Cargo's configuration. */
@@ -67,9 +72,8 @@ export async function checkBuildInputs(
   nx: () => Promise<NxTaskFiles>,
 ): Promise<string | undefined> {
   const root = realPathOf(repositoryRoot) ?? resolve(repositoryRoot);
-  const absolute = (path: string) => physicalPath(isAbsolute(path) ? path : join(root, path));
-  const artifactDirectory = absolute(check.records.artifactDirectory);
-  const cargoDirectories = [artifactDirectory, absolute(check.records.buildDirectory)];
+  const artifactDirectory = check.directories.artifact;
+  const cargoDirectories = [artifactDirectory, check.directories.build];
   const records = nameRecords(
     check.records,
     check.crate,

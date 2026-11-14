@@ -1,5 +1,5 @@
 import { readlinkSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /**
  * The path with every symbolic link resolved, so that two spellings of one
@@ -26,6 +26,25 @@ export function realPath(path: string): string {
  */
 export function physicalPath(path: string): string {
   return reachedPath(isAbsolute(path) ? path : `${process.cwd()}${sep}${path}`, { links: 0 });
+}
+
+/**
+ * A Cargo directory as the outputs and the plugin's messages name it
+ * (`DES-OUTPUTS`): the folder that the system reaches through `directory`
+ * ({@link physicalPath}), relative to the real path of `repositoryRoot`
+ * where it lies inside the repository, and absolute where it lies outside.
+ * Graph creation and the executor both name a directory with it, so that
+ * they agree on the same folder.
+ */
+export function repositoryFolder(
+  directory: string,
+  repositoryRoot: string,
+): { inside: boolean; path: string } {
+  const reached = physicalPath(directory);
+  const path = relative(realPath(repositoryRoot), reached);
+  return path === "" || path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)
+    ? { inside: false, path: reached }
+    : { inside: true, path };
 }
 
 // Linux's MAXSYMLINKS.

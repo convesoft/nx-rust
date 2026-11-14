@@ -167,9 +167,7 @@ describe("the check of a build's dependency files", () => {
               binaries: [...source.binaries].sort((a, b) => a.name.localeCompare(b.name)),
             };
       };
-      const directories = { artifactDirectory: "rust/target", buildDirectory: "rust/target" };
       expect(records("multi")).toEqual({
-        ...directories,
         library: { name: "multi", procMacro: false },
         binaries: [
           { name: "one", requiredFeatures: [] },
@@ -181,7 +179,6 @@ describe("the check of a build's dependency files", () => {
         shared: [],
       });
       expect(records("macros")).toEqual({
-        ...directories,
         library: { name: "macros", procMacro: true },
         binaries: [],
         features: {},
@@ -762,6 +759,32 @@ describe("the check of a build's dependency files", () => {
       } finally {
         registry.remove();
       }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // The graph names the workspace's usual build directory; the task's cargo
+  // uses the one that the dotenv file names (EVD-NX-24-MOVED-ARTIFACT-DIRS).
+  it(
+    "leaves out a file generated in OUT_DIR in the build directory that a dotenv file of the task names",
+    async () => {
+      await inFixture(
+        "undeclared-files",
+        {
+          ...readerDeclares,
+          ".gitignore": (text = "") => `${text}.env\n/rust/bd/\n`,
+          "rust/crates/reader/.env": "CARGO_BUILD_BUILD_DIR=bd\n",
+        },
+        async (workspace) => {
+          const { status, output } = await nx(workspace, ["run", "reader:build"]);
+          expect(output).not.toContain(failure);
+          expect(status).toBe(0);
+          expect(cargoCalls(workspace)).toEqual(["build -p reader"]);
+          expect(read(workspace, "rust/target/debug/libreader.d")).toMatch(
+            /\/rust\/bd\/\S*\/out\/lines\.rs/,
+          );
+        },
+      );
     },
     HARNESS_TIMEOUT,
   );

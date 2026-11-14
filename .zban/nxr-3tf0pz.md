@@ -1,6 +1,6 @@
 ---
 title: A cache hit restores build and doc into an artifact directory that Cargo's configuration outside the repository no longer names
-status: todo
+status: in-progress
 type: bug
 priority: high
 parent: nxr-w9qa5f
