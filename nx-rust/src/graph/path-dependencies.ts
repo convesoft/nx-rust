@@ -1,6 +1,11 @@
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import type { CargoMetadata, CargoPackage } from "../cargo/metadata";
-import { DeclaredPattern, declaredFiles, pluginProjectRoots } from "./declared-files";
+import {
+  DeclaredPattern,
+  declaredFiles,
+  knownCargoDirectories,
+  pluginProjectRoots,
+} from "./declared-files";
 import type { CargoDiscovery } from "./discovery";
 import type { Input, InputDefinition } from "./inputs";
 import { realPath } from "./real-path";
@@ -128,6 +133,7 @@ export async function findCrateFolders(
   const problems = new Set<string>();
   const patterns: DeclaredPattern[] = [];
   const projectRoots = pluginProjectRoots(discovery);
+  const cargoDirectories = knownCargoDirectories(discovery);
   type Reached = { name: string; folder: string; via: PathDependency["via"] };
   const reached = new Map<string, Reached[]>();
   const leftOutEdges = new Map<string, PathDependency[]>();
@@ -259,6 +265,7 @@ export async function findCrateFolders(
       const result = declaredFiles(fileInputs, workspace, workspaceRoot, {
         crate: pkg.name,
         projectRoots,
+        cargoDirectories,
       });
       for (const problem of [...found, ...result.problems]) {
         problems.add(problem);

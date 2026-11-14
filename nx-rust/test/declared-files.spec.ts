@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { lutimesSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lutimesSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { patternsBelow } from "../src/graph/declared-files";
 import { nxSegmentMatcher } from "../src/graph/nx-glob";
@@ -246,6 +254,9 @@ describe("declared files", () => {
               declared("{workspaceRoot}/docs/banner.txt"),
               declared("{workspaceRoot}/vendor/*/data/**"),
               declared("{workspaceRoot}/**/*"),
+              // The repository root holds the Cargo directories of rust and lexer.
+              declared("!{workspaceRoot}/rust/target"),
+              declared("!{workspaceRoot}/vendor/lexer/target"),
             ],
           });
           // A dependent hashes them through ^default, and the workspace
@@ -466,6 +477,71 @@ describe("declared files", () => {
           withFiles: apiAndDependents,
         });
       },
+      HARNESS_TIMEOUT,
+    );
+  });
+
+  describe("through a symbolic link to a folder whose name holds glob characters", () => {
+    // The fixed part of the pattern resolves to that folder, whose name Nx
+    // would read as a glob unless it is escaped.
+    it.each([["real[1]"], ["gen{x}"], ["old(1)"]])(
+      "change the keys of check, lint, test, build and doc and select the tasks for a file in %s",
+      async (folder) => {
+        const changed = `shared/${folder}/schema.sql`;
+        const compiling = ["api:build", "api:check", "api:lint", "api:test", "rust:doc"];
+        const outcome = await changeDeclaredFile({
+          files: {
+            [changed]: "create table api ();\n",
+            ...apiDeclares("../../../shared/linked/*.sql"),
+          },
+          links: { "shared/linked": folder },
+          changed,
+          tasks: compiling,
+        });
+
+        expect(outcome).toEqual({
+          keysDiffer: Object.fromEntries(compiling.map((task) => [task, true])),
+          afterCommit: apiAndDependents,
+          withFiles: apiAndDependents,
+        });
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
+  describe("whose folder holds Cargo's build directory", () => {
+    // rust/target is the build and artifact directory of the workspace in
+    // rust; .gitignore ignores it, but Nx reads filesets with includeIgnored
+    // from the disk.
+    const tasks = ["api:build", "api:check", "api:lint", "api:test", "app:test", "rust:doc"];
+
+    it.each([["../../**"], ["../../.."]])(
+      "leave it out of the key, so that a build changes no key, for %s",
+      (pattern) =>
+        inFixture("declared-files", apiDeclares(pattern), async (workspace) => {
+          const graph = await workspace.graph();
+          expect(graph.projects.api.namedInputs.default).toContainEqual({
+            fileset: "!{workspaceRoot}/rust/target",
+            includeIgnored: true,
+          });
+          const before = await workspace.hashTasks(tasks);
+          execFileSync("cargo", ["build", "-p", "other", "--offline"], {
+            cwd: join(workspace.root, "rust"),
+            env: testEnvironment({ RUSTUP_AUTO_INSTALL: "0" }),
+            stdio: "pipe",
+          });
+          // Positive control: the build wrote its outputs there.
+          expect(readdirSync(join(workspace.root, "rust", "target", "debug"))).toContain(
+            "libother.rlib",
+          );
+          const after = await workspace.hashTasks(tasks);
+
+          expect(
+            Object.fromEntries(
+              tasks.map((task) => [task, before[task].value !== after[task].value]),
+            ),
+          ).toEqual(Object.fromEntries(tasks.map((task) => [task, false])));
+        }),
       HARNESS_TIMEOUT,
     );
   });
@@ -937,6 +1013,8 @@ describe("declared files", () => {
               declared("rust/crates/app/**"),
               declared("*/banner.txt"),
               declared("*/banner.txt/**"),
+              // A pattern that starts at the repository root holds rust/target.
+              { fileset: "!{workspaceRoot}/rust/target", includeIgnored: true },
             ]);
             expect(graph.projects.other.namedInputs.default).toEqual([
               "{projectRoot}/**/*",

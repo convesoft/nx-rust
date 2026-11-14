@@ -4,7 +4,12 @@ import type { CargoPackage } from "../cargo/metadata";
 import { CacheContext, projectWarnings } from "./caching";
 import { cargoMetadata, cargoMetadataKey } from "./collisions";
 import type { CargoDiscovery, CargoWorkspace } from "./discovery";
-import { DeclaredPattern, declaredFiles, pluginProjectRoots } from "./declared-files";
+import {
+  DeclaredPattern,
+  declaredFiles,
+  knownCargoDirectories,
+  pluginProjectRoots,
+} from "./declared-files";
 import { Input, InputDefinition, InputSettings, namedInputs } from "./inputs";
 import { projectName } from "./names";
 import type { GraphSettings, ProjectSettings } from "./settings";
@@ -144,12 +149,14 @@ export function inferProjects(
     }
   }
   const projectRoots = pluginProjectRoots(discovery);
+  const cargoDirectories = knownCargoDirectories(discovery);
   const declared = new Map(
     projects.map((project) => [
       project,
       declaredFiles(project.settings.fileInputs, project.workspace, discovery.workspaceRoot, {
         crate: project.pkg?.name ?? project.name,
         projectRoots,
+        cargoDirectories,
       }),
     ]),
   );

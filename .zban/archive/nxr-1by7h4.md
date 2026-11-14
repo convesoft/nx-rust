@@ -58,3 +58,21 @@ Done when: the decision is in Mara, implemented if it changes behaviour, and `pn
 - A warning instead of the error: the key would still miss the files.
 
 **Follow-ups:** nxr-s0zp3q (Cargo's build directory inside a pattern's folder) and nxr-twpw9k (glob characters in a resolved real path).
+
+## Changes after review
+
+The review of 2a657b5 found three ways in which the rewrite and the guard read glob syntax differently from Nx. All three are fixed:
+- A brace alternative that names a folder, such as `../{app,other}/`, left out the members nested below it (a wrong cache hit).
+- The guard failed graph creation for `../{app,web}/src/**`, an alternative that starts inside another plugin's project and that Nx hashes correctly.
+- The guard failed graph creation for `../@(app|other)/src/**`, which does not reach that project.
+
+What changed, decided by the control plane:
+- Braces are replaced by their alternatives first, nested and wildcard ones included, and each alternative counts as a pattern of its own everywhere.
+- A pattern that ends in `/`, has no glob, or ends in a name after a glob names folders and covers everything below them. For a glob this adds a `/**` fileset, because Nx drops a trailing `/`.
+- Segments are matched with Nx's own engine through its native `matchGlobPaths`, which runs `build_glob_set` with Nx's conversion of extended groups. Where it is unavailable, or a pattern has more than 256 alternatives, a segment counts as a match: generous for added filesets, and the error stays with a remedy that works.
+- The harness gained `taskFiles` and `glob`.
+- New tests cover the reviewer's three cases, the directory forms, and a table of 24 patterns. For each, the files Nx's glob names must be in `api:check`'s key, and graph creation must fail exactly where the pattern reaches the `project.json` project.
+
+At the maintainer's request, the follow-ups nxr-twpw9k (escaping glob characters in resolved real paths) and nxr-s0zp3q (negating Cargo's build and artifact directories below a pattern's folder) were fixed in the same pull request and closed there.
+
+Checks after merging `origin/main` with #61, #62 and #63: `declared-files.spec` and `build-input-check.spec`, `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e --skip-nx-cache`, `mara schema validate`, `mara project validate` and `zban check`.

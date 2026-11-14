@@ -63,6 +63,12 @@ export interface DeclaredScope {
    */
   projectRoots: readonly string[];
   /**
+   * The build and artifact directories of the workspaces that the plugin
+   * knows, inside the repository ({@link knownCargoDirectories}); by default
+   * those of the crate's workspace.
+   */
+  cargoDirectories?: readonly string[];
+  /**
    * How a segment of a pattern is matched against a folder's name; by
    * default as Nx matches it ({@link nxSegmentMatcher}).
    */
@@ -194,9 +200,9 @@ export function declaredFiles(
         }
       };
       for (const link of links) {
-        declare(within(realRoot, link) ?? "");
+        declare(escapeGlob(within(realRoot, link) ?? ""));
       }
-      declareNaming(path, glob);
+      declareNaming(escapeGlob(path), glob);
       const { folder, rest } = walkRoot(toPosix(path), glob);
       const unread = alternatives === undefined;
       for (const root of folder === "" ? [] : scope.projectRoots) {
@@ -222,8 +228,52 @@ export function declaredFiles(
       });
     }
   }
+  // Cargo's outputs stay out of the key (`ADR-RESULTS-ONLY-CACHE`): Nx reads
+  // a fileset with `includeIgnored` from the disk, the build directory that
+  // Git ignores included, so a pattern whose folder holds one would change
+  // the key with every build. A directory that a pattern of the crate points
+  // into stays, as the repository declared it.
+  const outputs =
+    scope.cargoDirectories ??
+    directories.flatMap(({ realPath }) => within(realRoot, realPath) ?? []).map(toPosix);
+  for (const directory of [...new Set(outputs)].sort()) {
+    const held = patterns.some(({ folder }) => folder === "" || isBelow(folder, directory));
+    const declared = patterns.some(
+      ({ folder }) => folder === directory || isBelow(directory, folder),
+    );
+    if (directory !== "" && held && !declared) {
+      const fileset = `!{workspaceRoot}/${escapeGlob(directory)}`;
+      filesets.set(fileset, { fileset, includeIgnored: true });
+    }
+  }
   crateFilesets.push(...filesets.keys());
   return { filesets: [...filesets.values()], problems, patterns };
+}
+
+/**
+ * The build and artifact directories of every workspace that `discovery`
+ * reports, those of the crates without a project included, that lie inside
+ * the repository, as real paths relative to its root.
+ */
+export function knownCargoDirectories(
+  discovery: Pick<CargoDiscovery, "workspaceRoot" | "workspaces" | "pathDependencyReports">,
+): string[] {
+  const realRoot = physicalPath(discovery.workspaceRoot);
+  const reports = [
+    ...discovery.workspaces.map((workspace) => workspace.report),
+    ...discovery.pathDependencyReports.map((entry) => entry.report),
+  ];
+  const directories = new Set<string>();
+  for (const report of reports) {
+    for (const directory of [report.target_directory, report.build_directory]) {
+      const inside =
+        directory === undefined ? undefined : within(realRoot, physicalPath(directory));
+      if (inside !== undefined && inside !== "") {
+        directories.add(toPosix(inside));
+      }
+    }
+  }
+  return [...directories].sort();
 }
 
 /**
