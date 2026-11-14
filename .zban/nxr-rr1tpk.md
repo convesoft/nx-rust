@@ -1,6 +1,6 @@
 ---
 title: Stop counting a virtual workspace's project below a paths folder as a redirected crate
-status: todo
+status: in-progress
 type: bug
 priority: low
 parent: nxr-w9qa5f
@@ -14,5 +14,5 @@ Found while fixing nxr-8sf4xw. `redirectedCrates` in `nx-rust/src/graph/redirect
 
 Reproduction to check: in `patched-workspaces`, set `paths = ["../shared"]` in `rust/.cargo/config.toml` (`shared/` is a virtual workspace with the project `shared`) and look for an edge from `api` to `shared`.
 
-- [ ] Confirm the edge with a fixture test
-- [ ] Leave out a folder whose report shows a virtual manifest, and update `VER-GRAPH` if it needs a sentence
+- [x] Confirm the edge with a fixture test
+- [x] Leave out a folder whose report shows a virtual manifest, and update `VER-GRAPH` if it needs a sentence

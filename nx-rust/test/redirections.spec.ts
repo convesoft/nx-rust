@@ -395,6 +395,27 @@ describe("edges to redirected crates", () => {
   );
 
   it(
+    "go to no workspace project of a virtual workspace below the folder of a paths entry",
+    async () => {
+      // shared, a virtual workspace with the project shared, lies in the
+      // folder of the entry; cargo takes only its member types from there,
+      // which rust's [patch] redirects already.
+      const graph = await loadFixtureGraph("patched-workspaces", {
+        files: { "rust/.cargo/config.toml": 'paths = ["../shared"]\n' },
+      });
+
+      expect(edges(graph)).toEqual(committed);
+      for (const member of ["api", "harness", "model", "util", "viaw"]) {
+        expect({ member, inputs: graph.projects[member].targets.check.inputs }).toEqual({
+          member,
+          inputs: expect.not.arrayContaining(["{workspaceRoot}/shared/**/*"]),
+        });
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "come from no [patch] in a member's manifest, which cargo ignores",
     async () => {
       const graph = await loadFixtureGraph("patched-workspaces", {
