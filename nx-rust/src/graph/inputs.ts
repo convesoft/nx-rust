@@ -1,5 +1,5 @@
 import type { TargetConfiguration } from "@nx/devkit";
-import { posix, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoWorkspace } from "./discovery";
 import { digestFile, digestFolder, runIdVariable } from "./lockfile-task";
@@ -529,6 +529,43 @@ export function toolchainCommand(workspaceRoot: string): string {
   return [
     `{ cd ${shellQuote(folder)} && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
     `env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort`,
+    "true",
+  ].join("; ");
+}
+
+/**
+ * The plugin's script that prints the triples that cargo builds for
+ * (`print-triples.ts`), compiled beside this module.
+ */
+const tripleScript = join(__dirname, "..", "cargo", "print-triples.js");
+
+/**
+ * The command of the triple input of a cached `build` and `doc`, one per
+ * workspace (`DES-INPUTS`, `DES-OUTPUTS`): in the workspace root, the
+ * plugin's own script prints the triples that cargo will build for there
+ * without `--target`, from Cargo's configuration files and the
+ * `CARGO_BUILD_TARGET` of the task's environment, read with the function
+ * that graph creation uses. The key thereby follows the triples that the
+ * task's cargo will use, also where the graph that the Nx daemon keeps is
+ * older than a change to a configuration file that Nx does not watch, such
+ * as the Cargo home's, whose folders the outputs still name; the executor
+ * then fails the task before cargo runs (`taskInvocation` in `task.ts`).
+ *
+ * The command names Node and the script by their absolute paths. Nx keys a
+ * task on what a runtime input prints and not on its command, so
+ * checkouts in other folders share the keys (`EVD-CARGO-TRIPLE-FOLDERS`).
+ * Where the script cannot run, as for a plugin that Nx loads from its
+ * TypeScript source, the command prints a random value instead, new at each
+ * evaluation, so that no result stored under the key is ever restored. It
+ * always ends with status 0, like {@link toolchainCommand}.
+ *
+ * @param workspaceRoot The workspace's root folder, relative to the repository root.
+ */
+// @mara implements DES-INPUTS
+export function tripleCommand(workspaceRoot: string, script = tripleScript): string {
+  const folder = workspaceRoot === "." ? "." : `./${workspaceRoot}`;
+  return [
+    `{ cd ${shellQuote(folder)} && ${shellQuote(process.execPath)} ${shellQuote(script)} 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
     "true",
   ].join("; ");
 }
