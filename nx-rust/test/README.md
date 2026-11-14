@@ -375,7 +375,20 @@ can run: rustup has the toolchain that `pinned/` names
 Each helper that runs Nx or cargo takes a few seconds at most; give such
 tests the `HARNESS_TIMEOUT`.
 
-Each test file runs in a Jest worker, which holds a few hundred megabytes
-besides the Nx and cargo processes that its tests start, so
-[`../jest.config.cts`](../jest.config.cts) runs at most three test files at
-once, or fewer where Jest's default of one per core but one is lower.
+Each test file runs in a Jest worker, which holds about 130 to 190 MB when
+the run starts and up to about 350 MB later, besides the Nx and cargo
+processes that its tests start, so [`../jest.config.cts`](../jest.config.cts)
+runs at most three test files at once, or fewer where Jest's default of one
+per core but one is lower.
+
+ts-jest compiles each test file on its own, as `isolatedModules` in
+[`../tsconfig.spec.json`](../tsconfig.spec.json) tells it, without the program
+with type information that took about 210 MB in every Jest process
+(nxr-2bdrk4). The `typecheck` target checks the types of the tests, the
+harness and the sources they import once, with
+`tsc --noEmit -p nx-rust/tsconfig.spec.json`, and `lint` depends on it: a type
+error in a test fails `lint`, and so `pnpm nx run-many -t build lint test` and
+CI, while Jest still runs that test. Code that compiles only with type
+information from other files, such as a reference to an ambient `const enum`
+or a type re-exported without `export type`, fails `typecheck` too. The end-to-end tests have a
+`typecheck` target of their own on `nx-rust-e2e/tsconfig.spec.json`.

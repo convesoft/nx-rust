@@ -57,6 +57,32 @@
       "options": {
         "packageRoot": "dist/{projectRoot}"
       }
+    },
+    "typecheck": {
+      "command": "tsc --noEmit -p nx-rust/tsconfig.spec.json",
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/**/*.ts",
+        "{projectRoot}/test/**/*.ts",
+        "{projectRoot}/jest.config.cts",
+        "{projectRoot}/tsconfig.json",
+        "{projectRoot}/tsconfig.spec.json",
+        "{workspaceRoot}/tsconfig.base.json",
+        {
+          "externalDependencies": [
+            "typescript",
+            "tslib",
+            "@types/node",
+            "@types/jest",
+            "@nx/devkit",
+            "nx",
+            "smol-toml"
+          ]
+        }
+      ]
+    },
+    "lint": {
+      "dependsOn": ["typecheck"]
     }
   }
 }

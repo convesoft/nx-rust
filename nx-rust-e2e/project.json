@@ -16,6 +16,32 @@
       "options": {
         "runInBand": true
       }
+    },
+    "typecheck": {
+      "command": "tsc --noEmit -p nx-rust-e2e/tsconfig.spec.json",
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/src/**/*.ts",
+        "{projectRoot}/jest.config.cts",
+        "{projectRoot}/tsconfig.json",
+        "{projectRoot}/tsconfig.spec.json",
+        "{workspaceRoot}/tsconfig.base.json",
+        "{workspaceRoot}/nx-rust/**/*.ts",
+        "{workspaceRoot}/tools/scripts/*.d.ts",
+        {
+          "externalDependencies": [
+            "typescript",
+            "tslib",
+            "@types/node",
+            "@types/jest",
+            "@nx/devkit",
+            "nx"
+          ]
+        }
+      ]
+    },
+    "lint": {
+      "dependsOn": ["typecheck"]
     }
   }
 }

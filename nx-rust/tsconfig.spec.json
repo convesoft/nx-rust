@@ -4,7 +4,12 @@
     "outDir": "../dist/out-tsc",
     "module": "commonjs",
     "moduleResolution": "bundler",
-    "types": ["jest", "node"]
+    "types": ["jest", "node"],
+    // ts-jest compiles each file on its own, without the program with type
+    // information that took about 210 MB in every Jest process
+    // (nxr-2bdrk4). `@convesoft/nx-rust:typecheck`, which `lint` depends on,
+    // checks the types instead.
+    "isolatedModules": true
   },
   "include": [
     "jest.config.ts",

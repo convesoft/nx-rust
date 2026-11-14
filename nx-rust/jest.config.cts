@@ -1,11 +1,11 @@
 const { availableParallelism } = require("node:os");
 
 /**
- * The most test files that run at once. A Jest worker holds about 250 MB,
- * and the Nx and cargo processes that its tests start hold more besides, so
- * that Jest's default of one worker per core but one exhausts the memory of
- * a machine with many cores. Where there are fewer cores, Jest's default
- * applies.
+ * The most test files that run at once. A Jest worker holds about 130 to
+ * 190 MB when the run starts and up to about 350 MB later, and the Nx and
+ * cargo processes that its tests start hold more besides, so that Jest's
+ * default of one worker per core but one exhausts the memory of a machine
+ * with many cores. Where there are fewer cores, Jest's default applies.
  */
 const maxWorkers = 3;
 
