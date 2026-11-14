@@ -142,7 +142,7 @@ export async function nxTaskFiles(
  */
 // @mara implements DES-DIAGNOSTICS
 export function skippedCheckWarning(task: string, error: NxTaskFilesError): string {
-  return `nx-rust: ${task}: the build input check did not run, because ${error.message}, so Nx caches the result without it.`;
+  return `nx-rust: ${task}: the build input check did not run, because ${error.message}, so Nx caches the result without it. Use an Nx version that @convesoft/nx-rust supports, or a version of @convesoft/nx-rust that supports the installed one.`;
 }
 
 function load(path: string, workspaceRoot: string): Record<string, unknown> {

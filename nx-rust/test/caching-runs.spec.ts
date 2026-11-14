@@ -302,6 +302,9 @@ describe("a run with the plugin's executor", () => {
         expect(result.output).toContain(
           'cli:build: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves `build` uncached in this project, because its workspace\'s artifact directory lies outside the repository',
         );
+        expect(result.output).toContain(
+          "The setting comes from the workspace's configuration: run `nx show target cli:build --json` and look under `sourceMap` for the file and entry.",
+        );
         expect(taskCalls(workspace)).toEqual([]);
         // Where the plugin caches build, the same file fails nothing.
         expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
@@ -342,7 +345,9 @@ describe("a run with the plugin's executor", () => {
           expect(failed.output).toContain(
             `${task}: cargo builds this run of the cached ${target} for the triple ${hostTriple()}, as CARGO_BUILD_TARGET picks, but its outputs name the artifact directory itself, for no triple, as Cargo's configuration and the environment picked them when Nx created the graph.`,
           );
-          expect(failed.output).toContain(`--targetTriple=${hostTriple()}`);
+          expect(failed.output).toContain(
+            `Set it in the environment of the nx command or in the repository's root .env file, or give the triple as the targetTriple option, --targetTriple=${hostTriple()}.`,
+          );
         }
         expect(taskCalls(workspace)).toEqual([]);
         // Other targets run as before.
@@ -356,6 +361,30 @@ describe("a run with the plugin's executor", () => {
         const restored = await nx(workspace, option);
         expect(restored.output).toMatch(new RegExp(hit));
         expect(contents(artifact)).toEqual(built);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails a cached build whose dotenv file picks a triple whose folder the plugin cannot name before cargo runs, saying to give the triple as the targetTriple option",
+    async () => {
+      const workspace = FixtureWorkspace.create("crate-shapes", {
+        "rust/crates/cli/.env": "CARGO_BUILD_TARGET=host-tuple\n",
+      });
+      try {
+        const failed = await nx(workspace, ["run", "cli:build"]);
+
+        expect(failed.status).toBe(1);
+        expect(failed.output).toContain(
+          'cli:build: CARGO_BUILD_TARGET picks the target triple "host-tuple", whose folder @convesoft/nx-rust cannot name',
+        );
+        expect(failed.output).toContain(
+          "and this run of the cached build names no triple in the targetTriple option. Give the triple as the targetTriple option instead.",
+        );
+        expect(taskCalls(workspace)).toEqual([]);
       } finally {
         workspace.remove();
       }
@@ -513,6 +542,9 @@ describe("a run with the plugin's executor", () => {
         expect(cleared.status).toBe(1);
         expect(cleared.output).toContain(
           `cli:build: build.target in rust/.cargo/config.toml picks the target triple "host-tuple", whose folder @convesoft/nx-rust cannot name: cargo replaces it with the host's triple, and this run of the cached build names no triple in the targetTriple option.`,
+        );
+        expect(cleared.output).toContain(
+          "Run it with the triple that the target's options give, and remove what clears the option for this run",
         );
         expect(taskCalls(workspace)).toHaveLength(1);
       } finally {

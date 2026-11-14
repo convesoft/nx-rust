@@ -855,7 +855,7 @@ describe("the check of a build's dependency files", () => {
         expect(
           linesWith(first.output, "the build input check did not run").map((line) => line.trim()),
         ).toEqual([
-          "nx-rust: reader:build: the build input check did not run, because the installed Nx lacks HashPlanInspector in nx/src/hasher/hash-plan-inspector, so Nx caches the result without it.",
+          "nx-rust: reader:build: the build input check did not run, because the installed Nx lacks HashPlanInspector in nx/src/hasher/hash-plan-inspector, so Nx caches the result without it. Use an Nx version that @convesoft/nx-rust supports, or a version of @convesoft/nx-rust that supports the installed one.",
         ]);
         const next = await nx(workspace, ["run", "reader:build"]);
         expect(next.status).toBe(0);

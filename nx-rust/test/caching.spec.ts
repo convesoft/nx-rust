@@ -902,7 +902,7 @@ describe("caching", () => {
         }
         expect(cli.metadata.cargo.warnings).toEqual([
           expect.stringMatching(
-            /^nx-rust: build.target in rust\/.cargo\/config.toml picks the target triple "host-tuple", .* The build and doc targets of the Cargo workspace in rust run uncached where their options name no triple, .*targetTriple/,
+            /^nx-rust: build.target in rust\/.cargo\/config.toml picks the target triple "host-tuple", .* The build and doc targets of the Cargo workspace in rust run uncached where their options name no triple, .* To cache them, give the triple as the targetTriple option in the options of their target tables, in the crate's or the workspace's Cargo metadata;/,
           ),
         ]);
 
