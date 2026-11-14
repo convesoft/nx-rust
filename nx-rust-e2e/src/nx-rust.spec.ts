@@ -330,8 +330,9 @@ describe("@convesoft/nx-rust", () => {
         expect(inputs.environment).toEqual(
           expect.arrayContaining(["RUSTFLAGS", "CARGO_BUILD_WARNINGS", "NX_RUST_RUN_ID"]),
         );
+        // test runs rustdoc for doctests, so it also asks a rustdoc that a setting names.
         expect(inputs.runtime).toEqual([
-          "{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true",
+          `{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null && if [ -n "\${RUSTC+x}\${CARGO_BUILD_RUSTC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTC-$CARGO_BUILD_RUSTC}" -Vv 2>/dev/null; fi && if [ -n "\${RUSTDOC+x}\${CARGO_BUILD_RUSTDOC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTDOC-$CARGO_BUILD_RUSTDOC}" -Vv 2>/dev/null; fi || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true`,
         ]);
         expect(inputs.files).toEqual(
           expect.arrayContaining([

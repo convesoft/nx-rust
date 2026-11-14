@@ -1,5 +1,6 @@
 import type { TargetConfiguration } from "@nx/devkit";
 import { join, posix, relative } from "node:path";
+import { ConfiguredTools, noConfiguredTools } from "../cargo/configured-tools";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoWorkspace } from "./discovery";
 import { digestFile, digestFolder, runIdVariable } from "./lockfile-task";
@@ -332,10 +333,19 @@ export function targetInputs(
       ? []
       : externalDependencyInputs(target, subject, workspaceRoot, readsDigest)),
     ...environmentInputs(target),
-    { runtime: toolchainCommand(workspaceRoot) },
+    {
+      runtime: toolchainCommand(
+        workspaceRoot,
+        subject.workspace.configuredTools ?? noConfiguredTools,
+        rustdocTargets.has(target),
+      ),
+    },
     pluginVersionInput(context.plugin),
   ];
 }
+
+/** The targets whose cargo command runs rustdoc: `doc`, and `test` for doctests. */
+const rustdocTargets: ReadonlySet<InferredTargetName> = new Set(["doc", "test"]);
 
 /**
  * The files of the context that cargo runs in: each `rust-toolchain.toml`,
@@ -501,37 +511,91 @@ export function environmentInputs(target: InferredTargetName): InputDefinition[]
 }
 
 /**
- * The command of the toolchain input, one process per task's key: first
- * `rustc -Vv` in the workspace root, where the plugin's cargo commands run,
- * as cargo will resolve it there with the task's environment (`DES-INPUTS`,
- * `REQ-TOOLCHAIN-KEY`); then every variable of the task's environment whose
- * name starts with `CARGO_PROFILE_` or `CARGO_TARGET_`, with its value,
- * sorted, apart from `CARGO_TARGET_DIR`, which says where the artifacts go
- * and not what they are (`REQ-ENV-ALLOWLIST`). Those two families are open
- * ended, with a profile's or a triple's name in each variable, so no list of
- * `env` inputs can name them. Nx runs the command through `sh -c` in the
- * repository root, with the task's dotenv files loaded
+ * The command of the toolchain input, one shell per task's key (`DES-INPUTS`,
+ * `REQ-TOOLCHAIN-KEY`). In the workspace root, where the plugin's cargo
+ * commands run, it prints:
+ *
+ * - what `rustc -Vv` writes, as rustup or `PATH` resolve it there with the
+ *   task's environment: the toolchain of the task's cargo, and the compiler
+ *   that cargo runs where no setting names another;
+ * - where a setting names another compiler, what that compiler's `-Vv`
+ *   writes: the one that `RUSTC` in the task's environment names, else
+ *   `CARGO_BUILD_RUSTC`, else `build.rustc` of Cargo's configuration as
+ *   graph creation read it, which may name two (`configuredTools`);
+ * - with `rustdoc`, for the targets that run it, the same for the rustdoc
+ *   that `RUSTDOC`, `CARGO_BUILD_RUSTDOC` or `build.rustdoc` names;
+ * - every variable of the task's environment whose name starts with
+ *   `CARGO_PROFILE_` or `CARGO_TARGET_`, with its value, sorted, apart from
+ *   `CARGO_TARGET_DIR`, which says where the artifacts go and not what they
+ *   are (`REQ-ENV-ALLOWLIST`). Those two families are open ended, with a
+ *   profile's or a triple's name in each variable, so no list of `env`
+ *   inputs can name them.
+ *
+ * A named program runs as cargo runs it: a path with a `/` from the
+ * workspace root, which is also cargo's folder, and a bare name through
+ * `PATH`. Where nothing names a compiler or a rustdoc, the command prints
+ * what it printed before these settings counted, so those keys stay the
+ * same: Nx keys a runtime input on what it prints, not on its text
+ * (`EVD-CARGO-COMPILER-SELECTION`). Nx runs the command through `sh -c` in
+ * the repository root, with the task's dotenv files loaded
  * (`EVD-NX-24-INPUT-SEMANTICS`).
  *
  * rustup may not install a toolchain for it (`ADR-GRAPH-NO-TOOLCHAIN-INSTALL`).
- * When `rustc -Vv` fails, as for a pinned toolchain that is not installed,
- * or the folder is missing, the command prints a random value in its place,
- * new at each evaluation, so that no result stored under the key is ever
- * restored and the task runs as plain cargo would
- * (`EVD-RUSTUP-MISSING-TOOLCHAIN`). The command always ends with status 0;
- * Nx keys a task on what a runtime input prints whatever its status.
+ * When a version query fails, as for a pinned toolchain that is not
+ * installed, for a named compiler that does not exist or for an empty
+ * `RUSTC`, on which cargo fails too, or when the folder is missing, the
+ * command prints a random value in its place, new at each evaluation, so
+ * that no result stored under the key is ever restored and the task runs
+ * as plain cargo would (`EVD-RUSTUP-MISSING-TOOLCHAIN`). The command always
+ * ends with status 0; Nx keys a task on what a runtime input prints
+ * whatever its status.
  *
  * @param workspaceRoot The workspace's root folder, relative to the repository root.
+ * @param tools What `build.rustc` and `build.rustdoc` name in the workspace root.
+ * @param rustdoc Whether the target's cargo command runs rustdoc.
  */
 // @mara implements REQ-TOOLCHAIN-KEY
 // @mara implements REQ-ENV-ALLOWLIST
-export function toolchainCommand(workspaceRoot: string): string {
+export function toolchainCommand(
+  workspaceRoot: string,
+  tools: ConfiguredTools = noConfiguredTools,
+  rustdoc = false,
+): string {
   const folder = workspaceRoot === "." ? "." : `./${workspaceRoot}`;
+  const versions = [
+    versionCommand("rustc"),
+    namedToolVersion("RUSTC", tools.rustc),
+    ...(rustdoc ? [namedToolVersion("RUSTDOC", tools.rustdoc)] : []),
+  ];
   return [
-    `{ cd ${shellQuote(folder)} && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
+    `{ cd ${shellQuote(folder)} && ${versions.join(" && ")} || od -An -N16 -tx1 /dev/urandom; }`,
     `env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort`,
     "true",
   ].join("; ");
+}
+
+/**
+ * Shell text that prints the `-Vv` of the program that `variable`, else
+ * `CARGO_BUILD_<variable>`, else Cargo's configuration names, and nothing
+ * where none names one. A variable that is set but empty counts as it is,
+ * so the query fails, as cargo does.
+ */
+function namedToolVersion(variable: "RUSTC" | "RUSTDOC", configured: readonly string[]): string {
+  const setting = `CARGO_BUILD_${variable}`;
+  const fromEnvironment = versionCommand(`"\${${variable}-$${setting}}"`);
+  const fromConfiguration = configured
+    .map((program) => versionCommand(shellQuote(program)))
+    .join(" && ");
+  return [
+    `if [ -n "\${${variable}+x}\${${setting}+x}" ]; then ${fromEnvironment};`,
+    ...(fromConfiguration === "" ? [] : [`else ${fromConfiguration};`]),
+    "fi",
+  ].join(" ");
+}
+
+/** `-Vv` of a program, given as shell text, without rustup installing a toolchain for it. */
+function versionCommand(program: string): string {
+  return `RUSTUP_AUTO_INSTALL=0 ${program} -Vv 2>/dev/null`;
 }
 
 /**

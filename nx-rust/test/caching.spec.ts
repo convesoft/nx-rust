@@ -2,6 +2,7 @@ import type { TargetConfiguration } from "@nx/devkit";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { noConfiguredTools } from "../src/cargo/configured-tools";
 import { environmentVariables, toolchainCommand } from "../src/graph/inputs";
 import { listsPackage } from "../src/graph/plugin-package";
 import {
@@ -218,18 +219,57 @@ describe("caching", () => {
       const tripleInput = {
         runtime: expect.stringMatching(/\/src\/cargo\/print-artifact-folders\.js' 'rust'/),
       };
+      // test, which runs rustdoc for doctests, also asks the rustdoc that a setting names.
       for (const name of ["build", "check", "lint", "test", "fmt-check", "fmt"]) {
         expect(inputsOf(api.targets[name], "runtime")).toEqual([
-          { runtime: toolchainCommand("rust") },
+          { runtime: toolchainCommand("rust", noConfiguredTools, name === "test") },
           ...(name === "build" ? [tripleInput] : []),
         ]);
         expect(inputsOf(api.targets[name], "externalDependencies")).toEqual([
           { externalDependencies: [] },
         ]);
       }
+      expect(inputsOf(graph.projects.rust.targets.doc, "runtime")).toEqual([
+        { runtime: toolchainCommand("rust", noConfiguredTools, true) },
+        tripleInput,
+      ]);
       expect(toolchainCommand("rust")).toBe(
-        "{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true",
+        `{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null && if [ -n "\${RUSTC+x}\${CARGO_BUILD_RUSTC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTC-$CARGO_BUILD_RUSTC}" -Vv 2>/dev/null; fi || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true`,
       );
+      expect(
+        toolchainCommand("rust", { rustc: ["/a b/it's rustc", "rustc-91"], rustdoc: [] }, true),
+      ).toBe(
+        `{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null && if [ -n "\${RUSTC+x}\${CARGO_BUILD_RUSTC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTC-$CARGO_BUILD_RUSTC}" -Vv 2>/dev/null; else RUSTUP_AUTO_INSTALL=0 '/a b/it'"'"'s rustc' -Vv 2>/dev/null && RUSTUP_AUTO_INSTALL=0 'rustc-91' -Vv 2>/dev/null; fi && if [ -n "\${RUSTDOC+x}\${CARGO_BUILD_RUSTDOC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTDOC-$CARGO_BUILD_RUSTDOC}" -Vv 2>/dev/null; fi || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true`,
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "keeps what the toolchain command prints where no setting names a compiler or a rustdoc, so that those keys stay the same",
+    () => {
+      // The command before RUSTC, CARGO_BUILD_RUSTC and build.rustc counted.
+      // Nx keys a runtime input on what it prints (EVD-CARGO-COMPILER-SELECTION).
+      const before =
+        "{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true";
+      const workspace = FixtureWorkspace.create("subfolder-workspace");
+      try {
+        for (const env of [{}, { CARGO_PROFILE_DEV_DEBUG: "0" }]) {
+          const output = (command: string) =>
+            spawnSync("sh", ["-c", command], {
+              cwd: workspace.root,
+              env: testEnvironment(env),
+              encoding: "utf8",
+            }).stdout;
+          const printed = output(before);
+          expect(printed).toMatch(/^release: /m);
+          for (const rustdoc of [false, true]) {
+            expect(output(toolchainCommand("rust", noConfiguredTools, rustdoc))).toBe(printed);
+          }
+        }
+      } finally {
+        workspace.remove();
+      }
     },
     HARNESS_TIMEOUT,
   );
