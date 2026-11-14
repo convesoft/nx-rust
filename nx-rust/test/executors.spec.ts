@@ -160,20 +160,38 @@ describe("the cargo executor", () => {
     HARNESS_TIMEOUT,
   );
 
-  it(
-    "runs the command of the default name under the name that targetNames gives",
-    () =>
+  // Each case: targetNames, and the names to run with the cargo command that
+  // each runs.
+  it.each<[string, Record<string, string>, [string, string[]][]]>([
+    [
+      "one name passed on to another target",
+      { lint: "clippy", build: "lint" },
+      [
+        ["clippy", ["clippy", "--all-targets", "-p", "core-lib"]],
+        ["lint", ["build", "-p", "core-lib"]],
+      ],
+    ],
+    [
+      "two targets that swap their names",
+      { lint: "check", check: "lint" },
+      [
+        ["lint", ["check", "--all-targets", "-p", "core-lib"]],
+        ["check", ["clippy", "--all-targets", "-p", "core-lib"]],
+      ],
+    ],
+  ])(
+    "runs the command of the default name under the name that targetNames gives, with %s",
+    (_case, targetNames, runs) =>
       inFixture(
         "crate-shapes",
-        { "nx.json": pluginOptions({ targetNames: { lint: "clippy", build: "lint" } }) },
+        { "nx.json": pluginOptions({ targetNames }) },
         async (workspace) => {
-          expect((await nx(workspace, ["run", "core-lib:clippy"])).status).toBe(0);
-          expect((await nx(workspace, ["run", "core-lib:lint"])).status).toBe(0);
+          for (const [name] of runs) {
+            const result = await nx(workspace, ["run", `core-lib:${name}`]);
+            expect({ name, status: result.status }).toEqual({ name, status: 0 });
+          }
 
-          expect(taskCalls(workspace)).toEqual([
-            rust(["clippy", "--all-targets", "-p", "core-lib"]),
-            rust(["build", "-p", "core-lib"]),
-          ]);
+          expect(taskCalls(workspace)).toEqual(runs.map(([, command]) => rust(command)));
         },
       ),
     HARNESS_TIMEOUT,

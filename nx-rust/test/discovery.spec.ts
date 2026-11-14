@@ -38,146 +38,50 @@ function workspaceCall(root: string): CargoCall {
 }
 
 interface Expectation {
-  /** The workspace roots in the order the plugin reads them, with the folders of their members. */
-  workspaces: [root: string, members: string[]][];
+  /**
+   * The workspace roots in the order the plugin reads them. The projects of
+   * their members are checked in graph.spec.ts.
+   */
+  workspaces: string[];
   /** The reports for path dependencies without a project: where cargo starts and the manifest. */
   pathDependencies?: [cwd: string, manifest: string][];
 }
 
 const expected: Record<FixtureName, Expectation> = {
-  "subfolder-workspace": {
-    workspaces: [
-      [
-        "rust",
-        ["rust/crates/api", "rust/crates/codegen", "rust/crates/model", "rust/crates/testkit"],
-      ],
-    ],
-  },
-  "two-workspaces": {
-    workspaces: [
-      [".", ["crates/app", "crates/util"]],
-      ["tools", ["tools", "tools/scaffold"]],
-    ],
-  },
-  "standalone-crate": {
-    workspaces: [
-      ["rust", ["rust/crates/api"]],
-      ["tools/xtask", ["tools/xtask"]],
-    ],
-  },
-  "excluded-member": {
-    workspaces: [
-      ["rust", ["rust/crates/app"]],
-      ["rust/crates/legacy", ["rust/crates/legacy"]],
-    ],
-  },
-  "cross-workspace-path": {
-    workspaces: [
-      ["backend", ["backend/crates/server"]],
-      ["shared", ["shared/crates/model"]],
-    ],
-  },
+  "subfolder-workspace": { workspaces: ["rust"] },
+  "two-workspaces": { workspaces: [".", "tools"] },
+  "standalone-crate": { workspaces: ["rust", "tools/xtask"] },
+  "excluded-member": { workspaces: ["rust", "rust/crates/legacy"] },
+  "cross-workspace-path": { workspaces: ["backend", "shared"] },
   // Its nx.json excludes vendor/**, so the vendored crates have no project
   // and are read as path dependencies, from the workspace that uses them.
   "vendored-crate": {
-    workspaces: [["rust", ["rust/crates/app", "rust/crates/lib"]]],
+    workspaces: ["rust"],
     pathDependencies: [
       ["rust", "vendor/parser/Cargo.toml"],
       ["rust", "vendor/lexer/Cargo.toml"],
     ],
   },
-  "name-collision": {
-    workspaces: [
-      ["rust", ["rust/crates/api"]],
-      ["tools/api", ["tools/api"]],
-    ],
-  },
-  "dev-dependency-cycle": {
-    workspaces: [["rust", ["rust/crates/model", "rust/crates/testkit"]]],
-  },
-  "different-toolchains": {
-    workspaces: [
-      ["pinned", ["pinned/crates/pinned-lib"]],
-      ["stable", ["stable/crates/stable-lib"]],
-    ],
-  },
-  "mixed-folders": {
-    workspaces: [
-      [
-        "libs/rust",
-        [
-          "libs/rust/crates/addon",
-          "libs/rust/crates/cli",
-          "libs/rust/crates/engine",
-          "libs/rust/crates/unnamed",
-        ],
-      ],
-    ],
-  },
-  "nested-folders": {
-    workspaces: [
-      ["services/billing", ["services/billing/crates/invoice"]],
-      ["apps/Billing.API/rust_v2", ["apps/Billing.API/rust_v2/crates/gateway"]],
-    ],
-  },
-  "crate-shapes": {
-    workspaces: [
-      [
-        "rust",
-        [
-          "rust/crates/cli",
-          "rust/crates/core",
-          "rust/crates/internal",
-          "rust/crates/perf",
-          "rust/crates/server",
-        ],
-      ],
-    ],
-  },
+  "name-collision": { workspaces: ["rust", "tools/api"] },
+  "dev-dependency-cycle": { workspaces: ["rust"] },
+  "different-toolchains": { workspaces: ["pinned", "stable"] },
+  "mixed-folders": { workspaces: ["libs/rust"] },
+  "nested-folders": { workspaces: ["services/billing", "apps/Billing.API/rust_v2"] },
+  "crate-shapes": { workspaces: ["rust"] },
   // Its nx.json excludes third_party/**, so fork, which rust's [patch]
   // redirects to, has no project and is read from rust, where the
   // redirection applies. model and types have projects.
   "patched-workspaces": {
-    workspaces: [
-      [
-        "rust",
-        [
-          "rust/crates/api",
-          "rust/crates/harness",
-          "rust/crates/model",
-          "rust/crates/plain",
-          "rust/crates/util",
-          "rust/crates/viaw",
-        ],
-      ],
-      ["shared", ["shared/crates/types"]],
-    ],
+    workspaces: ["rust", "shared"],
     pathDependencies: [["rust", "third_party/fork/Cargo.toml"]],
   },
-  "declared-files": {
-    workspaces: [["rust", ["rust/crates/api", "rust/crates/app", "rust/crates/other"]]],
-  },
-  "undeclared-files": {
-    workspaces: [
-      [
-        "rust",
-        [
-          "rust/crates/base",
-          "rust/crates/cola",
-          "rust/crates/colb",
-          "rust/crates/macros",
-          "rust/crates/multi",
-          "rust/crates/plain",
-          "rust/crates/reader",
-        ],
-      ],
-    ],
-  },
+  "declared-files": { workspaces: ["rust"] },
+  "undeclared-files": { workspaces: ["rust"] },
 };
 
 function expectedCalls({ workspaces, pathDependencies = [] }: Expectation): CargoCall[] {
   return [
-    ...workspaces.map(([root]) => workspaceCall(root)),
+    ...workspaces.map((root) => workspaceCall(root)),
     ...pathDependencies.map(([cwd, manifest]) => metadataCall(cwd, manifest)),
   ];
 }
