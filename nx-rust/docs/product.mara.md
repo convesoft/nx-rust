@@ -208,7 +208,7 @@ Given a change, developers and CI can run the tasks of the crates and JS project
 :status: accepted
 :contributes_to: GOAL-FAST-FEEDBACK
 
-Running many Rust tasks through Nx does not compile the same code several times, does not queue cargo processes behind one build lock, and does not rebuild because a different set of crates happened to run together.
+Running many Rust tasks through Nx does not compile the same code several times with the same features, does not queue cargo processes behind one build lock, and does not rebuild because a different set of crates happened to run together.
 :::
 
 :::mara need NEED-FAST-TESTS
@@ -309,7 +309,7 @@ The directory where Cargo puts final artifacts such as binaries, set by `build.t
 :aliases: group
 :aliases: build flavour
 
-The set of tasks that the plugin serves together, with one cargo command for each step of their target: tasks of the same kind in the same Cargo workspace whose commands would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment.
+The set of tasks that the plugin serves together, with one cargo command for each step of their target: tasks of the same kind in the same Cargo workspace whose commands would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment. Where their command would pass a flag whose effect on a crate depends on which other crates it selects, or would select crates whose features cargo then resolves for that selection alone, each task forms a group of one crate ([[DES-BATCH]]).
 :::
 
 :::mara term TERM-FEATURE-UNIFICATION

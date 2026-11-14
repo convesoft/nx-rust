@@ -17,7 +17,7 @@ Goal: a cached task that runs in a batch is checked against its workspace's lock
 - after the call, `checkDigests` in `nx-rust/src/executors/digests.ts` computes each digest that the target's `metadata.cargo.digests` names again and fails the task when it differs from its digest file.
 
 - [ ] In the batch implementation, run the first check for each task of a batch before its group's call, failing only that task
-- [ ] Run `checkDigests` for each task of a group right after the group's last call, beside the check of `DES-BUILD-INPUT-CHECK` where that exists; a mismatch fails only the tasks whose digests changed
-- [ ] Cover both in the batch cases of `VER-CACHE-KEYS` (the post-check row) with a real batch
+- [ ] Run `checkDigests` for each task of a group right after the group's last call, a group of one crate included, beside the check of `DES-BUILD-INPUT-CHECK` where that exists, on the digests that "Post-check" in `DES-LOCKFILE-HASHING` names: every digest that the task's key holds (every member's under `cargo` and `workspace-build`), and under `hakari` every member's for a task that shared its command; a mismatch fails only the tasks whose compared digests changed
+- [ ] Cover both in the batch cases of `VER-CACHE-KEYS` (the post-check row) with a real batch, including the change that moves only a sibling's digest
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
