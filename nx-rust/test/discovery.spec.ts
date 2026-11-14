@@ -14,29 +14,19 @@ import {
   GraphCreationError,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
+  metadataCall,
   pinnedToolchain,
   pinnedToolchainAvailable,
   ProbeRecord,
   testEnvironment,
   withoutColours,
+  workspaceCall,
 } from "./harness";
 
 // Checks the discovery part of VER-GRAPH: which workspaces the plugin finds,
-// which cargo calls that takes, and how it fails.
-
-/** The `cargo metadata` call of graph creation for `manifest`, started in `cwd`. */
-function metadataCall(cwd: string, manifest: string): CargoCall {
-  const path = manifest.startsWith("/") ? manifest : `{workspaceRoot}/${manifest}`;
-  return {
-    cwd,
-    args: ["metadata", "--format-version", "1", "--no-deps", "--manifest-path", path],
-  };
-}
-
-/** The call that reads the workspace whose root manifest is in `root`. */
-function workspaceCall(root: string): CargoCall {
-  return metadataCall(root, root === "." ? "Cargo.toml" : `${root}/Cargo.toml`);
-}
+// which cargo calls that takes, and how it fails. The calls of each fixture's
+// graph, also with the plugin's entry changed, are checked together with that
+// graph in graph.spec.ts.
 
 interface Expectation {
   /** The workspace roots in the order the plugin reads them, with the folders of their members. */
@@ -182,39 +172,12 @@ const excludedFolders: Partial<Record<FixtureName, string[]>> = {
   "patched-workspaces": ["third_party"],
 };
 
-function expectedCalls({ workspaces, pathDependencies = [] }: Expectation): CargoCall[] {
-  return [
-    ...workspaces.map(([root]) => workspaceCall(root)),
-    ...pathDependencies.map(([cwd, manifest]) => metadataCall(cwd, manifest)),
-  ];
-}
-
 // Without the toolchain that it pins, cargo fails in different-toolchains/pinned.
 const fixtures = (Object.keys(expected) as FixtureName[]).filter(
   (fixture) => fixture !== "different-toolchains" || pinnedToolchainAvailable(),
 );
 
 describe("workspace discovery through Nx", () => {
-  it.each(fixtures)(
-    "reads each workspace of %s with one cargo call",
-    async (fixture) => {
-      const calls = await loadFixtureGraph(fixture).then(
-        (graph) => graph.cargoCalls,
-        (error: unknown) => {
-          // Its two crates called api fail graph creation once both
-          // workspaces are read (graph.spec.ts).
-          if (fixture === "name-collision" && error instanceof GraphCreationError) {
-            return error.cargoCalls;
-          }
-          throw error;
-        },
-      );
-
-      expect(calls).toEqual(expectedCalls(expected[fixture]));
-    },
-    HARNESS_TIMEOUT,
-  );
-
   it(
     "reads a workspace at the root, one in a subfolder and a standalone crate with one call each",
     async () => {
@@ -229,27 +192,8 @@ describe("workspace discovery through Nx", () => {
     HARNESS_TIMEOUT,
   );
 
-  it(
-    "reads a workspace whose root manifest Nx does not hand to the plugin once more in its root folder",
-    async () => {
-      // The first call starts in the folder of the shallowest manifest that
-      // the plugin receives and names the workspace root, where the
-      // workspace's tasks run cargo.
-      const graph = await loadFixtureGraph("subfolder-workspace", {
-        files: { "nx.json": pluginEntry({ exclude: ["rust/Cargo.toml"] }) },
-      });
-
-      expect(graph.cargoCalls).toEqual([
-        metadataCall("rust/crates/api", "rust/crates/api/Cargo.toml"),
-        workspaceCall("rust"),
-      ]);
-      expect(Object.keys(graph.projects).sort()).toEqual(["api", "codegen", "model", "testkit"]);
-    },
-    HARNESS_TIMEOUT,
-  );
-
   describe("skips crates that Nx does not hand to the plugin", () => {
-    // standalone-crate reads tools/xtask without these changes (see above).
+    // standalone-crate reads tools/xtask without these changes (graph.spec.ts).
     it.each([
       ["ignored by .gitignore", { ".gitignore": "target/\ntools/\n" }],
       ["ignored by .nxignore", { ".nxignore": "tools/xtask\n" }],
@@ -263,23 +207,6 @@ describe("workspace discovery through Nx", () => {
         const graph = await loadFixtureGraph("standalone-crate", { files });
 
         expect(graph.cargoCalls).toEqual([workspaceCall("rust")]);
-      },
-      HARNESS_TIMEOUT,
-    );
-
-    it(
-      "reads the vendored crates as standalone crates once they are no longer excluded",
-      async () => {
-        // The positive control for the exclude in vendored-crate's nx.json.
-        const graph = await loadFixtureGraph("vendored-crate", {
-          files: { "nx.json": pluginEntry({}) },
-        });
-
-        expect(graph.cargoCalls).toEqual([
-          workspaceCall("rust"),
-          workspaceCall("vendor/lexer"),
-          workspaceCall("vendor/parser"),
-        ]);
       },
       HARNESS_TIMEOUT,
     );

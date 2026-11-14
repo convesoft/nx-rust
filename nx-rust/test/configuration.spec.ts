@@ -524,6 +524,7 @@ describe("graph-creation errors", () => {
       },
       [
         'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test] sets "inputs" without "..." on the inferred target "test".',
+        'Put "..." where the inferred inputs belong, such as inputs = ["...", { env = "DATABASE_URL" }].',
       ],
     ],
     [
@@ -1063,6 +1064,52 @@ describe("options in the target tables", () => {
   );
 });
 
+describe("per-workspace settings", () => {
+  // The root workspace takes them from the plugin options, tools from its table.
+  const settings: FileChanges = {
+    "nx.json": pluginOptions({ testRunner: "nextest", affectedTests: true }),
+    "tools/Cargo.toml": appendTo(
+      '[workspace.metadata.nx]\ntestRunner = "cargo"\naffectedTests = false',
+    ),
+  };
+  /** Sets affectedTests = true among the options of test in the crate whose manifest is `manifest`. */
+  const affectedTestsOn = (manifest: string): FileChanges => ({
+    [manifest]: appendTo("[package.metadata.nx.targets.test.options]\naffectedTests = true"),
+  });
+
+  // featureUnification has no effect yet: until nxr-k64tm5 passes each
+  // workspace's strategy to the inputs, every workspace counts as
+  // workspace-build, whatever the setting says.
+  it(
+    "take a workspace's per-workspace settings from its table, and elsewhere from the plugin options",
+    async () => {
+      // A test that nextest runs hashes the workspace's .config/nextest.toml,
+      // and only a workspace that uses the selection of affected tests takes
+      // affectedTests = true among the options of test.
+      const graph = await loadFixtureGraph("two-workspaces", {
+        files: { ...settings, ...affectedTestsOn("crates/app/Cargo.toml") },
+      });
+
+      expect(graph.projects.app.targets.test.inputs).toContain(
+        "{workspaceRoot}/.config/nextest.toml",
+      );
+      expect(JSON.stringify(graph.projects.scaffold.targets.test.inputs)).not.toContain(
+        "nextest.toml",
+      );
+      expect(graph.projects.app.targets.test.options).toMatchObject({ affectedTests: true });
+
+      const message = await graphError("two-workspaces", {
+        ...settings,
+        ...affectedTestsOn("tools/scaffold/Cargo.toml"),
+      });
+      expect(message).toContain(
+        'tools/scaffold/Cargo.toml: [package.metadata.nx.targets.test.options] sets "affectedTests" to true, but the Cargo workspace in tools/Cargo.toml does not use the selection of affected tests',
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
 describe("settings that take effect later, as the plugin places them", () => {
   let workspace: FixtureWorkspace | undefined;
   let savedEnvironment: NodeJS.ProcessEnv;
@@ -1091,39 +1138,6 @@ describe("settings that take effect later, as the plugin places them", () => {
     const graph = registrationOf(entry).graphForDependencies(workspace.root);
     return Object.fromEntries((graph?.projects ?? []).map((project) => [project.name, project]));
   }
-
-  it(
-    "take a workspace's per-workspace settings from its table, and elsewhere from the plugin options",
-    async () => {
-      const found = await projects(
-        "two-workspaces",
-        { testRunner: "nextest", affectedTests: true, featureUnification: "cargo", locked: true },
-        {
-          "tools/Cargo.toml": appendTo(
-            '[workspace.metadata.nx]\ntestRunner = "cargo"\naffectedTests = false\nfeatureUnification = "workspace-build"',
-          ),
-        },
-      );
-
-      expect(found.app.settings.workspace).toMatchObject({
-        rootManifest: "Cargo.toml",
-        testRunner: "nextest",
-        affectedTests: true,
-        featureUnification: "cargo",
-        locked: true,
-        setInTable: [],
-      });
-      expect(found.scaffold.settings.workspace).toMatchObject({
-        rootManifest: "tools/Cargo.toml",
-        testRunner: "cargo",
-        affectedTests: false,
-        featureUnification: "workspace-build",
-        locked: true,
-        setInTable: ["testRunner", "affectedTests", "featureUnification"],
-      });
-    },
-    HARNESS_TIMEOUT,
-  );
 
   it(
     "use the defaults where nothing sets them",

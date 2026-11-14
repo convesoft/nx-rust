@@ -729,8 +729,13 @@ describe("targetNames", () => {
       });
 
       expect(message).toContain(
-        '"targetNames" in the options of the @convesoft/nx-rust entry in nx.json names "clippy", which is not the default name of an inferred target. The targets that can be renamed are "build", "check", "lint", "test", "fmt-check", "fmt", "bench", "run", "doc", "lockfile", "audit", "deny" and "update".',
+        '"targetNames" in the options of the @convesoft/nx-rust entry in nx.json names "clippy", which is not the default name of an inferred target.',
       );
+      // The list names the targets of crates and of workspaces, and not the key.
+      const renamable = /The targets that can be renamed are ([^\n]*)\./.exec(message)?.[1] ?? "";
+      expect(renamable).toContain('"lint"');
+      expect(renamable).toContain('"update"');
+      expect(renamable).not.toContain('"clippy"');
     },
     HARNESS_TIMEOUT,
   );

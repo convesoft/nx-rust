@@ -19,7 +19,6 @@ import {
   wasmTriple,
 } from "../src/tools/optional-tools";
 import {
-  CargoCall,
   changedFiles,
   FileChanges,
   FixtureName,
@@ -29,6 +28,7 @@ import {
   testEnvironment,
   ToolFolders,
   withoutColours,
+  workspaceCall,
 } from "./harness";
 
 // Checks the parts of VER-SETUP about `init`. An Nx or Cargo release that the
@@ -52,21 +52,6 @@ const executorEntries = {
 
 /** `nx.json` after init in a repository that did not know the plugin. */
 const registeredNxJson = { plugins: [pluginName], targetDefaults: executorEntries };
-
-/** The call that reads the workspace whose root manifest is in `root`. */
-function workspaceCall(root: string): CargoCall {
-  return {
-    cwd: root,
-    args: [
-      "metadata",
-      "--format-version",
-      "1",
-      "--no-deps",
-      "--manifest-path",
-      `{workspaceRoot}/${root === "." ? "" : `${root}/`}Cargo.toml`,
-    ],
-  };
-}
 
 /**
  * Runs `init` in a copy of `fixture` without plugin entry, with no tool
@@ -108,6 +93,25 @@ async function runInit(
 /** The one line of tools that are missing and that nothing needs, or `undefined`. */
 function notNeededLine(output: string): string | undefined {
   return output.split("\n").find((line) => line.includes("not needed by your settings"));
+}
+
+/**
+ * The lines that Nx prints for a failed graph creation in `output`, between
+ * its heading and its hint about `--verbose`, without blank lines and with
+ * the plugin, which `entry` names in nx.json, named by its package, as init
+ * names it.
+ */
+function graphCreationErrors(output: string, entry: string): string[] {
+  const lines = output.split("\n");
+  const start = lines.findIndex((line) => line.includes("Failed to process project graph."));
+  const end = lines.findIndex((line, index) => index > start && line.startsWith("Pass --verbose"));
+  if (start < 0 || end < 0) {
+    return [];
+  }
+  return lines
+    .slice(start + 1, end)
+    .filter((line) => line.trim() !== "")
+    .map((line) => line.split(entry).join(pluginName));
 }
 
 describe("init", () => {
@@ -608,320 +612,97 @@ describe("init", () => {
       HARNESS_TIMEOUT,
     );
 
-    /** `nx.json` with one entry of the plugin per argument, as a second run finds it. */
-    const registered = (...entries: object[]): FileChanges => ({
-      "nx.json": `${JSON.stringify({
-        plugins: entries.map((entry) => ({ plugin: pluginName, ...entry })),
-      })}\n`,
-    });
-
-    // The problems in the options of the plugin's entries, which only an
-    // nx.json that registers the plugin can have.
-    it.each<[string, FileChanges, string[]]>([
+    // One case for each way graph creation can fail. Init checks the graph
+    // as graph creation does, so for each of them it stops, writes nothing
+    // and prints what graph creation prints for the same files. What each
+    // message says, the remedy included, is checked where that error's own
+    // case is, in the spec of the part of the plugin that reports it.
+    it.each<[string, FileChanges, object | undefined]>([
       [
-        "targetNames that give two targets of a project one name",
-        registered({ options: { targetNames: { test: "build" } } }),
-        [
-          `"targetNames" in the options of the ${pluginName} entry in nx.json gives two inferred targets of one project the same name`,
-          'Change "targetNames" so that every inferred target keeps a name of its own.',
-        ],
-      ],
-      [
-        "a key of targetNames that is not the default name of an inferred target",
-        registered({ options: { targetNames: { clippy: "lint" } } }),
-        [
-          `"targetNames" in the options of the ${pluginName} entry in nx.json names "clippy", which is not the default name of an inferred target.`,
-          'The targets that can be renamed are "build", "check", "lint",',
-        ],
-      ],
-      [
-        "a value of targetNames that is no target name",
-        registered({ options: { targetNames: { test: "" } } }),
-        [
-          `"targetNames" in the options of the ${pluginName} entry in nx.json gives the target "test" "", but a target name has to be a string that is not empty.`,
-        ],
-      ],
-      [
-        "an option that nx-rust does not know",
-        registered({ options: { namePrefix: "rust-" } }),
-        [
-          `nx.json: nx-rust does not know the key "namePrefix" in the options of the ${pluginName} entry.`,
-          '"namePrefix" can be set in [workspace.metadata.nx] of a workspace\'s root manifest.',
-        ],
-      ],
-      [
-        "locked that is neither true nor false",
-        registered({ options: { locked: "yes" } }),
-        [
-          `"locked" in the options of the ${pluginName} entry in nx.json is "yes", but it has to be true or false.`,
-        ],
-      ],
-      [
-        "two entries that give one workspace different values of a per-workspace setting",
-        registered(
-          {
-            include: ["rust/Cargo.toml", "rust/crates/api/**"],
-            options: { testRunner: "nextest" },
-          },
-          { include: ["rust/crates/model/**", "rust/crates/codegen/**", "rust/crates/testkit/**"] },
-        ),
-        [
-          `nx-rust: the entries plugins[0], plugins[1] of ${pluginName} in nx.json receive manifests of the Cargo workspace in rust/, but give it different values of "testRunner": plugins[0] sets "nextest"; plugins[1] does not set it, which gives the default "cargo".`,
-          '"testRunner" holds for a whole workspace. Give these entries the same value, or set testRunner under [workspace.metadata.nx] in rust/Cargo.toml, which wins over the plugin options.',
-        ],
-      ],
-    ])(
-      "stops a run on an nx.json that registers the plugin with %s, and writes nothing",
-      (_case, files, messages) =>
-        runInit(
-          "subfolder-workspace",
-          files,
-          (_workspace, { status, output, changed }) => {
-            expect(status).toBe(1);
-            expect(output).toContain(
-              "Nx cannot create the project graph with nx-rust as nx.json registers it.",
-            );
-            for (const message of messages) {
-              expect(output).toContain(message);
-            }
-            expect(output).toContain("nx.json is unchanged.");
-            expect(changed).toEqual([]);
-          },
-          // As above: the harness cannot load the registered plugin by name.
-          ["--skipProjectGraph"],
-        ),
-      HARNESS_TIMEOUT,
-    );
-
-    // A case for each problem of DES-DIAGNOSTICS that stops graph creation
-    // and that changed files bring about in a repository that does not
-    // register the plugin yet, in subfolder-workspace unless a case names
-    // another fixture; each checks the remedy as well. The problems in the
-    // options of the plugin's entries are in the table above, a targetDefaults
-    // entry that turns on caching is in target-defaults.spec.ts, and the
-    // others have tests of their own here.
-    it.each<[string, FileChanges, string | string[], FixtureName?]>([
-      [
-        "a configuration file that cargo reads and that is no valid TOML",
-        { "rust/.cargo/config.toml": "paths = [\n" },
-        [
-          "`cargo metadata` failed for the Cargo workspace of rust/Cargo.toml",
-          "rust/.cargo/config.toml",
-          "Fix what cargo reports, so that `cargo metadata --no-deps` succeeds in rust.",
-        ],
-      ],
-      [
-        "a crate that gets the name of its workspace's workspace project",
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx]\nname = "rust"\n`,
-        },
-        [
-          // Nx's own error, from merging the projects, then the plugin's.
-          "The following projects are defined in multiple locations:",
-          'nx-rust would give 2 projects the name "rust", and Nx needs every project name to be unique:',
-          "- the crate model in rust/crates/model/Cargo.toml: change `name` under [package.metadata.nx] in that manifest.",
-          "- the workspace project of the Cargo workspace in rust/Cargo.toml: set `name` under [workspace.metadata.nx.project] in that manifest.",
-        ],
-      ],
-      [
-        "a project table in a root manifest that defines a crate",
-        {
-          "tools/Cargo.toml": (manifest) =>
-            `${manifest}\n[workspace.metadata.nx.project]\nname = "toolbox"\n`,
-        },
-        "tools/Cargo.toml: [workspace.metadata.nx.project] configures the workspace project, but this root manifest defines a crate, which is the workspace project. Move its settings to [package.metadata.nx] in tools/Cargo.toml.",
-        "two-workspaces",
-      ],
-      [
-        "an unknown key in a metadata table",
+        "a problem in a manifest, such as an unknown key in a metadata table",
         {
           "rust/Cargo.toml": (manifest) =>
             `${manifest}\n[workspace.metadata.nx]\ntestrunner = "nextest"\n`,
         },
-        'rust/Cargo.toml: nx-rust does not know the key "testrunner" in [workspace.metadata.nx]. Did you mean "testRunner"?',
+        undefined,
       ],
       [
-        "an unknown key in the project table of a workspace table",
-        {
-          "rust/Cargo.toml": (manifest) =>
-            `${manifest}\n[workspace.metadata.nx.project]\nimplicitDependencies = ["web"]\n`,
-        },
-        [
-          'rust/Cargo.toml: nx-rust does not know the key "implicitDependencies" in [workspace.metadata.nx.project].',
-          'The keys it knows there are "name", "tags" and "targets".',
-        ],
-      ],
-      [
-        "a different executor on an inferred target",
+        "a problem between projects, such as a crate that gets the name of its workspace's workspace project",
         {
           "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx.targets.build]\nexecutor = "nx:run-commands"\n`,
+            `${manifest}\n[package.metadata.nx]\nname = "rust"\n`,
         },
-        [
-          'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build] sets "executor" to "nx:run-commands" on the inferred target "build", which runs "@convesoft/nx-rust:cargo".',
-          "To run something else, define a target under a name of its own.",
-        ],
+        undefined,
+      ],
+      // Only an nx.json that registers the plugin can give its entry options,
+      // as a second run of init finds it.
+      [
+        "a problem in the options of the plugin's entry, such as an option that nx-rust does not know",
+        {},
+        { namePrefix: "rust-" },
       ],
       [
-        "a command on an inferred target",
-        {
-          "rust/Cargo.toml": (manifest) =>
-            `${manifest}\n[workspace.metadata.nx.project.targets.doc]\ncommand = "cargo doc"\n`,
-        },
-        [
-          'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc] sets "command" on the inferred target "doc".',
-          "To run another command, define a target under a name of its own.",
-        ],
+        "cargo itself, such as on a configuration file that it reads and that is no valid TOML",
+        { "rust/.cargo/config.toml": "paths = [\n" },
+        undefined,
       ],
-      [
-        "affectedTests = true among the options of test, without the setting",
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx.targets.test.options]\naffectedTests = true\n`,
-        },
-        [
-          'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.options] sets "affectedTests" to true, but the Cargo workspace in rust/Cargo.toml does not use the selection of affected tests',
-          "Remove it, or turn selection on with affectedTests = true under [workspace.metadata.nx] in rust/Cargo.toml.",
-        ],
-      ],
-      [
-        "an implicitDependencies entry starting with !",
-        {
-          "rust/crates/api/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx]\nimplicitDependencies = ["!model"]\n`,
-        },
-        'rust/crates/api/Cargo.toml: "implicitDependencies" in [package.metadata.nx] has the entry "!model", but the key only adds dependencies, so an entry starting with "!" is an error, whatever it names. Remove it; nx-rust keeps the edge of every Cargo dependency.',
-      ],
-      [
-        'inputs without "..." on an inferred target',
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx.targets.test]\ninputs = ["default"]\n`,
-        },
-        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test] sets "inputs" without "..." on the inferred target "test". The list would replace the inferred inputs, and the cache key would lose the toolchain, the environment and the files of the crate\'s dependencies. Put "..." where the inferred inputs belong, such as inputs = ["...", { env = "DATABASE_URL" }].',
-      ],
-      [
-        "a key under the options of a target table that the executor does not know",
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx.targets.test.configurations.ci]\ncoverage = true\n`,
-        },
-        [
-          'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.configurations.ci] sets the option "coverage", which @convesoft/nx-rust:cargo, the executor of the inferred target "test", does not know.',
-          'The options that "test" takes are "features", "allFeatures", "noDefaultFeatures", "profile" and "affectedTests".',
-        ],
-      ],
-      [
-        "an option in a target table that the target does not take",
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx.targets.test.options]\ntargetTriple = "x86_64-unknown-linux-gnu"\n`,
-        },
-        [
-          'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.test.options] sets the option "targetTriple", which the inferred target "test" does not take.',
-          'The options that "test" takes are "features", "allFeatures", "noDefaultFeatures", "profile" and "affectedTests".',
-        ],
-      ],
-      [
-        "pluginVersion in a target table",
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx.targets.build.options]\npluginVersion = "0.0.0"\n`,
-        },
-        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build.options] sets the option "pluginVersion", which only the plugin sets: it carries the plugin\'s version into the cache key, and a value set by hand would replace it, so that Nx could restore results of another version of the plugin. Remove it.',
-      ],
-      [
-        "pluginVersion in a project.json beside a crate",
-        {
-          "rust/crates/model/project.json": JSON.stringify({
-            targets: { build: { options: { pluginVersion: "0.0.0" } } },
-          }),
-        },
-        'The file rust/crates/model/project.json sets the option "pluginVersion" on targets that nx-rust infers. Only nx-rust sets this option: it carries the plugin\'s version into the cache key, and another value would take its place, so that Nx could restore results of another version of the plugin. Remove it there. It reaches:\n  - model (rust/crates/model/Cargo.toml): "build"',
-      ],
-      [
-        "pluginVersion in a targetDefaults entry keyed by the plugin's executor",
-        {
-          "nx.json": `${JSON.stringify({
-            targetDefaults: { [`${pluginName}:cargo`]: { options: { pluginVersion: "0.0.0" } } },
-          })}\n`,
-        },
-        `The targetDefaults entry "${pluginName}:cargo" in nx.json sets the option "pluginVersion" on targets that nx-rust infers. Only nx-rust sets this option: it carries the plugin's version into the cache key, and another value would take its place, so that Nx could restore results of another version of the plugin. Remove it there. It reaches:`,
-      ],
-      [
-        "a targetDefaults entry keyed by the plugin's executor that replaces the inputs of its targets",
-        {
-          "nx.json": `${JSON.stringify({
-            targetDefaults: { [`${pluginName}:cargo`]: { inputs: ["default"] } },
-          })}\n`,
-        },
-        [
-          `The targetDefaults entry "${pluginName}:cargo" in nx.json changes targets that nx-rust infers:`,
-          "  - It replaces the inputs that nx-rust declares for",
-          `  - Keep what nx-rust declares by putting "..." into the entry's "inputs" list, as in ["...", <your entries>].`,
-        ],
-      ],
-      [
-        "a fileInputs pattern that resolves into Cargo's directories",
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx]\nfileInputs = ["../../target/debug/model.d"]\n`,
-        },
-        'rust/crates/model/Cargo.toml: the fileInputs pattern "../../target/debug/model.d" resolves into rust/target, Cargo\'s build and artifact directory of the Cargo workspace in rust. Cargo writes the files there; declare the files that they are made from instead.',
-      ],
-      [
-        "a fileInputs pattern that resolves outside the repository",
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx]\nfileInputs = ["../../../../outside.txt"]\n`,
-        },
-        "outside.txt, outside the repository, whose files Nx does not track. To key the crate's tasks on such files, add a command to runtimeInputs",
-      ],
-      [
-        "a fileInputs pattern that names files in the folder of another plugin's project below where it starts",
-        {
-          "rust/crates/api/web/project.json": JSON.stringify({ name: "web" }),
-          "rust/crates/api/web/index.js": "export {};\n",
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx]\nfileInputs = ["../api/**"]\n`,
-        },
-        [
-          'rust/crates/model/Cargo.toml: the fileInputs pattern "../api/**" of the crate model names files in rust/crates/api/web, the folder of the project "web", which Nx would leave out of the cache keys.',
-          'Add "../api/web/**" beside it in the fileInputs of rust/crates/model/Cargo.toml, or narrow the pattern so that it does not reach rust/crates/api/web.',
-        ],
-      ],
-      [
-        "a fileInputs pattern with a .. segment after a glob character",
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx]\nfileInputs = ["../*/../model/README.md"]\n`,
-        },
-        'rust/crates/model/Cargo.toml: the fileInputs pattern "../*/../model/README.md" has a ".." segment after a glob character, so that nx-rust cannot tell which folder it reaches, and Nx cannot hash it. Put every ".." before the first glob character, such as "*", "?" or "{".',
-      ],
-      ...(
-        [
-          ['options = "broken"', 'has to be a table, not "broken".'],
-          ["outputs = 3", "has to be a list of strings, not 3."],
-          ['continuous = "false"', 'has to be true or false, not "false".'],
-        ] as const
-      ).map(([field, expected]): [string, FileChanges, string] => [
-        `a target field of another type than Nx gives it, ${field}`,
-        {
-          "rust/crates/model/Cargo.toml": (manifest) =>
-            `${manifest}\n[package.metadata.nx.targets.build]\n${field}\n`,
-        },
-        `rust/crates/model/Cargo.toml: "${field.split(" ")[0]}" in [package.metadata.nx.targets.build] ${expected}`,
-      ]),
     ])(
-      "stops with graph creation's message for %s",
-      (_case, files, messages, fixture = "subfolder-workspace") =>
-        runInit(fixture, files, (_workspace, result) => {
-          expectStopped(result, ...[messages].flat());
-          expect(result.output).toContain(
-            "nx-rust was not added to nx.json: Nx could not create the project graph with it.",
+      "stops where graph creation fails on %s, prints what graph creation prints, and writes nothing",
+      async (_case, files, options) => {
+        // The harness registers the plugin by its path for graph creation.
+        const workspace = FixtureWorkspace.create("subfolder-workspace", files, {
+          "nx.json": (nxJson) => {
+            const config = JSON.parse(nxJson);
+            return JSON.stringify({
+              ...config,
+              plugins: config.plugins.map((entry: string | { plugin: string }) => ({
+                plugin: typeof entry === "string" ? entry : entry.plugin,
+                ...(options === undefined ? {} : { options }),
+              })),
+            });
+          },
+        });
+        const tools = new ToolFolders();
+        try {
+          const entry: string = JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))
+            .plugins[0].plugin;
+          const graph = await workspace.nx(["show", "projects"], { NX_DAEMON: "false" });
+          const printed = graphCreationErrors(withoutColours(graph.output), entry);
+          expect({ status: graph.status, printed }).toEqual({
+            status: 1,
+            printed: expect.arrayContaining([expect.any(String)]),
+          });
+
+          // Then without the plugin, or with its entry as init finds it.
+          writeFileSync(
+            join(workspace.root, "nx.json"),
+            `${JSON.stringify(options === undefined ? {} : { plugins: [{ plugin: pluginName, options }] })}\n`,
           );
-        }),
+          const before = repositoryFiles(workspace.root);
+          const { status, output } = await workspace.nx(
+            ["g", `${pluginName}:init`, ...(options === undefined ? [] : ["--skipProjectGraph"])],
+            tools.env(),
+          );
+          const shown = withoutColours(output);
+
+          expect(status).toBe(1);
+          expect(shown).toContain(
+            options === undefined
+              ? "nx-rust was not added to nx.json: Nx could not create the project graph with it."
+              : "Nx cannot create the project graph with nx-rust as nx.json registers it.",
+          );
+          for (const line of printed) {
+            expect(shown).toContain(line);
+          }
+          expect(shown).toContain(
+            `nx.json is unchanged. Fix the problem above and run \`nx add ${pluginName}\` again.`,
+          );
+          expect(changedFiles(before, repositoryFiles(workspace.root))).toEqual([]);
+        } finally {
+          tools.remove();
+          workspace.remove();
+        }
+      },
       HARNESS_TIMEOUT,
     );
 

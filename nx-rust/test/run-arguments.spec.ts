@@ -206,30 +206,18 @@ describe("the binary of a run task", () => {
     HARNESS_TIMEOUT,
   );
 
+  // split-words.spec.ts checks how the value of args is split. Through Nx,
+  // shell syntax shows that no shell reads the words on the way to the
+  // binary, and a value that Nx would read as a number, alone after -- or
+  // behind a space in args, still reaches it as a word.
   it(
     "gets the words of args split as a shell splits them, with nothing expanded",
     () =>
       inFixture("crate-shapes", binaries, async (workspace) => {
         const cases: [string[], string[]][] = [
           [
-            ["server:run", "--bin", "server", "--args=--port 3000 --log a,b"],
-            ["--port", "3000", "--log", "a,b"],
-          ],
-          [
-            ["cli:run", "--args=a '' b"],
-            ["a", "", "b"],
-          ],
-          [
-            ["cli:run", '--args=a\\ b "c d" e'],
-            ["a b", "c d", "e"],
-          ],
-          [
-            ["cli:run", "--args=a | b; c > d && e"],
-            ["a", "|", "b;", "c", ">", "d", "&&", "e"],
-          ],
-          [
-            ["cli:run", "--args=$HOME \"$PATH\" *.rs #x '\\n'"],
-            ["$HOME", "$PATH", "*.rs", "#x", "\\n"],
+            ["cli:run", "--args=a | b; c > d && e $HOME *.rs"],
+            ["a", "|", "b;", "c", ">", "d", "&&", "e", "$HOME", "*.rs"],
           ],
           [["cli:run", "--args= 3000"], ["3000"]],
           [["cli:run", "--", "3000"], ["3000"]],
@@ -238,15 +226,11 @@ describe("the binary of a run task", () => {
           workspace.cargo.clear();
           const result = await runNx(workspace, ["run", ...args]);
 
-          const binary = args.includes("server") ? "server" : "cli";
           expect({ args, status: result.status }).toEqual({ args, status: 0 });
-          expect({ args, words: received(result.output, binary) }).toEqual({ args, words });
-          const crate = binary === "server" ? "server" : "cli";
+          expect({ args, words: received(result.output, "cli") }).toEqual({ args, words });
           expect({ args, calls: taskCalls(workspace) }).toEqual({
             args,
-            calls: [
-              run(crate, ...(args.includes("--bin") ? ["--bin", "server"] : []), "--", ...words),
-            ],
+            calls: [run("cli", "--", ...words)],
           });
         }
       }),

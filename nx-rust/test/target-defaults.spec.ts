@@ -47,6 +47,17 @@ const crates = {
 const allCrates =
   "api (rust/crates/api/Cargo.toml), codegen (rust/crates/codegen/Cargo.toml), model (rust/crates/model/Cargo.toml) and testkit (rust/crates/testkit/Cargo.toml)";
 
+/**
+ * Matches the report's line for one change: what the entry does to which
+ * targets, `change`, and the projects it does it in. The reason that the
+ * line gives between them is left out; DES-DIAGNOSTICS asks the tests for
+ * the fact and for what the user can do.
+ */
+function findingLine(change: string, projects: string): RegExp {
+  const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`${escaped(change)}[^\\n]* In ${escaped(projects)}\\.`);
+}
+
 /** A JS project beside the crates, whose `build` and `lint` a target default can reach. */
 const web: FileChanges = {
   "web/project.json": JSON.stringify({
@@ -136,13 +147,17 @@ describe("a target default that adds dependencies on other projects' tasks", () 
 
       expect(projects.api.targets?.build.dependsOn).toEqual([lockfileTask, dependency]);
       expect(output).toContain(
-        [
-          'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
-          `  - It adds ${shown} to the dependsOn of "build", so that the task waits for tasks of other projects. Cargo builds what a crate depends on itself, so these only queue more cargo processes behind its build lock. In ${allCrates}.`,
-          `To narrow the entry (${targetDefaultsGuide}), do one of these:`,
-          `  - Give the entry a "filter" that leaves these projects out, which needs the entry written as a list: "build": [{ "filter": { "projects": ["!tag:lang:rust"] }, ... }] where the crates carry the tag lang:rust, or a filter on the "executor" of the targets the entry is meant for.`,
-          `  - Add an empty entry keyed by the executor of these targets, "${cargoExecutor}": {}. Nx chooses an entry keyed by a target's executor before one keyed by its name.`,
-        ].join("\n"),
+        'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
+      );
+      expect(output).toMatch(
+        findingLine(`It adds ${shown} to the dependsOn of "build"`, allCrates),
+      );
+      expect(output).toContain(`To narrow the entry (${targetDefaultsGuide}), do one of these:`);
+      expect(output).toContain(
+        `Give the entry a "filter" that leaves these projects out, which needs the entry written as a list: "build": [{ "filter": { "projects": ["!tag:lang:rust"] }, ... }] where the crates carry the tag lang:rust, or a filter on the "executor" of the targets the entry is meant for.`,
+      );
+      expect(output).toContain(
+        `Add an empty entry keyed by the executor of these targets, "${cargoExecutor}": {}.`,
       );
       expect(output).not.toContain('"..."');
     },
@@ -163,12 +178,12 @@ describe("a target default that fails graph creation", () => {
       );
 
       expect(output).toContain(
-        [
-          'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
-          `  - It turns on caching for "build", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ${allCrates}.`,
-          `To narrow the entry (${targetDefaultsGuide}), do one of these:`,
-        ].join("\n"),
+        'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
       );
+      expect(output).toMatch(
+        findingLine('It turns on caching for "build", which nx-rust leaves uncached', allCrates),
+      );
+      expect(output).toContain(`To narrow the entry (${targetDefaultsGuide}), do one of these:`);
       expect(output).toContain(`"${cargoExecutor}": {}`);
     },
     HARNESS_TIMEOUT,
@@ -179,8 +194,8 @@ describe("a target default that fails graph creation", () => {
     async () => {
       const output = await failed({ fmt: { cache: true } });
 
-      expect(output).toContain(
-        `  - It turns on caching for "fmt", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ${allCrates}.`,
+      expect(output).toMatch(
+        findingLine('It turns on caching for "fmt", which nx-rust leaves uncached', allCrates),
       );
     },
     HARNESS_TIMEOUT,
@@ -192,18 +207,19 @@ describe("a target default that fails graph creation", () => {
       const output = await failed({ [cargoExecutor]: { cache: true } });
 
       expect(output).toContain(`The targetDefaults entry "${cargoExecutor}" in nx.json changes`);
-      expect(output).toContain(
-        `  - It turns on caching for "fmt", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ${allCrates}.`,
+      expect(output).toMatch(
+        findingLine('It turns on caching for "fmt", which nx-rust leaves uncached', allCrates),
       );
-      expect(output).toContain(
-        `  - It turns on caching for "audit" and "update", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In rust (rust/Cargo.toml).`,
+      expect(output).toMatch(
+        findingLine(
+          'It turns on caching for "audit" and "update", which nx-rust leaves uncached',
+          "rust (rust/Cargo.toml)",
+        ),
       );
       for (const cached of ["build", "check", "fmt-check", "lint", "test", "doc"]) {
         expect(output).not.toContain(`"${cached}"`);
       }
-      expect(output).toContain(
-        `  - Remove "cache" from the entry. It is keyed by the executor of nx-rust's targets, so it reaches only those.`,
-      );
+      expect(output).toContain('Remove "cache" from the entry.');
       expect(output).not.toContain(`"${cargoExecutor}": {}`);
     },
     HARNESS_TIMEOUT,
@@ -222,15 +238,15 @@ describe("a target default that fails graph creation", () => {
       const output = await failed({ build: { dependsOn: [dependency] } });
 
       expect(output).toContain(
-        [
-          'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
-          `  - It replaces the dependsOn that nx-rust declares for "build", so that the task no longer depends on a task whose output its cache key reads. In ${allCrates}.`,
-          `To narrow the entry (${targetDefaultsGuide}), do one of these:`,
-        ].join("\n"),
+        'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
       );
+      expect(output).toMatch(
+        findingLine('It replaces the dependsOn that nx-rust declares for "build"', allCrates),
+      );
+      expect(output).toContain(`To narrow the entry (${targetDefaultsGuide}), do one of these:`);
       expect(output).toContain(`putting "..." into the entry's "dependsOn" list`);
-      expect(output).toContain(
-        `  - It adds ${shown} to the dependsOn of "build", so that the task waits for tasks of other projects.`,
+      expect(output).toMatch(
+        findingLine(`It adds ${shown} to the dependsOn of "build"`, allCrates),
       );
     },
     HARNESS_TIMEOUT,
@@ -241,8 +257,11 @@ describe("a target default that fails graph creation", () => {
     async () => {
       const output = await failed({ lockfile: { cache: true } });
 
-      expect(output).toContain(
-        '  - It turns on caching for "lockfile", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In rust (rust/Cargo.toml).',
+      expect(output).toMatch(
+        findingLine(
+          'It turns on caching for "lockfile", which nx-rust leaves uncached',
+          "rust (rust/Cargo.toml)",
+        ),
       );
     },
     HARNESS_TIMEOUT,
@@ -260,7 +279,13 @@ describe("a target default that fails graph creation", () => {
 
         expect(status).not.toBe(0);
         expect(withoutColours(output)).toContain(
-          'The targetDefaults entry "@convesoft/nx-rust:run" in nx.json changes targets that nx-rust infers:\n  - It turns on caching for "run", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In cli (rust/crates/cli/Cargo.toml) and server (rust/crates/server/Cargo.toml).',
+          'The targetDefaults entry "@convesoft/nx-rust:run" in nx.json changes targets that nx-rust infers:',
+        );
+        expect(withoutColours(output)).toMatch(
+          findingLine(
+            'It turns on caching for "run", which nx-rust leaves uncached',
+            "cli (rust/crates/cli/Cargo.toml) and server (rust/crates/server/Cargo.toml)",
+          ),
         );
       } finally {
         workspace.remove();
@@ -274,11 +299,14 @@ describe("a target default that fails graph creation", () => {
     async () => {
       const output = await failed({ update: { inputs: ["default"] } });
 
+      expect(output).toContain(
+        'The targetDefaults entry "update" in nx.json changes targets that nx-rust infers:',
+      );
       expect(output).toMatch(
-        /The targetDefaults entry "update" in nx\.json changes targets that nx-rust infers:\n {2}- It replaces the inputs that nx-rust declares for "update", so that the cache key and nx affected miss files or settings that the task depends on\. In \S+ \(rust\/Cargo\.toml\)\./,
+        /It replaces the inputs that nx-rust declares for "update",[^\n]* In \S+ \(rust\/Cargo\.toml\)\./,
       );
       expect(output).toContain(
-        `  - Keep what nx-rust declares by putting "..." into the entry's "inputs" list, as in ["...", <your entries>].`,
+        `Keep what nx-rust declares by putting "..." into the entry's "inputs" list, as in ["...", <your entries>].`,
       );
     },
     HARNESS_TIMEOUT,
@@ -289,8 +317,8 @@ describe("a target default that fails graph creation", () => {
     async () => {
       const output = await failed({ test: { inputs: ["default", "^default"] } });
 
-      expect(output).toContain(
-        `  - It replaces the inputs that nx-rust declares for "test", so that the cache key and nx affected miss files or settings that the task depends on. In ${allCrates}.`,
+      expect(output).toMatch(
+        findingLine('It replaces the inputs that nx-rust declares for "test"', allCrates),
       );
       expect(output).toContain(`putting "..." into the entry's "inputs" list`);
     },
@@ -348,8 +376,12 @@ describe("a target default that fails graph creation", () => {
       );
       expect(output).toMatch(
         new RegExp(
-          `  - It replaces the inputs that nx-rust declares for [^\\n]*"test"[^\\n]*\\. In ${allCrates.replace(/[()]/g, "\\$&")}\\.`,
+          `It replaces the inputs that nx-rust declares for [^\\n]*"test"[^\\n]* In ${allCrates.replace(/[()]/g, "\\$&")}\\.`,
         ),
+      );
+      expect(output).toContain('Remove "inputs" from the entry.');
+      expect(output).toContain(
+        `Keep what nx-rust declares by putting "..." into the entry's "inputs" list, as in ["...", <your entries>].`,
       );
     },
     HARNESS_TIMEOUT,
@@ -513,10 +545,13 @@ describe("the layer that made a change", () => {
       );
 
       expect(output).toContain(
-        [
-          'The targetDefaults entry "fmt" in nx.json changes targets that nx-rust infers:',
-          '  - It turns on caching for "fmt", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In api (rust/crates/api/Cargo.toml).',
-        ].join("\n"),
+        'The targetDefaults entry "fmt" in nx.json changes targets that nx-rust infers:',
+      );
+      expect(output).toMatch(
+        findingLine(
+          'It turns on caching for "fmt", which nx-rust leaves uncached',
+          "api (rust/crates/api/Cargo.toml)",
+        ),
       );
     },
     HARNESS_TIMEOUT,
@@ -572,8 +607,11 @@ describe("the layer that made a change", () => {
         },
       );
 
-      expect(output).toContain(
-        '  - It replaces the inputs that nx-rust declares for "update", so that the cache key and nx affected miss files or settings that the task depends on. In rust (rust/Cargo.toml).',
+      expect(output).toMatch(
+        findingLine(
+          'It replaces the inputs that nx-rust declares for "update"',
+          "rust (rust/Cargo.toml)",
+        ),
       );
     },
     HARNESS_TIMEOUT,
@@ -614,10 +652,12 @@ describe("a dependency's projects", () => {
         ],
       });
 
-      expect(output).toContain(
-        '  - It adds {"projects":["mod*"],"target":"lint"} to the dependsOn of "build", so that the task waits for tasks of other projects.',
+      expect(output).toMatch(
+        findingLine(
+          'It adds {"projects":["mod*"],"target":"lint"} to the dependsOn of "build"',
+          "api (rust/crates/api/Cargo.toml)",
+        ),
       );
-      expect(output).toContain("In api (rust/crates/api/Cargo.toml).");
     },
     HARNESS_TIMEOUT,
   );
@@ -657,8 +697,8 @@ describe("combinations", () => {
       workspace.remove();
 
       expect(status).not.toBe(0);
-      expect(output).toContain(
-        `  - It replaces the inputs that nx-rust declares for "clippy", so that the cache key and nx affected miss files or settings that the task depends on. In ${allCrates}.`,
+      expect(output).toMatch(
+        findingLine('It replaces the inputs that nx-rust declares for "clippy"', allCrates),
       );
       expect(output).not.toContain('The targetDefaults entry "lint"');
     },
@@ -698,8 +738,11 @@ describe("combinations", () => {
       async () => {
         const output = await failed({ update: { inputs: ["default"] } }, table);
 
-        expect(output).toContain(
-          '  - It replaces the inputs that nx-rust declares for "update", so that the cache key and nx affected miss files or settings that the task depends on. In rust (rust/Cargo.toml).',
+        expect(output).toMatch(
+          findingLine(
+            'It replaces the inputs that nx-rust declares for "update"',
+            "rust (rust/Cargo.toml)",
+          ),
         );
       },
       HARNESS_TIMEOUT,
@@ -732,8 +775,8 @@ describe("combinations", () => {
     async () => {
       const { output, projects } = await created({ build: { dependsOn: ["...", "^build"] } });
 
-      expect(output).toContain(
-        `  - It adds "^build" to the dependsOn of "build", so that the task waits for tasks of other projects. Cargo builds what a crate depends on itself, so these only queue more cargo processes behind its build lock. In ${allCrates}.`,
+      expect(output).toMatch(
+        findingLine('It adds "^build" to the dependsOn of "build"', allCrates),
       );
       expect(projects.api.targets?.build.dependsOn).toEqual([lockfileTask, "^build"]);
     },
@@ -826,8 +869,11 @@ describe("a change that the plugin cannot attribute", () => {
       expect(output).toContain(unattributedFmt);
       expect(output).not.toContain(`The targetDefaults entry "${cargoExecutor}"`);
       // The other crates have no tag extra, and Nx takes the entry keyed fmt for them.
-      expect(output).toContain(
-        '  - It turns on caching for "fmt", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In codegen (rust/crates/codegen/Cargo.toml), model (rust/crates/model/Cargo.toml) and testkit (rust/crates/testkit/Cargo.toml).',
+      expect(output).toMatch(
+        findingLine(
+          'It turns on caching for "fmt", which nx-rust leaves uncached',
+          "codegen (rust/crates/codegen/Cargo.toml), model (rust/crates/model/Cargo.toml) and testkit (rust/crates/testkit/Cargo.toml)",
+        ),
       );
     },
     HARNESS_TIMEOUT,
@@ -862,8 +908,11 @@ describe('object-level "..."', () => {
         },
       );
 
-      expect(output).toContain(
-        '  - It replaces the inputs that nx-rust declares for "update", so that the cache key and nx affected miss files or settings that the task depends on. In rust (rust/Cargo.toml).',
+      expect(output).toMatch(
+        findingLine(
+          'It replaces the inputs that nx-rust declares for "update"',
+          "rust (rust/Cargo.toml)",
+        ),
       );
     },
     HARNESS_TIMEOUT,
@@ -875,10 +924,10 @@ describe('object-level "..."', () => {
       const output = await failed({ fmt: [{ cache: true }, { cache: false, "...": true }] });
 
       expect(output).toContain(
-        [
-          'The targetDefaults entry "fmt" in nx.json (its elements 0 and 1) changes targets that nx-rust infers:',
-          `  - It turns on caching for "fmt", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ${allCrates}.`,
-        ].join("\n"),
+        'The targetDefaults entry "fmt" in nx.json (its elements 0 and 1) changes targets that nx-rust infers:',
+      );
+      expect(output).toMatch(
+        findingLine('It turns on caching for "fmt", which nx-rust leaves uncached', allCrates),
       );
     },
     HARNESS_TIMEOUT,
@@ -893,11 +942,9 @@ describe('object-level "..."', () => {
 
       expect(projects.api.targets?.build.dependsOn).toEqual([lockfileTask, "^lint"]);
       expect(output).toContain(
-        [
-          'The targetDefaults entry "build" in nx.json (its elements 0 and 1) changes targets that nx-rust infers:',
-          `  - It adds "^lint" to the dependsOn of "build", so that the task waits for tasks of other projects. Cargo builds what a crate depends on itself, so these only queue more cargo processes behind its build lock. In ${allCrates}.`,
-        ].join("\n"),
+        'The targetDefaults entry "build" in nx.json (its elements 0 and 1) changes targets that nx-rust infers:',
       );
+      expect(output).toMatch(findingLine('It adds "^lint" to the dependsOn of "build"', allCrates));
     },
     HARNESS_TIMEOUT,
   );
@@ -1016,8 +1063,8 @@ describe("init", () => {
       expect(output).toContain(
         `The targetDefaults entry "${cargoExecutor}" in nx.json changes targets that nx-rust infers:`,
       );
-      expect(output).toContain(
-        `  - It turns on caching for "fmt", which nx-rust leaves uncached: Nx could restore a result where running the task would give another one. In ${allCrates}.`,
+      expect(output).toMatch(
+        findingLine('It turns on caching for "fmt", which nx-rust leaves uncached', allCrates),
       );
       expect(output).toContain(`To narrow the entry (${targetDefaultsGuide}), do one of these:`);
       // The entry keyed by the executor wins over the one keyed "build".
@@ -1049,7 +1096,7 @@ describe("init", () => {
         `The targetDefaults entry "${cargoExecutor}" in nx.json changes targets that nx-rust infers:`,
       );
       expect(output).toContain(
-        `  - It adds "^build" to the dependsOn of "build", "check", "fmt", "fmt-check", "lint" and "test", so that the task waits for tasks of other projects.`,
+        'It adds "^build" to the dependsOn of "build", "check", "fmt", "fmt-check", "lint" and "test"',
       );
       expect(output).toContain(`To narrow the entry (${targetDefaultsGuide}), do one of these:`);
     },
