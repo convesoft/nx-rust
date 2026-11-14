@@ -226,13 +226,16 @@ describe("inferred targets", () => {
       for (const project of Object.values(graph.projects)) {
         for (const [name, target] of Object.entries(project.targets ?? {})) {
           // An uncached target also carries why (caching.spec.ts), the
-          // targets around the lockfile task the members of its digests, and
-          // build what names its dependency files (build-input-check.spec.ts).
+          // targets around the lockfile task the members of its digests,
+          // build what names its dependency files (build-input-check.spec.ts),
+          // and build and doc the artifact directory that their outputs name
+          // (caching.spec.ts).
           const {
             uncached,
             digests: _digests,
             members: _members,
             records: _records,
+            artifactDirectory: _artifactDirectory,
             ...cargo
           } = target.metadata?.cargo ?? {};
           expect({ name, cargo }).toEqual({ name, cargo: { target: name, locked: true } });
