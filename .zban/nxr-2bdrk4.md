@@ -24,3 +24,11 @@ Fewer workers would slow CI, where Jest's default on the 4-core runner is three.
 - [ ] Measure one full run's peak before and after and record both here
 
 Done when: the measurements are recorded here, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
+
+## Notes from nxr-28k2vk (14 November 2026)
+
+Measured while finding out whether one long-lived Nx process per fixture could answer the harness's graph and hash requests (`EVD-NX-24-PROCESS-STATE`), on `main` e8958bb, with other test runs on the machine:
+
+- A fresh Nx process of a fixture, hashing six tasks of `subfolder-workspace`, peaked at about 250 MB of resident memory (`ru_maxrss`), with and without `--enable-source-maps`, which the harness sets for the compiled plugin, so source maps are not what makes these processes large. With `MALLOC_ARENA_MAX=2` it peaked at about 245 MB.
+- A process that stays up and answers request after request grows to 400 to 475 MB after 20 to 40 requests, even with `MALLOC_ARENA_MAX=2`, and to 384 to 405 MB with V8's semi-space limited to 1 or 2 MB as well. A run of one spec file with such a session peaked about 130 to 220 MB higher in anonymous memory than with fresh processes (`cache-keys.spec.ts`: about 1030 against 1250 MB; `declared-files.spec.ts`: 1250 against 1380 MB), so the session was left out; with three Jest workers it would have added up to about 0.6 GB to a full run's peak.
+- A full unit run starts about 1670 Nx processes (867 for graph and hash requests, 800 `nx` commands) and, besides them, 4680 Node processes for the harness's cargo wrapper (nxr-3tffj9) and 1179 for the plugin's artifact folder input; each lives only for its call, so they add to the run's time more than to its peak.
