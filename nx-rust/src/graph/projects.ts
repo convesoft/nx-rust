@@ -259,7 +259,9 @@ function targetTables(settings: ProjectSettings, name: string): TargetConfigurat
  * manifest it comes from, with its name, its tags, its implicit
  * dependencies, its named inputs, its targets and, in its metadata, what
  * another entry of the plugin needs to recognise it ({@link cargoMetadata})
- * and the warnings that concern it.
+ * and the warnings that concern it, among them, apart from the others, those
+ * about its workspace's Cargo configuration that Nx does not hash, which stay
+ * out of every key, as project metadata does (`EVD-NX-24-WARNING-CHANNELS`).
  */
 export function projectNodes(projects: readonly CargoProject[]): CreateNodesResultArray {
   return projects.map((project) => [
@@ -278,6 +280,9 @@ export function projectNodes(projects: readonly CargoProject[]): CreateNodesResu
             [cargoMetadataKey]: {
               ...cargoMetadata(project),
               ...(project.warnings.length > 0 ? { warnings: project.warnings } : {}),
+              ...(project.workspace.configurationWarnings.length > 0
+                ? { configurationWarnings: project.workspace.configurationWarnings }
+                : {}),
             },
           },
         },

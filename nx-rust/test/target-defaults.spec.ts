@@ -1166,7 +1166,7 @@ describe("the check on a dependency on the lockfile task", () => {
         targets: inferred,
         namedInputs: {},
         warnings: [],
-        workspace: { rootManifest: "rust/Cargo.toml" },
+        workspace: { rootManifest: "rust/Cargo.toml", configurationWarnings: [] },
         pkg: { name: "api" },
         isWorkspaceProject: false,
         settings: { tags: [], implicitDependencies: [] },
