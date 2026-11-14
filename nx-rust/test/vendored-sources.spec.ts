@@ -247,6 +247,9 @@ describe("crates that cargo vendor writes", () => {
         expect((failure as Error).message).toContain(
           "current package believes it's in a workspace when it's not",
         );
+        expect((failure as Error).message).toContain(
+          "Fix what cargo reports, so that `cargo metadata --no-deps` succeeds in rust/vendor/greet.",
+        );
       } finally {
         copy.remove();
       }

@@ -303,7 +303,7 @@ describe("the digests of a run", () => {
     writeFor("2-b");
 
     expect(checkFor("1-a")).toMatch(
-      /^app:test: the locked dependencies of app had the digest \w+ when this command's lockfile task ran; now Cargo\.lock gives \w+, and the digest file that Nx hashed holds \w+\.\n[^]*another nx command that ran at the same time/,
+      /^app:test: the locked dependencies of app had the digest \w+ when this command's lockfile task ran; now Cargo\.lock gives \w+, and the digest file that Nx hashed holds \w+\.\n[^]*another nx command that ran at the same time[^]*; run it again\.$/,
     );
     expect(checkFor("2-b")).toBeUndefined();
   });

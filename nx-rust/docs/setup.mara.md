@@ -188,7 +188,9 @@ or tool) and what to do. Messages have no error codes.
 Keep Cargo's folders out of what Nx sees. Apart from a few fixed folders such
 as `node_modules`, Nx ignores only what `.gitignore` and `.nxignore` say, so a
 `target` folder that neither covers is hashed with your sources, and the plugin
-warns about it. Either file will do:
+warns about it. On your machine Nx also follows `.git/info/exclude` and your
+global git excludes file, but other clones and CI do not have them, so the
+plugin warns all the same. Either file of the repository will do:
 
 ```gitignore
 target/
@@ -368,7 +370,7 @@ Every diagnostic names what is wrong, the crate, workspace, manifest, option or 
 
 **Toolchains.** Graph creation and the toolchain input of a task's cache key do not let rustup install a toolchain that a workspace pins and that is missing. Graph creation fails with a message that names the toolchain and the workspace. The toolchain input cannot fail a task, so it gives the task a key that matches no stored result, and the task keeps plain cargo's behaviour ([[ADR-GRAPH-NO-TOOLCHAIN-INSTALL]], [[DES-INPUTS]]).
 
-**Directories that Nx does not ignore.** Nx leaves out only what `.gitignore` and `.nxignore` exclude and a few fixed folders, `target` not among them, and `cargo new --vcs none` writes no `.gitignore` ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]). By default Cargo puts both its directories in the workspace folder, which for a standalone crate is the crate's folder, all of whose files are inputs ([[EVD-CARGO-DIRECTORIES]], [[REQ-INPUT-FILES]]). When Cargo's build or artifact directory lies inside the repository and Nx does not ignore it, the warning names the directory and advises adding it to `.gitignore`. The plugin applies these rules as Nx itself reads them from the ignore files on disk, so it warns also before Cargo has created the directory, and where the installed Nx lacks that reading it does not warn. A directory that several workspaces use gets one warning, which names them all, and the tasks of each of them print it.
+**Directories that Nx does not ignore.** Of the files of a repository, Nx leaves out only what `.gitignore` and `.nxignore` exclude and a few fixed folders, `target` not among them, and `cargo new --vcs none` writes no `.gitignore` ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]). By default Cargo puts both its directories in the workspace folder, which for a standalone crate is the crate's folder, all of whose files are inputs ([[EVD-CARGO-DIRECTORIES]], [[REQ-INPUT-FILES]]). When Cargo's build or artifact directory lies inside the repository and Nx does not ignore it, the warning names the directory and advises adding it to `.gitignore`. The plugin applies these rules as Nx itself reads them from the ignore files on disk, so it warns also before Cargo has created the directory, and where the installed Nx lacks that reading it does not warn. On the machine where it runs, Nx also leaves out what `.git/info/exclude` and the user's global git excludes file exclude ([[EVD-NX-24-SETUP]]), but the warning stays where only one of these covers the directory: neither file is part of the repository, so other clones and CI do not leave the directory out, and the warning names a gap that the repository has. A directory that several workspaces use gets one warning, which names them all, and the tasks of each of them print it.
 
 **Missing tools.** The message names the tool, the target or setting that needs it, and how to get it. The plugin installs nothing ([[ADR-V1-SCOPE]]).
 :::

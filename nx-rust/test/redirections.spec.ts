@@ -97,7 +97,7 @@ describe("reading redirections", () => {
     expect(await read("ws")).toEqual([["patch", "ws/crates/model", "ws/.cargo/config"]]);
   });
 
-  it("skips an included file that is no valid TOML, with a warning that names it", async () => {
+  it("skips an included file that is no valid TOML, with a warning that names it and says what to do", async () => {
     write("ws/Cargo.toml", "[workspace]\n");
     write(
       "ws/.cargo/config.toml",
@@ -112,11 +112,15 @@ describe("reading redirections", () => {
     expect(found.redirections.map((entry) => relative(root, entry.folder))).toEqual([
       "ws/crates/model",
     ]);
+    const config = join(root, "ws/.cargo/config.toml");
     expect(found.warnings).toEqual([
       expect.stringContaining(
-        `nx-rust: ${join(root, "ws/.cargo/broken.toml")}, which ${join(root, "ws/.cargo/config.toml")} includes, cannot be read`,
+        `nx-rust: ${join(root, "ws/.cargo/broken.toml")}, which ${config} includes, cannot be read`,
       ),
     ]);
+    expect(found.warnings[0].split("\n").at(-1)).toBe(
+      `Correct the file's TOML, or remove it from include in ${config}.`,
+    );
   });
 
   it("follows include in either form, against the folder above the included file's folder", async () => {
@@ -151,11 +155,17 @@ describe("reading redirections", () => {
     expect(await read("ws")).toEqual([]);
   });
 
-  it("fails, naming the file, when a file it reads is no valid TOML", async () => {
+  it("fails, naming the file and what to do, when a file it reads is no valid TOML", async () => {
     write("ws/Cargo.toml", "[workspace]\n");
     write("ws/.cargo/config.toml", "paths = [\n");
 
-    await expect(read("ws")).rejects.toThrow(join(root, "ws/.cargo/config.toml"));
+    // Cargo rejects such a file first, so the message asks for a report of
+    // a file that cargo accepts.
+    const failure = read("ws");
+    await expect(failure).rejects.toThrow(join(root, "ws/.cargo/config.toml"));
+    await expect(failure).rejects.toThrow(
+      "If cargo accepts the file, please report this at https://github.com/convesoft/nx-rust/issues.",
+    );
   });
 });
 

@@ -152,6 +152,7 @@ async function readConfig(
       [
         `nx-rust: ${file}, which ${includedFrom} includes, cannot be read: ${reason}`,
         "nx-rust skips it, so a [patch] or paths entry in it gives no edges. Cargo 1.91 ignores include, and later versions fail on such a file.",
+        `Correct the file's TOML, or remove it from include in ${includedFrom}.`,
       ].join("\n"),
     );
     return;
