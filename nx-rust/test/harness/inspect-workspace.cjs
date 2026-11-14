@@ -4,10 +4,12 @@
 //
 //   node inspect-workspace.cjs <request.json> <result.json>
 //
-// The request is { "command": "graph" } or
-// { "command": "hash", "tasks": ["project:target[:configuration]"], "overrides": {} }.
-// The result is { "ok": true, "graph": ... }, { "ok": true, "hashes": { [task]: { value, details } } }
-// or { "ok": false, "error": "..." }.
+// The request is { "command": "graph" },
+// { "command": "hash", "tasks": ["project:target[:configuration]"], "overrides": {} },
+// { "command": "files", "tasks": [...] } or { "command": "glob", "globs": [...] }.
+// The result is { "ok": true, "graph": ... }, { "ok": true, "hashes": { [task]: { value, details } } },
+// { "ok": true, "files": { [task]: [path] } }, { "ok": true, "globbed": [path] }
+// or { "ok": false, "error": "..." }. Only "glob" creates no project graph.
 //
 // Graph and hashes come from the functions that `nx graph` and `nx run` call,
 // so a hash is the one a real run of the task would compute. These are
@@ -20,6 +22,19 @@ async function main() {
   let result;
   try {
     const request = JSON.parse(readFileSync(requestFile, "utf8"));
+    if (request.command === "glob") {
+      // The files of the workspace that Nx's own glob, the engine of its
+      // filesets, finds, whatever project holds them.
+      const { globWithWorkspaceContextSync } = require("nx/src/utils/workspace-context");
+      writeFileSync(
+        resultFile,
+        JSON.stringify({
+          ok: true,
+          globbed: globWithWorkspaceContextSync(process.cwd(), request.globs),
+        }),
+      );
+      return;
+    }
     // As the nx command line does: it loads the root dotenv files when it
     // starts, and `nx run` lets each task load its own dotenv files, which
     // its key's runtime inputs then see, unless the environment says not to.
@@ -32,7 +47,9 @@ async function main() {
     result =
       request.command === "hash"
         ? { ok: true, hashes: await hashTasks(graph, request.tasks, request.overrides ?? {}) }
-        : { ok: true, graph };
+        : request.command === "files"
+          ? { ok: true, files: await taskFiles(graph, request.tasks) }
+          : { ok: true, graph };
   } catch (error) {
     result = { ok: false, error: describeError(error) };
   }
@@ -101,6 +118,22 @@ async function hashTasks(projectGraph, taskIds, overrides) {
     hashes[id] = { value: task.hash, details: task.hashDetails };
   }
   return hashes;
+}
+
+// The files of each task's key, as Nx's HashPlanInspector lists them for
+// the check of DES-BUILD-INPUT-CHECK.
+async function taskFiles(projectGraph, taskIds) {
+  const { readNxJson } = require("nx/src/config/nx-json");
+  const { HashPlanInspector } = require("nx/src/hasher/hash-plan-inspector");
+  const inspector = new HashPlanInspector(projectGraph, process.cwd(), readNxJson());
+  await inspector.init();
+  const files = {};
+  for (const id of taskIds) {
+    const [project, target, configuration] = id.split(":");
+    const inputs = inspector.inspectTaskInputs({ project, target, configuration }, {}, {}, true);
+    files[id] = inputs[id].files;
+  }
+  return files;
 }
 
 // Nx reports a failed graph as an error that holds the plugins' errors, each

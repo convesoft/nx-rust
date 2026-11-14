@@ -116,7 +116,10 @@ beside it. With a root `package.json` and an empty
 makes npm nodes of them, as in a repository that installs the plugin.
 
 **`FixtureWorkspace.create(fixture, files)`** is the copy both helpers use:
-`graph()`, `hashTasks(tasks, { env, overrides })`, `nx(args, env)`, which
+`graph()`, `hashTasks(tasks, { env, overrides })`, `taskFiles(tasks)`, which
+lists the files of each task's key as Nx's `HashPlanInspector` does,
+`glob(globs)`, which lists the files that Nx's own glob finds whatever project
+holds them, without creating the graph, `nx(args, env)`, which
 runs the Nx command line there and returns its status and output,
 `cargoCalls()`, `files()`, which returns every file outside `node_modules`
 and `.nx` with its content, `reset(files)` and `remove()`. Besides the fixture, the copy
