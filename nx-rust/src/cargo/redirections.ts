@@ -37,12 +37,6 @@ export interface Redirection {
 export interface WorkspaceRedirections {
   redirections: Redirection[];
   /**
-   * The configuration files among those read that set `build.target`, which
-   * makes cargo put a build's artifacts in a triple's folder without any
-   * flag (`DES-OUTPUTS`).
-   */
-  buildTargetFiles: string[];
-  /**
    * The files that `include` adds to the configuration that cargo reads,
    * which change a build as the files that include them do.
    */
@@ -85,7 +79,6 @@ export async function readRedirections(
   const manifest = join(workspaceRoot, "Cargo.toml");
   const found: WorkspaceRedirections = {
     redirections: [],
-    buildTargetFiles: [],
     includedFiles: [],
     warnings: [],
   };
@@ -111,11 +104,14 @@ export async function readRedirections(
   return found;
 }
 
-// The configuration files cargo reads for a command started in `folder`, as
-// pairs of the older and the current name, of which cargo reads the older
-// where it exists: those of the folder and each one above it, then those of
-// the Cargo home.
-function configFiles(folder: string, env: NodeJS.ProcessEnv): [string, string][] {
+/**
+ * The configuration files cargo reads for a command started in `folder`, in
+ * descending precedence, as pairs of the older and the current name, of
+ * which cargo reads the older where it exists: those of the folder and each
+ * one above it, then those of the Cargo home, which cargo reads once where
+ * it is also one of the folders.
+ */
+export function configFiles(folder: string, env: NodeJS.ProcessEnv): [string, string][] {
   const files: [string, string][] = [];
   let current = resolve(folder);
   for (;;) {
@@ -169,9 +165,6 @@ async function readConfig(
   }
   const base = dirname(dirname(file));
   found.redirections.push(...patchEntries(table.patch, base, file));
-  if (asTable(table.build).target !== undefined) {
-    found.buildTargetFiles.push(file);
-  }
   if (Array.isArray(table.paths)) {
     for (const path of table.paths) {
       if (typeof path === "string") {

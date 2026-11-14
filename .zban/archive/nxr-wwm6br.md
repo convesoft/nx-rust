@@ -53,3 +53,13 @@ Filed: nxr-nst7g2. The unknown-option line for an option passed on the command l
 Out of scope, not implemented on `main` yet: a value of `NX_RUST_TEST_MODE` other than `affected` and `full`, `--affectedTests=true` at the start of a `test` task, and differing `wasm-bindgen` CLI and crate versions. Rows that open pull requests #59 and #60 add are left to them.
 
 Checks run: `pnpm nx run-many -t build lint test` (31 suites, 941 tests passed); the changed spec files again with `CI=true GITHUB_ACTIONS=true` and without the agent variables (350 tests passed); `pnpm nx format:check --all`; `mara schema validate`, `mara project validate` and `zban check`.
+
+## Addendum after merging #59 (target triples)
+
+#59 added three rows, and each message has a remedy. `VER-CARGO-UNCHANGED` names them all, and it requires the remedy through its closing sentence.
+
+- A triple whose folder the plugin cannot name, at graph creation: `caching.spec.ts` now asserts the "To cache them, give the triple as the targetTriple option …" sentence of the new message.
+- At the start of a task, the environment or configuration picks other triples than the outputs name: the dotenv test in `caching-runs.spec.ts` now asserts the whole remedy sentence. A new test covers the branch where a dotenv file picks `host-tuple` ("Give the triple as the targetTriple option instead."), and `VER-CARGO-UNCHANGED` now names it.
+- Cargo's configuration changed since graph creation: its `nx reset` remedy was already asserted.
+
+No bug was needed.

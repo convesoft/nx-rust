@@ -24,3 +24,13 @@ The form for an option from the workspace's configuration names the command that
 - [ ] Assert it in `nx-rust/test/unknown-options.spec.ts` (`fromCommandLine`, `wordsFromCommandLine`, `notTakenFromCommandLine`)
 
 Done when: each command-line form says what the user can do, the tests check it, and `mara project validate` and `pnpm nx run-many -t build lint test` pass.
+
+## Decided wording (control plane, 14 November 2026)
+
+This is wording and needs no further question. What each command-line form says to do:
+
+- An unknown flag: remove it, or check its spelling.
+- A flag that the target does not take: remove it.
+- Positional words: remove them. Where the target has a way to pass arguments on, name it: for `run`, after `--` or with `--args`. For `test`, say that arguments for the test binary go in the option that the plugin has for them, if one exists, and otherwise only to remove them.
+
+Note from the triage: as `optionTargets` in `nx-rust/src/executors/command.ts` stands (14 November 2026), only `run` takes `args`, and `test` has no option for arguments of the test binary. So the `test` line says only to remove the words, unless such an option exists by the time this is taken up. The first task item ("Decide what each of the three forms suggests, with the maintainer") is settled by this note; recording it in `DES-UNKNOWN-OPTIONS` and the user guide remains.

@@ -82,12 +82,29 @@ export interface TargetCargoMetadata {
    */
   uncached?: string;
   /**
-   * On `build` and `doc`, the configuration file whose `build.target`
-   * chooses the workspace's target triple, relative to the repository root
-   * where it lies inside it. The executor fails a cached task of the target
-   * whose run names no triple (`DES-OUTPUTS`).
+   * On `build` and `doc`, the target triples that Cargo's configuration and
+   * the graph's environment pick, whose folders the outputs name where a run
+   * names no triple; absent where they pick none. The executor fails a
+   * cached task whose environment and configuration pick other triples when
+   * it starts (`DES-OUTPUTS`).
    */
-  buildTargetFile?: string;
+  triples?: string[];
+  /**
+   * On `build` and `doc`, what picks a triple whose folder the plugin cannot
+   * name, and why. The executor fails a cached task of the target whose run
+   * names no triple (`DES-OUTPUTS`).
+   */
+  tripleProblem?: string;
+  /**
+   * On `build` and `doc`, the triples that Cargo's configuration alone
+   * picked when the graph was created, without `CARGO_BUILD_TARGET`, as
+   * `pickText` in `target-triples.ts` writes them; absent where it picked
+   * none. The executor tells by it
+   * whether a cached task's triples differ because the configuration
+   * changed after graph creation or because of the task's environment
+   * (`DES-OUTPUTS`).
+   */
+  configuredPick?: string;
   /**
    * On the lockfile task: the workspace's members, whose digests it writes
    * (`DES-LOCKFILE-HASHING`).
