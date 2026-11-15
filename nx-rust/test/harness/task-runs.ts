@@ -110,3 +110,23 @@ export function withTargetDefaults(defaults: object): (nxJson: string) => string
 export function linesWith(output: string, text: string): string[] {
   return output.split("\n").filter((line) => line.includes(text));
 }
+
+/**
+ * Fails the test where a command did not end with `status`, with an error
+ * whose message holds the command's whole output, which Jest prints. An
+ * assertion that compares `{ status, output }` with `output:
+ * expect.any(String)` would print `Any<String>` in its place.
+ *
+ * @param label Names the command in the message, such as the run of a loop.
+ */
+export function expectStatus(
+  result: { status: number | null; output: string },
+  status: number,
+  label?: string,
+): void {
+  if (result.status !== status) {
+    throw new Error(
+      `${label === undefined ? "The command" : label} ended with status ${result.status}, not ${status}. Its output:\n${result.output}`,
+    );
+  }
+}

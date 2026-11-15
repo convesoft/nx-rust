@@ -686,9 +686,20 @@ function locateArtifactDirectories(
   return located;
 }
 
+// What the warning about artifact directories that lie one inside the other
+// adds, inside the repository or outside it: two cargo commands that create
+// such directories at once can fail in cargo itself (`DES-OUTPUTS`, "Nested
+// artifact directories").
+const nestedFirstBuild = `A first build, while these directories do not exist yet, can fail in cargo with "No such file or directory"; run the command again.`;
+
 // The warning of `DES-OUTPUTS` for a workspace whose artifact directory lies
 // outside the repository or is shared with another workspace: the same
-// folder, or one inside the other.
+// folder, or one inside the other. Where it lies one inside another
+// workspace's, wherever both lie, the warning names that directory and adds
+// that a first build can fail in cargo ({@link nestedFirstBuild}); one
+// shared folder cannot make it fail. A directory inside the repository can
+// lie inside one outside it only where that one holds the repository, and
+// never the other way round.
 // @mara implements DES-DIAGNOSTICS
 function artifactDirectoryWarning(
   workspace: CargoWorkspace,
@@ -700,28 +711,12 @@ function artifactDirectoryWarning(
   const artifacts = located.get(workspace.root);
   const directory = reached.get(workspace) ?? workspace.report.target_directory;
   const where = describeWorkspace(workspace);
-  if (artifacts === undefined || !artifacts.inside) {
-    return [
-      `nx-rust: Cargo's artifact directory of ${where} is ${directory}, outside the repository, where Nx cannot store files.`,
-      `Its build and doc targets run uncached, and its other targets stay cached.`,
-      `To cache them, set build.target-dir in a .cargo/config.toml of the workspace to a folder inside the repository, or unset CARGO_TARGET_DIR.`,
-    ].join(" ");
-  }
-  if (!artifacts.shared) {
-    return undefined;
-  }
   const others = sharers.get(workspace) ?? [];
   const relations = others.map((other) => ({
     other,
     relation: directoryRelation(workspace, other, reached),
   }));
-  if (relations.every(({ relation }) => relation === "same")) {
-    return [
-      `nx-rust: ${where} shares Cargo's artifact directory ${artifacts.path} with ${others.map(describeWorkspace).join(" and ")}.`,
-      `Its doc target runs uncached, because restoring one workspace's doc folder from the cache would delete the pages of the others; its other targets stay cached.`,
-      `To cache it, give each workspace an artifact directory of its own with build.target-dir in its .cargo/config.toml.`,
-    ].join(" ");
-  }
+  const nested = relations.some(({ relation }) => relation === "inside" || relation === "around");
   const described = relations.map(({ other, relation }) =>
     relation === "same"
       ? `is that of ${describeWorkspace(other)} as well`
@@ -729,10 +724,29 @@ function artifactDirectoryWarning(
         ? `lies inside ${directoryOf(other)}, that of ${describeWorkspace(other)}`
         : `holds ${directoryOf(other)}, that of ${describeWorkspace(other)}`,
   );
+  if (artifacts === undefined || !artifacts.inside) {
+    return [
+      `nx-rust: Cargo's artifact directory of ${where} is ${directory}, outside the repository, where Nx cannot store files.`,
+      `Its build and doc targets run uncached, and its other targets stay cached.`,
+      `To cache them, set build.target-dir in a .cargo/config.toml of the workspace to a folder inside the repository, or unset CARGO_TARGET_DIR.`,
+      ...(nested ? [`The directory ${described.join(", and ")}.`, nestedFirstBuild] : []),
+    ].join(" ");
+  }
+  if (!artifacts.shared) {
+    return undefined;
+  }
+  if (!nested) {
+    return [
+      `nx-rust: ${where} shares Cargo's artifact directory ${artifacts.path} with ${others.map(describeWorkspace).join(" and ")}.`,
+      `Its doc target runs uncached, because restoring one workspace's doc folder from the cache would delete the pages of the others; its other targets stay cached.`,
+      `To cache it, give each workspace an artifact directory of its own with build.target-dir in its .cargo/config.toml.`,
+    ].join(" ");
+  }
   return [
     `nx-rust: Cargo's artifact directory ${artifacts.path} of ${where} ${described.join(", and ")}, so that the folders of a triple or a profile in one can be those of the other.`,
     `Its doc target runs uncached, because restoring one workspace's doc folder from the cache could delete or replace files of the others; its other targets stay cached.`,
     `To cache it, give each workspace an artifact directory of its own, none inside another, with build.target-dir in its .cargo/config.toml.`,
+    nestedFirstBuild,
   ].join(" ");
 }
 

@@ -1,0 +1,38 @@
+---
+title: "shared-executables: the first build of the nested-artifact-directory case fails now and then"
+status: done
+type: bug
+parent: nxr-9y4eh8
+discovered_from: nxr-v1b7rc
+created_at: 2026-11-15T09:51:28Z
+closed_at: 2026-11-15T11:43:15Z
+---
+
+Goal: the case "crates whose artifacts share a file name in one artifact directory › run both builds in every run and restore neither where one workspace's artifact directory is the folder of a triple in another's" of `nx-rust/test/shared-executables.spec.ts` passes in every run, or fails only for a defect it is meant to catch, and the cause of its occasional failure is known.
+
+Context: on 15 November 2026, in a run of `NX_DAEMON=false pnpm nx run-many -t build lint test --skip-nx-cache` on a loaded machine (14 GB of memory, load average above 10), this case failed once at `expect(first.status).toBe(0)`: the first `nx run-many -t build` of the test ended with status 1. Its output was not captured. The case passed in another run of the whole suite on the same commit (7b8b928) and in a run of the file alone with Cargo 1.91.0. It came with nxr-ew8kb3. In that case (`nestedDirectories`) the artifact directory of the workspace `tools` is the host triple's folder inside the artifact directory of the workspace `rust` (`DES-OUTPUTS`, "Files of one name"; `RISK-ARTIFACT-DIR-WRITERS`), and `alpha`'s build names that triple, so `alpha:build` and `tools:build` run cargo commands that write the same folders. Unverified guess: Nx runs both builds at once, and the two cargo processes, which hold different build locks, collide in the shared folder.
+
+- [x] Make a failing `nx` command in the spec show its whole output
+- [x] Reproduce the failure in a bounded loop under load, on Cargo 1.100.0 and 1.91.0, and capture the output
+- [x] Establish the cause from that output and from what plain `cargo` does
+- [x] Fix the cause in the test or harness, or, where the cause is in the product, record it as evidence in Mara, make the test deterministic without losing what it checks, and state the product question
+- [x] Decide with the maintainer what the plugin does where the artifact directories of two workspaces lie one inside the other, so that two of its cargo commands that create them at once can fail, record the decision in Mara and implement it
+- [x] Check the other cases of this file and other spec files for the same exposure
+
+Decision, 15 November 2026: the maintainer chose to say so in the warning about nested artifact directories and in the caching guide (`DES-OUTPUTS`, "Nested artifact directories").
+
+## Summary of Changes
+
+- Cause: where one workspace's artifact directory lies inside another's and neither exists yet, cargo's command for the outer one renames its new directory onto the still empty parent that the inner command has just created for its own, and the inner command fails with "No such file or directory" before it takes its build lock. Plain cargo does the same, on 1.100.0 and 1.91.0. Recorded with the commands, counts and an inotify trace in `EVD-CARGO-NESTED-DIRECTORY-CREATION`; through Nx, 7 of 750 first runs failed on 1.100.0 and 7 of 500 on 1.91.0, 0 of 500 with `--parallel=1`.
+- Decision recorded in `DES-OUTPUTS` ("Nested artifact directories", with the options not chosen and why), the warning's row in `DES-DIAGNOSTICS` and a check in `VER-SETUP`. `RISK-ARTIFACT-DIR-WRITERS` is unchanged: it concerns wrong cache entries, and this failure stores none.
+- The warning about artifact directories that lie one inside the other (`artifactDirectoryWarning` in `nx-rust/src/graph/caching.ts`) ends with: A first build, while these directories do not exist yet, can fail in cargo with "No such file or directory"; run the command again. The warning about one shared directory does not. After the review, the warning about an artifact directory outside the repository says it as well where that directory and another workspace's nest, naming the other. Graph creation, the tasks and `init` print it from the same text, which `metadata.cargo.warnings` holds.
+- The caching guide explains it, with the remedies for CI: run the command again, or build such workspaces with `--parallel=1` on a first run, or give each workspace an artifact directory of its own.
+- `nx-rust/test/shared-executables.spec.ts`: every exit-status assertion goes through `expectStatus` from the harness, so a failing `nx` command shows its output (see the changes after the review); the nested case's first run keeps `--parallel=1`, its comment citing the decision; the graph tests assert the full text of both nested warnings and its absence where two workspaces share one directory, and the run test that graph creation prints it twice and the tasks again where the directories nest, and nowhere where they are one. Without the sentence 3 of these tests fail, with it in the shared warning 3 others.
+- A draft report for cargo, for the maintainer to file, is outside the repository.
+- Checks run on the final head, after merging the local `main`: `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e`, `mara schema validate`, `mara project validate` (`valid: true`, evaluation complete) and `zban check`, each with `NX_DAEMON=false` and one at a time.
+
+## Changes after the review
+
+- Nested directories outside the repository: the warning about an artifact directory outside the repository returned before the nesting was looked at, so two outside directories such as `<folder>/artifacts` and `<folder>/artifacts/inner` got no advice. `artifactDirectoryWarning` now works out the nesting first. The warning about an outside directory adds which directory it lies inside or holds, and the same sentence, where it nests with another workspace's, and nothing where they are one. Of the other combinations, two directories inside the repository already had it. A directory inside the repository can lie inside an outside one only where that one holds the repository, which the inside workspace's warning already covered and the outside one's now does. An inside directory never holds an outside one. Where the outer directory holds the repository, or is the repository root or a workspace folder, it always exists, so the race cannot happen there. The sentence still appears, because the rule is that the directories nest, and its "while these directories do not exist yet" keeps it true. Recorded in `DES-OUTPUTS`, the outside directory's row in `DES-DIAGNOSTICS` and `VER-SETUP`. Tests: both outside rows (nested and one directory) assert the full text in the metadata, the count printed by graph creation and the copy printed by a task. With the sentence taken out of the outside branch the nested row fails; with it on every outside directory the other row fails.
+- Hidden output: comparing `{ status, output }` with `output: expect.any(String)` made Jest print `Any<String>` in place of the output. `expectStatus(result, status, label?)` in `nx-rust/test/harness/task-runs.ts` throws an error whose message holds the command's whole output, and every status assertion of `shared-executables.spec.ts` uses it. With the nested case's first command expected to end with status 2, on purpose and not committed, Jest printed "The command ended with status 0, not 2. Its output:" followed by the whole `nx run-many` output, from the warnings to the run summary. The other test files with the pattern are filed as nxr-5j43c8.
+- Checks run again on the final head, after merging the local `main`: `pnpm nx run-many -t build lint test`, `pnpm nx format:check --all`, `pnpm nx e2e nx-rust-e2e`, `mara schema validate`, `mara project validate` (`valid: true`, evaluation complete) and `zban check`, each with `NX_DAEMON=false` and one at a time.

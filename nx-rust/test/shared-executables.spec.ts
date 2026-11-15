@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  expectStatus,
   FileChanges,
   FixtureGraph,
   FixtureWorkspace,
@@ -43,6 +44,14 @@ const betaRenamed: FileChanges = {
 /** The warning about alpha and tools, whose artifact directories `where` describes. */
 const alphaAndTools = (where: string) =>
   `nx-rust: the crates alpha in rust/crates/alpha and tools in tools put executables called cli into ${where} cargo keeps the file of the crate that it wrote last, so that a cached build of one crate could hold another crate's file. The build targets of alpha and tools run uncached, and so does the test target of alpha, whose integration tests or benches run that executable; their other targets stay cached. To cache them, give one of the binaries another name, with the name key of its [[bin]] table in Cargo.toml, or give each Cargo workspace an artifact directory of its own, none inside another, with build.target-dir in its .cargo/config.toml.`;
+
+/**
+ * What the warning about artifact directories that lie one inside the other
+ * adds, and that about one directory of two workspaces does not
+ * (DES-OUTPUTS, "Nested artifact directories").
+ */
+const firstBuildCanFail =
+  'A first build, while these directories do not exist yet, can fail in cargo with "No such file or directory"; run the command again.';
 
 /** Two entries of the plugin in nx.json, one for rust/ and one for tools/. */
 const twoEntries: FileChanges = {
@@ -261,6 +270,15 @@ describe("crates whose artifacts share a file name in one artifact directory", (
           "nx-rust: the Cargo workspace in rust shares Cargo's artifact directory target with the Cargo workspace in tools.",
         ),
       ]);
+      // Commands that create one directory together do not make each other
+      // fail (EVD-CARGO-NESTED-DIRECTORY-CREATION), so its warning does not
+      // say that they can.
+      for (const project of ["rust", "tools"]) {
+        expect({ project, warnings: warningsOf(graph, project) }).toEqual({
+          project,
+          warnings: expect.not.arrayContaining([expect.stringContaining(firstBuildCanFail)]),
+        });
+      }
     },
     HARNESS_TIMEOUT,
   );
@@ -293,9 +311,69 @@ describe("crates whose artifacts share a file name in one artifact directory", (
       for (const project of [rust, tools]) {
         expect(project.targets?.doc).toMatchObject({ cache: false, outputs: [] });
       }
+      const uncachedDoc =
+        "so that the folders of a triple or a profile in one can be those of the other. Its doc target runs uncached, because restoring one workspace's doc folder from the cache could delete or replace files of the others; its other targets stay cached. To cache it, give each workspace an artifact directory of its own, none inside another, with build.target-dir in its .cargo/config.toml.";
       expect(warningsOf(graph, "tools")).toContain(
-        `nx-rust: Cargo's artifact directory target/${triple} of the Cargo workspace in tools lies inside target, that of the Cargo workspace in rust, so that the folders of a triple or a profile in one can be those of the other. Its doc target runs uncached, because restoring one workspace's doc folder from the cache could delete or replace files of the others; its other targets stay cached. To cache it, give each workspace an artifact directory of its own, none inside another, with build.target-dir in its .cargo/config.toml.`,
+        `nx-rust: Cargo's artifact directory target/${triple} of the Cargo workspace in tools lies inside target, that of the Cargo workspace in rust, ${uncachedDoc} ${firstBuildCanFail}`,
       );
+      expect(warningsOf(graph, "rust")).toContain(
+        `nx-rust: Cargo's artifact directory target of the Cargo workspace in rust holds target/${triple}, that of the Cargo workspace in tools, ${uncachedDoc} ${firstBuildCanFail}`,
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each([
+    ["lie one inside the other, that a first build can fail", "artifacts/inner", 2],
+    ["are one, nothing about a first build", "artifacts", 0],
+  ])(
+    "warn, where the artifact directories of two workspaces outside the repository %s",
+    async (_case, inner, notes) => {
+      const workspace = FixtureWorkspace.create("shared-executables", betaRenamed);
+      try {
+        // Beside the copy, so that removing the workspace removes them too.
+        const outer = join(workspace.root, "..", "artifacts");
+        const tools = join(workspace.root, "..", inner);
+        for (const [folder, directory] of [
+          ["rust", outer],
+          ["tools", tools],
+        ]) {
+          mkdirSync(join(workspace.root, folder, ".cargo"));
+          writeFileSync(
+            join(workspace.root, folder, ".cargo", "config.toml"),
+            `[build]\ntarget-dir = ${JSON.stringify(directory)}\n`,
+          );
+        }
+        const outside = (folder: string, directory: string) =>
+          `nx-rust: Cargo's artifact directory of the Cargo workspace in ${folder} is ${directory}, outside the repository, where Nx cannot store files. Its build and doc targets run uncached, and its other targets stay cached. To cache them, set build.target-dir in a .cargo/config.toml of the workspace to a folder inside the repository, or unset CARGO_TARGET_DIR.`;
+        const expected =
+          notes > 0
+            ? {
+                rust: `${outside("rust", outer)} The directory holds ${tools}, that of the Cargo workspace in tools. ${firstBuildCanFail}`,
+                tools: `${outside("tools", tools)} The directory lies inside ${outer}, that of the Cargo workspace in rust. ${firstBuildCanFail}`,
+              }
+            : { rust: outside("rust", outer), tools: outside("tools", tools) };
+
+        const graph = await workspace.graph();
+        for (const project of ["rust", "tools"] as const) {
+          expect({ project, warnings: warningsOf(graph, project) }).toEqual({
+            project,
+            warnings: expect.arrayContaining([expected[project]]),
+          });
+        }
+        // Graph creation prints each workspace's warning once, and a task of
+        // the workspace prints it again (DES-DIAGNOSTICS).
+        const shown = await workspace.nx(["show", "projects"]);
+        expectStatus(shown, 0);
+        expect(occurrences(withoutColours(shown.output), firstBuildCanFail)).toBe(notes);
+        const check = await nx(workspace, ["run", "tools:check"]);
+        expectStatus(check, 0);
+        expect(check.output.slice(check.output.indexOf("> nx run tools:check"))).toContain(
+          expected.tools,
+        );
+      } finally {
+        workspace.remove();
+      }
     },
     HARNESS_TIMEOUT,
   );
@@ -316,7 +394,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
       const warning = alphaAndTools("Cargo's artifact directory target, where");
       try {
         const shown = await workspace.nx(["show", "projects"], env);
-        expect(shown.status).toBe(0);
+        expectStatus(shown, 0);
         // Both entries find it; the first by its place prints it.
         expect(occurrences(withoutColours(shown.output), warning)).toBe(1);
       } finally {
@@ -432,7 +510,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
       const workspace = FixtureWorkspace.create("shared-executables");
       try {
         const first = await nx(workspace, ["run-many", "-t", "build"]);
-        expect(first.status).toBe(0);
+        expectStatus(first, 0);
         // Graph creation prints the warning once; the tasks of alpha and
         // beta print it again (DES-DIAGNOSTICS).
         expect(
@@ -448,7 +526,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         );
 
         const second = await nx(workspace, ["run-many", "-t", "build"]);
-        expect(second.status).toBe(0);
+        expectStatus(second, 0);
         expect(calls(workspace)).toEqual(
           [build(workspace, "rust", "alpha"), build(workspace, "rust", "beta")].sort(),
         );
@@ -460,13 +538,13 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         // Without the file, alpha's build runs cargo, which writes its own.
         rmSync(join(workspace.root, "rust/target/debug/cli"));
         const alone = await nx(workspace, ["run", "alpha:build"]);
-        expect(alone.status).toBe(0);
+        expectStatus(alone, 0);
         expect(calls(workspace)).toEqual([build(workspace, "rust", "alpha")]);
         expect(prints(workspace, "rust/target/debug/cli")).toBe("alpha");
 
         for (const run of ["first", "second"]) {
           const test = await nx(workspace, ["run", "alpha:test"]);
-          expect({ run, status: test.status }).toEqual({ run, status: 0 });
+          expectStatus(test, 0, `The ${run} run of alpha:test`);
           expect({ run, calls: taskCalls(workspace).map((call) => call.args[0]) }).toEqual({
             run,
             calls: ["build", "test"],
@@ -489,9 +567,9 @@ describe("crates whose artifacts share a file name in one artifact directory", (
       );
       try {
         const first = await nx(workspace, ["run-many", "-t", "build"]);
-        expect(first.status).toBe(0);
+        expectStatus(first, 0);
         const second = await nx(workspace, ["run-many", "-t", "build"]);
-        expect(second.status).toBe(0);
+        expectStatus(second, 0);
         expect(calls(workspace)).toEqual(
           [build(workspace, "rust", "alpha"), build(workspace, "tools", "tools")].sort(),
         );
@@ -505,7 +583,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         expect(prints(workspace, "target/debug/cli")).toMatch(/^(alpha|tools)$/);
         rmSync(join(workspace.root, "target/debug/cli"));
         const alone = await nx(workspace, ["run", "tools:build"]);
-        expect(alone.status).toBe(0);
+        expectStatus(alone, 0);
         expect(calls(workspace)).toEqual([build(workspace, "tools", "tools")]);
         expect(prints(workspace, "target/debug/cli")).toBe("tools");
       } finally {
@@ -515,30 +593,42 @@ describe("crates whose artifacts share a file name in one artifact directory", (
     HARNESS_TIMEOUT * 2,
   );
 
-  it.each<[string, (triple: string) => FileChanges, (triple: string) => string]>([
+  it.each<[string, (triple: string) => FileChanges, (triple: string) => string, string[], number]>([
     [
       "two entries of the plugin receive workspaces with one artifact directory",
       () => ({ ...twoEntries, ...oneArtifactDirectory }),
       () => "target/debug/cli",
+      [],
+      0,
     ],
     [
       "one workspace's artifact directory is the folder of a triple in another's",
       nestedDirectories,
       (triple) => `target/${triple}/debug/cli`,
+      // Two cargo commands that create these directories at once can fail
+      // in cargo itself, before either takes its build lock: rust's renames
+      // its new target onto the empty one that tools' has just made for its
+      // own folder inside it (EVD-CARGO-NESTED-DIRECTORY-CREATION). The
+      // plugin says so in its warning and leaves the rest to a second run or
+      // to --parallel=1 on a first one (DES-OUTPUTS, "Nested artifact
+      // directories"), so the first run, the only one that creates them,
+      // runs its tasks one at a time.
+      ["--parallel=1"],
+      2,
     ],
   ])(
     "run both builds in every run and restore neither where %s",
-    async (_case, files, executable) => {
+    async (_case, files, executable, firstRun, firstBuildNotes) => {
       const triple = hostTriple();
       const workspace = FixtureWorkspace.create("shared-executables", files(triple), betaRenamed);
       try {
-        const first = await nx(workspace, ["run-many", "-t", "build"]);
-        expect(first.status).toBe(0);
+        const first = await nx(workspace, ["run-many", "-t", "build", ...firstRun]);
+        expectStatus(first, 0);
         // Both crates wrote one file.
         expect(prints(workspace, executable(triple))).toMatch(/^(alpha|tools)$/);
 
         const second = await nx(workspace, ["run-many", "-t", "build"]);
-        expect(second.status).toBe(0);
+        expectStatus(second, 0);
         // alpha's build names the triple of its project.json where it has one.
         expect(calls(workspace).map((call) => call.replace(/ --target \S+$/, ""))).toEqual(
           [build(workspace, "rust", "alpha"), build(workspace, "tools", "tools")].sort(),
@@ -555,13 +645,19 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         for (const crate of ["alpha", "tools"]) {
           rmSync(join(workspace.root, executable(triple)));
           const alone = await nx(workspace, ["run", `${crate}:build`]);
-          expect({ crate, status: alone.status }).toEqual({ crate, status: 0 });
+          expectStatus(alone, 0, `${crate}:build`);
           expect({ crate, ran: calls(workspace).length }).toEqual({ crate, ran: 1 });
           expect(prints(workspace, executable(triple))).toBe(crate);
         }
         // Graph creation printed the warning once, whichever entry held it.
         const warned = first.output.slice(0, first.output.indexOf("> nx run "));
         expect(occurrences(warned, "put executables called cli into")).toBe(1);
+        // Where the directories nest, the warnings of both workspaces say
+        // that a first build can fail, and their tasks print them again
+        // (DES-DIAGNOSTICS); where they are one, none does.
+        expect(occurrences(warned, firstBuildCanFail)).toBe(firstBuildNotes);
+        const byTasks = occurrences(first.output, firstBuildCanFail) - firstBuildNotes;
+        expect(byTasks > 0).toBe(firstBuildNotes > 0);
       } finally {
         workspace.remove();
       }
@@ -587,7 +683,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         expect(graph.projects.tools.targets?.build.cache).toBe(true);
 
         const build = await nx(workspace, ["run", "alpha:build"]);
-        expect(build.status).toBe(1);
+        expectStatus(build, 1);
         expect(build.output).toContain(
           "alpha:build: tools:build writes cli into the same artifact directory, target, where cargo keeps one file for both crates, that of the one it built last, so that a result stored for alpha:build could hold the other crate's file.\n@convesoft/nx-rust left alpha:build cached because it did not see tools:build when it created the graph, as where another installation of the plugin, registered in nx.json under another name, creates it. The task does not run, so that Nx stores no result for it.\nGive one of the binaries another name, with the name key of its [[bin]] table in Cargo.toml, or for a library of its [lib] table, or register both Cargo workspaces through one installation of the plugin, which then leaves both builds uncached.",
         );
@@ -596,20 +692,20 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         // alpha's integration test runs that file too; tools' build fails
         // the same way, as its installation sees alpha's.
         const test = await nx(workspace, ["run", "alpha:test", "--exclude-task-dependencies"]);
-        expect(test.status).toBe(1);
+        expectStatus(test, 1);
         expect(test.output).toContain(
           "alpha:test: tools:build writes cli into the same artifact directory, target, where cargo keeps one file for both crates, that of the one it built last, so that the tests could run the other crate's executable.",
         );
         const tools = await nx(workspace, ["run", "tools:build"]);
-        expect(tools.status).toBe(1);
+        expectStatus(tools, 1);
         expect(tools.output).toContain("tools:build: alpha:build writes cli into");
         expect(calls(workspace)).toEqual([]);
 
         // A crate without such a file builds, and its result is stored.
         const gamma = await nx(workspace, ["run-many", "-t", "build", "-p", "beta", "gamma"]);
-        expect(gamma.status).toBe(0);
+        expectStatus(gamma, 0);
         const again = await nx(workspace, ["run-many", "-t", "build", "-p", "beta", "gamma"]);
-        expect(again.status).toBe(0);
+        expectStatus(again, 0);
         expect(calls(workspace)).toEqual([]);
       } finally {
         workspace.remove();
@@ -627,9 +723,9 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         expect(before.projects.alpha.targets?.build.cache).toBe(false);
         writeFileSync(join(workspace.root, "rust/crates/alpha/Cargo.toml"), alphaRenamed);
         const first = await nx(workspace, ["run-many", "-t", "build"]);
-        expect(first.status).toBe(0);
+        expectStatus(first, 0);
         const second = await nx(workspace, ["run-many", "-t", "build"]);
-        expect(second.status).toBe(0);
+        expectStatus(second, 0);
         expect(calls(workspace)).toEqual([]);
         for (const task of ["alpha:build", "beta:build", "gamma:build"]) {
           expect({ task, restored: restored(second.output, task) }).toEqual({
@@ -656,7 +752,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
       });
       try {
         const run = await nx(workspace, ["run", "alpha:build"]);
-        expect(run.status).toBe(1);
+        expectStatus(run, 1);
         expect(run.output).toContain(
           `alpha:build: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves \`build\` uncached in this project, because files that its build writes can lie at the paths of files that other crates write`,
         );
