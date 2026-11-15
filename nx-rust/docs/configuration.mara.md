@@ -65,6 +65,11 @@ them, `name` has no effect
 with the name of one of the crate's targets replaces that target, together with
 the settings this table gives it, unless Nx merges the two
 ([napi and wasm artifacts](artifacts.mara.md#things-to-know)).
+Another plugin listed in `nx.json` may add to a crate's targets, but not take
+away or narrow the inputs, outputs or dependencies that nx-rust declares; to
+change them on purpose, write the change into the `project.json` in the crate's
+folder
+([Other plugins that reach Rust targets](targets.mara.md#other-plugins-that-reach-rust-targets)).
 
 The keys under `options`, and under each of the target's `configurations`,
 have to be options of the target. A key that the plugin does not know, such as
@@ -96,7 +101,10 @@ manifest: `inputs` without `"..."` on an inferred target, because the cache key
 would lose the toolchain, the environment and the files of the crate's
 dependencies; and a different `executor`, or a `command`, on an inferred
 target. To run another command, define an extra target under a name of its
-own, as `migrate` above.
+own, as `migrate` above. Nx lays the `targetDefaults` of `nx.json` over an
+extra target as over any target that a plugin infers, so an entry keyed by its
+name replaces what the table sets, unless a list keeps it with `"..."`. The
+plugin does not check this, because it infers nothing for the target.
 
 Leaving files out, as `docs` above, is your statement that the target does not
 read them. Nx then ignores changes to them, so if a macro such as

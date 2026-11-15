@@ -498,8 +498,10 @@ The plugin has to know the folder that cargo writes to:
 - A `targetDefaults` entry in `nx.json` that sets `cache: true` on a target
   that the plugin leaves uncached fails graph creation
   ([Target defaults that reach Rust targets](targets.mara.md#target-defaults-that-reach-rust-targets)).
-  A `project.json` or `package.json` that does so makes the task fail before
-  cargo runs, with the reason.
+  A `project.json` or `package.json`, or another plugin, that does so makes
+  the task fail before cargo runs, with the reason. Another plugin that takes
+  away or narrows inputs or outputs fails graph creation
+  ([Other plugins that reach Rust targets](targets.mara.md#other-plugins-that-reach-rust-targets)).
 
 ## Cargo's two directories
 
