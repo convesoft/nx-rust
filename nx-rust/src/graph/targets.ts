@@ -78,8 +78,10 @@ export interface TargetCargoMetadata {
   locked: boolean;
   /**
    * Why the plugin leaves the target uncached in this project
-   * (`configureCaching` in `caching.ts`); absent where it caches it. The
-   * executor fails a task whose configuration caches the target anyway.
+   * (`configureCaching` in `caching.ts`, or a target table that sets
+   * `cache = false`, `applyTargetTables` in `target-tables.ts`); absent
+   * where it caches it. The executor fails a task whose configuration
+   * caches the target anyway.
    */
   uncached?: string;
   /**

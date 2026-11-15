@@ -39,6 +39,7 @@ interface Outcome {
 // @mara implements DES-DISCOVERY
 // @mara implements DES-METADATA-REPORT
 // @mara implements DES-PROJECT-GRAPH
+// @mara implements DES-TARGET-DEFAULT-GUARD
 export class Registration {
   /** The `createNodes` hook of this entry. */
   readonly createNodes: CreateNodes;
@@ -62,7 +63,13 @@ export class Registration {
         for (const warning of graph.discovery.warnings) {
           console.warn(warning);
         }
-        return projectNodes(graph.projects);
+        // A copy: in its own process, Nx merges the lists of the nodes it
+        // receives without copying them and rewrites the project names in
+        // their dependsOn and inputs in place (EVD-NX-24-PLUGIN-NODES). The
+        // graph kept for createDependencies has to stay what the plugin
+        // inferred, which DES-TARGET-DEFAULT-GUARD compares with what Nx
+        // merged.
+        return structuredClone(projectNodes(graph.projects));
       },
     ];
     registrations.set(this.createNodes, this);

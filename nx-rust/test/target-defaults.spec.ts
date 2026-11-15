@@ -17,6 +17,7 @@ import {
   pluginEntry,
   pluginWorkers,
   repositoryFiles,
+  taskCalls,
   withoutColours,
 } from "./harness";
 
@@ -72,6 +73,15 @@ const web: FileChanges = {
 const tripleFromConfiguration: FileChanges = {
   "rust/.cargo/config.toml": '[build]\ntarget = "host-tuple"\n',
 };
+
+/**
+ * The two ways in which Nx runs the plugin, as `env` of a command: in Nx's
+ * own process, the harness's default, and in a plugin worker, Nx's default.
+ */
+const pluginModes: [string, Env][] = [
+  ["with the plugin in Nx's own process", {}],
+  ["with the plugin in a worker", pluginWorkers],
+];
 
 /** Sets `targetDefaults` in a fixture copy's `nx.json`. */
 function targetDefaults(defaults: object): FileChanges {
@@ -605,6 +615,331 @@ describe("nothing is reported", () => {
   );
 });
 
+describe("a target default that writes out the dependency on the lockfile task", () => {
+  // Nx rewrites the project names in the dependsOn of the project nodes that
+  // a plugin in its own process returns and writes them back only where the
+  // list survives the merge, so a list that an entry replaces kept Nx's
+  // placeholder in what the plugin had inferred (EVD-NX-24-PLUGIN-NODES).
+  const modes = pluginModes;
+
+  it.each(modes)(
+    "creates the graph without a finding where the entry is exactly what the plugin declares, %s",
+    async (_mode, env) => {
+      const { status, output, workspace } = await showProjectsWith(
+        env,
+        targetDefaults({ test: { dependsOn: [lockfileTask] } }),
+      );
+      try {
+        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+        expect(output).not.toContain("targetDefaults");
+        const { projects } = await workspace.graph(env);
+        expect(projects.api.targets?.test.dependsOn).toEqual([lockfileTask]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(modes)(
+    "reports only that it replaces the dependsOn of the crates whose test also depends on their build, %s",
+    async (_mode, env) => {
+      const workspace = FixtureWorkspace.create(
+        "binary-tests",
+        targetDefaults({ test: { dependsOn: [lockfileTask] } }),
+      );
+      try {
+        const { status, output } = await workspace.nx(["show", "projects"], env);
+
+        expect(status).not.toBe(0);
+        const shown = withoutColours(output);
+        expect(
+          missingFromReport(
+            shown,
+            'It replaces the dependsOn that nx-rust declares for "test"',
+            ["app", "benched", "gated", "harnessless"].map(
+              (crate) => `${crate} (rust/crates/${crate}/Cargo.toml)`,
+            ),
+          ),
+        ).toEqual([]);
+        for (const crate of [
+          "addon",
+          "flavour",
+          "library",
+          "showcase",
+          "timed",
+          "unit",
+          "untested",
+        ]) {
+          expect(shown).not.toContain(`${crate} (rust/crates/${crate}/Cargo.toml)`);
+        }
+        expect(shown).not.toContain("It adds");
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // With the plugin in Nx's own process, where the comparison used to read
+  // Nx's placeholder. Each entry differs from the declared one in a field
+  // that Nx's task graph reads, or names the same task in a form that holds
+  // only in this workspace.
+  it.each<[string, unknown[]]>([
+    ["names another target", [{ projects: ["directory:rust"], target: "update" }]],
+    [
+      "names the workspace project by its name, which a project.json in its folder can change",
+      [{ projects: ["rust"], target: "lockfile" }],
+    ],
+    [
+      "reaches the target in the crate's dependencies instead",
+      [{ dependencies: true, target: "lockfile" }],
+    ],
+    ["forwards the command's arguments", [{ ...lockfileTask, params: "forward" }]],
+    ["forwards the task's options", [{ ...lockfileTask, options: "forward" }]],
+    ["leaves the dependency out", []],
+  ])(
+    "is reported as replacing the dependsOn where the entry %s",
+    async (_case, dependsOn) => {
+      const output = await failed({ test: { dependsOn } });
+
+      expect(
+        missingFromReport(
+          output,
+          'It replaces the dependsOn that nx-rust declares for "test"',
+          allCrates,
+        ),
+      ).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("a declared reference to a project that a file renames", () => {
+  // Nx gives each project name in a dependsOn or inputs that the plugin
+  // declares the final name of the project that had it when the plugin's
+  // projects were merged (EVD-NX-24-PLUGIN-NODES): here model's
+  // project.json renames it model-rs. The check gives the declared
+  // references the same names, and a difference that it still cannot
+  // attribute does not switch off the check of another field.
+
+  const modelRenamed: FileChanges = {
+    "rust/crates/model/project.json": JSON.stringify({ name: "model-rs" }),
+  };
+
+  /** A table of api's `check` in its manifest, such as `dependsOn = [...]`. */
+  function apiCheck(table: string): FileChanges {
+    return {
+      "rust/crates/api/Cargo.toml": (manifest) =>
+        `${manifest}\n[package.metadata.nx.targets.check]\n${table}\n`,
+    };
+  }
+
+  /** The heading of the paragraph about the first element of the entry keyed `check`. */
+  const checkElement = 'The targetDefaults entry "check" in nx.json (its element 0) changes';
+
+  /** The start of the warning that the check cannot tell who changed api's `check`. */
+  const unattributedCheck =
+    'The target "check" of the Rust project api (rust/crates/api/Cargo.toml) differs from what nx-rust infers in';
+
+  /** Each form of api's dependency on model's `check` that Nx renames. */
+  const references: [string, string][] = [
+    ["a list of projects", 'dependsOn = ["...", { projects = ["model"], target = "check" }]'],
+    ["a project:target string", 'dependsOn = ["...", "model:check"]'],
+    ["a projects string", 'dependsOn = ["...", { projects = "model", target = "check" }]'],
+  ];
+
+  /** Each case in each of {@link pluginModes}, with the mode first and its variables last. */
+  const inEachMode = <T extends unknown[]>(cases: T[]): [string, ...T, Env][] =>
+    pluginModes.flatMap(([mode, env]) =>
+      cases.map((item): [string, ...T, Env] => [mode, ...item, env]),
+    );
+
+  it.each(inEachMode(references))(
+    "%s: an entry filtered to api that replaces the inputs of check is an error that names it, where the dependency is %s",
+    async (_mode, _form, table, env) => {
+      const output = await failed(
+        { check: [{ filter: { projects: ["api"] }, inputs: ["default"] }] },
+        { ...apiCheck(table), ...modelRenamed },
+        env,
+      );
+
+      expect(output).toContain(checkElement);
+      expect(
+        missingFromReport(output, 'It replaces the inputs that nx-rust declares for "check"', [
+          `api (${crates.api})`,
+        ]),
+      ).toEqual([]);
+      expect(output).not.toContain(unattributedCheck);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(inEachMode(references))(
+    "%s: an entry that sets only options draws nothing, where the dependency is %s",
+    async (_mode, _form, table, env) => {
+      const { status, output, workspace } = await showProjectsWith(
+        env,
+        targetDefaults({ check: { options: { quiet: true } } }),
+        apiCheck(table),
+        modelRenamed,
+      );
+      try {
+        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+        expect(output).not.toContain("nx-rust");
+        // Nx renamed the reference.
+        const { projects } = await workspace.graph(env);
+        expect(JSON.stringify(projects.api.targets?.check.dependsOn)).toContain("model-rs");
+        expect(JSON.stringify(projects.api.targets?.check.dependsOn)).not.toContain('"model"');
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(pluginModes)(
+    "%s: an entry filtered to api that replaces the dependsOn of check is an error that names it, where api's inputs name model",
+    async (_mode, env) => {
+      const output = await failed(
+        { check: [{ filter: { projects: ["api"] }, dependsOn: [] }] },
+        {
+          ...apiCheck('inputs = ["...", { input = "default", projects = ["model"] }]'),
+          ...modelRenamed,
+        },
+        env,
+      );
+
+      expect(output).toContain(checkElement);
+      expect(
+        missingFromReport(output, 'It replaces the dependsOn that nx-rust declares for "check"', [
+          `api (${crates.api})`,
+        ]),
+      ).toEqual([]);
+      expect(output).not.toContain(unattributedCheck);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(pluginModes)(
+    "%s: an entry filtered to app that replaces the outputs of its build is an error that names it, where that build depends on a renamed library",
+    async (_mode, env) => {
+      const workspace = FixtureWorkspace.create(
+        "binary-tests",
+        {
+          "rust/crates/app/Cargo.toml": (manifest) =>
+            `${manifest}\n[package.metadata.nx.targets.build]\ndependsOn = ["...", "library:check"]\n`,
+          "rust/crates/library/project.json": JSON.stringify({ name: "library-rs" }),
+        },
+        targetDefaults({ build: [{ filter: { projects: ["app"] }, outputs: [] }] }),
+      );
+      try {
+        const { status, output } = await workspace.nx(["show", "projects"], env);
+
+        expect(status).not.toBe(0);
+        const shown = withoutColours(output);
+        expect(shown).toContain(
+          'The targetDefaults entry "build" in nx.json (its element 0) changes',
+        );
+        expect(
+          missingFromReport(shown, 'It replaces the outputs that nx-rust declares for "build"', [
+            "app (rust/crates/app/Cargo.toml)",
+          ]),
+        ).toEqual([]);
+        expect(shown).not.toContain("cannot tell which configuration changed it");
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // A JS project that its package.json names web and its project.json
+  // renames web-app, both after the plugin's projects were merged: whether
+  // Nx gives a reference to web the name web-app depends on the names that
+  // projects of other plugins had at the time, which the check cannot see.
+  const webRenamed: FileChanges = {
+    "package.json": JSON.stringify({ name: "repo", private: true, workspaces: ["web"] }),
+    "web/package.json": JSON.stringify({ name: "web" }),
+    "web/project.json": JSON.stringify({
+      name: "web-app",
+      targets: { build: { executor: "nx:noop" } },
+    }),
+  };
+  const dependsOnWeb = apiCheck('dependsOn = ["...", { projects = ["web"], target = "build" }]');
+
+  it.each(pluginModes)(
+    "%s: stays a difference where it names a project of another plugin, so an entry that sets only options draws the warning that names the field",
+    async (_mode, env) => {
+      const { status, output, workspace } = await showProjectsWith(
+        env,
+        targetDefaults({ check: { options: { quiet: true } } }),
+        dependsOnWeb,
+        webRenamed,
+      );
+      try {
+        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+        expect(output).toContain(`${unattributedCheck} "dependsOn"`);
+        const { projects } = await workspace.graph(env);
+        expect(projects.api.targets?.check.dependsOn).toContainEqual({
+          projects: ["web-app"],
+          target: "build",
+        });
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(pluginModes)(
+    "%s: stays a difference where an entry's own list names it, and that entry, which replaces the inputs of check, is an error",
+    async (_mode, env) => {
+      const output = await failed(
+        {
+          check: [
+            {
+              filter: { projects: ["api"] },
+              inputs: ["default", { input: "default", projects: ["web"] }],
+            },
+          ],
+        },
+        webRenamed,
+        env,
+      );
+
+      expect(output).toContain(checkElement);
+      expect(
+        missingFromReport(output, 'It replaces the inputs that nx-rust declares for "check"', [
+          `api (${crates.api})`,
+        ]),
+      ).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(pluginModes)(
+    "%s: is no reason to pass over an entry that replaces the inputs of a crate to which another plugin gives the tag that its filter selects",
+    async (_mode, env) => {
+      const output = await failed(
+        {},
+        otherPlugin(false, {
+          check: [{ filter: { projects: ["tag:extra"] }, inputs: ["default"] }],
+        }),
+        env,
+      );
+
+      expect(output).toContain(checkElement);
+      expect(
+        missingFromReport(output, 'It replaces the inputs that nx-rust declares for "check"', [
+          `api (${crates.api})`,
+        ]),
+      ).toEqual([]);
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
 describe("the layer that made a change", () => {
   it(
     "is the target default when a project.json supplies the target's executor, which takes the target away from an entry filtered to the plugin",
@@ -863,13 +1198,33 @@ describe("combinations", () => {
   );
 });
 
+/** Where {@link otherPlugin} differs from its default shape. */
+interface OtherPluginShape {
+  /** The target that it gives api with the cargo executor; `fmt` by default. */
+  target?: string;
+  /** Whether nx.json lists it before nx-rust; after it by default. */
+  before?: boolean;
+  /** Whether it gives api the tag `extra`; it does by default. */
+  tagged?: boolean;
+}
+
 /**
- * Another inference plugin, registered after nx-rust, that adds the tag
- * `extra` to api and contributes an `fmt` target with the cargo executor,
- * with `cache: true` if `cache`, as the review of pull request #32 set it up
- * on `build` while the plugin left that uncached.
+ * Another inference plugin, named `other` and registered after nx-rust, that
+ * adds the tag `extra` to api and contributes an `fmt` target with the
+ * cargo executor, with `cache: true` if `cache`, as the review of pull
+ * request #32 set it up on `build` while the plugin left that uncached.
  */
-function otherPlugin(cache: boolean, defaults: object | undefined): FileChanges {
+function otherPlugin(
+  cache: boolean,
+  defaults: object | undefined,
+  shape: OtherPluginShape = {},
+): FileChanges {
+  const { target = "fmt", before = false, tagged = true } = shape;
+  const project = {
+    name: "api",
+    ...(tagged ? { tags: ["extra"] } : {}),
+    targets: { [target]: { executor: cargoExecutor, ...(cache ? { cache: true } : {}) } },
+  };
   return {
     "other.cjs": `exports.name = "other";
 exports.createNodes = [
@@ -877,14 +1232,14 @@ exports.createNodes = [
   async (files) =>
     files
       .filter((file) => file === "rust/crates/api/Cargo.toml")
-      .map((file) => [file, { projects: { "rust/crates/api": { name: "api", tags: ["extra"], targets: { fmt: ${JSON.stringify({ executor: cargoExecutor, ...(cache ? { cache: true } : {}) })} } } } }]),
+      .map((file) => [file, { projects: { "rust/crates/api": ${JSON.stringify(project)} } }]),
 ];
 `,
     "nx.json": (nxJson) => {
       const config = JSON.parse(nxJson ?? "{}");
       return JSON.stringify({
         ...config,
-        plugins: [...config.plugins, "./other.cjs"],
+        plugins: before ? ["./other.cjs", ...config.plugins] : [...config.plugins, "./other.cjs"],
         ...(defaults === undefined ? {} : { targetDefaults: defaults }),
       });
     },
@@ -899,20 +1254,20 @@ const unattributedFmt = [
 
 describe("a change that the plugin cannot attribute", () => {
   it(
-    "where another plugin adds a tag that an entry's filter selects: a warning, not a silent pass",
+    "where another plugin adds a tag that an entry's filter selects: an error that names the entry, which the tag lets apply",
     async () => {
-      const { status, output, workspace } = await showProjects(
+      const output = await failed(
+        {},
         otherPlugin(false, { fmt: [{ filter: { projects: ["tag:extra"] }, cache: true }] }),
       );
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).toContain(unattributedFmt);
-        expect(output).not.toContain("The targetDefaults entry");
-        // Nx did apply the entry.
-        expect((await workspace.graph()).projects.api.targets?.fmt.cache).toBe(true);
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).toContain('The targetDefaults entry "fmt" in nx.json (its element 0) changes');
+      expect(
+        missingFromReport(output, 'It turns on caching for "fmt", which nx-rust leaves uncached', [
+          `api (${crates.api})`,
+        ]),
+      ).toEqual([]);
+      expect(output).not.toContain(unattributedFmt);
     },
     HARNESS_TIMEOUT,
   );
@@ -935,7 +1290,7 @@ describe("a change that the plugin cannot attribute", () => {
   );
 
   it(
-    "where another plugin adds a tag that takes the target away from the executor's entry: a warning for it, not the wrong key",
+    "where another plugin adds a tag that takes the target away from the executor's entry: the entry keyed by its name, which then applies, not the executor's",
     async () => {
       const output = await failed(
         {},
@@ -945,20 +1300,17 @@ describe("a change that the plugin cannot attribute", () => {
         }),
       );
 
-      expect(output).toContain(unattributedFmt);
       expect(output).not.toContain(`The targetDefaults entry "${cargoExecutor}"`);
-      // The other crates have no tag extra, and Nx takes the entry keyed fmt for them.
+      // The other crates have no tag extra, and Nx takes the entry keyed fmt
+      // for them; for api, the tag takes it away from the executor's entry.
       expect(
-        missingFromReport(output, 'It turns on caching for "fmt", which nx-rust leaves uncached', [
-          `codegen (${crates.codegen})`,
-          `model (${crates.model})`,
-          `testkit (${crates.testkit})`,
-        ]),
+        missingFromReport(
+          output,
+          'It turns on caching for "fmt", which nx-rust leaves uncached',
+          allCrates,
+        ),
       ).toEqual([]);
-      // No entry is blamed for api: the output names it only in the warning
-      // that the plugin cannot tell which configuration changed its fmt.
-      const occurrences = (text: string) => output.split(text).length - 1;
-      expect(occurrences(`api (${crates.api})`)).toBe(occurrences(unattributedFmt.split("\n")[0]));
+      expect(output).not.toContain(unattributedFmt);
     },
     HARNESS_TIMEOUT,
   );
@@ -971,6 +1323,153 @@ describe("a change that the plugin cannot attribute", () => {
         expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
         expect(output).not.toContain("nx-rust");
         expect((await workspace.graph()).projects.api.targets?.fmt.cache).toBe(true);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("an entry that the check cannot prove does not apply", () => {
+  // Nx's synthesis reads filter.plugin against the plugin that first gave
+  // the target its executor, which graph creation cannot see, so an entry
+  // filtered to another plugin may apply; and it reads tag filters against
+  // the tags that every plugin gave. An entry that may apply and would make
+  // a lost entry or caching that is on is an error that names it.
+
+  /** api's `check` left uncached by its own Cargo metadata. */
+  const checkUncached: FileChanges = {
+    "rust/crates/api/Cargo.toml": (manifest) =>
+      `${manifest}\n[package.metadata.nx.targets.check]\ncache = false\n`,
+  };
+
+  /** A plugin before nx-rust that gives api's `check` the cargo executor first. */
+  const firstPlugin = (defaults: object) =>
+    otherPlugin(false, defaults, { target: "check", before: true, tagged: false });
+
+  it.each(pluginModes)(
+    "%s: an entry filtered to a plugin before nx-rust that gave check its executor first, and that replaces its inputs, is an error that names it",
+    async (_mode, env) => {
+      const output = await failed(
+        {},
+        firstPlugin({ check: [{ filter: { plugin: "other" }, inputs: ["default"] }] }),
+        env,
+      );
+
+      expect(output).toContain(
+        'The targetDefaults entry "check" in nx.json (its element 0) changes',
+      );
+      expect(
+        missingFromReport(output, 'It replaces the inputs that nx-rust declares for "check"', [
+          `api (${crates.api})`,
+        ]),
+      ).toEqual([]);
+      expect(output).not.toContain("cannot tell which configuration changed it");
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each<[string, object]>([
+    [
+      "whose filter on the executor leaves check out",
+      { filter: { plugin: "other", executor: "nx:run-commands" }, inputs: ["default"] },
+    ],
+    [
+      'that keeps the inputs with "..."',
+      { filter: { plugin: "other" }, inputs: ["...", "{workspaceRoot}/extra.txt"] },
+    ],
+  ])(
+    "draws nothing where the entry filtered to that plugin is one %s",
+    async (_case, element) => {
+      const { status, output, workspace } = await showProjects(firstPlugin({ check: [element] }));
+      try {
+        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+        expect(output).not.toContain("nx-rust");
+        const { projects } = await workspace.graph();
+        expect(projects.api.targets?.check.inputs).toEqual(expect.arrayContaining(["default"]));
+        expect(projects.api.targets?.check.inputs).not.toEqual(["default"]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(pluginModes)(
+    "%s: an entry filtered to a tag that another plugin gives api, and that turns on caching where its Cargo metadata leaves check uncached, is an error that names it",
+    async (_mode, env) => {
+      const output = await failed(
+        {},
+        {
+          ...checkUncached,
+          ...otherPlugin(false, {
+            check: [{ filter: { projects: ["tag:extra"] }, cache: true }],
+          }),
+        },
+        env,
+      );
+
+      expect(output).toContain(
+        'The targetDefaults entry "check" in nx.json (its element 0) changes',
+      );
+      expect(
+        missingFromReport(
+          output,
+          'It turns on caching for "check", which nx-rust leaves uncached',
+          [`api (${crates.api})`],
+        ),
+      ).toEqual([]);
+      expect(output).not.toContain("cannot tell which configuration changed it");
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    'draws nothing where that entry sets cache before an object-level "...", for which Nx keeps the value below',
+    async () => {
+      const { status, output, workspace } = await showProjects(checkUncached, {
+        ...otherPlugin(false, {
+          check: [{ filter: { projects: ["tag:extra"] }, cache: true, "...": true }],
+        }),
+      });
+      try {
+        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+        expect(output).not.toContain("nx-rust");
+        expect((await workspace.graph()).projects.api.targets?.check.cache).toBe(false);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(pluginModes)(
+    "%s: where another plugin turns on caching that api's Cargo metadata turns off and no entry can have done it, warns, and the task fails before cargo runs, also the second time",
+    async (_mode, env) => {
+      const { status, output, workspace } = await showProjectsWith(
+        env,
+        checkUncached,
+        otherPlugin(
+          true,
+          { check: [{ filter: { projects: ["api", "!tag:extra"] }, cache: true }] },
+          { target: "check" },
+        ),
+      );
+      try {
+        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+        expect(output).toContain(
+          'The target "check" of the Rust project api (rust/crates/api/Cargo.toml) differs from what nx-rust infers in "cache", and nx-rust cannot tell which configuration changed it',
+        );
+        for (const run of [1, 2]) {
+          const result = await workspace.nx(["run", "api:check", "--output-style=static"], env);
+
+          expect({ run, status: result.status }).toEqual({ run, status: 1 });
+          expect(withoutColours(result.output)).toContain(
+            'api:check: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves `check` uncached in this project, because [package.metadata.nx.targets.check] in rust/crates/api/Cargo.toml sets cache = false.',
+          );
+          expect(taskCalls(workspace)).toEqual([]);
+        }
       } finally {
         workspace.remove();
       }

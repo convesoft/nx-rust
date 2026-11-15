@@ -9,6 +9,7 @@ import {
   cargoExecutor,
   type InferredTargetName,
   inferredTargetNames,
+  type TargetCargoMetadata,
   targetCargoMetadataKey,
 } from "./targets";
 
@@ -41,6 +42,7 @@ export interface TableSubject {
  */
 // @mara implements DES-PLUGIN-OPTIONS
 // @mara implements DES-METADATA-TABLES
+// @mara implements DES-OUTPUTS
 export function applyTargetTables(
   projects: readonly { project: TableSubject; targets: Record<string, TargetConfiguration> }[],
   workspaceRoot: string,
@@ -87,6 +89,34 @@ export function applyTargetTables(
         undefined,
         false,
       );
+    }
+    // A table that turns caching off for an inferred target is a reason why
+    // the plugin leaves it uncached in this project, which the executor
+    // reads, so that it fails a task that caches the target through another
+    // configuration (`DES-OUTPUTS`, "Per project").
+    for (const [name, tables] of kept) {
+      const before = targets[name];
+      const after = result[name];
+      const setter = [...tables].reverse().find((table) => table.target.cache !== undefined);
+      const metadata = after.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
+      if (
+        before?.cache === true &&
+        after.cache !== true &&
+        setter !== undefined &&
+        metadata !== undefined &&
+        metadata.uncached === undefined
+      ) {
+        result[name] = {
+          ...after,
+          metadata: {
+            ...after.metadata,
+            [targetCargoMetadataKey]: {
+              ...metadata,
+              uncached: `${targetHeader(setter.table, name)} in ${setter.manifest} sets cache = false`,
+            },
+          },
+        };
+      }
     }
     // Checked once every table is merged, so that the options of an extra
     // target meet the executor that another table gives it.
