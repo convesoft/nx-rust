@@ -847,6 +847,10 @@ describe("@convesoft/nx-rust", () => {
   // release-version.spec.ts checks what they do (VER-RELEASE).
   describe("with crates configured for Nx release", () => {
     const gitConfig = join(process.cwd(), "tmp", "release-gitconfig");
+    // An empty Cargo home of the test's own, offline: the lockfile step's
+    // `cargo update --workspace` reaches no registry, which the fixture,
+    // locking path packages only, does not need.
+    const cargoHome = join(process.cwd(), "tmp", "release-cargo-home");
     // Also for the commit and the tag that Nx makes.
     const gitVariables = {
       GIT_AUTHOR_NAME: "nx-rust e2e",
@@ -865,6 +869,7 @@ describe("@convesoft/nx-rust", () => {
 
     beforeAll(() => {
       writeFileSync(gitConfig, "");
+      mkdirSync(cargoHome, { recursive: true });
       installFixture(projectDirectory, "release-crates");
       cargo.placeIn(join(projectDirectory, "node_modules", ".bin"));
       git("init", "--quiet", "--initial-branch=main");
@@ -875,6 +880,7 @@ describe("@convesoft/nx-rust", () => {
     afterAll(() => {
       rmSync(join(projectDirectory, ".git"), { recursive: true, force: true });
       rmSync(gitConfig, { force: true });
+      rmSync(cargoHome, { recursive: true, force: true });
     });
 
     it(
@@ -885,7 +891,13 @@ describe("@convesoft/nx-rust", () => {
           ["exec", "nx", "release", "version", "patch", "--projects", "base"],
           {
             cwd: projectDirectory,
-            env: cargo.environment(testEnvironment(gitVariables)),
+            env: cargo.environment(
+              testEnvironment({
+                ...gitVariables,
+                CARGO_HOME: cargoHome,
+                CARGO_NET_OFFLINE: "true",
+              }),
+            ),
             encoding: "utf8",
           },
         );
@@ -907,6 +919,8 @@ describe("@convesoft/nx-rust", () => {
             "utf8",
           ),
         ).toContain('name = "normal-user"\nversion = "0.1.1"\n');
+        expect(output).toContain("Updated rust/Cargo.lock with cargo update --workspace");
+        expect(git("show", "--name-only", "--format=", "HEAD")).toContain("rust/Cargo.lock");
         expect(git("status", "--porcelain").trim()).toBe("");
         expect(git("tag", "--list", "base@*").trim()).toBe("base@0.1.1");
       },

@@ -1,10 +1,10 @@
 import type { Tree } from "@nx/devkit";
 import { readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CargoDependency } from "../cargo/metadata";
 import { satisfies } from "../cargo/version-req";
-import { realPath } from "../graph/real-path";
+import { physicalPath, realPath } from "../graph/real-path";
 import {
   dependencyEntries,
   DependencyEntry,
@@ -260,27 +260,97 @@ function isOutside(path: string): boolean {
 
 /**
  * A manifest or configuration file as the run sees it: through the run's
- * tree inside the repository, from disk outside it.
+ * tree inside the repository ({@link readTreeText}), from disk outside it.
  *
  * @param file Relative to the repository root, or absolute outside it.
+ * @throws {ReleaseError} When the file does not exist or cannot be read,
+ *   saying which.
  */
 export function readDocument(tree: Tree, repository: ReleaseRepository, file: string): TomlTable {
-  let text: string | null;
-  if (isOutside(file)) {
-    try {
-      text = readFileSync(file.startsWith("/") ? file : join(repository.root, file), "utf8");
-    } catch {
-      text = null;
-    }
-  } else {
-    text = tree.read(file, "utf-8");
+  if (!isOutside(file)) {
+    return parseManifest(readTreeText(tree, file), file);
   }
-  if (text === null) {
-    throw new ReleaseError(
-      `${file} does not exist, so nx release version cannot read it. Run nx reset and the command again.`,
-    );
+  let text: string;
+  try {
+    text = readFileSync(file.startsWith("/") ? file : join(repository.root, file), "utf8");
+  } catch (error) {
+    throw readFailure(file, error);
   }
   return parseManifest(text, file);
+}
+
+/**
+ * The path by which the run reads and writes a file inside the repository
+ * in Nx's tree: where the file lies once symbolic links are followed,
+ * relative to the real path of the repository root, with `/`. Nx stages the
+ * paths that its tree changed, and git keeps a link apart from the file it
+ * leads to, so a write through the path of a link would change the file
+ * without putting it into the commit (`DES-RELEASE`, "Writes"). A file that
+ * lies outside the repository, which the run does not write, keeps its path.
+ *
+ * @param file Relative to the repository root.
+ */
+export function treePath(root: string, file: string): string {
+  if (isOutside(file)) {
+    return file;
+  }
+  const real = relative(realPath(root), physicalPath(join(root, file)));
+  return real === "" || real === ".." || real.startsWith(`..${sep}`) || isAbsolute(real)
+    ? file
+    : real.split(sep).join("/");
+}
+
+/**
+ * The text of a file inside the repository, as the run's tree holds it at
+ * the file's {@link treePath}.
+ *
+ * @param file Relative to the repository root.
+ * @throws {ReleaseError} When the file does not exist or cannot be read,
+ *   saying which: Nx's tree answers `null` for every file that it cannot
+ *   read, so the file is read from disk once more to tell.
+ */
+export function readTreeText(tree: Tree, file: string): string {
+  const path = treePath(tree.root, file);
+  const text = tree.read(path, "utf-8");
+  if (text !== null) {
+    return text;
+  }
+  try {
+    readFileSync(join(tree.root, path));
+  } catch (error) {
+    throw readFailure(file, error);
+  }
+  throw new ReleaseError(
+    `nx release version cannot read ${file} through Nx's tree, although the file can be read. Run nx reset and the command again.`,
+  );
+}
+
+/**
+ * Whether a failure to read a file says that the file does not exist. Every
+ * other failure, such as a missing permission, says nothing about whether
+ * it exists.
+ */
+export function isAbsence(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+// The error for a file that the run cannot read: that it does not exist only
+// where reading it says so, and otherwise why it cannot be read.
+function readFailure(file: string, error: unknown): ReleaseError {
+  return isAbsence(error)
+    ? new ReleaseError(
+        `${file} does not exist, so nx release version cannot read it. Run nx reset and the command again.`,
+      )
+    : new ReleaseError(
+        `nx release version cannot read ${file}: ${errorMessage(error)}. Make it readable and run the command again.`,
+      );
+}
+
+/** The message of an error, also of one from another realm, as Node's own errors are under Jest. */
+export function errorMessage(error: unknown): string {
+  const message = (error as { message?: unknown } | null | undefined)?.message;
+  return typeof message === "string" ? message : String(error);
 }
 
 /** An entry of a member's dependency tables, with what it names and writes, its own or inherited. */

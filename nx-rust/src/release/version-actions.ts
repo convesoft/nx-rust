@@ -1,9 +1,12 @@
 import { readCachedProjectGraph } from "@nx/devkit";
 import type { ProjectGraph, ProjectGraphDependency, Tree } from "@nx/devkit";
-import { accessSync, constants } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { accessSync, constants, readFileSync } from "node:fs";
+import { dirname, join, posix } from "node:path";
+import { parse } from "smol-toml";
 import { VersionActions } from "nx/release";
 import type { CargoDependency } from "../cargo/metadata";
+import { shellWord } from "../executors/cargo-invocation";
 import { realPath } from "../graph/real-path";
 import {
   crateVersion,
@@ -16,13 +19,24 @@ import {
 } from "./manifests";
 import {
   blockers,
+  errorMessage,
+  isAbsence,
   memberEntries,
   outsideDestination,
   readDocument,
+  readTreeText,
   Requirement,
   requirementsOn,
+  treePath,
 } from "./places";
-import { cargoMetadataOf, ReleaseCrate, releaseRepository, ReleaseRepository } from "./repository";
+import {
+  cargoMetadataOf,
+  ReleaseCrate,
+  releaseRepository,
+  ReleaseRepository,
+  ReleaseWorkspace,
+  repositoryPath,
+} from "./repository";
 import { requirementChange } from "./requirements";
 import { replaceStrings, StringEdit, TomlEditError } from "./toml-edit";
 
@@ -52,6 +66,18 @@ interface Run {
   named: Set<string>;
   /** Whether the dependents have been checked, once every version is decided. */
   dependentsChecked: boolean;
+  /**
+   * The lockfiles that `afterAllProjectsVersioned` brings up to date, relative
+   * to the repository root, with their workspaces.
+   */
+  lockfiles: Map<string, ReleaseWorkspace>;
+  /**
+   * The files that the run writes through Nx's tree, by their
+   * {@link treePath}: where they lie once symbolic links are followed.
+   */
+  written: Set<string>;
+  /** The lockfiles that the run has read, by their absolute path, as they were before it. */
+  lockfileStates: Map<string, LockfileState>;
 }
 
 /** The runs, by the tree that Nx hands to each method that writes. */
@@ -355,13 +381,19 @@ export default class CargoVersionActions extends VersionActions {
       }
     }
     const blocking = blockers(tree, repository, crate, newVersion);
+    // The lockfiles that cargo will rewrite after Nx has written the files
+    // (`afterAllProjectsVersioned`), checked now with them.
+    const { lockfiles, unreadable } = staleLockfiles(tree, repository, run, crate, [
+      ...edits.keys(),
+    ]);
+    const files = [...new Set([...edits.keys(), ...lockfiles.keys()])];
     // A file inside the repository by its path can lead outside it through
     // a symbolic link, of its own or of a folder on the way.
-    const outside = [...edits.keys()].flatMap((file) => {
+    const outside = files.flatMap((file) => {
       const destination = outsideDestination(tree.root, file);
       return destination === undefined ? [] : [`- ${file} leads to ${destination}`];
     });
-    const unwritable = [...edits.keys()].filter(
+    const unwritable = files.filter(
       (file) =>
         outsideDestination(tree.root, file) === undefined && !writable(join(tree.root, file)),
     );
@@ -392,6 +424,16 @@ export default class CargoVersionActions extends VersionActions {
         ].join("\n"),
       );
     }
+    if (unreadable.length > 0) {
+      const one = unreadable.length === 1;
+      sections.push(
+        [
+          `nx release version cannot read the Cargo.lock of ${one ? "a Cargo workspace" : "Cargo workspaces"}, which it needs to tell whether the new version ${newVersion} of ${crate.name} makes ${one ? "it" : "them"} stale and to bring ${one ? "it" : "them"} up to date:`,
+          ...unreadable,
+          `Make ${one ? "it" : "them"} readable and valid, and run the command again.`,
+        ].join("\n"),
+      );
+    }
     if (unwritable.length > 0) {
       sections.push(
         `nx release version cannot write ${sentenceList(unwritable)}, which the new version ${newVersion} of ${crate.name} changes: make ${unwritable.length === 1 ? "it" : "them"} writable and run the command again.`,
@@ -401,18 +443,25 @@ export default class CargoVersionActions extends VersionActions {
       throw new ReleaseError([...sections, "No file has been changed."].join("\n\n"));
     }
 
+    // Written at the path of what a symbolic link leads to, which Nx then
+    // stages and its formatter leaves alone.
     for (const [file, fileEdits] of edits) {
-      tree.write(file, editedFile(tree, file, fileEdits));
-      if (!this.manifestsToUpdate.some((update) => update.manifestPath === file)) {
+      const path = treePath(tree.root, file);
+      tree.write(path, editedFile(tree, file, fileEdits));
+      if (!this.manifestsToUpdate.some((update) => update.manifestPath === path)) {
         this.manifestsToUpdate.push({
-          manifestPath: file,
+          manifestPath: path,
           preserveLocalDependencyProtocols:
             this.finalConfigForProject.preserveLocalDependencyProtocols,
         });
       }
+      run.written.add(path);
     }
     run.versioned.add(this.projectGraphNode.name);
     run.rewrites.push(...rewrites);
+    for (const [lockfile, workspace] of lockfiles) {
+      run.lockfiles.set(lockfile, workspace);
+    }
     return lines;
   }
 
@@ -454,15 +503,7 @@ export default class CargoVersionActions extends VersionActions {
   // The current version and the manifest that holds it.
   private currentVersion(tree: Tree): { currentVersion: string; manifestPath: string } {
     const crate = this.crate();
-    const read = (path: string) => {
-      const text = tree.read(path, "utf-8");
-      if (text === null) {
-        throw new ReleaseError(
-          `${path} does not exist, so nx release version cannot read it. Run nx reset and the command again.`,
-        );
-      }
-      return text;
-    };
+    const read = (path: string) => readTreeText(tree, path);
     const version = crateVersion(parseManifest(read(crate.manifest), crate.manifest));
     if (version.kind === "own") {
       return { currentVersion: version.version, manifestPath: crate.manifest };
@@ -564,6 +605,9 @@ function runOf(tree: Tree): Run {
       rewrites: [],
       named: new Set(),
       dependentsChecked: false,
+      lockfiles: new Map(),
+      written: new Set(),
+      lockfileStates: new Map(),
     };
     runs.set(tree, run);
   }
@@ -711,12 +755,10 @@ function writable(path: string): boolean {
   }
 }
 
+// The file with the edits made, read at its tree path ({@link treePath}).
 function editedFile(tree: Tree, file: string, edits: readonly StringEdit[]): string {
-  const text = tree.read(file, "utf-8");
+  const text = readTreeText(tree, file);
   try {
-    if (text === null) {
-      throw new TomlEditError("the file does not exist");
-    }
     return replaceStrings(text, edits);
   } catch (error) {
     if (!(error instanceof TomlEditError)) {
@@ -733,4 +775,299 @@ function sentenceList(items: readonly string[]): string {
   return items.length <= 1
     ? (items[0] ?? "")
     : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/**
+ * Brings the `Cargo.lock` of each Cargo workspace that the run changed up to
+ * date (`DES-RELEASE`, "Lockfile"). Nx calls it once, after it has written
+ * the files of the run and before it stages and commits them
+ * (`EVD-NX-24-VERSION-ACTIONS`); in a dry run it does nothing, because Nx has
+ * written nothing.
+ *
+ * For each lockfile that `updateProjectVersion` recorded, in the order of
+ * their paths, it runs `cargo update --workspace` in the workspace's root
+ * folder, with the environment of the run and never with `--locked` or
+ * `--offline`, whatever the plugin's `locked` option says, because the
+ * lockfile has to change. It goes on after a workspace whose cargo fails,
+ * so that the message names every failure, and then throws.
+ *
+ * @returns The lockfiles that cargo changed and that git does not ignore,
+ *   for Nx to stage and commit, each by its {@link treePath}: where it lies
+ *   once symbolic links are followed, relative to the repository root.
+ * @throws {ReleaseError} When cargo fails in a workspace, or a lockfile
+ *   cannot be read, naming the workspace, with cargo's message and the
+ *   commands that go back or on.
+ */
+// @mara implements DES-RELEASE
+export async function afterAllProjectsVersioned(
+  cwd: string,
+  options: { dryRun?: boolean },
+): Promise<{ changedFiles: string[]; deletedFiles: string[] }> {
+  const run = latestRun;
+  if (options.dryRun || run === undefined || run.lockfiles.size === 0) {
+    return { changedFiles: [], deletedFiles: [] };
+  }
+  const changed: string[] = [];
+  const failures: {
+    workspace: ReleaseWorkspace;
+    reason: string;
+    output: string;
+    cargoFailed: boolean;
+  }[] = [];
+  for (const [lockfile, workspace] of [...run.lockfiles].sort(([a], [b]) => a.localeCompare(b))) {
+    const file = join(cwd, lockfile);
+    const before = readLockfile(file);
+    if (before.kind === "absent") {
+      continue;
+    }
+    if (before.kind === "unreadable") {
+      failures.push({
+        workspace,
+        reason: `nx release version cannot read ${lockfile}: ${before.reason}`,
+        output: "",
+        cargoFailed: false,
+      });
+      continue;
+    }
+    const update = spawnSync("cargo", ["update", "--workspace"], {
+      cwd: dirname(file),
+      env: process.env,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (update.error !== undefined || update.status !== 0) {
+      const code = (update.error as NodeJS.ErrnoException | undefined)?.code;
+      failures.push({
+        workspace,
+        reason:
+          code === "ENOENT"
+            ? "cargo was not found on PATH"
+            : update.error !== undefined
+              ? update.error.message
+              : update.signal
+                ? `cargo was stopped by ${update.signal}`
+                : `cargo exited with status ${update.status}`,
+        output: (update.stderr ?? "").trim(),
+        cargoFailed: true,
+      });
+      continue;
+    }
+    const after = readLockfile(file);
+    if (after.kind !== "read") {
+      failures.push({
+        workspace,
+        reason: `nx release version cannot read ${lockfile} after cargo update --workspace: ${after.kind === "absent" ? "it does not exist" : after.reason}`,
+        output: "",
+        cargoFailed: false,
+      });
+      continue;
+    }
+    if (after.text !== before.text) {
+      const path = treePath(cwd, lockfile);
+      changed.push(path);
+      console.log(
+        path === lockfile
+          ? `Updated ${lockfile} with cargo update --workspace`
+          : `Updated ${path}, to which ${lockfile} leads, with cargo update --workspace`,
+      );
+    }
+  }
+  const staged = changed.filter((path) => !gitIgnores(cwd, path));
+  if (failures.length > 0) {
+    throw new ReleaseError(recoveryMessage(cwd, run, failures, changed, staged));
+  }
+  return { changedFiles: staged, deletedFiles: [] };
+}
+
+/**
+ * The message for a lockfile step that failed: each failure, and the
+ * commands, quoted for a POSIX shell, that take back what Nx and cargo
+ * wrote or bring the lockfiles up to date by hand.
+ */
+function recoveryMessage(
+  cwd: string,
+  run: Run,
+  failures: readonly {
+    workspace: ReleaseWorkspace;
+    reason: string;
+    output: string;
+    cargoFailed: boolean;
+  }[],
+  changed: readonly string[],
+  staged: readonly string[],
+): string {
+  const one = failures.length === 1;
+  const workspaces = `${one ? "the Cargo workspace" : "the Cargo workspaces"} ${sentenceList(failures.map(({ workspace }) => workspace.rootManifest))}`;
+  const written = [...new Set([...run.written, ...staged])].sort();
+  const untracked = untrackedFiles(cwd, written);
+  const restorable = written.filter((file) => !untracked.includes(file));
+  const folders = failures.map(({ workspace }) => posix.dirname(workspace.rootManifest));
+  const byHand =
+    untracked.length === 0
+      ? ""
+      : `take back ${sentenceList(untracked)}, which git does not track, by hand`;
+  return [
+    failures.every(({ cargoFailed }) => cargoFailed)
+      ? `cargo update --workspace failed in ${workspaces}, so nx release version cannot bring ${one ? "its" : "their"} Cargo.lock up to date:`
+      : `nx release version cannot bring the Cargo.lock of ${workspaces} up to date:`,
+    ...failures.flatMap(({ workspace, reason, output }) => [
+      `- ${workspace.rootManifest}: ${reason}`,
+      ...(output === "" ? [] : output.split("\n").map((line) => `    ${line}`)),
+    ]),
+    `Nx has written the new versions${changed.length > 0 ? ` and cargo has updated ${sentenceList(changed)}` : ""}, and made no commit or tag.`,
+    ...(restorable.length === 0
+      ? [`To go back, ${byHand}, and run nx release version again once cargo works.`]
+      : [
+          `To go back, run this in the root of the Nx workspace,${byHand === "" ? "" : ` ${byHand},`} and run nx release version again once cargo works:`,
+          // git reads a path in `*`, `?`, `[` or `\` as a pattern otherwise.
+          `    git ${restorable.some((file) => /[*?[\\]/.test(file)) ? "--literal-pathspecs " : ""}checkout -- ${restorable.map(shellWord).join(" ")}`,
+        ]),
+    `To go on instead, correct what cargo reports, run ${folders.length === 1 ? "this" : "these"} in the root of the Nx workspace, and commit and tag the release yourself:`,
+    // cd would read a folder that starts with `-` as an option.
+    ...folders.map(
+      (folder) =>
+        `    (cd ${shellWord(folder.startsWith("-") ? `./${folder}` : folder)} && cargo update --workspace)`,
+    ),
+  ].join("\n");
+}
+
+/** The lockfile of a workspace, relative to the repository root with `/`. */
+function lockfileOf(workspace: ReleaseWorkspace): string {
+  return posix.join(posix.dirname(workspace.rootManifest), "Cargo.lock");
+}
+
+/** A package that a lockfile locks. */
+interface LockedPackage {
+  name?: unknown;
+  version?: unknown;
+  source?: unknown;
+}
+
+/** A lockfile as the run read it before it changed anything. */
+type LockfileState =
+  | { kind: "absent" }
+  | { kind: "unreadable"; reason: string }
+  | { kind: "read"; packages: LockedPackage[] };
+
+/**
+ * The lockfiles, by their path relative to the repository root, that the new
+ * version of `crate` makes stale, with their workspaces: those of the
+ * workspaces whose root manifest, member manifests or Cargo configuration
+ * files are among `files`, and those that lock the crate as a path package
+ * at its old version, as the lockfile of a workspace does whose member
+ * depends on the crate by path without a version requirement, whose
+ * manifests stay as they are (`EVD-CARGO-LOCKFILE-UPDATE`). A workspace
+ * without a `Cargo.lock` has none. A lockfile that cannot be read or parsed
+ * is among `unreadable`, with the reason, because then nx-rust can tell
+ * neither whether it is stale nor bring it up to date; only a lockfile that
+ * does not exist is absent.
+ */
+function staleLockfiles(
+  tree: Tree,
+  repository: ReleaseRepository,
+  run: Run,
+  crate: ReleaseCrate,
+  files: readonly string[],
+): { lockfiles: Map<string, ReleaseWorkspace>; unreadable: string[] } {
+  const lockfiles = new Map<string, ReleaseWorkspace>();
+  const unreadable: string[] = [];
+  for (const workspace of repository.workspaces) {
+    const lockfile = lockfileOf(workspace);
+    const file = join(tree.root, lockfile);
+    let state = run.lockfileStates.get(file);
+    if (state === undefined) {
+      state = lockfileState(file);
+      run.lockfileStates.set(file, state);
+    }
+    if (state.kind === "unreadable") {
+      unreadable.push(`- ${lockfile}: ${state.reason}`);
+    } else if (
+      state.kind === "read" &&
+      (changesWorkspace(repository, workspace, files) ||
+        // A lockfile names no path, and another path crate of that name and
+        // version only costs an update that changes nothing.
+        state.packages.some(
+          (pkg) =>
+            pkg.name === crate.name && pkg.version === crate.version && pkg.source === undefined,
+        ))
+    ) {
+      lockfiles.set(lockfile, workspace);
+    }
+  }
+  return { lockfiles, unreadable };
+}
+
+// Whether `files` holds the workspace's root manifest, a member's manifest
+// or one of its Cargo configuration files.
+function changesWorkspace(
+  repository: ReleaseRepository,
+  workspace: ReleaseWorkspace,
+  files: readonly string[],
+): boolean {
+  return files.some(
+    (file) =>
+      file === workspace.rootManifest ||
+      workspace.crates.some((member) => member.manifest === file) ||
+      workspace.configFiles.some(
+        (configFile) => repositoryPath(repository.root, configFile) === file,
+      ),
+  );
+}
+
+// The packages that the lockfile at `file` locks.
+function lockfileState(file: string): LockfileState {
+  const read = readLockfile(file);
+  if (read.kind !== "read") {
+    return read;
+  }
+  try {
+    const lock = parse(read.text) as { package?: unknown };
+    return {
+      kind: "read",
+      packages: Array.isArray(lock.package) ? (lock.package as LockedPackage[]) : [],
+    };
+  } catch (error) {
+    return { kind: "unreadable", reason: `no valid TOML: ${errorMessage(error).split("\n")[0]}` };
+  }
+}
+
+// The text of the lockfile at `file`; absent only where it does not exist.
+function readLockfile(
+  file: string,
+): { kind: "absent" } | { kind: "unreadable"; reason: string } | { kind: "read"; text: string } {
+  try {
+    return { kind: "read", text: readFileSync(file, "utf8") };
+  } catch (error) {
+    return isAbsence(error)
+      ? { kind: "absent" }
+      : { kind: "unreadable", reason: errorMessage(error) };
+  }
+}
+
+// Whether git ignores a path of the repository; outside a git repository nothing is.
+function gitIgnores(cwd: string, path: string): boolean {
+  return (
+    spawnSync("git", ["check-ignore", "--quiet", "--", path], { cwd, stdio: "ignore" }).status === 0
+  );
+}
+
+// The files among `files` that git does not track, which `git checkout`
+// cannot take back and refuses to take back anything beside; none where git
+// cannot tell, as outside a git repository.
+function untrackedFiles(cwd: string, files: readonly string[]): string[] {
+  if (files.length === 0) {
+    return [];
+  }
+  const listed = spawnSync("git", ["--literal-pathspecs", "ls-files", "-z", "--", ...files], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (listed.status !== 0) {
+    return [];
+  }
+  const tracked = new Set(listed.stdout.split("\0"));
+  return files.filter((file) => !tracked.has(file));
 }

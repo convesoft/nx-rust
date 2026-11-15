@@ -1,7 +1,20 @@
-import { readdirSync, readFileSync } from "node:fs";
+import type { Tree } from "@nx/devkit";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
-import { parsePackageSpec } from "../src/release/manifests";
+import { parsePackageSpec, ReleaseError } from "../src/release/manifests";
+import { readDocument, readTreeText, treePath } from "../src/release/places";
+import type { ReleaseRepository } from "../src/release/repository";
 import { requirementChange } from "../src/release/requirements";
 import { elementKey, replaceStrings, scanStrings, TomlEditError } from "../src/release/toml-edit";
 
@@ -242,5 +255,78 @@ describe("reading a package ID specification", () => {
     ["*", undefined],
   ])("%s", (spec, parts) => {
     expect(parsePackageSpec(spec)).toEqual(parts);
+  });
+});
+
+describe("reading and writing the files of a release", () => {
+  let base: string;
+  let root: string;
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "nx-rust-release-files-"));
+    root = join(base, "repo");
+    mkdirSync(join(root, "linked"), { recursive: true });
+    mkdirSync(join(root, "crate"));
+    writeFileSync(join(root, "linked", "manifest.toml"), 'version = "0.1.0"\n');
+    symlinkSync("../linked/manifest.toml", join(root, "crate", "Cargo.toml"));
+    symlinkSync("linked", join(root, "folder"));
+    writeFileSync(join(base, "outside.toml"), 'version = "0.1.0"\n');
+    symlinkSync("../outside.toml", join(root, "outside.toml"));
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  // Nx's own tree, as nx release version hands it to the version actions.
+  function nxTree(): Tree {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { FsTree } = require("nx/src/generators/tree");
+    return new FsTree(root, false);
+  }
+
+  // The message of the ReleaseError that `read` throws.
+  function readFailure(read: () => unknown): string {
+    try {
+      read();
+    } catch (error) {
+      return error instanceof ReleaseError ? error.message : `another error: ${String(error)}`;
+    }
+    return "read";
+  }
+
+  it("names a file by where symbolic links inside the repository lead", () => {
+    expect(treePath(root, "crate/Cargo.toml")).toBe("linked/manifest.toml");
+    expect(treePath(root, "folder/manifest.toml")).toBe("linked/manifest.toml");
+    expect(treePath(root, "linked/manifest.toml")).toBe("linked/manifest.toml");
+    // Outside the repository, and not there at all, a file keeps its path.
+    expect(treePath(root, "outside.toml")).toBe("outside.toml");
+    expect(treePath(root, "crate/missing.toml")).toBe("crate/missing.toml");
+  });
+
+  it("reads a file through a link as Nx's tree holds what the link leads to", () => {
+    const tree = nxTree();
+    tree.write("linked/manifest.toml", 'version = "0.2.0"\n');
+    expect(readTreeText(tree, "crate/Cargo.toml")).toBe('version = "0.2.0"\n');
+  });
+
+  it("says that a file does not exist only where it does not, and otherwise why it cannot be read", () => {
+    const tree = nxTree();
+    expect(readFailure(() => readTreeText(tree, "crate/missing.toml"))).toBe(
+      "crate/missing.toml does not exist, so nx release version cannot read it. Run nx reset and the command again.",
+    );
+    chmodSync(join(root, "linked", "manifest.toml"), 0o200);
+    chmodSync(join(base, "outside.toml"), 0o200);
+    try {
+      expect(readFailure(() => readTreeText(tree, "crate/Cargo.toml"))).toMatch(
+        /^nx release version cannot read crate\/Cargo\.toml: EACCES: permission denied, open .*\. Make it readable and run the command again\.$/,
+      );
+      const repository = { root } as ReleaseRepository;
+      expect(readFailure(() => readDocument(tree, repository, join(base, "outside.toml")))).toMatch(
+        /^nx release version cannot read .*outside\.toml: EACCES: permission denied/,
+      );
+      expect(readFailure(() => readDocument(tree, repository, join(base, "missing.toml")))).toBe(
+        `${join(base, "missing.toml")} does not exist, so nx release version cannot read it. Run nx reset and the command again.`,
+      );
+    } finally {
+      chmodSync(join(root, "linked", "manifest.toml"), 0o644);
+      chmodSync(join(base, "outside.toml"), 0o644);
+    }
   });
 });

@@ -7,6 +7,7 @@ import {
   readlinkSync,
   realpathSync,
   renameSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -25,8 +26,11 @@ import {
 // Checks groups 1, 2, 3 and 5 of VER-RELEASE: `nx release version` with the
 // plugin's version actions, with the real Nx and cargo, in copies of the
 // release-crates fixture that are made git repositories. Versioning reads no
-// registry, so no test starts one. Every edge of the fixture's graph is
-// implicit, as every edge of the plugin is.
+// registry, so no test starts one, and the lockfile step that follows a run
+// that writes runs offline here, which the fixture allows because it locks
+// path packages only; release-lockfile.spec.ts checks that step against a
+// registry (group 4). Every edge of the fixture's graph is implicit, as every
+// edge of the plugin is.
 
 /** The variables that give git, also Nx's commits and tags, an identity and no outside configuration. */
 function gitVariables(workspace: FixtureWorkspace): Record<string, string> {
@@ -96,6 +100,8 @@ async function releaseVersion(
   const { status, output } = await workspace.nx(["release", "version", ...args], {
     ...gitVariables(workspace),
     CARGO_HOME: emptyCargoHome(workspace),
+    // The lockfile step's `cargo update --workspace` reaches no registry.
+    CARGO_NET_OFFLINE: "true",
     ...env,
   });
   return { status, output: withoutColours(output).replace(/[^\S\n]+$/gm, "") };
@@ -137,14 +143,18 @@ function repositoryState(workspace: FixtureWorkspace) {
 /**
  * Checks that exactly the files of `changes` changed since `before`, each into
  * its old content with every pair `[from, to]` replaced, where `from` occurs
- * once in it: so every other byte is as it was.
+ * once in it: so every other byte is as it was. The lockfiles, which cargo
+ * updates after the version actions, are left to release-lockfile.spec.ts.
  */
 function expectOnly(
   workspace: FixtureWorkspace,
-  before: Map<string, string>,
+  allBefore: Map<string, string>,
   changes: Record<string, [from: string, to: string][]>,
 ): void {
-  const after = trackedFiles(workspace);
+  const withoutLockfiles = (files: Map<string, string>) =>
+    new Map([...files].filter(([path]) => !path.endsWith("Cargo.lock")));
+  const before = withoutLockfiles(allBefore);
+  const after = withoutLockfiles(trackedFiles(workspace));
   expect(changedFiles(before, after)).toEqual(Object.keys(changes).sort());
   for (const [path, replacements] of Object.entries(changes)) {
     let expected = before.get(path) ?? "";
@@ -289,7 +299,7 @@ describe("nx release version with the plugin's version actions (VER-RELEASE)", (
           expect(git(workspace, "rev-parse", "HEAD~1").trim()).toBe(head);
           expect(
             git(workspace, "show", "--name-only", "--format=", "HEAD").trim().split("\n").sort(),
-          ).toEqual(["rust/Cargo.toml", "rust/crates/cli/Cargo.toml"]);
+          ).toEqual(["rust/Cargo.lock", "rust/Cargo.toml", "rust/crates/cli/Cargo.toml"]);
           expect(git(workspace, "tag", "--list").trim().split("\n").sort()).toEqual([
             "cli@0.4.0",
             "crates-v0.2.0",
@@ -1260,6 +1270,82 @@ describe("nx release version with the plugin's version actions (VER-RELEASE)", (
             chmodSync(manifest, 0o644);
           }
         }),
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "writes, stages and commits the files that symbolic links inside the repository lead to, for a member's manifest and a configuration file",
+      () =>
+        withCopy(
+          { ...withPatch('fork = { path = "../third_party/fork" }\n'), ".oxfmtrc.json": "{}\n" },
+          async (workspace) => {
+            // normal-user's Cargo.toml and rust/.cargo/config.toml link to
+            // files in another folder of the repository, in layouts that
+            // oxfmt, which the copy configures, would change.
+            const linked = join(workspace.root, "linked");
+            mkdirSync(linked);
+            const manifest = join(workspace.root, "rust", "crates", "normal-user", "Cargo.toml");
+            rmSync(manifest);
+            writeFileSync(
+              join(linked, "normal-user.toml"),
+              [
+                "[package]",
+                'name = "normal-user"',
+                "version    =    '0.1.0'   # the version",
+                'edition = "2024"',
+                "",
+                "[dependencies]",
+                "base = {path='../base',version='0.1.0'}",
+                "",
+              ].join("\n"),
+            );
+            symlinkSync("../../../linked/normal-user.toml", manifest);
+            writeFileSync(
+              join(linked, "cargo-config.toml"),
+              "[patch.crates-io]\nbase = {   path = 'crates/base',   version = '=0.1.0' }\n",
+            );
+            mkdirSync(join(workspace.root, "rust", ".cargo"));
+            symlinkSync(
+              "../../linked/cargo-config.toml",
+              join(workspace.root, "rust", ".cargo", "config.toml"),
+            );
+            git(workspace, "add", "--all");
+            git(workspace, "commit", "--quiet", "--message", "Linked files");
+            const before = trackedFiles(workspace);
+
+            const { status, output } = await releaseVersion(workspace, [
+              "0.2.0",
+              "--projects",
+              "base",
+            ]);
+
+            expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
+            // The links stay as they were, and what they lead to changed in
+            // its version strings only, and is in Nx's commit.
+            const after = trackedFiles(workspace);
+            for (const link of ["rust/crates/normal-user/Cargo.toml", "rust/.cargo/config.toml"]) {
+              expect({ link, leadsTo: after.get(link) }).toEqual({
+                link,
+                leadsTo: before.get(link),
+              });
+            }
+            expect(after.get("linked/normal-user.toml")).toBe(
+              (before.get("linked/normal-user.toml") ?? "")
+                .replace("version    =    '0.1.0'", "version    =    '0.1.1'")
+                .replace("version='0.1.0'", "version='0.2.0'"),
+            );
+            expect(after.get("linked/cargo-config.toml")).toBe(
+              (before.get("linked/cargo-config.toml") ?? "").replace("'=0.1.0'", "'=0.2.0'"),
+            );
+            const committed = git(workspace, "show", "--name-only", "--format=", "HEAD")
+              .trim()
+              .split("\n");
+            expect(committed).toEqual(
+              expect.arrayContaining(["linked/normal-user.toml", "linked/cargo-config.toml"]),
+            );
+            expect(git(workspace, "status", "--porcelain").trim()).toBe("");
+          },
+        ),
       HARNESS_TIMEOUT,
     );
   });

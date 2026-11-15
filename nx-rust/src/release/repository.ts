@@ -155,9 +155,12 @@ export function releaseRepository(root: string, graph: ProjectGraph): ReleaseRep
  * there up and in the Cargo home, `.cargo/config` where it exists and
  * `.cargo/config.toml` otherwise, and the files that their `include` names,
  * as graph creation reads them (`DES-METADATA-REPORT`). An included file
- * that cannot be parsed is left out, as graph creation leaves it out.
+ * that cannot be read or parsed is left out, as graph creation leaves it
+ * out with a warning. A file that cannot even be looked at, as in a folder
+ * that may not be searched, counts as absent, as it does for cargo.
  *
- * @throws {ReleaseError} When a file that cargo reads in any version is no valid TOML.
+ * @throws {ReleaseError} When a file that cargo reads in any version cannot
+ *   be read or is no valid TOML, saying which.
  */
 function cargoConfigFiles(workspaceRoot: string): string[] {
   const files: string[] = [];
@@ -167,9 +170,20 @@ function cargoConfigFiles(workspaceRoot: string): string[] {
       return;
     }
     seen.add(file);
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch (error) {
+      if (included) {
+        return;
+      }
+      throw new ReleaseError(
+        `nx release version cannot read ${file}, from which cargo takes [patch] entries: ${(error as Error).message}. Make it readable and run the command again.`,
+      );
+    }
     let table: unknown;
     try {
-      table = parse(readFileSync(file, "utf8"));
+      table = parse(text);
     } catch (error) {
       if (included) {
         return;
@@ -193,6 +207,10 @@ function cargoConfigFiles(workspaceRoot: string): string[] {
   return files;
 }
 
+// Whether a file exists at `path`. One that cannot be looked at counts as
+// absent: cargo 1.100.0 and 1.91.0 read no configuration from a `.cargo`
+// folder that they may not search, and fail on a file there that they may
+// not read.
 function isFile(path: string): boolean {
   try {
     return statSync(path).isFile();
