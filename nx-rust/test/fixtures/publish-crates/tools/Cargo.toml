@@ -1,0 +1,9 @@
+[package]
+name = "pub-tool"
+version = "0.1.0"
+description = "A crate of another Cargo workspace of the publishing tests that depends on pub-core"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+pub-core = { path = "../rust/crates/core", version = "0.1.0", registry = "nx-rust-test" }

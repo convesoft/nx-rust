@@ -10,6 +10,7 @@ import {
   GraphCreationError,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
+  offlineRegistryKeyEnv,
   pinnedToolchainAvailable,
 } from "./harness";
 
@@ -29,6 +30,8 @@ interface ExpectedGraph {
   projects: Record<string, string>;
   /** Each edge as source and target, sorted. */
   edges: [source: string, target: string][];
+  /** The variables that graph creation needs, such as the index of a registry that the fixture's entries name. */
+  env?: Readonly<Record<string, string>>;
 }
 
 // The edges of patched-workspaces.
@@ -410,6 +413,27 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["xtask", "base"],
     ],
   },
+  // Every entry names the harness registry, which cargo needs configured to
+  // read the manifests; offline cargo never asks its index.
+  "publish-crates": {
+    cargoFolders: ["rust", "tools"],
+    env: offlineRegistryKeyEnv,
+    projects: {
+      "pub-base": "rust/crates/base",
+      "pub-core": "rust/crates/core",
+      "pub-private": "rust/crates/private",
+      rust: "rust",
+      "pub-tool": "tools",
+    },
+    edges: [
+      ["pub-core", "pub-base"],
+      ["pub-private", "pub-base"],
+      ["pub-tool", "pub-core"],
+      ["rust", "pub-base"],
+      ["rust", "pub-core"],
+      ["rust", "pub-private"],
+    ],
+  },
   // alpha and beta have binaries of one name; tools is a standalone crate.
   "shared-executables": {
     cargoFolders: ["rust", "tools"],
@@ -472,7 +496,7 @@ describe("projects and edges of each fixture", () => {
       try {
         const files = workspace.files();
 
-        const graph = await workspace.graph();
+        const graph = await workspace.graph(expected[fixture].env);
 
         expect(roots(graph)).toEqual(expected[fixture].projects);
         expect(edges(graph)).toEqual(expected[fixture].edges);

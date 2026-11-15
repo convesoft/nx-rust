@@ -38,6 +38,7 @@ each fixture still has the workspaces and members listed there, and with
 | `binary-tests`         | Binaries in the `rust/` workspace beside the library `flavour`, whose feature `extra` each binary's dev-dependency on it turns on, so that `cargo test` builds another executable than `cargo build`. Each crate has one shape of `DES-TARGETS`' rule for `test` waiting for `build`: `app`'s integration test runs `CARGO_BIN_EXE_app` and expects `extra`, `harnessless` has a test without harness, `benched` a bench with `test = true` and `gated` a binary with `required-features` beside an integration test; `showcase` has an example only, `unit` unit tests only, `untested` a `[[test]]` with `test = false`, `timed` a bench without `test`, `library` a library with an integration test and `addon` a `cdylib` and `staticlib` with one.           |
 | `batch-groups`         | Crates in the `rust/` workspace whose failures the batch tests switch on by replacing one file: `dep` depends on `base`, `user` on `breakable`, and `devuser` has `breakable` as a dev-dependency of its only test, a unit test; `indep` has an integration test, `base` a doctest and `scripted` a build script. Every crate passes as checked in.                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `release-crates`       | Release groups in `nx.json`: `core` and `api` in `rust/` inherit `version.workspace = true`, as the fixed group `crates`; the other crates with a project, but `unreleased`, form the group `others`. `base` 0.1.0 is required in every form: normal, build, renamed and optional, `cfg(unix)`, dev, without a version, `*`, through `[workspace.dependencies]`, from `hidden` (excluded, behind which `via-hidden` uses it), `private` (`publish = false`) and `tools/`'s `xtask`. `rust/`'s `[patch.crates-io]` redirects `base` and `fork` (`third_party/fork`, excluded), which `registry-user` uses. `cli` 0.3.0 depends on `api`.                                                                                                                            |
+| `publish-crates`       | For publishing through Nx release (groups 6, 7 and 9 of `VER-RELEASE`). In `rust/`, `pub-core` depends on `pub-base` through `[workspace.dependencies]` and `pub-private` (`publish = false`) on it as well; `tools/`, a Cargo workspace of one crate, holds `pub-tool`, which depends on `pub-core`. Every entry on a crate of the repository names the harness registry, `registry = "nx-rust-test"`, so every cargo command on it, graph creation included, needs the harness's Cargo home and variables. `nx.json` puts the three published crates into one independent release group and commits and tags versions.                                                                                                                                           |
 | `shared-executables`   | Two crates of the `rust/` workspace whose binaries are both called `cli`: `alpha` with a `[[bin]]` table, whose integration test runs `CARGO_BIN_EXE_cli` and passes with either crate's executable, and `beta` with `src/bin/cli.rs`; `gamma` has a binary of its own name. The standalone crate `tools` has a binary called `cli` too, in an artifact directory of its own until a test gives both workspaces one.                                                                                                                                                                                                                                                                                                                                               |
 
 A fixture has no `nx.json` unless it needs plugin options. The harness writes
@@ -201,6 +202,25 @@ itself can write; and Nx's own requests.
   Jest runs beside the others.
 - `stop()` stops the server and keeps the files, for a test of a registry that
   does not answer.
+- Beside it, the same server serves two more registries, `alpha` and `beta`
+  (`registry.named`), each under a path of its own with its own index,
+  publish endpoint and token, for the cases of group 9 of `VER-RELEASE`.
+  Every Cargo home names them, and `env()` pins their indexes, tokens and
+  credential providers as it pins its own registry's. `seed`, `index` and
+  `uploads` take a registry's name, and each upload records the registry,
+  the token it carried and, in its metadata, the registry of each
+  dependency; `allUploads()` lists the uploads of all of them. A third
+  registry, `spare` (`registry.spare`), is served the same way and named
+  nowhere, for a case that configures a name of its own for an index: cargo
+  refuses an upload where two names configure one index.
+- The variants of `env({ registryDefault, home, aliases, offline })` leave
+  `CARGO_REGISTRY_DEFAULT` unset (`null`) or pin another registry, choose a
+  Cargo home without `registry.default` (`no-default`) or one that also
+  replaces `alpha` with `beta` through a `[source]` table
+  (`alpha-replaced`), give a further name the index of `alpha` or `beta` in
+  the environment, such as `{ alias: "alpha" }`, and set
+  `CARGO_NET_OFFLINE=true` in place of the pinned `false`. Every Cargo home
+  replaces crates.io with the main registry and keeps the proxy.
 
 [`sparse-registry.spec.ts`](sparse-registry.spec.ts) checks each of these
 against the real cargo of the default toolchain and of 1.91. For the

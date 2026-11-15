@@ -1,0 +1,12 @@
+{
+  "plugins": ["@convesoft/nx-rust"],
+  "release": {
+    "groups": {
+      "crates": {
+        "projects": ["pub-base", "pub-core", "pub-tool"],
+        "projectsRelationship": "independent"
+      }
+    },
+    "version": { "git": { "commit": true, "tag": true } }
+  }
+}

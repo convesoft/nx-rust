@@ -29,6 +29,7 @@ const cargoExecutor = "@convesoft/nx-rust:cargo";
 const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
 const runExecutor = "@convesoft/nx-rust:run";
 const lockfileExecutor = "@convesoft/nx-rust:lockfile";
+const releasePublishExecutor = "@convesoft/nx-rust:release-publish";
 
 /** The empty target defaults that init adds for the plugin's executors. */
 const executorEntries = {
@@ -36,6 +37,7 @@ const executorEntries = {
   [cargoOutputsExecutor]: {},
   [runExecutor]: {},
   [lockfileExecutor]: {},
+  [releasePublishExecutor]: {},
 };
 
 /** The line with which init says which target defaults it added. */
@@ -281,7 +283,15 @@ describe("@convesoft/nx-rust", () => {
         const api = show("api");
         const rust = show("rust");
 
-        expect(Object.keys(api)).toEqual(["build", "check", "lint", "test", "fmt-check", "fmt"]);
+        expect(Object.keys(api)).toEqual([
+          "build",
+          "check",
+          "lint",
+          "test",
+          "fmt-check",
+          "fmt",
+          "nx-release-publish",
+        ]);
         expect(Object.keys(rust)).toEqual(["doc", "lockfile", "audit", "update"]);
         const cached = ["build", "check", "lint", "test", "fmt-check", "doc"];
         for (const [name, target] of [...Object.entries(api), ...Object.entries(rust)]) {
@@ -291,9 +301,11 @@ describe("@convesoft/nx-rust", () => {
               executor:
                 name === "lockfile"
                   ? lockfileExecutor
-                  : name === "build" || name === "doc"
-                    ? cargoOutputsExecutor
-                    : cargoExecutor,
+                  : name === "nx-release-publish"
+                    ? releasePublishExecutor
+                    : name === "build" || name === "doc"
+                      ? cargoOutputsExecutor
+                      : cargoExecutor,
               cache: cached.includes(name),
             },
           });
@@ -1105,10 +1117,13 @@ describe("@convesoft/nx-rust", () => {
           [cargoOutputsExecutor]: {},
           [runExecutor]: {},
           [lockfileExecutor]: {},
+          [releasePublishExecutor]: {},
         },
         plugins: ["@convesoft/nx-rust"],
       });
-      expect(output).toContain(addedLine([cargoOutputsExecutor, runExecutor, lockfileExecutor]));
+      expect(output).toContain(
+        addedLine([cargoOutputsExecutor, runExecutor, lockfileExecutor, releasePublishExecutor]),
+      );
       expect(output).toContain(
         `The targetDefaults entry "${cargoExecutor}" in nx.json changes targets that nx-rust infers:`,
       );

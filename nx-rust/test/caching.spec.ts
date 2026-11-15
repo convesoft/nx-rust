@@ -28,7 +28,16 @@ const pluginVersion: string = JSON.parse(
 ).version;
 
 const cached = ["build", "check", "lint", "test", "fmt-check"];
-const uncached = ["fmt", "bench", "run", "lockfile", "audit", "deny", "update"];
+const uncached = [
+  "fmt",
+  "bench",
+  "run",
+  "nx-release-publish",
+  "lockfile",
+  "audit",
+  "deny",
+  "update",
+];
 
 /** The dependency of a cached target on the lockfile task of the workspace in `root`. */
 function lockfileDependency(root: string) {

@@ -42,6 +42,12 @@ export interface CargoPackage {
   features?: Record<string, string[]>;
   /** `[package.metadata]`, or `null`. */
   metadata: unknown;
+  /**
+   * The registries that the package may be published to, from its `publish`
+   * key: `null` without the key, `[]` for `publish = false` and for a crate
+   * without a version.
+   */
+  publish?: string[] | null;
 }
 
 /** A Cargo target of a {@link CargoPackage}. */
@@ -84,6 +90,13 @@ export interface CargoDependency {
   rename?: string | null;
   /** The platform that the dependency is limited to, such as `cfg(windows)`; `null` for none. */
   target?: string | null;
+  /**
+   * The index URL of the registry that the entry names with `registry`,
+   * crates.io's for `registry = "crates-io"`, and `null` for an entry
+   * without the key, also where the entry inherits it from
+   * `[workspace.dependencies]` (`EVD-CARGO-PUBLISH-REGISTRIES`).
+   */
+  registry?: string | null;
 }
 
 /** The arguments after `cargo` that request the report for `manifest`. */

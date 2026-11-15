@@ -1,4 +1,4 @@
-import { inferredTargetNames } from "./targets";
+import { inferredTargetNames, releasePublishTarget } from "./targets";
 
 /**
  * The names that the plugin options' `targetNames` gives inferred targets:
@@ -12,12 +12,14 @@ export type TargetNames = Readonly<Record<string, string>>;
  *
  * Each key has to be the default name of an inferred target that this
  * version of the plugin knows ({@link inferredTargetNames}), whether or not
- * a project has that target, and each value a target name. The other
+ * a project has that target, other than `nx-release-publish`, which Nx
+ * release runs only under that name, and each value a target name. The other
  * plugin options are read with it (`readPluginOptions` in `settings.ts`).
  *
  * @param options The `options` of the entry, as Nx passes them to `createNodes`.
  * @throws {Error} When `targetNames` is no object, has a key that names no
- *   inferred target or a value that is no name, naming the keys.
+ *   inferred target, or `nx-release-publish`, or a value that is no name,
+ *   naming the keys.
  */
 // @mara implements DES-PLUGIN-OPTIONS
 export function readTargetNames(options: unknown): TargetNames {
@@ -31,13 +33,19 @@ export function readTargetNames(options: unknown): TargetNames {
       `${where} has to be an object that maps the default name of an inferred target to the name to use, such as { "lint": "clippy" }.`,
     );
   }
-  const known = new Set<string>(inferredTargetNames);
+  const renamable = inferredTargetNames.filter((target) => target !== releasePublishTarget);
+  if (Object.prototype.hasOwnProperty.call(value, releasePublishTarget)) {
+    throw new Error(
+      `${where} names "${releasePublishTarget}", but Nx release runs the publish target only under that name, so it cannot be renamed. Remove the key "${releasePublishTarget}" from "targetNames"; the targets that can be renamed are ${list(renamable.map((target) => `"${target}"`))}.`,
+    );
+  }
+  const known = new Set<string>(renamable);
   const unknown = Object.keys(value).filter((target) => !known.has(target));
   if (unknown.length > 0) {
     throw new Error(
       [
         `${where} names ${list(unknown.map((target) => `"${target}"`))}, which ${unknown.length === 1 ? "is not the default name of an inferred target" : "are not default names of inferred targets"}.`,
-        `The targets that can be renamed are ${list(inferredTargetNames.map((target) => `"${target}"`))}.`,
+        `The targets that can be renamed are ${list(renamable.map((target) => `"${target}"`))}.`,
       ].join(" "),
     );
   }

@@ -61,6 +61,8 @@ export const uncachedByDesign: Partial<Record<InferredTargetName, string>> = {
   update: "it exists to change Cargo.lock",
   lockfile:
     "whether cargo changes Cargo.lock also depends on files outside the repository, such as a [patch] in the Cargo home's configuration, which Nx cannot hash",
+  "nx-release-publish":
+    "it uploads the crate to a registry, which a result restored from the cache would not do",
 };
 
 /** What decides, beyond the target, whether the plugin can cache it in a workspace. */

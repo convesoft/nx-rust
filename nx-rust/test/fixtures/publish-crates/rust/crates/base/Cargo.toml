@@ -1,0 +1,6 @@
+[package]
+name = "pub-base"
+version = "0.1.0"
+description = "The crate that the other crates of the publishing tests depend on"
+edition.workspace = true
+license.workspace = true

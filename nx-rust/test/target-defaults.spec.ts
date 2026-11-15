@@ -33,6 +33,7 @@ const cargoExecutor = "@convesoft/nx-rust:cargo";
 const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
 const runExecutor = "@convesoft/nx-rust:run";
 const lockfileExecutor = "@convesoft/nx-rust:lockfile";
+const releasePublishExecutor = "@convesoft/nx-rust:release-publish";
 /** The dependency of the crates' cached targets on the lockfile task of `rust`. */
 const lockfileTask = { projects: ["directory:rust"], target: "lockfile" };
 
@@ -2293,9 +2294,10 @@ describe("init", () => {
     [cargoOutputsExecutor]: {},
     [runExecutor]: {},
     [lockfileExecutor]: {},
+    [releasePublishExecutor]: {},
   };
   /** How init's line names them. */
-  const addedNames = `"${cargoExecutor}": {}, "${cargoOutputsExecutor}": {}, "${runExecutor}": {} and "${lockfileExecutor}": {}`;
+  const addedNames = `"${cargoExecutor}": {}, "${cargoOutputsExecutor}": {}, "${runExecutor}": {}, "${lockfileExecutor}": {} and "${releasePublishExecutor}": {}`;
 
   /** Init's line about the entries it added. */
   const addedLine = (entries: string) =>
@@ -2329,6 +2331,7 @@ describe("init", () => {
         cargoOutputsExecutor,
         runExecutor,
         lockfileExecutor,
+        releasePublishExecutor,
       ]);
       expect(output).toContain(addedLine(addedNames));
       expect(output).toContain(
@@ -2406,12 +2409,13 @@ describe("init", () => {
           [cargoOutputsExecutor]: {},
           [runExecutor]: {},
           [lockfileExecutor]: {},
+          [releasePublishExecutor]: {},
         },
         plugins: [pluginName],
       });
       expect(output).toContain(
         addedLine(
-          `"${cargoOutputsExecutor}": {}, "${runExecutor}": {} and "${lockfileExecutor}": {}`,
+          `"${cargoOutputsExecutor}": {}, "${runExecutor}": {}, "${lockfileExecutor}": {} and "${releasePublishExecutor}": {}`,
         ),
       );
       expect(output).toContain(
@@ -2426,7 +2430,7 @@ describe("init", () => {
   );
 
   it(
-    "adds nothing when all four entries are there, and leaves nx.json as it was apart from the plugin entry",
+    "adds nothing when all five entries are there, and leaves nx.json as it was apart from the plugin entry",
     async () => {
       const defaults = {
         build: { cache: true },
@@ -2434,6 +2438,7 @@ describe("init", () => {
         [lockfileExecutor]: {},
         [cargoExecutor]: {},
         [cargoOutputsExecutor]: {},
+        [releasePublishExecutor]: {},
       };
       const { status, output, nxJson } = await init(defaults);
 
@@ -2467,7 +2472,7 @@ describe("init", () => {
       const { status, nxJson } = await init(before);
       expect(status).toBe(0);
       expect(nxJson).toEqual({
-        targetDefaults: { ...before, [cargoOutputsExecutor]: {} },
+        targetDefaults: { ...before, [cargoOutputsExecutor]: {}, [releasePublishExecutor]: {} },
         plugins: [pluginName],
       });
     },

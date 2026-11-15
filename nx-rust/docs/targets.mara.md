@@ -1,8 +1,9 @@
 # Targets
 
 > **Status:** the plugin infers the targets of this page apart from
-> `napi-build` and `wasm-build`, which arrive with milestone 0.4, the coverage
-> baseline of milestone 0.3 and the release targets of milestone 0.5. `test`
+> `napi-build` and `wasm-build`, which arrive with milestone 0.4, and the
+> coverage baseline of milestone 0.3; a cargo-hakari hack crate still gets
+> `nx-release-publish`, until its guard arrives with milestone 0.5. `test`
 > runs `cargo test`; nextest arrives with milestone 0.3. `build` and `doc` run
 > the executor `@convesoft/nx-rust:cargo-outputs`, the other cargo targets
 > `@convesoft/nx-rust:cargo`. Each task still runs a cargo call of its own,
@@ -290,11 +291,12 @@ replaces their `dependsOn` and stops graph creation. Run
 nothing else, or add `"@convesoft/nx-rust:cargo-outputs": {}` yourself.
 
 `nx add` adds `"@convesoft/nx-rust:cargo": {}`,
-`"@convesoft/nx-rust:cargo-outputs": {}`, `"@convesoft/nx-rust:run": {}` and
-`"@convesoft/nx-rust:lockfile": {}` where `targetDefaults` lacks them
+`"@convesoft/nx-rust:cargo-outputs": {}`, `"@convesoft/nx-rust:run": {}`,
+`"@convesoft/nx-rust:lockfile": {}` and
+`"@convesoft/nx-rust:release-publish": {}` where `targetDefaults` lacks them
 ([Setup](setup.mara.md#adding-the-plugin)). Nx chooses an entry keyed by a
 target's executor before one keyed by its name or a glob, so with these entries
-in place only an entry keyed by one of the four executors reaches Rust
+in place only an entry keyed by one of the five executors reaches Rust
 targets. The plugin checks its targets when Nx creates
 the project graph, and `nx add` checks them before it writes anything
 ([[DES-TARGET-DEFAULT-GUARD]]):
@@ -367,9 +369,10 @@ of these ways:
 
 - Add an empty entry keyed by the executor of the Rust targets,
   `"@convesoft/nx-rust:cargo": {}`, `"@convesoft/nx-rust:cargo-outputs": {}`
-  for `build` and `doc`, `"@convesoft/nx-rust:run": {}` for `run` and
-  `"@convesoft/nx-rust:lockfile": {}` for `lockfile`, as `nx add` does where
-  they are missing. Nx chooses an entry keyed by a
+  for `build` and `doc`, `"@convesoft/nx-rust:run": {}` for `run`,
+  `"@convesoft/nx-rust:lockfile": {}` for `lockfile` and
+  `"@convesoft/nx-rust:release-publish": {}` for `nx-release-publish`, as
+  `nx add` does where they are missing. Nx chooses an entry keyed by a
   target's executor before one keyed by its name, so no entry keyed by a target
   name reaches those targets.
 - Where the entry is keyed by one of those executors, remove the field that the
@@ -459,8 +462,9 @@ tag `lang:rust`, for example through `[workspace.metadata.nx]`:
 Or add an empty entry keyed by the target's executor, the `executor` that
 `nx show project <crate> --json` shows for it: `@convesoft/nx-rust:cargo`,
 `@convesoft/nx-rust:cargo-outputs` for `build` and `doc`,
-`@convesoft/nx-rust:run` for `run`, or `@convesoft/nx-rust:lockfile` for
-`lockfile`. `nx add` adds all four where they are missing.
+`@convesoft/nx-rust:run` for `run`, `@convesoft/nx-rust:lockfile` for
+`lockfile`, or `@convesoft/nx-rust:release-publish` for `nx-release-publish`.
+`nx add` adds all five where they are missing.
 Nx prefers an entry keyed by the executor to one keyed by the target name, so
 then no entry keyed by a target name reaches the targets of that executor.
 

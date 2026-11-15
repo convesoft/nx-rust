@@ -12,6 +12,7 @@ import {
   cargoExecutor,
   cargoOutputsExecutor,
   lockfileExecutor,
+  releasePublishExecutor,
   runExecutor,
 } from "../../graph/targets";
 import {
@@ -35,6 +36,7 @@ export const shieldedExecutors = [
   cargoOutputsExecutor,
   runExecutor,
   lockfileExecutor,
+  releasePublishExecutor,
 ];
 
 /**

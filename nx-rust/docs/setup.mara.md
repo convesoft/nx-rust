@@ -57,7 +57,7 @@ nx add @convesoft/nx-rust
 
 Nx first installs the package, which adds it to your `package.json` and
 lockfile, and then runs the plugin's `init` generator. `init` registers the
-plugin in `nx.json`, adds four empty entries to its `targetDefaults`, and changes
+plugin in `nx.json`, adds five empty entries to its `targetDefaults`, and changes
 nothing else in your repository: no crate, no Cargo manifest, no
 `.cargo/config.toml`.
 
@@ -73,7 +73,8 @@ therefore adds an empty entry keyed by each executor of the Rust targets, where
     "@convesoft/nx-rust:cargo": {},
     "@convesoft/nx-rust:cargo-outputs": {},
     "@convesoft/nx-rust:run": {},
-    "@convesoft/nx-rust:lockfile": {}
+    "@convesoft/nx-rust:lockfile": {},
+    "@convesoft/nx-rust:release-publish": {}
   }
 }
 ```
@@ -126,7 +127,8 @@ adds:
     "@convesoft/nx-rust:cargo": {},
     "@convesoft/nx-rust:cargo-outputs": {},
     "@convesoft/nx-rust:run": {},
-    "@convesoft/nx-rust:lockfile": {}
+    "@convesoft/nx-rust:lockfile": {},
+    "@convesoft/nx-rust:release-publish": {}
   }
 }
 ```

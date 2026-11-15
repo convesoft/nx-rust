@@ -36,6 +36,7 @@ export const fixtureNames = [
   "batch-groups",
   "release-crates",
   "shared-executables",
+  "publish-crates",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

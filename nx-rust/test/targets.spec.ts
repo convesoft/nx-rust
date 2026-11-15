@@ -20,6 +20,8 @@ import {
 // their caching, inputs and outputs.
 
 const crateTargets = ["build", "check", "lint", "test", "fmt-check", "fmt"];
+/** The publish target of a crate without `publish = false`, which keeps its name (DES-RELEASE). */
+const released = "nx-release-publish";
 const workspaceTargets = ["doc", "lockfile", "audit", "update"];
 /** The workspace project's targets where cargo-deny is configured, in their order. */
 const withDeny = ["doc", "lockfile", "audit", "deny", "update"];
@@ -123,12 +125,12 @@ describe("inferred targets", () => {
 
       expect(targetNames(graph)).toEqual({
         // A library with an example: an example is no binary.
-        "core-lib": crateTargets,
-        cli: [...crateTargets, "run"],
+        "core-lib": [...crateTargets, released],
+        cli: [...crateTargets, "run", released],
         // Two binaries, one run target.
-        server: [...crateTargets, "run"],
-        perf: [...crateTargets, "bench"],
-        // publish = false: no release target, and there is none on the others yet.
+        server: [...crateTargets, "run", released],
+        perf: [...crateTargets, "bench", released],
+        // publish = false: no release target.
         internal: crateTargets,
         rust: workspaceTargets,
       });
@@ -140,21 +142,21 @@ describe("inferred targets", () => {
     [
       "two-workspaces",
       {
-        app: [...crateTargets, "run"],
+        app: [...crateTargets, "run", released],
         "cargo-workspace": workspaceTargets,
-        scaffold: crateTargets,
+        scaffold: [...crateTargets, released],
         // The crate of a root manifest is the workspace project.
-        tools: [...crateTargets, "run", ...workspaceTargets],
-        util: crateTargets,
+        tools: [...crateTargets, "run", released, ...workspaceTargets],
+        util: [...crateTargets, released],
       },
     ],
     [
       "standalone-crate",
       {
-        api: crateTargets,
+        api: [...crateTargets, released],
         rust: workspaceTargets,
         // A workspace of one.
-        xtask: [...crateTargets, "run", ...workspaceTargets],
+        xtask: [...crateTargets, "run", released, ...workspaceTargets],
       },
     ],
   ])(
@@ -621,11 +623,12 @@ describe("targetNames", () => {
       });
 
       const prefixed = (names: string[]) => names.map((name) => `cargo-${name}`);
+      // The publish target keeps its name, which targetNames cannot change.
       expect(targetNames(graph)).toEqual({
-        "core-lib": prefixed(crateTargets),
-        cli: prefixed([...crateTargets, "run"]),
-        server: prefixed([...crateTargets, "run"]),
-        perf: prefixed([...crateTargets, "bench"]),
+        "core-lib": [...prefixed(crateTargets), released],
+        cli: [...prefixed([...crateTargets, "run"]), released],
+        server: [...prefixed([...crateTargets, "run"]), released],
+        perf: [...prefixed([...crateTargets, "bench"]), released],
         internal: prefixed(crateTargets),
         rust: prefixed(withDeny),
       });
@@ -658,6 +661,7 @@ describe("targetNames", () => {
         "test",
         "fmt-check",
         "fmt",
+        released,
       ]);
       expect(graph.projects["core-lib"].targets.clippy.options).toEqual({
         allTargets: true,
@@ -796,7 +800,7 @@ describe("targetNames", () => {
         },
       });
 
-      expect(targetNames(graph).api).toEqual(crateTargets);
+      expect(targetNames(graph).api).toEqual([...crateTargets, released]);
       expect(targetNames(graph).rust).toEqual(workspaceTargets);
     },
     HARNESS_TIMEOUT,

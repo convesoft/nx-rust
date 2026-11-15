@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/schema",
+  "version": 2,
+  "outputCapture": "pipe",
+  "title": "release-publish",
+  "description": "Publishes a crate with cargo publish for nx release publish, with one call for the crates of each Cargo workspace and registry in a batch, after the checks that the release design asks for.",
+  "type": "object",
+  "properties": {
+    "dryRun": {
+      "type": "boolean",
+      "description": "Verify the crates without uploading them, passed as --dry-run. nx release publish --dry-run sets it."
+    },
+    "registry": {
+      "type": "string",
+      "description": "Nx's npm registry option, which nx-rust does not map to a Cargo registry: a task that receives it fails before cargo runs and says how Cargo chooses a registry."
+    },
+    "firstRelease": {
+      "type": "boolean",
+      "description": "Set by nx release publish --first-release. It changes nothing: the executor still leaves out versions that the registry has."
+    },
+    "nxReleaseVersionData": {
+      "type": "object",
+      "description": "The versions that nx release passes to its publish step. It changes nothing."
+    },
+    "pluginVersion": {
+      "type": "string",
+      "description": "The plugin's version, which the plugin sets. Not meant to be set by hand."
+    }
+  }
+}

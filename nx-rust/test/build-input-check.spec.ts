@@ -21,6 +21,7 @@ import {
   inFixture,
   linesWith,
   LocalRegistry,
+  offlineRegistryKeyEnv,
   packageSpec,
   pinnedToolchainAvailable,
   runNx,
@@ -144,7 +145,11 @@ describe("the check of a build's dependency files", () => {
     "fails no build of the fixture %s, whose crates read only files their inputs cover",
     async (fixture) => {
       await inFixture(fixture, renamed[fixture], async (workspace) => {
-        const { status, output } = await nx(workspace, ["run-many", "-t", "build"]);
+        const { status, output } = await nx(
+          workspace,
+          ["run-many", "-t", "build"],
+          fixture === "publish-crates" ? offlineRegistryKeyEnv : {},
+        );
         expect(output).not.toContain(failure);
         expect(status).toBe(0);
       });

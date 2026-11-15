@@ -217,11 +217,17 @@ describe("SparseRegistry", () => {
         });
         expect(readFileSync(join(registry.cargoHome, "config.toml"), "utf8")).toBe(
           [
+            "[registry]",
+            `default = "${registryName}"`,
+            "",
             `[registries.${registryName}]`,
             `index = "sparse+${registry.url}/index/"`,
             "",
-            "[registry]",
-            `default = "${registryName}"`,
+            "[registries.alpha]",
+            `index = "sparse+${registry.url}/alpha/index/"`,
+            "",
+            "[registries.beta]",
+            `index = "sparse+${registry.url}/beta/index/"`,
             "",
             "[source.crates-io]",
             `replace-with = "${registryName}"`,
@@ -735,6 +741,131 @@ describe("SparseRegistry", () => {
         ]);
       },
       HARNESS_TIMEOUT,
+    );
+    it(
+      "serves alpha and beta beside it, each with its own index, token and log of uploads",
+      async () => {
+        const registry = await start();
+        const { alpha, beta } = registry.named;
+        expect(alpha.indexUrl).toBe(`sparse+${registry.url}/alpha/index/`);
+        expect(beta.indexUrl).toBe(`sparse+${registry.url}/beta/index/`);
+        expect(new Set([registry.token, alpha.token, beta.token]).size).toBe(3);
+        const root = workspace({
+          "Cargo.toml": '[workspace]\nmembers = ["a", "b", "c"]\nresolver = "2"\n',
+          "a/Cargo.toml": `${manifest("alpa", "0.1.0")}publish = ["alpha"]\n`,
+          "a/src/lib.rs": "",
+          "b/Cargo.toml": manifest(
+            "alpb",
+            "0.1.0",
+            'alpa = { path = "../a", version = "0.1.0", registry = "alpha" }',
+          ).replace("[dependencies]", 'publish = ["alpha"]\n\n[dependencies]'),
+          "b/src/lib.rs": "",
+          "c/Cargo.toml": manifest(
+            "betc",
+            "0.1.0",
+            'alpa = { path = "../a", version = "0.1.0", registry = "alpha" }',
+          ).replace("[dependencies]", 'publish = ["beta"]\n\n[dependencies]'),
+          "c/src/lib.rs": "",
+        });
+        // Without CARGO_REGISTRY_DEFAULT and registry.default, the crates'
+        // publish lists choose; each registry takes its own token from the
+        // environment.
+        const env = {
+          ...registry.env({ registryDefault: null, home: "no-default" }),
+          ...toolchain,
+        };
+        expect(env.CARGO_REGISTRY_DEFAULT).toBeUndefined();
+        expect(env.CARGO_HOME).not.toBe(registry.cargoHome);
+        expect(
+          cargo(root, ["publish", "--no-verify", "-p", "alpa", "-p", "alpb"], env),
+        ).toMatchObject({ status: 0 });
+        expect(cargo(root, ["publish", "--no-verify", "-p", "betc"], env)).toMatchObject({
+          status: 0,
+        });
+        const summary = (registryName?: "alpha" | "beta") =>
+          registry.uploads(registryName).map((upload) => ({
+            registry: upload.registry,
+            token: upload.token,
+            crate: `${upload.name}@${upload.vers}`,
+            dependencies: upload.metadata.deps.map((dependency) => [
+              dependency.name,
+              dependency.registry ?? null,
+            ]),
+          }));
+        expect(summary("alpha")).toEqual([
+          { registry: "alpha", token: alpha.token, crate: "alpa@0.1.0", dependencies: [] },
+          {
+            registry: "alpha",
+            token: alpha.token,
+            crate: "alpb@0.1.0",
+            dependencies: [["alpa", null]],
+          },
+        ]);
+        expect(summary("beta")).toEqual([
+          {
+            registry: "beta",
+            token: beta.token,
+            crate: "betc@0.1.0",
+            dependencies: [["alpa", alpha.indexUrl]],
+          },
+        ]);
+        expect(registry.uploads()).toEqual([]);
+        expect(registry.allUploads().map((upload) => upload.name)).toEqual([
+          "alpa",
+          "alpb",
+          "betc",
+        ]);
+        expect(registry.index("alpa", "alpha").map((entry) => entry.vers)).toEqual(["0.1.0"]);
+        expect(registry.index("alpa")).toEqual([]);
+
+        // A version seeded into beta alone, which the Cargo home that
+        // replaces alpha with beta finds for a lookup in alpha.
+        registry.seed({ name: "alpa", version: "0.2.0" }, { registry: "beta", crateFile: true });
+        expect(registry.index("alpa", "beta").map((entry) => entry.vers)).toEqual(["0.2.0"]);
+        const outside = workspace({});
+        const replaced = cargo(outside, ["info", "alpa@0.2.0", "--registry", "alpha"], {
+          ...registry.env({ registryDefault: null, home: "alpha-replaced" }),
+          ...toolchain,
+        });
+        expect(replaced.output).toContain("Updating `beta` index");
+        expect(replaced.output).toContain("version: 0.2.0 (from registry `alpha-src`)");
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
+  it("pins what its variants of env() name", async () => {
+    const registry = await start();
+    const { alpha, beta } = registry.named;
+    const pinned = registry.env();
+    expect(pinned).toMatchObject({
+      CARGO_REGISTRY_DEFAULT: registryName,
+      CARGO_NET_OFFLINE: "false",
+      CARGO_HOME: registry.cargoHome,
+      CARGO_REGISTRIES_ALPHA_INDEX: alpha.indexUrl,
+      CARGO_REGISTRIES_ALPHA_TOKEN: alpha.token,
+      CARGO_REGISTRIES_ALPHA_CREDENTIAL_PROVIDER: "cargo:token",
+      CARGO_REGISTRIES_BETA_INDEX: beta.indexUrl,
+      CARGO_REGISTRIES_BETA_TOKEN: beta.token,
+      CARGO_REGISTRIES_BETA_CREDENTIAL_PROVIDER: "cargo:token",
+    });
+    expect(registry.env({ registryDefault: "alpha" }).CARGO_REGISTRY_DEFAULT).toBe("alpha");
+    expect("CARGO_REGISTRY_DEFAULT" in registry.env({ registryDefault: null })).toBe(false);
+    expect(registry.env({ offline: true }).CARGO_NET_OFFLINE).toBe("true");
+    const aliased = registry.env({ aliases: { alias: "alpha" } });
+    expect(aliased.CARGO_REGISTRIES_ALIAS_INDEX).toBe(alpha.indexUrl);
+    expect(aliased.CARGO_REGISTRIES_ALIAS_TOKEN).toBeUndefined();
+    const homes = (["default", "no-default", "alpha-replaced"] as const).map((home) => {
+      const folder = registry.env({ home }).CARGO_HOME as string;
+      return readFileSync(join(folder, "config.toml"), "utf8");
+    });
+    expect(homes[0]).toContain(`[registry]\ndefault = "${registryName}"`);
+    for (const config of homes.slice(1)) {
+      expect(config).not.toContain("[registry]");
+      expect(config).toContain(`[source.crates-io]\nreplace-with = "${registryName}"`);
+    }
+    expect(homes[2]).toContain(
+      `[source.alpha-src]\nregistry = "${alpha.indexUrl}"\nreplace-with = "beta"\n`,
     );
   });
 

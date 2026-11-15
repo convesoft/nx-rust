@@ -62,6 +62,69 @@ export interface SeedOptions {
    * index lists the version, and its download fails with 404.
    */
   crateFile?: boolean;
+  /** The registry to put it into ({@link ServedRegistryName}); the main registry by default. */
+  registry?: ServedRegistryName;
+}
+
+/**
+ * The registries that the server serves beside the main one, each under a
+ * path of its own, with its own index, publish endpoint, token and log of
+ * uploads, which the Cargo homes name as they are named here (`VER-RELEASE`,
+ * group 9).
+ */
+export const namedRegistries = ["alpha", "beta"] as const;
+
+/** The name of a registry of {@link namedRegistries}. */
+export type NamedRegistryName = (typeof namedRegistries)[number];
+
+/**
+ * A registry that the server serves beside the main one: one of
+ * {@link namedRegistries}, or `spare`, which no Cargo home and no variable
+ * of {@link SparseRegistry.env} names, for a case that configures a name of
+ * its own for an index, as two names for one index make cargo refuse an
+ * upload (`EVD-CARGO-PUBLISH-REGISTRIES`).
+ */
+export type ServedRegistryName = NamedRegistryName | "spare";
+
+/** A registry of {@link namedRegistries}, as the Cargo homes and {@link SparseRegistry.env} name it. */
+export interface NamedRegistry {
+  name: NamedRegistryName;
+  /** The URL of its index, `sparse+http://127.0.0.1:<port>/<name>/index/`. */
+  indexUrl: string;
+  /** The only token that it takes for an upload, which {@link SparseRegistry.env} pins. */
+  token: string;
+}
+
+/**
+ * Which Cargo home {@link SparseRegistry.env} gives cargo. Each names every
+ * registry, replaces crates.io with the main registry and makes the server
+ * its proxy:
+ *
+ * - `default`: makes the main registry `registry.default`;
+ * - `no-default`: sets no `registry.default`;
+ * - `alpha-replaced`: sets no `registry.default` either, and replaces
+ *   `alpha` with `beta` through a `[source]` table that holds `alpha`'s
+ *   index, `alpha-src`, as in `EVD-CARGO-PUBLISH-REGISTRIES`.
+ */
+export type CargoHomeKind = "default" | "no-default" | "alpha-replaced";
+
+/** The variants of {@link SparseRegistry.env}. */
+export interface RegistryEnvOptions {
+  /**
+   * What `CARGO_REGISTRY_DEFAULT` pins: the main registry by default, the
+   * given registry name, or, with `null`, nothing, so that the Cargo home
+   * and the crates' `publish` lists choose the registry.
+   */
+  registryDefault?: string | null;
+  /** The Cargo home; `default` by default. */
+  home?: CargoHomeKind;
+  /**
+   * Further registry names that the environment gives the index of a named
+   * registry, as `CARGO_REGISTRIES_<NAME>_INDEX`, such as `{ alias: "alpha" }`.
+   */
+  aliases?: Readonly<Record<string, NamedRegistryName>>;
+  /** Whether cargo runs offline, `CARGO_NET_OFFLINE=true`, in place of the pinned `false`. */
+  offline?: boolean;
 }
 
 /**
@@ -101,12 +164,22 @@ export interface SeedOptions {
  * and {@link requests} every request that the server received. An upload of
  * a version that the registry already has is refused as crates.io refuses
  * it, and the index can show an upload late ({@link setIndexDelay}).
+ *
+ * The same server serves the registries of {@link namedRegistries},
+ * `alpha` and `beta`, each under a path of its own with its own index,
+ * publish endpoint, token and log of uploads, which records the registry,
+ * the token and the registry that the upload gives each dependency
+ * (`VER-RELEASE`, group 9). Every Cargo home names them, and
+ * {@link env} pins their indexes and tokens as it pins the main registry's;
+ * {@link seed}, {@link index} and {@link uploads} take the registry's name.
+ * The variants of {@link env} choose a Cargo home without `registry.default`
+ * or one that replaces `alpha` with `beta` ({@link CargoHomeKind}).
  */
 export class SparseRegistry {
   /** The registry's name in the Cargo home's configuration. */
   static readonly registryName = "nx-rust-test";
 
-  /** The Cargo home whose configuration puts this registry in place of crates.io. */
+  /** The Cargo home whose configuration puts this registry in place of crates.io and makes it `registry.default`. */
   readonly cargoHome: string;
   /** The only token that the registry takes for an upload, which the Cargo home holds. */
   readonly token: string;
@@ -114,17 +187,22 @@ export class SparseRegistry {
   readonly url: string;
   /** The URL of the index, as the Cargo home names it. */
   readonly indexUrl: string;
+  /** The registries that the server serves beside this one, by name. */
+  readonly named: Readonly<Record<NamedRegistryName, NamedRegistry>>;
+  /** The registry that the server serves and nothing names ({@link ServedRegistryName}). */
+  readonly spare: { indexUrl: string; token: string };
+  private readonly homes: Readonly<Record<CargoHomeKind, string>>;
   private child: ChildProcess | undefined;
   private exited: Promise<void>;
 
   private constructor(
-    /** The folder that holds the registry's files and the Cargo home. */
+    /** The folder that holds the registry's files and the Cargo homes. */
     readonly base: string,
-    token: string,
+    tokens: { main: string; named: Record<NamedRegistryName, string>; spare: string },
     child: ChildProcess,
     readonly port: number,
   ) {
-    this.token = token;
+    this.token = tokens.main;
     this.child = child;
     this.exited = new Promise((resolve) => {
       if (child.exitCode !== null || child.signalCode !== null) {
@@ -133,33 +211,60 @@ export class SparseRegistry {
         child.once("exit", () => resolve());
       }
     });
-    this.cargoHome = join(base, "home");
     this.url = `http://127.0.0.1:${port}`;
     this.indexUrl = `sparse+${this.url}/index/`;
-    mkdirSync(this.cargoHome, { recursive: true });
+    const named = Object.fromEntries(
+      namedRegistries.map((name) => [
+        name,
+        { name, indexUrl: `sparse+${this.url}/${name}/index/`, token: tokens.named[name] },
+      ]),
+    ) as Record<NamedRegistryName, NamedRegistry>;
+    this.named = named;
+    this.spare = { indexUrl: `sparse+${this.url}/spare/index/`, token: tokens.spare };
     const name = SparseRegistry.registryName;
-    writeFileSync(
-      join(this.cargoHome, "config.toml"),
-      [
-        `[registries.${name}]`,
-        `index = "${this.indexUrl}"`,
+    const registries = [
+      `[registries.${name}]`,
+      `index = "${this.indexUrl}"`,
+      "",
+      ...namedRegistries.flatMap((other) => [
+        `[registries.${other}]`,
+        `index = "${named[other].indexUrl}"`,
         "",
-        "[registry]",
-        `default = "${name}"`,
+      ]),
+      "[source.crates-io]",
+      `replace-with = "${name}"`,
+      "",
+      "# Every request goes through the registry, which refuses other hosts.",
+      "[http]",
+      `proxy = "${this.url}"`,
+      "",
+    ];
+    const contents: Record<CargoHomeKind, string[]> = {
+      default: ["[registry]", `default = "${name}"`, "", ...registries],
+      "no-default": registries,
+      "alpha-replaced": [
+        ...registries,
+        "[source.alpha-src]",
+        `registry = "${named.alpha.indexUrl}"`,
+        `replace-with = "beta"`,
         "",
-        "[source.crates-io]",
-        `replace-with = "${name}"`,
-        "",
-        "# Every request goes through the registry, which refuses other hosts.",
-        "[http]",
-        `proxy = "${this.url}"`,
-        "",
-      ].join("\n"),
-    );
-    writeFileSync(
-      join(this.cargoHome, "credentials.toml"),
-      `[registries.${name}]\ntoken = "${token}"\n`,
-    );
+      ],
+    };
+    const folders: Record<CargoHomeKind, string> = {
+      default: join(base, "home"),
+      "no-default": join(base, "home-no-default"),
+      "alpha-replaced": join(base, "home-alpha-replaced"),
+    };
+    for (const kind of Object.keys(folders) as CargoHomeKind[]) {
+      mkdirSync(folders[kind], { recursive: true });
+      writeFileSync(join(folders[kind], "config.toml"), contents[kind].join("\n"));
+      writeFileSync(
+        join(folders[kind], "credentials.toml"),
+        `[registries.${name}]\ntoken = "${tokens.main}"\n`,
+      );
+    }
+    this.homes = folders;
+    this.cargoHome = folders.default;
   }
 
   /** Starts a registry with an empty index in a new folder. */
@@ -173,20 +278,38 @@ export class SparseRegistry {
     let child: ChildProcess | undefined;
     try {
       mkdirSync(join(base, "index"));
-      const token = `nx-rust-test-${randomBytes(12).toString("hex")}`;
+      const tokenOf = (name: string) => `${name}-${randomBytes(12).toString("hex")}`;
+      const tokens = {
+        main: tokenOf("nx-rust-test"),
+        named: Object.fromEntries(namedRegistries.map((name) => [name, tokenOf(name)])) as Record<
+          NamedRegistryName,
+          string
+        >,
+        spare: tokenOf("spare"),
+      };
       const log = join(base, "server.log");
       const output = openSync(log, "a");
       try {
-        child = fork(serverScript, [base, token, delayArgument(options.indexDelay ?? 0)], {
-          execArgv: [],
-          env: testEnvironment(),
-          stdio: ["ignore", output, output, "ipc"],
-        });
+        child = fork(
+          serverScript,
+          [
+            base,
+            delayArgument(options.indexDelay ?? 0),
+            tokens.main,
+            ...namedRegistries.map((name) => `${name}=${tokens.named[name]}`),
+            `spare=${tokens.spare}`,
+          ],
+          {
+            execArgv: [],
+            env: testEnvironment(),
+            stdio: ["ignore", output, output, "ipc"],
+          },
+        );
       } finally {
         closeSync(output);
       }
       const port = await listening(child, log);
-      const registry = new SparseRegistry(base, token, child, port);
+      const registry = new SparseRegistry(base, tokens, child, port);
       // A test that forgets the registry does not keep its Jest worker alive,
       // and the server exits when the worker does.
       child.unref();
@@ -226,24 +349,50 @@ export class SparseRegistry {
    * configuration file above the working folder can still replace crates.io
    * with another source; its requests then go through the proxy or to local
    * files like any other.
+   *
+   * The registries of {@link namedRegistries} are pinned in the same way,
+   * each with its index, its own token and `cargo:token`. The variants of
+   * `options` leave `CARGO_REGISTRY_DEFAULT` unset or pin another registry,
+   * choose another Cargo home, give a further name the index of a named
+   * registry, or make cargo work offline.
    */
-  env(): Record<string, string | undefined> {
+  env(options: RegistryEnvOptions = {}): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = {};
     for (const name of Object.keys(process.env)) {
       if (/^CARGO_(REGISTRY|REGISTRIES|SOURCE|HTTP|NET)_/.test(name) || /^no_proxy$/i.test(name)) {
         env[name] = undefined;
       }
     }
-    const registry = `CARGO_REGISTRIES_${SparseRegistry.registryName.toUpperCase().replace(/-/g, "_")}`;
+    const pins = (name: string, index: string, token?: string) => {
+      const prefix = `CARGO_REGISTRIES_${name.toUpperCase().replace(/-/g, "_")}`;
+      return {
+        [`${prefix}_INDEX`]: index,
+        ...(token === undefined
+          ? {}
+          : { [`${prefix}_TOKEN`]: token, [`${prefix}_CREDENTIAL_PROVIDER`]: "cargo:token" }),
+      };
+    };
+    const registryDefault =
+      options.registryDefault === undefined ? SparseRegistry.registryName : options.registryDefault;
     return {
       ...env,
-      CARGO_HOME: this.cargoHome,
+      CARGO_HOME: this.homes[options.home ?? "default"],
       CARGO_HTTP_PROXY: this.url,
-      CARGO_NET_OFFLINE: "false",
-      CARGO_REGISTRY_DEFAULT: SparseRegistry.registryName,
-      [`${registry}_INDEX`]: this.indexUrl,
-      [`${registry}_TOKEN`]: this.token,
-      [`${registry}_CREDENTIAL_PROVIDER`]: "cargo:token",
+      CARGO_NET_OFFLINE: options.offline ? "true" : "false",
+      ...(registryDefault === null ? {} : { CARGO_REGISTRY_DEFAULT: registryDefault }),
+      ...pins(SparseRegistry.registryName, this.indexUrl, this.token),
+      ...Object.assign(
+        {},
+        ...namedRegistries.map((name) =>
+          pins(name, this.named[name].indexUrl, this.named[name].token),
+        ),
+      ),
+      ...Object.assign(
+        {},
+        ...Object.entries(options.aliases ?? {}).map(([alias, name]) =>
+          pins(alias, this.named[name].indexUrl),
+        ),
+      ),
       CARGO_NET_GIT_FETCH_WITH_CLI: "true",
       GIT_ALLOW_PROTOCOL: "file",
     };
@@ -259,8 +408,11 @@ export class SparseRegistry {
    * @throws {Error} Where the index already lists the version.
    */
   seed(crate: RegistryCrate, options: SeedOptions = {}): IndexEntry {
-    if (this.index(crate.name).some((entry) => entry.vers === crate.version)) {
-      throw new Error(`The test registry already has ${crate.name}@${crate.version}.`);
+    const folder = this.folderOf(options.registry);
+    if (this.index(crate.name, options.registry).some((entry) => entry.vers === crate.version)) {
+      throw new Error(
+        `The test registry ${options.registry ?? SparseRegistry.registryName} already has ${crate.name}@${crate.version}.`,
+      );
     }
     let crateBytes = Buffer.alloc(0);
     if (options.crateFile) {
@@ -271,25 +423,42 @@ export class SparseRegistry {
           testEnvironment(this.env()),
         ),
       );
-      const file = join(this.base, ...crateFilePath(crate.name, crate.version));
+      const file = join(folder, ...crateFilePath(crate.name, crate.version));
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, crateBytes);
     }
     const entry = registryIndexEntry(crate, createHash("sha256").update(crateBytes).digest("hex"));
-    const indexFile = join(this.base, "index", ...indexPath(crate.name));
+    const indexFile = join(folder, "index", ...indexPath(crate.name));
     mkdirSync(dirname(indexFile), { recursive: true });
     writeFileSync(indexFile, `${JSON.stringify(entry)}\n`, { flag: "a" });
     return entry;
   }
 
-  /** The versions that the index lists for a crate now, as cargo reads them, in the order they were added. */
-  index(name: string): IndexEntry[] {
-    return readLines(join(this.base, "index", ...indexPath(name)));
+  /**
+   * The versions that the index of the main registry, or of a named one,
+   * lists for a crate now, as cargo reads them, in the order they were added.
+   */
+  index(name: string, registry?: ServedRegistryName): IndexEntry[] {
+    return readLines(join(this.folderOf(registry), "index", ...indexPath(name)));
   }
 
-  /** The uploads that the registry accepted, in the order they arrived. */
-  uploads(): RegistryUpload[] {
-    return readLines(join(this.base, "uploads.jsonl"));
+  /** The uploads that the main registry, or a named one, accepted, in the order they arrived. */
+  uploads(registry?: ServedRegistryName): RegistryUpload[] {
+    return readLines(join(this.folderOf(registry), "uploads.jsonl"));
+  }
+
+  /** The uploads that every registry of the server accepted, the main one's first and `spare`'s last. */
+  allUploads(): RegistryUpload[] {
+    return [
+      this.uploads(),
+      ...namedRegistries.map((name) => this.uploads(name)),
+      this.uploads("spare"),
+    ].flat();
+  }
+
+  /** The folder of the main registry's files, or of a named one's, as `registry-server.mts` lays them out. */
+  private folderOf(registry: ServedRegistryName | undefined): string {
+    return registry === undefined ? this.base : join(this.base, "registries", registry);
   }
 
   /** Every request that the server answered, in order, refused ones and proxy requests included. */

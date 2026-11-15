@@ -50,6 +50,7 @@ const executorEntries = {
   "@convesoft/nx-rust:cargo-outputs": {},
   "@convesoft/nx-rust:run": {},
   "@convesoft/nx-rust:lockfile": {},
+  "@convesoft/nx-rust:release-publish": {},
 };
 
 /** `nx.json` after init in a repository that did not know the plugin. */
@@ -123,7 +124,7 @@ describe("init", () => {
           registeredNxJson,
         );
         expect(output).toContain(
-          'Added "@convesoft/nx-rust:cargo": {}, "@convesoft/nx-rust:cargo-outputs": {}, "@convesoft/nx-rust:run": {} and "@convesoft/nx-rust:lockfile": {} to targetDefaults in nx.json',
+          'Added "@convesoft/nx-rust:cargo": {}, "@convesoft/nx-rust:cargo-outputs": {}, "@convesoft/nx-rust:run": {}, "@convesoft/nx-rust:lockfile": {} and "@convesoft/nx-rust:release-publish": {} to targetDefaults in nx.json',
         );
         // Its check read the workspace as graph creation does.
         expect(workspace.cargoCalls()).toEqual([workspaceCall("rust")]);
@@ -271,10 +272,11 @@ describe("init", () => {
               ...targetDefaults,
               "@convesoft/nx-rust:cargo": {},
               "@convesoft/nx-rust:cargo-outputs": {},
+              "@convesoft/nx-rust:release-publish": {},
             },
           });
           expect(output).toContain(
-            'Added "@convesoft/nx-rust:cargo": {} and "@convesoft/nx-rust:cargo-outputs": {} to targetDefaults in nx.json',
+            'Added "@convesoft/nx-rust:cargo": {}, "@convesoft/nx-rust:cargo-outputs": {} and "@convesoft/nx-rust:release-publish": {} to targetDefaults in nx.json',
           );
         },
         ["--skipProjectGraph"],

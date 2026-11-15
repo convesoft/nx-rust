@@ -45,11 +45,26 @@ export const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 export const runExecutor = "@convesoft/nx-rust:run";
 
 /**
+ * The executor of `nx-release-publish`, with a batch implementation of its
+ * own that publishes the crates of each Cargo workspace and registry with
+ * one `cargo publish` (`DES-RELEASE`, `ADR-BATCHED-PUBLISH`).
+ */
+export const releasePublishExecutor = "@convesoft/nx-rust:release-publish";
+
+/**
+ * The name of the publish target, which Nx release runs under this name
+ * only, so that `targetNames` cannot rename it (`DES-RELEASE`, "Publish
+ * target"; `DES-PLUGIN-OPTIONS`, "Target names").
+ */
+export const releasePublishTarget = "nx-release-publish";
+
+/**
  * The inferred targets by their default names, in the order of the table in
  * `DES-TARGETS`: first those of a crate, then those of the workspace project.
  * They are also the keys that `targetNames` accepts (`readTargetNames` in
- * `options.ts`). The artifact targets and the release targets are not
- * inferred yet; each joins the list when it is.
+ * `options.ts`), apart from {@link releasePublishTarget}, which keeps its
+ * name. The artifact targets are not inferred yet; each joins the list when
+ * it is.
  */
 export const inferredTargetNames = [
   "build",
@@ -60,6 +75,7 @@ export const inferredTargetNames = [
   "fmt",
   "bench",
   "run",
+  releasePublishTarget,
   "doc",
   "lockfile",
   "audit",
@@ -250,7 +266,9 @@ export interface TargetSubject {
  * in the order of {@link inferredTargetNames}.
  *
  * A crate gets `build`, `check`, `lint`, `test`, `fmt-check` and `fmt`, `run`
- * when it has a binary target and `bench` when it has a bench target. The
+ * when it has a binary target, `bench` when it has a bench target, and
+ * `nx-release-publish` unless its manifest sets `publish = false`, which the
+ * report gives as an empty `publish` list (`DES-RELEASE`). The
  * workspace project gets `doc`, `lockfile`, `audit` and `update`, and `deny`
  * where a cargo-deny configuration file is in the workspace root; a root
  * manifest's crate gets both sets. Whether a tool is installed decides
@@ -314,6 +332,15 @@ export function inferTargets(
         ...target("run", "Runs a binary of the crate with cargo run."),
         executor: runExecutor,
         continuous: false,
+      });
+    }
+    if (!(Array.isArray(pkg.publish) && pkg.publish.length === 0)) {
+      targets.set(releasePublishTarget, {
+        ...target(
+          releasePublishTarget,
+          "Publishes the crate with cargo publish, with one call for the crates of its Cargo workspace and registry that nx release publish publishes together.",
+        ),
+        executor: releasePublishExecutor,
       });
     }
   }

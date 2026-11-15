@@ -21,6 +21,13 @@
       "implementation": "./src/executors/lockfile/executor",
       "schema": "./src/executors/lockfile/schema.json",
       "description": "Lets cargo bring a Cargo workspace's Cargo.lock up to date and writes a digest of each member's locked dependencies."
+    },
+    "release-publish": {
+      "implementation": "./src/executors/release-publish/executor",
+      "batchImplementation": "./src/executors/release-publish/executor#batch",
+      "preferBatch": true,
+      "schema": "./src/executors/release-publish/schema.json",
+      "description": "Publishes the crates of each Cargo workspace and registry with one cargo publish for nx release publish."
     }
   }
 }

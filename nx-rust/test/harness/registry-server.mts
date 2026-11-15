@@ -9,34 +9,40 @@
  * imports nothing but Node's own modules at run time.
  * The `typecheck` target checks it with the rest of the harness.
  *
- * It listens on 127.0.0.1, on a port that the system picks, and serves the
- * sparse protocol and the publish endpoint of Cargo's registry web API:
+ * It listens on 127.0.0.1, on a port that the system picks, and serves one
+ * main registry at the root and further named registries each under a path
+ * of its own, `/<name>`, each with its own folder, token, index and log of
+ * uploads. For each, below its path, it serves the sparse protocol and the
+ * publish endpoint of Cargo's registry web API:
  *
- * - `GET /index/config.json` names the downloads and the API on this server;
+ * - `GET /index/config.json` names the downloads and the API of that registry;
  * - `GET /index/<prefix>/<name>` serves the index file of a crate from the
  *   folder `index`, and 404 where there is none;
  * - `GET /api/v1/crates/<name>/<version>/download` serves a `.crate` file
  *   from the folder `crates`;
  * - `PUT /api/v1/crates/new` takes what `cargo publish` uploads.
  *
- * An upload needs the registry's token in the `Authorization` header, as
+ * An upload needs the registry's own token in the `Authorization` header, as
  * cargo sends it, and is refused with 403 otherwise. A version that the
  * registry already has, in its index or waiting to be shown there, is
  * refused with 400 and the message with which crates.io refuses it. An
- * accepted upload is written to `crates` and logged in `uploads.jsonl`, and
- * its line is appended to the index after the index delay, or never. Every
- * request is logged in `requests.jsonl` before it is answered, so that the
- * log is complete once the cargo that sent it has exited.
+ * accepted upload is written to `crates` and logged in `uploads.jsonl` with
+ * the registry's name and the token it carried, and its line is appended to
+ * the index after the index delay, or never. Every request is logged in the
+ * main folder's `requests.jsonl` before it is answered, so that the log is
+ * complete once the cargo that sent it has exited.
  *
  * {@link SparseRegistry} makes this server cargo's HTTP proxy, so that no
  * HTTP or HTTPS request of cargo's reaches another host: a request for
  * another host is refused with 403, a `CONNECT` tunnel too, and both are
  * logged.
  *
- * Arguments: the registry's folder, the token and the index delay in
- * milliseconds or `never`. The process sends {@link ServerMessage}s and takes
- * {@link ParentMessage}s through its IPC channel, and exits when asked to
- * stop or when its parent goes away.
+ * Arguments: the main registry's folder, the index delay in milliseconds or
+ * `never`, the main registry's token, and for each further registry
+ * `<name>=<token>`, whose folder is `registries/<name>` in the main folder.
+ * The process sends {@link ServerMessage}s and takes {@link ParentMessage}s
+ * through its IPC channel, and exits when asked to stop or when its parent
+ * goes away.
  */
 
 import { createHash } from "node:crypto";
@@ -112,6 +118,10 @@ export interface IndexEntry {
 
 /** A line of `uploads.jsonl`: an upload that the registry accepted. */
 export interface RegistryUpload {
+  /** The registry that accepted it: its name, or `null` for the main registry. */
+  registry: string | null;
+  /** The `Authorization` header that the upload carried, which is the registry's token. */
+  token: string;
   name: string;
   vers: string;
   /** The metadata as cargo sent it. */
@@ -205,27 +215,38 @@ class Refusal extends Error {
   }
 }
 
+/** What the registries of one server share: the port and the index delay. */
+interface ServerState {
+  port: number;
+  /** In milliseconds; `null` for never. */
+  indexDelay: number | null;
+}
+
 class Registry {
   /** Uploads not shown in the index yet, by `name@version` without build metadata. */
   private readonly waiting = new Set<string>();
   private readonly timers = new Set<NodeJS.Timeout>();
-  /** In milliseconds; `null` for never. */
-  indexDelay: number | null;
-  port = 0;
+  private readonly server: ServerState;
+  /** The registry's name, `null` for the main registry. */
+  readonly name: string | null;
+  /** The path below which the server serves it: `""` for the main registry, `/<name>` for another. */
+  readonly prefix: string;
   private readonly folder: string;
   private readonly token: string;
 
-  constructor(folder: string, token: string, indexDelay: number | null) {
+  constructor(server: ServerState, name: string | null, folder: string, token: string) {
+    this.server = server;
+    this.name = name;
+    this.prefix = name === null ? "" : `/${name}`;
     this.folder = folder;
     this.token = token;
-    this.indexDelay = indexDelay;
   }
 
-  /** Answers a request whose target is this server. */
+  /** Answers a request whose target is this registry, with `path` below its prefix. */
   async handle(request: IncomingMessage, path: string): Promise<Reply> {
     const [route] = path.split("?");
     if (request.method === "GET" && route === "/index/config.json") {
-      const base = `http://127.0.0.1:${this.port}`;
+      const base = `http://127.0.0.1:${this.server.port}${this.prefix}`;
       return json(200, { dl: `${base}/api/v1/crates`, api: base });
     }
     if (request.method === "GET" && route.startsWith("/index/")) {
@@ -281,6 +302,8 @@ class Registry {
     writeFileSync(crateFile, crate);
     const cksum = createHash("sha256").update(crate).digest("hex");
     const upload: RegistryUpload = {
+      registry: this.name,
+      token: request.headers.authorization ?? "",
       name: metadata.name,
       vers: metadata.vers,
       metadata,
@@ -295,7 +318,7 @@ class Registry {
 
   /** Appends the entry to the index after the index delay, or never. */
   private show(entry: IndexEntry, key: string): void {
-    const delay = this.indexDelay;
+    const delay = this.server.indexDelay;
     const append = () =>
       appendIndexLine(join(this.folder, "index", ...indexPath(entry.name)), entry);
     if (delay === 0) {
@@ -395,7 +418,11 @@ function readBody(request: IncomingMessage): Promise<Buffer> {
 }
 
 /** The reply to a request, which names the whole URL where it came through the proxy. */
-async function reply(registry: Registry, request: IncomingMessage): Promise<Reply> {
+async function reply(
+  server: ServerState,
+  registries: readonly Registry[],
+  request: IncomingMessage,
+): Promise<Reply> {
   let path = request.url ?? "/";
   // Only requests for this server itself pass the proxy.
   if (!path.startsWith("/")) {
@@ -405,15 +432,23 @@ async function reply(registry: Registry, request: IncomingMessage): Promise<Repl
     } catch {
       // Not a URL.
     }
-    if (url?.protocol !== "http:" || url.host !== `127.0.0.1:${registry.port}`) {
+    if (url?.protocol !== "http:" || url.host !== `127.0.0.1:${server.port}`) {
       return json(403, {
         errors: [{ detail: `the test registry refuses to forward a request to ${path}` }],
       });
     }
     path = `${url.pathname}${url.search}`;
   }
+  // A named registry's prefix, else the main registry at the root.
+  const registry =
+    registries.find(
+      (candidate) => candidate.prefix !== "" && path.startsWith(`${candidate.prefix}/`),
+    ) ?? registries.find((candidate) => candidate.prefix === "");
   try {
-    return await registry.handle(request, path);
+    if (registry === undefined) {
+      throw new Refusal(404, `the test registry has nothing at ${path}`);
+    }
+    return await registry.handle(request, path.slice(registry.prefix.length));
   } catch (error) {
     const status = error instanceof Refusal ? error.status : 500;
     if (status === 500) {
@@ -424,12 +459,24 @@ async function reply(registry: Registry, request: IncomingMessage): Promise<Repl
 }
 
 function main(): void {
-  const [folder, token, delay] = process.argv.slice(2);
+  const [folder, delay, token, ...others] = process.argv.slice(2);
   if (!folder || !token || !delay || !process.send) {
-    throw new Error("usage: registry-server.mts <folder> <token> <milliseconds|never>, with IPC");
+    throw new Error(
+      "usage: registry-server.mts <folder> <milliseconds|never> <token> [<name>=<token> ...], with IPC",
+    );
   }
   const tell = (message: ServerMessage) => process.send?.(message);
-  const registry = new Registry(folder, token, delay === "never" ? null : Number(delay));
+  const state: ServerState = { port: 0, indexDelay: delay === "never" ? null : Number(delay) };
+  const registries = [
+    new Registry(state, null, folder, token),
+    ...others.map((spec) => {
+      const [name, otherToken] = spec.split("=");
+      if (!name || !otherToken || !crateName.test(name)) {
+        throw new Error(`a further registry has to be given as <name>=<token>, not ${spec}`);
+      }
+      return new Registry(state, name, join(folder, "registries", name), otherToken);
+    }),
+  ];
   const log = (request: IncomingMessage, status: number) =>
     appendFileSync(
       join(folder, "requests.jsonl"),
@@ -442,7 +489,7 @@ function main(): void {
     );
 
   const server = createServer((request, response: ServerResponse) => {
-    void reply(registry, request).then(({ status, type, body }) => {
+    void reply(state, registries, request).then(({ status, type, body }) => {
       // Logged before the answer, so that the log is complete when cargo exits.
       log(request, status);
       response.writeHead(status, { "content-type": type });
@@ -456,7 +503,9 @@ function main(): void {
   });
 
   const stop = () => {
-    registry.stopTimers();
+    for (const registry of registries) {
+      registry.stopTimers();
+    }
     server.close();
     server.closeAllConnections();
     process.exit(0);
@@ -465,7 +514,7 @@ function main(): void {
     if (message.type === "stop") {
       stop();
     } else if (message.type === "settings") {
-      registry.indexDelay = message.indexDelay;
+      state.indexDelay = message.indexDelay;
       tell({ type: "settings-applied" });
     }
   });
@@ -475,8 +524,8 @@ function main(): void {
     process.exit(1);
   });
   server.listen(0, "127.0.0.1", () => {
-    registry.port = (server.address() as AddressInfo).port;
-    tell({ type: "listening", port: registry.port });
+    state.port = (server.address() as AddressInfo).port;
+    tell({ type: "listening", port: state.port });
   });
 }
 

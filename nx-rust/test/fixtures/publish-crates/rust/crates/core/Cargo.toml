@@ -1,0 +1,9 @@
+[package]
+name = "pub-core"
+version = "0.1.0"
+description = "A crate of the publishing tests that depends on pub-base"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pub-base = { workspace = true }

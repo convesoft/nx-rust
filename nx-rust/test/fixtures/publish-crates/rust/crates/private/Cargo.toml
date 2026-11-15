@@ -1,0 +1,10 @@
+[package]
+name = "pub-private"
+version = "0.1.0"
+description = "A crate of the publishing tests that is never published"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+pub-base = { workspace = true }

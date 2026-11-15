@@ -7,6 +7,7 @@ import {
   FixtureName,
   fixtureNames,
   HARNESS_TIMEOUT,
+  offlineRegistryKeyEnv,
   pinnedToolchain,
   pinnedToolchainAvailable,
   pluginPackageName,
@@ -169,6 +170,12 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       tools: ["tools"],
     },
   },
+  "publish-crates": {
+    workspaces: {
+      rust: ["rust/crates/base", "rust/crates/core", "rust/crates/private"],
+      tools: ["tools"],
+    },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.
@@ -260,12 +267,14 @@ interface CargoMetadata {
 }
 
 // The full report, offline and locked: it fails if a lockfile is missing a
-// package or would change.
+// package or would change. Cargo refuses a manifest whose `registry` key no
+// configuration names, so the registry of the harness, which the entries of
+// publish-crates name, gets an index that offline cargo never asks.
 function cargoMetadata(cwd: string): CargoMetadata {
   return JSON.parse(
     execFileSync("cargo", ["metadata", "--format-version", "1", "--offline", "--locked"], {
       cwd,
-      env: testEnvironment(),
+      env: testEnvironment(offlineRegistryKeyEnv),
       encoding: "utf8",
     }),
   );
