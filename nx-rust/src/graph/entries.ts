@@ -4,152 +4,157 @@ import { join, relative } from "node:path";
 import { ComputationReports } from "./computation-reports";
 import {
   type CargoDiscovery,
+  type CargoWorkspace,
   discoverReportedWorkspaces,
   type ReportedWorkspace,
 } from "./discovery";
 import { nxGraphInternals } from "./nx-internals";
-import { GraphSettings, WorkspaceWideSetting, workspaceWideSettings } from "./settings";
 
 const packageName = "@convesoft/nx-rust";
 
-/** What an entry gives a workspace-wide setting: a valid value, or nothing. */
-interface Given {
+/** The pattern of the plugin's `createNodes`, with which Nx chooses the files it hands an entry. */
+export const manifestPattern = "**/Cargo.toml";
+
+/**
+ * Where an entry of the plugin stands among the entries of the plugin in
+ * `nx.json`, once {@link checkEntries} has found that no two of them receive
+ * manifests of one Cargo workspace.
+ */
+export interface EntryView {
+  /**
+   * This entry's place in the `plugins` of `nx.json`; `undefined` where it
+   * found no workspace, and so has no warnings and compares no workspaces.
+   */
+  readonly self: number | undefined;
+  /** The entries of the plugin, by place, each with the manifests that Nx hands it. */
+  readonly entries: readonly ReceivingEntry[];
+}
+
+/** An entry of the plugin in `nx.json` with the manifests that Nx hands it. */
+interface ReceivingEntry {
   /** The entry's place in the `plugins` of `nx.json`. */
   index: number;
-  /** Whether the entry is a plain string, which has no options. */
-  plain: boolean;
-  /** The value of its options; `undefined` where it does not set one. */
-  value: string | boolean | undefined;
+  /** The manifests, relative to the repository root. */
+  manifests: ReadonlySet<string>;
 }
 
 /**
- * Fails when entries of the plugin in `nx.json` that receive manifests of
- * one workspace give different values of `testRunner`, `affectedTests` or
- * `featureUnification`, which hold for a whole workspace, and the
- * workspace's own table does not set it. An entry without the option counts
- * as giving the default.
+ * Fails where two or more entries of the plugin in `nx.json` receive
+ * manifests of one Cargo workspace, its root manifest or a member's: each
+ * workspace belongs to one entry (`DES-PLUGIN-OPTIONS`, "Several entries").
  *
  * Each entry learns of the others from the `plugins` of `nx.json`, which
  * the context of its `createNodes` holds, also under plugin isolation. It
- * finds the manifests another entry receives by applying that entry's
- * `include` and `exclude` to the `Cargo.toml` files of Nx's workspace
- * context, as Nx does (`EVD-NX-24-ENTRY-CONTEXT`). Every entry checks the
- * workspaces it found, so between them they check every workspace.
+ * works out the manifests that each entry receives with Nx's own steps for
+ * choosing an entry's files: `globPluginFiles`, which globs a narrow
+ * `include` natively and keeps the files that the `createNodes` pattern
+ * matches, then `findMatchingConfigFiles` with the entry's `include` and
+ * `exclude` (`EVD-NX-24-ENTRY-CONTEXT`). It compares them with the root
+ * manifests and members of the workspaces that it discovered. An entry that
+ * receives a manifest of a workspace discovers that workspace, so every
+ * entry that takes part fails, with the same paragraph for the workspace,
+ * whatever the order in which Nx runs them.
  *
- * The default of `featureUnification` depends on whether the workspace has a
- * cargo-hakari configuration, which the plugin does not detect yet
- * (nxr-k64tm5). Until then an entry without that option disagrees only
- * with one that sets `cargo`, which is never the default.
+ * It fails as well where it cannot tell which manifests the entries
+ * receive: where Nx's steps fail for an entry, as for an `include` or
+ * `exclude` that is no list of patterns, or where no entry gets exactly the
+ * manifests that Nx handed this one, as where a manifest was added or
+ * removed in between (`GOAL-TRUSTED-CACHE`).
  *
- * An entry whose value is invalid fails with its own error and is left out.
- *
- * @throws {Error} Naming each workspace, setting and the entries by their place.
+ * @param handed The manifests that Nx handed this entry, relative to the repository root.
+ * @returns Where this entry stands among the entries of the plugin, for
+ *   warnings that name crates of several entries ({@link warnsHere});
+ *   `undefined` where it is the plugin's only entry.
+ * @throws {Error} Naming each workspace and the entries that receive its
+ *   manifests by their place, or what could not be determined.
  */
 // @mara implements DES-PLUGIN-OPTIONS
 export async function checkEntries(
   discovery: CargoDiscovery,
-  settings: GraphSettings,
+  handed: readonly string[],
   nxJson: NxJsonConfiguration | undefined,
-): Promise<void> {
+): Promise<EntryView | undefined> {
   const { workspaceRoot } = discovery;
-  const entries = (nxJson?.plugins ?? [])
+  const own = (nxJson?.plugins ?? [])
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => isOwnEntry(entry, workspaceRoot));
-  if (entries.length < 2) {
-    return;
+  if (own.length < 2) {
+    return undefined;
   }
   const nx = nxGraphInternals(workspaceRoot);
-  const manifests = await nx.globWithWorkspaceContext(workspaceRoot, ["**/Cargo.toml"]);
-  const received = entries.map(({ entry, index }) => ({
-    index,
-    entry,
-    manifests: new Set(
-      typeof entry === "string"
-        ? manifests
-        : nx.findMatchingConfigFiles(manifests, entry.include, entry.exclude),
-    ),
-  }));
-  const problems: string[] = [];
-  for (const workspace of discovery.workspaces) {
-    const own = [
-      workspace.rootManifest,
-      ...workspace.report.packages.map((pkg) => relative(workspaceRoot, pkg.manifest_path)),
-    ];
-    const sharing = received.filter((entry) =>
-      own.some((manifest) => entry.manifests.has(manifest)),
-    );
-    if (sharing.length < 2) {
-      continue;
+  const entries: ReceivingEntry[] = [];
+  for (const { entry, index } of own) {
+    const include = typeof entry === "string" ? undefined : entry.include;
+    const exclude = typeof entry === "string" ? undefined : entry.exclude;
+    try {
+      const files = await nx.pluginFiles(workspaceRoot, manifestPattern, include, exclude);
+      entries.push({
+        index,
+        manifests: new Set(nx.findMatchingConfigFiles(files, include, exclude)),
+      });
+    } catch (error) {
+      throw cannotTell(
+        `it could not work out as Nx does which Cargo.toml files Nx hands plugins[${index}] (${reason(error)})`,
+        'Give the "include" and "exclude" of each entry as lists of glob patterns, such as ["rust/**"]. If they are, run nx reset and try again, and if the error remains, please report it at https://github.com/convesoft/nx-rust/issues together with the Nx version and command.',
+      );
     }
-    const { setInTable } = settings.workspace(workspace);
-    for (const setting of workspaceWideSettings) {
-      if (setInTable.includes(setting)) {
-        continue;
-      }
-      const given = sharing
-        .map(({ entry, index }) => givenBy(entry, index, setting))
-        .filter((value) => value !== undefined);
-      if (disagree(setting, given)) {
-        problems.push(message(workspace.root, workspace.rootManifest, setting, given));
-      }
+  }
+  // This entry is one whose files, worked out as Nx works them out, are
+  // exactly those that Nx handed it.
+  const given = new Set(handed);
+  const self = entries.find(
+    (entry) =>
+      entry.manifests.size === given.size &&
+      [...given].every((manifest) => entry.manifests.has(manifest)),
+  );
+  if (self === undefined) {
+    throw cannotTell(
+      `working out the Cargo.toml files of each of them as Nx does gives none of them exactly the ${given.size} that Nx handed this entry${differenceExample(given, entries)}`,
+      `Where a Cargo.toml was added or removed while Nx created the graph, run the command again; otherwise name the plugin in nx.json by its package name, ${packageName}, and if the error remains, please report it at https://github.com/convesoft/nx-rust/issues together with the Nx version and command.`,
+    );
+  }
+  const problems: string[] = [];
+  // By root folder, so that every entry words its error alike.
+  const byRoot = [...discovery.workspaces].sort((a, b) =>
+    a.root < b.root ? -1 : a.root > b.root ? 1 : 0,
+  );
+  for (const workspace of byRoot) {
+    // A root manifest that defines a crate is a member's manifest as well.
+    const members = new Set(workspace.report.workspace_members);
+    const workspaceManifests = [
+      ...new Set([
+        workspace.rootManifest,
+        ...workspace.report.packages
+          .filter((pkg) => members.has(pkg.id))
+          .map((pkg) => relative(workspaceRoot, pkg.manifest_path))
+          .sort(),
+      ]),
+    ];
+    const receiving = entries.flatMap(({ index, manifests: received }) => {
+      const first = workspaceManifests.find((manifest) => received.has(manifest));
+      return first === undefined
+        ? []
+        : [{ index, first, count: workspaceManifests.filter((m) => received.has(m)).length }];
+    });
+    if (receiving.length > 1) {
+      problems.push(overlapMessage(workspace, receiving));
     }
   }
   if (problems.length > 0) {
     throw new Error(problems.join("\n\n"));
   }
+  return { self: discovery.workspaces.length > 0 ? self.index : undefined, entries };
 }
 
 /**
- * The root folders of the workspaces whose root manifest Nx hands to no
- * entry of the plugin in `nx.json`, because the entries' `include` and
- * `exclude`, `.gitignore` or `.nxignore` keep it out. No project of the
- * plugin lies at such a workspace's root folder, so the workspace has no
- * lockfile task (`DES-LOCKFILE-HASHING`). With one entry, that is this
- * entry's own view; with several, each entry's `include` and `exclude` is
- * applied to the `Cargo.toml` files of Nx's workspace context, as Nx does
- * ({@link checkEntries}).
- */
-// @mara implements DES-LOCKFILE-HASHING
-export async function workspacesWithoutRootProject(
-  discovery: CargoDiscovery,
-  nxJson: NxJsonConfiguration | undefined,
-): Promise<Set<string>> {
-  const unhanded = discovery.workspaces.filter((workspace) => !workspace.rootManifestHanded);
-  if (unhanded.length === 0) {
-    return new Set();
-  }
-  const { workspaceRoot } = discovery;
-  const entries = (nxJson?.plugins ?? []).filter((entry) => isOwnEntry(entry, workspaceRoot));
-  if (entries.length < 2) {
-    return new Set(unhanded.map((workspace) => workspace.root));
-  }
-  const nx = nxGraphInternals(workspaceRoot);
-  const manifests = await nx.globWithWorkspaceContext(workspaceRoot, ["**/Cargo.toml"]);
-  const received = new Set(
-    entries.flatMap((entry) =>
-      typeof entry === "string"
-        ? manifests
-        : nx.findMatchingConfigFiles(manifests, entry.include, entry.exclude),
-    ),
-  );
-  return new Set(
-    unhanded
-      .filter((workspace) => !received.has(workspace.rootManifest))
-      .map((workspace) => workspace.root),
-  );
-}
-
-/**
- * The workspaces that the other entries of the plugin in `nx.json` receive
- * and this entry does not, each with its root folder and report, for the
- * comparison of artifact directories (`DES-OUTPUTS`, "Files of one name").
- * An entry does not know its own place among the entries, so it reads the
- * manifests that every entry receives, applying each entry's `include` and
- * `exclude` to the `Cargo.toml` files of Nx's workspace context as Nx does
- * ({@link checkEntries}), and leaves out those that its own workspaces
- * claim. Every entry thereby compares the same workspaces, whatever the
- * order in which Nx runs them. With one entry there are no others, and
- * nothing is read.
+ * The workspaces that the other entries of the plugin in `nx.json` receive,
+ * each with its root folder and report, for the comparison of artifact
+ * directories (`DES-OUTPUTS`, "Files of one name"). They are read from the
+ * manifests that {@link checkEntries} works out for the other entries, none
+ * of which is a manifest of this entry's workspaces, so every entry
+ * compares the same workspaces, whatever the order in which Nx runs them.
+ * An entry that found no workspace compares nothing, and with one entry
+ * there are no others.
  *
  * The reports come from those of the graph computation, so that entries in
  * one process request each once. A workspace whose report fails is left
@@ -158,37 +163,24 @@ export async function workspacesWithoutRootProject(
 // @mara implements DES-OUTPUTS
 export async function otherEntriesWorkspaces(
   discovery: CargoDiscovery,
-  nxJson: NxJsonConfiguration | undefined,
+  view: EntryView | undefined,
   reports: ComputationReports | undefined,
 ): Promise<ReportedWorkspace[]> {
-  const { workspaceRoot } = discovery;
-  const entries = (nxJson?.plugins ?? []).filter((entry) => isOwnEntry(entry, workspaceRoot));
-  if (entries.length < 2) {
+  if (view === undefined || view.self === undefined) {
     return [];
   }
-  const nx = nxGraphInternals(workspaceRoot);
-  const manifests = await nx.globWithWorkspaceContext(workspaceRoot, ["**/Cargo.toml"]);
-  const received = new Set(
-    entries.flatMap((entry) =>
-      typeof entry === "string"
-        ? manifests
-        : nx.findMatchingConfigFiles(manifests, entry.include, entry.exclude),
-    ),
-  );
-  const own = new Set(
-    discovery.workspaces.flatMap((workspace) => [
-      workspace.rootManifest,
-      ...workspace.report.packages.map((pkg) => relative(workspaceRoot, pkg.manifest_path)),
-    ]),
-  );
-  const ownRoots = new Set(discovery.workspaces.map((workspace) => workspace.root));
+  const { workspaceRoot } = discovery;
   const shared = reports ?? new ComputationReports();
   const others: ReportedWorkspace[] = [];
   const claimed = new Set<string>();
   const depth = (path: string) => path.split("/").length;
-  const remaining = [...received]
-    .filter((manifest) => !own.has(manifest))
-    .sort((a, b) => depth(a) - depth(b) || (a < b ? -1 : a > b ? 1 : 0));
+  const remaining = [
+    ...new Set(
+      view.entries
+        .filter((entry) => entry.index !== view.self)
+        .flatMap((entry) => [...entry.manifests]),
+    ),
+  ].sort((a, b) => depth(a) - depth(b) || (a < b ? -1 : a > b ? 1 : 0));
   for (const manifest of remaining) {
     if (claimed.has(manifest)) {
       continue;
@@ -199,7 +191,7 @@ export async function otherEntriesWorkspaces(
         for (const pkg of found.report.packages) {
           claimed.add(relative(workspaceRoot, pkg.manifest_path));
         }
-        if (!ownRoots.has(found.root) && !others.some((other) => other.root === found.root)) {
+        if (!others.some((other) => other.root === found.root)) {
           others.push(found);
         }
       }
@@ -211,167 +203,84 @@ export async function otherEntriesWorkspaces(
 }
 
 /**
- * Which entry of the plugin in `nx.json` is the first, by its place, to
- * receive each manifest, and which entry this one is: for warnings that
- * several entries find about one project, so that one entry prints each and
- * one attaches them to the project (`DES-DIAGNOSTICS`, "Warnings where they
- * are seen"). Nx merges the projects that several entries create for one
- * folder and joins the lists in their metadata, so a list that every such
- * entry attached would hold each warning once per entry.
- */
-export interface EntryView {
-  /** This entry's place among the entries of `nx.json`; `undefined` where it cannot tell. */
-  readonly self: number | undefined;
-  /**
-   * The place of the first entry of the plugin that receives `manifest`,
-   * relative to the repository root; `undefined` where none does or this
-   * entry cannot tell.
-   */
-  firstReceiver(manifest: string): number | undefined;
-}
-
-/** The view of an entry that is the plugin's only one, or that cannot tell its place. */
-const soleEntry: EntryView = { self: undefined, firstReceiver: () => undefined };
-
-/**
- * The {@link EntryView} of the entry that receives `handed` with `options`.
- * An entry does not know its own place, so it takes the first entry of the
- * plugin whose options are the same and that receives the same manifests,
- * applying each entry's `include` and `exclude` to the `Cargo.toml` files of
- * Nx's workspace context as Nx does ({@link checkEntries}). Two entries that
- * agree in both create the same projects and each take the first place; the
- * view then cannot tell them apart.
- *
- * @param handed The manifests that Nx hands this entry, relative to the repository root.
- * @param options The options that Nx hands this entry.
+ * Whether this entry prints a warning that concerns the crates of
+ * `manifests`, relative to the repository root, which can belong to the
+ * workspaces of several entries of the plugin, as a warning about files of
+ * one name does (`DES-DIAGNOSTICS`, "Warnings where they are seen"): it
+ * does where it is the first of those entries by its place in `nx.json`, so
+ * that each such warning is printed once. As the plugin's only entry, it
+ * prints every warning.
  */
 // @mara implements DES-DIAGNOSTICS
-export async function entryView(
-  workspaceRoot: string,
-  nxJson: NxJsonConfiguration | undefined,
-  handed: readonly string[],
-  options: unknown,
-): Promise<EntryView> {
-  const entries = (nxJson?.plugins ?? [])
-    .map((entry, index) => ({ entry, index }))
-    .filter(({ entry }) => isOwnEntry(entry, workspaceRoot));
-  if (entries.length < 2) {
-    return soleEntry;
-  }
-  const nx = nxGraphInternals(workspaceRoot);
-  const manifests = await nx.globWithWorkspaceContext(workspaceRoot, ["**/Cargo.toml"]);
-  const received = entries.map(({ entry, index }) => ({
-    index,
-    options: typeof entry === "string" ? undefined : entry.options,
-    manifests: new Set(
-      typeof entry === "string"
-        ? manifests
-        : nx.findMatchingConfigFiles(manifests, entry.include, entry.exclude),
-    ),
-  }));
-  const own = new Set(handed);
-  const self = received.find(
-    (entry) =>
-      stableJson(entry.options ?? {}) === stableJson(options ?? {}) &&
-      entry.manifests.size === own.size &&
-      [...own].every((manifest) => entry.manifests.has(manifest)),
-  );
-  if (self === undefined) {
-    return soleEntry;
-  }
-  return {
-    self: self.index,
-    firstReceiver: (manifest) => received.find((entry) => entry.manifests.has(manifest))?.index,
-  };
-}
-
-/**
- * Whether this entry prints, or attaches to its projects, a warning that
- * concerns the projects of `manifests`: where it is the first entry of the
- * plugin, by its place in `nx.json`, that receives any of them, or where it
- * cannot tell, as the plugin's only entry ({@link EntryView}).
- */
-export function warnsHere(view: EntryView, manifests: readonly string[]): boolean {
-  if (view.self === undefined) {
+export function warnsHere(view: EntryView | undefined, manifests: readonly string[]): boolean {
+  if (view === undefined) {
     return true;
   }
   const places = manifests
-    .map((manifest) => view.firstReceiver(manifest))
+    .map((manifest) => view.entries.find((entry) => entry.manifests.has(manifest))?.index)
     .filter((place) => place !== undefined);
   return places.length === 0 || Math.min(...places) === view.self;
 }
 
-// JSON with the keys of every object sorted, so that options compare by value.
-function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, item) =>
-    typeof item === "object" && item !== null && !Array.isArray(item)
-      ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : item,
+// The paragraph of the error of `checkEntries` for one workspace.
+function overlapMessage(
+  workspace: CargoWorkspace,
+  receiving: readonly { index: number; first: string; count: number }[],
+): string {
+  const places = receiving.map(({ index }) => `plugins[${index}]`);
+  const listed =
+    places.length === 2
+      ? `${places[0]} and ${places[1]}`
+      : `${places.slice(0, -1).join(", ")} and ${places[places.length - 1]}`;
+  const where = workspace.root === "." ? "the repository root" : `${workspace.root}/`;
+  const what = receiving
+    .map(
+      ({ index, first, count }) =>
+        `plugins[${index}] receives ${first}${count > 1 ? ` and ${count - 1} more of its manifests` : ""}`,
+    )
+    .join(", ");
+  const exclude =
+    workspace.root === "."
+      ? `an "exclude" that leaves out its manifests, ${workspace.rootManifest} and those of its members`
+      : `an "exclude" that leaves out the workspace, such as "${workspace.root}/**"`;
+  return [
+    `nx-rust: the entries ${listed} of ${packageName} in nx.json ${places.length === 2 ? "both" : "all"} receive manifests of the Cargo workspace in ${where} (${what}), so that each would create projects of that workspace with its own options, which Nx would merge.`,
+    `A Cargo workspace belongs to one entry of the plugin. Give all but one of these entries ${exclude}, or narrow their "include", so that one entry receives all its manifests.`,
+  ].join("\n");
+}
+
+// A manifest that tells the files that Nx handed this entry from those
+// worked out for the entry that shares most of them, for the error of
+// `checkEntries`.
+function differenceExample(given: ReadonlySet<string>, entries: readonly ReceivingEntry[]): string {
+  const shared = (entry: ReceivingEntry) =>
+    [...given].filter((manifest) => entry.manifests.has(manifest)).length;
+  const closest = [...entries].sort((a, b) => shared(b) - shared(a))[0];
+  if (closest === undefined) {
+    return "";
+  }
+  const missing = [...given].find((manifest) => !closest.manifests.has(manifest));
+  if (missing !== undefined) {
+    return `: it was handed ${missing}, which Nx would not hand plugins[${closest.index}]`;
+  }
+  const extra = [...closest.manifests].find((manifest) => !given.has(manifest));
+  return extra === undefined
+    ? ""
+    : `: it was not handed ${extra}, which Nx would hand plugins[${closest.index}]`;
+}
+
+// The error for an overlap that `checkEntries` cannot rule out.
+function cannotTell(because: string, remedy: string): Error {
+  return new Error(
+    [
+      `nx-rust could not tell whether entries of ${packageName} in nx.json receive manifests of one Cargo workspace, which it refuses, because ${because}.`,
+      remedy,
+    ].join("\n"),
   );
 }
 
-const defaults: Record<WorkspaceWideSetting, string | boolean | undefined> = {
-  testRunner: "cargo",
-  affectedTests: false,
-  // Depends on the workspace (DES-UNIFICATION, nxr-k64tm5).
-  featureUnification: undefined,
-};
-
-const validValues: Record<WorkspaceWideSetting, readonly (string | boolean)[]> = {
-  testRunner: ["cargo", "nextest"],
-  affectedTests: [true, false],
-  featureUnification: ["hakari", "cargo", "workspace-build"],
-};
-
-// What one entry gives a setting, or `undefined` for an invalid value, which
-// that entry reports itself.
-function givenBy(
-  entry: PluginConfiguration,
-  index: number,
-  setting: WorkspaceWideSetting,
-): Given | undefined {
-  if (typeof entry === "string") {
-    return { index, plain: true, value: undefined };
-  }
-  const options = entry.options as Record<string, unknown> | undefined;
-  const value = typeof options === "object" && options !== null ? options[setting] : undefined;
-  if (value !== undefined && !validValues[setting].includes(value as string | boolean)) {
-    return undefined;
-  }
-  return { index, plain: false, value: value as string | boolean | undefined };
-}
-
-function disagree(setting: WorkspaceWideSetting, given: readonly Given[]): boolean {
-  const effective = new Set(given.map(({ value }) => value ?? defaults[setting]));
-  if (setting !== "featureUnification") {
-    return effective.size > 1;
-  }
-  const explicit = new Set(given.flatMap(({ value }) => (value === undefined ? [] : [value])));
-  const someDefault = given.some(({ value }) => value === undefined);
-  return explicit.size > 1 || (someDefault && explicit.has("cargo"));
-}
-
-function message(
-  root: string,
-  rootManifest: string,
-  setting: WorkspaceWideSetting,
-  given: readonly Given[],
-): string {
-  const describe = ({ index, plain, value }: Given) => {
-    const entry = `plugins[${index}]`;
-    if (value !== undefined) {
-      return `${entry} sets ${JSON.stringify(value)}`;
-    }
-    const without = plain ? "names the plugin without options" : "does not set it";
-    const fallback = defaults[setting];
-    return fallback === undefined
-      ? `${entry} ${without}, which gives the default strategy, never "cargo"`
-      : `${entry} ${without}, which gives the default ${JSON.stringify(fallback)}`;
-  };
-  return [
-    `nx-rust: the entries ${given.map(({ index }) => `plugins[${index}]`).join(", ")} of @convesoft/nx-rust in nx.json receive manifests of the Cargo workspace in ${root === "." ? "the repository root" : `${root}/`}, but give it different values of "${setting}": ${given.map(describe).join("; ")}.`,
-    `"${setting}" holds for a whole workspace. Give these entries the same value, or set ${setting} under [workspace.metadata.nx] in ${rootManifest}, which wins over the plugin options.`,
-  ].join("\n");
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

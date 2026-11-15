@@ -371,26 +371,6 @@ describe("caching", () => {
       HARNESS_TIMEOUT,
     );
 
-    it(
-      "keeps them cached where another entry of the plugin receives the root manifest",
-      async () => {
-        const graph = await loadFixtureGraph("subfolder-workspace", {
-          files: {
-            "nx.json": entries({ exclude: ["rust/Cargo.toml"] }, { include: ["rust/Cargo.toml"] }),
-          },
-        });
-        const { api } = graph.projects;
-
-        expect(graph.projects.rust.targets.lockfile).toBeDefined();
-        expect(api.targets.test).toMatchObject({
-          cache: true,
-          dependsOn: [lockfileDependency("rust")],
-        });
-        expect(api.metadata.cargo.warnings).toBeUndefined();
-      },
-      HARNESS_TIMEOUT,
-    );
-
     // The first report of the entry without the root manifest starts in
     // rust/crates/cli, the shallowest manifest it receives, while the tasks
     // run cargo in rust/ (nxr-xrfd50).
@@ -410,43 +390,6 @@ describe("caching", () => {
     ])(
       "where %s another artifact directory in the folder of the first manifest that an entry receives",
       (_case, files, env, directory) => {
-        it.each([
-          ["in plugin workers", "true"],
-          ["in one process", "false"],
-        ])(
-          "names the directory of the workspace root, where the tasks run cargo, %s",
-          async (_mode, isolation) => {
-            const graph = await loadFixtureGraph("crate-shapes", {
-              files: {
-                ...files,
-                "nx.json": entries(
-                  { exclude: ["rust/Cargo.toml"] },
-                  { include: ["rust/Cargo.toml"] },
-                ),
-              },
-              env: { ...env, NX_ISOLATE_PLUGINS: isolation },
-            });
-            const folder = `{workspaceRoot}/${directory}/{options.targetTriple ?? .}/{options.profile ?? debug}`;
-
-            expect(graph.projects.cli.targets.build).toMatchObject({
-              cache: true,
-              outputs: [`${folder}/cli`],
-            });
-            expect(graph.projects.rust.targets.doc.outputs).toEqual([
-              `{workspaceRoot}/${directory}/{options.targetTriple ?? .}/doc`,
-            ]);
-            // The entry without the root manifest reads the workspace once
-            // more in its root folder, unless it shares the report requested
-            // there by the entry that receives the root manifest.
-            expect(graph.cargoCalls.map((call) => call.cwd).sort()).toEqual(
-              isolation === "true"
-                ? ["rust", "rust", "rust/crates/cli"]
-                : ["rust", "rust/crates/cli"],
-            );
-          },
-          HARNESS_TIMEOUT,
-        );
-
         it(
           "reads the directory of the workspace root where no entry receives the root manifest",
           async () => {

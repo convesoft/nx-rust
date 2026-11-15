@@ -726,30 +726,6 @@ describe("the workspace project at the root of the Nx workspace", () => {
   );
 });
 
-describe("two plugin entries that split a workspace's manifests", () => {
-  it.each([
-    ["in plugin workers", "true"],
-    ["in one process", "false"],
-  ])(
-    "give the workspace project an edge to every member %s",
-    async (_mode, isolation) => {
-      const graph = await loadFixtureGraph("subfolder-workspace", {
-        files: {
-          "nx.json": pluginEntries(
-            { include: ["rust/Cargo.toml"] },
-            { include: ["rust/crates/**"] },
-          ),
-        },
-        env: { NX_ISOLATE_PLUGINS: isolation },
-      });
-
-      expect(roots(graph)).toEqual(expected["subfolder-workspace"].projects);
-      expect(edges(graph)).toEqual(expected["subfolder-workspace"].edges);
-    },
-    HARNESS_TIMEOUT,
-  );
-});
-
 describe("name collisions", () => {
   it(
     "fail graph creation for two crates with one name, naming both manifests and the remedies",
@@ -916,35 +892,6 @@ describe.each([
 
       await expect(loading).rejects.toThrow(/defined in multiple locations/);
       await expect(loading).rejects.not.toThrow(/nx-rust would give/);
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "find none between two entries that receive the same manifests",
-    async () => {
-      const graph = await loadFixtureGraph("subfolder-workspace", {
-        files: { "nx.json": pluginEntries({}, {}) },
-        env,
-      });
-
-      expect(roots(graph)).toEqual(expected["subfolder-workspace"].projects);
-      expect(edges(graph)).toEqual(expected["subfolder-workspace"].edges);
-    },
-    HARNESS_TIMEOUT,
-  );
-
-  it(
-    "fail graph creation with Nx's error for two crates with one name that two entries both receive",
-    async () => {
-      // How often the plugin's message appears here is best effort.
-      const loading = loadFixtureGraph("name-collision", {
-        files: { "nx.json": pluginEntries({}, { options: {} }) },
-        env,
-      });
-
-      await expect(loading).rejects.toThrow(GraphCreationError);
-      await expect(loading).rejects.toThrow(/defined in multiple locations/);
     },
     HARNESS_TIMEOUT,
   );

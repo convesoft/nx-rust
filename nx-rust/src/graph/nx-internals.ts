@@ -2,7 +2,7 @@ import type { TargetConfiguration } from "@nx/devkit";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** The parts of Nx's `nx/src/devkit-internals` that graph creation uses. */
+/** The parts of Nx's internal modules that graph creation uses. */
 export interface NxGraphInternals {
   /**
    * Nx's rule for laying one configuration of a target over another, as it
@@ -18,21 +18,37 @@ export interface NxGraphInternals {
     targetIdentifier: undefined,
     deferSpreadsWithoutBase: boolean,
   ): TargetConfiguration;
-  /** The files of `files` that an entry with `include` and `exclude` receives. */
+  /**
+   * The files of `files` that an entry with `include` and `exclude`
+   * receives: Nx's last step in choosing an entry's files.
+   */
   findMatchingConfigFiles(
     files: readonly string[],
     include: readonly string[] | undefined,
     exclude: readonly string[] | undefined,
   ): string[];
-  /** The files of Nx's workspace context that match `globs`, relative to the root. */
-  globWithWorkspaceContext(workspaceRoot: string, globs: string[]): Promise<string[]>;
+  /**
+   * The files that Nx chooses for an entry before {@link findMatchingConfigFiles}:
+   * those of Nx's workspace context that the entry's `createNodes` pattern
+   * matches, where Nx globs a narrow `include` natively first
+   * (`EVD-NX-24-ENTRY-CONTEXT`). Nx's own `globPluginFiles`, called through
+   * `retrieveProjectConfigurationPaths` of
+   * `nx/src/project-graph/utils/retrieve-workspace-files` with the entry
+   * alone, relative to the repository root. That module is loaded on the
+   * first call.
+   */
+  pluginFiles(
+    workspaceRoot: string,
+    pattern: string,
+    include: readonly string[] | undefined,
+    exclude: readonly string[] | undefined,
+  ): Promise<string[]>;
 }
 
-const parts = [
-  "mergeTargetConfigurations",
-  "findMatchingConfigFiles",
-  "globWithWorkspaceContext",
-] as const;
+const parts = ["mergeTargetConfigurations", "findMatchingConfigFiles"] as const;
+
+const pluginFilesPath = "nx/src/project-graph/utils/retrieve-workspace-files";
+const pluginFilesPart = "retrieveProjectConfigurationPaths";
 
 const loaded = new Map<string, NxGraphInternals>();
 
@@ -81,13 +97,28 @@ export function nxGraphInternals(workspaceRoot: string): NxGraphInternals {
         "no list of file paths",
         isPathList,
       ),
-    globWithWorkspaceContext: async (...args) =>
-      checked(
-        await nx.globWithWorkspaceContext(...args),
-        "globWithWorkspaceContext",
+    pluginFiles: async (root, pattern, include, exclude) => {
+      let retrieve: unknown;
+      try {
+        retrieve = require(resolveFromRepository(pluginFilesPath, workspaceRoot))[pluginFilesPart];
+      } catch (error) {
+        throw unsupported(`${pluginFilesPath} could not be loaded (${reason(error)})`);
+      }
+      if (typeof retrieve !== "function") {
+        throw unsupported(`${pluginFilesPart} from ${pluginFilesPath} is not a function`);
+      }
+      // The parts of a loaded plugin entry that Nx's globPluginFiles reads.
+      const entry = { createNodes: [pattern], include, exclude };
+      return checked(
+        (await (retrieve as (root: string, plugins: object[]) => Promise<unknown>)(root, [
+          entry,
+        ])) as string[],
+        pluginFilesPart,
         "no list of file paths",
         isPathList,
-      ),
+        pluginFilesPath,
+      );
+    },
   };
   loaded.set(workspaceRoot, internals);
   return internals;
@@ -141,12 +172,13 @@ export function nxIgnoreRules(workspaceRoot: string): ((directory: string) => bo
 // The result, or an error that names the part and what its result lacks.
 function checked<T>(
   result: T,
-  part: (typeof parts)[number],
+  part: string,
   lacking: string,
   isExpected: (value: unknown) => boolean,
+  path = "nx/src/devkit-internals",
 ): T {
   if (!isExpected(result)) {
-    throw unsupported(`the result of ${part} from nx/src/devkit-internals is ${lacking}`);
+    throw unsupported(`the result of ${part} from ${path} is ${lacking}`);
   }
   return result;
 }

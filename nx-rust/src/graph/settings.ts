@@ -14,15 +14,6 @@ export type FeatureUnification = "hakari" | "cargo" | "workspace-build";
 /** A kind of artifact that `artifacts` names (`DES-ARTIFACT-STEPS`). */
 export type ArtifactKind = "napi" | "wasm";
 
-/**
- * The settings that hold for a whole workspace, which the plugin entries
- * that receive manifests of one workspace have to agree on
- * (`checkEntries` in `entries.ts`).
- */
-export const workspaceWideSettings = ["testRunner", "affectedTests", "featureUnification"] as const;
-
-export type WorkspaceWideSetting = (typeof workspaceWideSettings)[number];
-
 /** The options of one entry of the plugin in `nx.json`, validated. */
 export interface PluginOptions {
   targetNames: TargetNames;
@@ -81,8 +72,6 @@ export interface WorkspaceSettings {
    * whether the workspace has a cargo-hakari configuration (nxr-k64tm5).
    */
   featureUnification?: FeatureUnification;
-  /** The workspace-wide settings that `[workspace.metadata.nx]` sets itself. */
-  setInTable: readonly WorkspaceWideSetting[];
   /** Put in front of the package name of each member without a `name` of its own. */
   namePrefix?: string;
   /** The workspace table's tags, which every member and the workspace project have. */
@@ -291,7 +280,6 @@ export function readSettings(discovery: CargoDiscovery, options: PluginOptions):
       testRunner: table.testRunner ?? options.testRunner ?? "cargo",
       affectedTests: table.affectedTests ?? options.affectedTests ?? false,
       featureUnification: table.featureUnification ?? options.featureUnification,
-      setInTable: workspaceWideSettings.filter((setting) => table[setting] !== undefined),
       namePrefix: table.namePrefix,
       tags: table.tags,
       implicitDependencies: table.implicitDependencies,

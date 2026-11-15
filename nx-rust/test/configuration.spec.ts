@@ -16,6 +16,7 @@ import {
   HARNESS_TIMEOUT,
   loadFixtureGraph,
   packageSpec,
+  pluginSourceEntry,
   pluginWorkers,
   testEnvironment,
   withoutColours,
@@ -1158,49 +1159,57 @@ describe("settings that take effect later, as the plugin places them", () => {
 });
 
 describe("several entries of the plugin", () => {
-  // The members api and model, with the root manifest in the first entry.
-  const split = (first: object, second: object) =>
-    pluginEntries(
-      { include: ["rust/Cargo.toml", "rust/crates/api/**"], ...first },
-      {
-        include: ["rust/crates/model/**", "rust/crates/codegen/**", "rust/crates/testkit/**"],
-        ...second,
-      },
-    );
+  /** nx.json with one entry per argument: `"plain"` for the plugin's name alone, an object for the rest of an entry. */
+  const entries =
+    (...given: (object | "plain")[]) =>
+    (nxJson: string) => {
+      const config = JSON.parse(nxJson);
+      const [first] = config.plugins;
+      const plugin = typeof first === "string" ? first : first.plugin;
+      return JSON.stringify({
+        ...config,
+        plugins: given.map((entry) => (entry === "plain" ? plugin : { plugin, ...entry })),
+      });
+    };
+  const rustEntry = { include: ["rust/**"] };
+  /** The issue's configuration: the plugin's name, and an entry for rust/. */
+  const nameAndRust = entries("plain", rustEntry);
+  /** The second paragraph of the refusal of a workspace in a subfolder. */
+  const remedy = (folder: string) =>
+    `A Cargo workspace belongs to one entry of the plugin. Give all but one of these entries an "exclude" that leaves out the workspace, such as "${folder}/**", or narrow their "include", so that one entry receives all its manifests.`;
+  /** The refusal for rust/ in shared-executables, where `what` lists what each entry receives. */
+  const rustRefusal = (listed: string, what: string, all = "both") =>
+    `nx-rust: the entries ${listed} of @convesoft/nx-rust in nx.json ${all} receive manifests of the Cargo workspace in rust/ (${what}), so that each would create projects of that workspace with its own options, which Nx would merge.\n${remedy("rust")}`;
+  const everyRustManifest = (index: number) =>
+    `plugins[${index}] receives rust/Cargo.toml and 3 more of its manifests`;
+  const issueRefusal = rustRefusal(
+    "plugins[0] and plugins[1]",
+    `${everyRustManifest(0)}, ${everyRustManifest(1)}`,
+  );
+
+  /** How many times `text` occurs in `output`. */
+  const occurrences = (output: string, text: string) => output.split(text).length - 1;
 
   describe.each<[string, Record<string, string>]>([
-    ["with plugin isolation", { NX_ISOLATE_PLUGINS: "true" }],
-    ["without plugin isolation", { NX_ISOLATE_PLUGINS: "false" }],
+    ["with plugin isolation", { NX_ISOLATE_PLUGINS: "true", NX_DAEMON: "false" }],
+    ["without plugin isolation", { NX_ISOLATE_PLUGINS: "false", NX_DAEMON: "false" }],
     ["through the Nx daemon", { NX_DAEMON: "true" }],
   ])("%s", (_mode, env) => {
     it(
-      "fail for different values of each per-workspace setting, naming the workspace, the setting and both entries",
+      "fail where two entries receive manifests of one workspace, naming the workspace, both entries and the remedy, once for each entry",
       async () => {
-        const workspace = FixtureWorkspace.create("subfolder-workspace", {
-          "nx.json": split(
-            { options: { testRunner: "cargo", affectedTests: true, featureUnification: "hakari" } },
-            {
-              options: { testRunner: "nextest", affectedTests: false, featureUnification: "cargo" },
-            },
-          ),
-        });
+        const workspace = FixtureWorkspace.create("shared-executables", { "nx.json": nameAndRust });
         try {
           const { status, output } = await workspace.nx(["show", "projects"], env);
           const text = withoutColours(output);
 
           expect(status).toBe(1);
-          for (const [setting, first, second] of [
-            ["testRunner", '"cargo"', '"nextest"'],
-            ["affectedTests", "true", "false"],
-            ["featureUnification", '"hakari"', '"cargo"'],
-          ]) {
-            expect(text).toContain(
-              `the entries plugins[0], plugins[1] of @convesoft/nx-rust in nx.json receive manifests of the Cargo workspace in rust/, but give it different values of "${setting}": plugins[0] sets ${first}; plugins[1] sets ${second}.`,
-            );
-          }
-          expect(text).toContain(
-            "Give these entries the same value, or set testRunner under [workspace.metadata.nx] in rust/Cargo.toml",
-          );
+          // Nx indents each line of an entry's error.
+          const [first, second] = issueRefusal.split("\n");
+          expect(text).toContain(`${first}\n    ${second}`);
+          // Each entry fails with it, and Nx prints the error of each.
+          expect(occurrences(text, first)).toBe(2);
+          expect(occurrences(text, second)).toBe(2);
         } finally {
           if (env.NX_DAEMON === "true") {
             await workspace.nx(["daemon", "--stop"], env);
@@ -1210,99 +1219,189 @@ describe("several entries of the plugin", () => {
       },
       HARNESS_TIMEOUT,
     );
+
+    it(
+      "create every project once, as one entry does, where an exclude leaves the workspace to one entry",
+      async () => {
+        const workspace = FixtureWorkspace.create("shared-executables", {
+          "nx.json": entries({ exclude: ["rust/**"] }, rustEntry),
+        });
+        const single = FixtureWorkspace.create("shared-executables");
+        try {
+          const graph = await workspace.graph(env);
+          const projects = Object.keys(graph.projects).sort();
+          expect(projects).toEqual(["alpha", "beta", "gamma", "rust", "tools"]);
+          // Nx joins the lists that two entries give one project, so a
+          // doubled list shows where both created it.
+          expect(graph.projects.rust.targets?.lockfile.metadata?.technologies).toEqual(["cargo"]);
+          expect(graph.projects.alpha.metadata?.cargo.warnings).toHaveLength(1);
+          expect(graph.projects).toEqual((await single.graph(env)).projects);
+        } finally {
+          if (env.NX_DAEMON === "true") {
+            await workspace.nx(["daemon", "--stop"], env);
+            await single.nx(["daemon", "--stop"], env);
+          }
+          workspace.remove();
+          single.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
   });
 
-  it.each<[string, (nxJson: string) => string, string]>([
+  it.each<[string, (nxJson: string) => string, string[]]>([
     [
-      "an entry without the setting beside one with a value other than the default",
-      split({}, { options: { testRunner: "nextest" } }),
-      'plugins[0] does not set it, which gives the default "cargo"; plugins[1] sets "nextest"',
+      "entries that split the workspace, the root manifest to one and the members to the other",
+      entries({ exclude: ["rust/crates/**"] }, rustEntry),
+      [
+        rustRefusal(
+          "plugins[0] and plugins[1]",
+          `plugins[0] receives rust/Cargo.toml, ${everyRustManifest(1)}`,
+        ),
+      ],
     ],
     [
-      "an entry without featureUnification beside one with cargo, which is never the default",
-      split({ options: { featureUnification: "cargo" } }, {}),
-      'plugins[0] sets "cargo"; plugins[1] does not set it, which gives the default strategy, never "cargo"',
+      "an exclude that leaves out one member only",
+      entries({ exclude: ["rust/crates/alpha/**"] }, rustEntry),
+      [
+        rustRefusal(
+          "plugins[0] and plugins[1]",
+          `plugins[0] receives rust/Cargo.toml and 2 more of its manifests, ${everyRustManifest(1)}`,
+        ),
+      ],
     ],
     [
-      "a plain string entry beside an object entry with a value other than the default",
-      (json) => {
-        const [first] = JSON.parse(json).plugins;
-        const plugin = typeof first === "string" ? first : first.plugin;
-        return JSON.stringify({
-          plugins: [plugin, { plugin, options: { affectedTests: true } }],
-        });
-      },
-      "plugins[0] names the plugin without options, which gives the default false; plugins[1] sets true",
+      "an exclude that matches no manifest",
+      entries({ exclude: ["rust/**/*.rs"] }, rustEntry),
+      [issueRefusal],
+    ],
+    [
+      "two identical entries, for each workspace",
+      entries({}, {}),
+      [
+        issueRefusal,
+        "nx-rust: the entries plugins[0] and plugins[1] of @convesoft/nx-rust in nx.json both receive manifests of the Cargo workspace in tools/ (plugins[0] receives tools/Cargo.toml, plugins[1] receives tools/Cargo.toml)",
+      ],
+    ],
+    [
+      "three entries",
+      entries("plain", rustEntry, { include: ["rust/crates/alpha/**"] }),
+      [
+        rustRefusal(
+          "plugins[0], plugins[1] and plugins[2]",
+          `${everyRustManifest(0)}, ${everyRustManifest(1)}, plugins[2] receives rust/crates/alpha/Cargo.toml`,
+          "all",
+        ),
+      ],
     ],
   ])(
     "fail for %s",
     async (_case, nxJson, expected) => {
-      const loading = loadFixtureGraph("subfolder-workspace", { files: { "nx.json": nxJson } });
+      const message = await graphError("shared-executables", { "nx.json": nxJson });
 
-      await expect(loading).rejects.toThrow(expected);
+      for (const paragraph of expected) {
+        expect(message).toContain(paragraph);
+      }
     },
     HARNESS_TIMEOUT,
   );
 
-  it.each<[string, (nxJson: string) => string]>([
-    [
-      "an entry without the setting beside one with the default",
-      split({}, { options: { testRunner: "cargo" } }),
-    ],
-    [
-      "an entry without featureUnification beside one with workspace-build, in a workspace without cargo-hakari",
-      split({}, { options: { featureUnification: "workspace-build" } }),
-    ],
-    [
-      "equal values",
-      split({ options: { testRunner: "nextest" } }, { options: { testRunner: "nextest" } }),
-    ],
-    [
-      "two identical object entries",
-      pluginEntries({ options: { testRunner: "nextest" } }, { options: { testRunner: "nextest" } }),
-    ],
-  ])(
-    "pass for %s",
-    async (_case, nxJson) => {
-      const graph = await loadFixtureGraph("subfolder-workspace", { files: { "nx.json": nxJson } });
+  // Nx globs an include without "**", "!", "(" or ")" natively before it
+  // matches the patterns in JavaScript (EVD-NX-24-ENTRY-CONTEXT), and the
+  // native glob does not know a POSIX class such as [[:upper:]].
+  describe.each<[string, Record<string, string>]>([
+    ["with plugin isolation", { NX_ISOLATE_PLUGINS: "true" }],
+    ["without plugin isolation", { NX_ISOLATE_PLUGINS: "false" }],
+  ])("where an entry's include is narrow, %s", (_mode, env) => {
+    it(
+      "pass for entries that Nx's native glob keeps apart, though the patterns alone would match one manifest for both",
+      async () => {
+        const graph = await loadFixtureGraph("shared-executables", {
+          files: {
+            "nx.json": entries(rustEntry, {
+              include: ["rust/[[:upper:]]argo.toml", "tools/Cargo.toml"],
+            }),
+          },
+          env,
+        });
 
-      expect(Object.keys(graph.projects).sort()).toEqual([
-        "api",
-        "codegen",
-        "model",
-        "rust",
-        "testkit",
-      ]);
-    },
-    HARNESS_TIMEOUT,
-  );
+        expect(Object.keys(graph.projects).sort()).toEqual([
+          "alpha",
+          "beta",
+          "gamma",
+          "rust",
+          "tools",
+        ]);
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "fail for entries that both receive manifests of one workspace through it",
+      async () => {
+        const message = await graphError(
+          "shared-executables",
+          {
+            "nx.json": entries(rustEntry, {
+              include: ["rust/crates/*/Cargo.toml", "tools/Cargo.toml"],
+            }),
+          },
+          env,
+        );
+
+        expect(message).toContain(
+          rustRefusal(
+            "plugins[0] and plugins[1]",
+            `${everyRustManifest(0)}, plugins[1] receives rust/crates/alpha/Cargo.toml and 2 more of its manifests`,
+          ).split("\n")[0],
+        );
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
 
   it(
-    "accept different values where the workspace table sets the setting",
+    "fail for a workspace at the repository root, naming it so",
     async () => {
-      const graph = await loadFixtureGraph("subfolder-workspace", {
-        files: {
-          "nx.json": split(
-            { options: { testRunner: "cargo" } },
-            { options: { testRunner: "nextest" } },
-          ),
-          "rust/Cargo.toml": appendTo('[workspace.metadata.nx]\ntestRunner = "nextest"'),
-        },
+      const message = await graphError("two-workspaces", {
+        "nx.json": entries("plain", { include: ["crates/**"] }),
+      });
+
+      expect(message).toContain(
+        'nx-rust: the entries plugins[0] and plugins[1] of @convesoft/nx-rust in nx.json both receive manifests of the Cargo workspace in the repository root (plugins[0] receives Cargo.toml and 2 more of its manifests, plugins[1] receives crates/app/Cargo.toml and 1 more of its manifests), so that each would create projects of that workspace with its own options, which Nx would merge.\nA Cargo workspace belongs to one entry of the plugin. Give all but one of these entries an "exclude" that leaves out its manifests, Cargo.toml and those of its members, or narrow their "include", so that one entry receives all its manifests.',
+      );
+      expect(message).not.toContain("tools/");
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each<[string, object]>([
+    [
+      "an exclude of the root manifest and every member",
+      { exclude: ["rust/Cargo.toml", "rust/crates/**"] },
+    ],
+    ["an include of every file but rust/", { include: ["**", "!rust/**"] }],
+    ["an include that starts with a negation, from every file", { include: ["!rust/**"] }],
+  ])(
+    "pass for %s beside the entry for rust/",
+    async (_case, first) => {
+      const graph = await loadFixtureGraph("shared-executables", {
+        files: { "nx.json": entries(first, rustEntry) },
       });
 
       expect(Object.keys(graph.projects).sort()).toEqual([
-        "api",
-        "codegen",
-        "model",
+        "alpha",
+        "beta",
+        "gamma",
         "rust",
-        "testkit",
+        "tools",
       ]);
     },
     HARNESS_TIMEOUT,
   );
 
   it(
-    "leave alone entries that receive manifests of different workspaces",
+    "leave alone entries that receive manifests of different workspaces, with different options",
     async () => {
       const graph = await loadFixtureGraph("two-workspaces", {
         files: {
@@ -1323,6 +1422,69 @@ describe("several entries of the plugin", () => {
     },
     HARNESS_TIMEOUT,
   );
+
+  describe("where the plugin cannot tell which manifests an entry receives", () => {
+    let workspace: FixtureWorkspace | undefined;
+    let savedEnvironment: NodeJS.ProcessEnv;
+
+    beforeEach(() => {
+      savedEnvironment = process.env;
+    });
+
+    afterEach(() => {
+      process.env = savedEnvironment;
+      workspace?.remove();
+      workspace = undefined;
+    });
+
+    /** Runs the plugin's createNodes in this process for `handed`, with the entries of `plugins`. */
+    async function createNodes(handed: string[], plugins: unknown[]): Promise<void> {
+      workspace = FixtureWorkspace.create("shared-executables");
+      process.env = workspace.cargo.environment(testEnvironment());
+      const context: CreateNodesContext = {
+        workspaceRoot: workspace.root,
+        nxJsonConfiguration: { plugins: plugins as never },
+      };
+      await { ...plugin }.createNodes[1](handed, undefined, context);
+    }
+
+    it(
+      "fail where an entry's exclude cannot be applied, naming the entry",
+      async () => {
+        // Nx itself fails on such an entry before it calls the plugin.
+        const loading = createNodes(
+          ["rust/Cargo.toml", "tools/Cargo.toml"],
+          [pluginSourceEntry, { plugin: pluginSourceEntry, exclude: "rust/**" }],
+        );
+
+        await expect(loading).rejects.toThrow(
+          "nx-rust could not tell whether entries of @convesoft/nx-rust in nx.json receive manifests of one Cargo workspace, which it refuses, because it could not work out as Nx does which Cargo.toml files Nx hands plugins[1] (",
+        );
+        await expect(loading).rejects.toThrow(
+          'Give the "include" and "exclude" of each entry as lists of glob patterns, such as ["rust/**"].',
+        );
+      },
+      HARNESS_TIMEOUT,
+    );
+
+    it(
+      "fail where no entry gets exactly the manifests that Nx handed this one, naming one that differs",
+      async () => {
+        const loading = createNodes(
+          ["rust/Cargo.toml"],
+          [
+            { plugin: pluginSourceEntry, include: ["tools/**"] },
+            { plugin: pluginSourceEntry, include: ["tools/**"], options: {} },
+          ],
+        );
+
+        await expect(loading).rejects.toThrow(
+          "because working out the Cargo.toml files of each of them as Nx does gives none of them exactly the 1 that Nx handed this entry: it was handed rust/Cargo.toml, which Nx would not hand plugins[0].",
+        );
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
 });
 
 describe("tasks of targets that the tables configure", () => {
@@ -1510,9 +1672,13 @@ describe("the parts of Nx that graph creation uses", () => {
       [
         "exports.mergeTargetConfigurations = () => undefined;",
         'exports.findMatchingConfigFiles = () => "Cargo.toml";',
-        "exports.globWithWorkspaceContext = async () => [1];",
         "",
       ].join("\n"),
+    );
+    mkdirSync(join(nx, "src", "project-graph", "utils"), { recursive: true });
+    writeFileSync(
+      join(nx, "src", "project-graph", "utils", "retrieve-workspace-files.js"),
+      "exports.retrieveProjectConfigurationPaths = async () => [1];\n",
     );
   });
 
@@ -1529,8 +1695,8 @@ describe("the parts of Nx that graph creation uses", () => {
     expect(() => nx.findMatchingConfigFiles(["Cargo.toml"], undefined, undefined)).toThrow(
       unsupported("findMatchingConfigFiles", "no list of file paths"),
     );
-    await expect(nx.globWithWorkspaceContext(root, ["**/Cargo.toml"])).rejects.toThrow(
-      unsupported("globWithWorkspaceContext", "no list of file paths"),
+    await expect(nx.pluginFiles(root, "**/Cargo.toml", undefined, undefined)).rejects.toThrow(
+      "nx-rust cannot create the project graph with the installed Nx: the result of retrieveProjectConfigurationPaths from nx/src/project-graph/utils/retrieve-workspace-files is no list of file paths.",
     );
   });
 });

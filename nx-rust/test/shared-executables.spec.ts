@@ -58,17 +58,6 @@ const twoEntries: FileChanges = {
   },
 };
 
-/** Two entries of the plugin in nx.json that both receive rust/: one for every manifest, one for rust/. */
-const overlappingEntries: FileChanges = {
-  "nx.json": (text) => {
-    const config = JSON.parse(text ?? "{}");
-    const [entry] = config.plugins;
-    const plugin = typeof entry === "string" ? entry : entry.plugin;
-    config.plugins = [plugin, { plugin, include: ["rust/**"] }];
-    return JSON.stringify(config);
-  },
-};
-
 /**
  * The plugin's entry for rust/, and a second installation of the plugin,
  * `node_modules/rust-alias`, registered under that name for tools/
@@ -315,19 +304,21 @@ describe("crates whose artifacts share a file name in one artifact directory", (
     ["with plugin isolation", "true"],
     ["without plugin isolation", "false"],
   ])(
-    "attach and print the warning once where two entries of the plugin receive the workspace, %s",
+    "print the warning about crates of two entries of the plugin once, from the first entry, %s",
     async (_case, isolation) => {
-      const workspace = FixtureWorkspace.create("shared-executables", overlappingEntries);
+      const workspace = FixtureWorkspace.create(
+        "shared-executables",
+        twoEntries,
+        oneArtifactDirectory,
+        betaRenamed,
+      );
       const env = { NX_ISOLATE_PLUGINS: isolation, NX_DAEMON: "false" };
+      const warning = alphaAndTools("Cargo's artifact directory target, where");
       try {
-        const graph = await workspace.graph(env);
-        expect(warningsOf(graph, "alpha")).toEqual([alphaAndBeta]);
-        expect(warningsOf(graph, "beta")).toEqual([alphaAndBeta]);
-        expect(graph.projects.alpha.targets?.build.cache).toBe(false);
-
         const shown = await workspace.nx(["show", "projects"], env);
         expect(shown.status).toBe(0);
-        expect(occurrences(withoutColours(shown.output), alphaAndBeta)).toBe(1);
+        // Both entries find it; the first by its place prints it.
+        expect(occurrences(withoutColours(shown.output), warning)).toBe(1);
       } finally {
         workspace.remove();
       }

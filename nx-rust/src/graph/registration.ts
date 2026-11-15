@@ -3,7 +3,7 @@ import { checkNxForGraph } from "../compatibility/nx-version";
 import { cacheContext } from "./caching";
 import { computationReports } from "./computation-reports";
 import { discoverWorkspaces } from "./discovery";
-import { checkEntries, entryView, warnsHere } from "./entries";
+import { checkEntries, manifestPattern } from "./entries";
 import type { TargetWarning } from "./collisions";
 import { CargoGraph, inferProjects, projectNodes, withWarningsInputs } from "./projects";
 import { readPluginOptions, readSettings } from "./settings";
@@ -47,7 +47,7 @@ export class Registration {
 
   constructor() {
     this.createNodes = [
-      "**/Cargo.toml",
+      manifestPattern,
       async (manifests, options, context) => {
         const graph = await this.discover(
           manifests,
@@ -62,7 +62,7 @@ export class Registration {
         for (const warning of graph.discovery.warnings) {
           console.warn(warning);
         }
-        return projectNodes(graph.projects, graph.view);
+        return projectNodes(graph.projects);
       },
     ];
     registrations.set(this.createNodes, this);
@@ -82,16 +82,17 @@ export class Registration {
    * its own.
    *
    * @param options The entry's plugin options.
-   * @param nxJson `nx.json`, whose `plugins` name the entries of the plugin
-   *   that have to agree on the settings of a workspace (`checkEntries` in
-   *   `entries.ts`), which says whether Nx analyses the JS lockfile
+   * @param nxJson `nx.json`, whose `plugins` name the entries of the plugin,
+   *   no two of which may receive manifests of one workspace (`checkEntries`
+   *   in `entries.ts`), which says whether Nx analyses the JS lockfile
    *   (`pluginInput` in `plugin-package.ts`), and whose `namedInputs` give
    *   the repository's `default` (`cacheContext` in `caching.ts`).
    * @throws {Error} When the installed Nx is not supported (see
    *   {@link checkNxForGraph}), when the options are invalid, when discovery
    *   fails (see {@link discoverWorkspaces}), when a metadata table is
-   *   invalid (see {@link readSettings}), when entries disagree on the
-   *   settings of a workspace, when a `fileInputs` pattern resolves where
+   *   invalid (see {@link readSettings}), when two entries of the plugin
+   *   receive manifests of one workspace, or the plugin cannot tell whether
+   *   they do (see {@link checkEntries}), when a `fileInputs` pattern resolves where
    *   Nx cannot hash it, or when the targets cannot be given their names
    *   and tables (see {@link inferProjects}).
    */
@@ -110,8 +111,7 @@ export class Registration {
       const pluginOptions = readPluginOptions(options);
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
       const settings = readSettings(discovery, pluginOptions);
-      await checkEntries(discovery, settings, nxJson);
-      const view = await entryView(workspaceRoot, nxJson, manifests, options);
+      const view = await checkEntries(discovery, manifests, nxJson);
       const context = await cacheContext(
         discovery,
         nxJson,
@@ -128,7 +128,6 @@ export class Registration {
           ...projects.flatMap((project) => project.declaredPatterns),
           ...(context.declaredPatterns ?? []),
         ],
-        view,
       };
       return graph;
     } finally {
@@ -177,29 +176,9 @@ export class Registration {
       return byProject;
     }
     for (const { project, target, warning } of this.latest.targetWarnings ?? []) {
-      if (this.attachesWarningsOf(project)) {
-        byProject.set(project, [...(byProject.get(project) ?? []), { target, warning }]);
-      }
+      byProject.set(project, [...(byProject.get(project) ?? []), { target, warning }]);
     }
     return byProject;
-  }
-
-  /**
-   * Whether this entry attaches the warnings of the project of this name,
-   * and prints those that concern it: the first entry of the plugin that
-   * receives its manifest does, so that Nx's merge of the projects that
-   * several entries create for one folder keeps each warning once
-   * (`warnsHere` in `entries.ts`).
-   */
-  attachesWarningsOf(...projects: string[]): boolean {
-    const graph = this.latest?.graph;
-    if (graph?.view === undefined) {
-      return true;
-    }
-    const manifests = graph.projects
-      .filter((project) => projects.includes(project.name))
-      .map((project) => project.manifest);
-    return warnsHere(graph.view, manifests);
   }
 }
 

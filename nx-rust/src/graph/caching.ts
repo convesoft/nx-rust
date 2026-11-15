@@ -14,12 +14,7 @@ import { buildRecordSource, sharedRecordNames } from "./build-records";
 import type { DeclaredPattern } from "./declared-files";
 import type { ComputationReports } from "./computation-reports";
 import type { CargoDiscovery, CargoWorkspace, ReportedWorkspace } from "./discovery";
-import {
-  type EntryView,
-  otherEntriesWorkspaces,
-  warnsHere,
-  workspacesWithoutRootProject,
-} from "./entries";
+import { type EntryView, otherEntriesWorkspaces, warnsHere } from "./entries";
 import {
   defaultInputSettings,
   Input,
@@ -66,8 +61,9 @@ export interface CacheContext extends InputContext {
   declaredPatterns?: readonly DeclaredPattern[];
   /**
    * The root folders of the workspaces that have no lockfile task, because
-   * Nx hands their root manifest to no entry of the plugin
-   * ({@link workspacesWithoutRootProject}).
+   * Nx hands their root manifest to no entry of the plugin: an entry that
+   * receives a workspace's other manifests but not its root manifest knows
+   * that no other entry receives it either (`checkEntries` in `entries.ts`).
    */
   withoutLockfileTask?: ReadonlySet<string>;
   /**
@@ -114,9 +110,8 @@ export interface CacheContext extends InputContext {
  * @param reports The reports of the graph computation, which the other
  *   entries in this process share.
  * @param view Where this entry stands among the entries of the plugin: a
- *   warning is printed by the first entry that receives a project it
- *   concerns ({@link warnsHere}), so that entries that receive one
- *   workspace print it once.
+ *   warning that names crates of several entries is printed by the first
+ *   of them ({@link warnsHere}), so that it is printed once.
  */
 export async function cacheContext(
   discovery: CargoDiscovery,
@@ -179,7 +174,7 @@ export async function cacheContext(
   }
   const compared: ReportedWorkspace[] = [
     ...discovery.workspaces,
-    ...(await otherEntriesWorkspaces(discovery, nxJson, reports)),
+    ...(await otherEntriesWorkspaces(discovery, view, reports)),
   ];
   const reached = reachedArtifactDirectories(compared);
   const sharers = artifactDirectorySharers(compared, reached);
@@ -191,7 +186,11 @@ export async function cacheContext(
       : (reached.get(workspace) ?? workspace.report.target_directory);
   };
   const directoryWarnings = unignoredDirectoryWarnings(discovery.workspaces, workspaceRoot);
-  const withoutLockfileTask = await workspacesWithoutRootProject(discovery, nxJson);
+  const withoutLockfileTask = new Set(
+    discovery.workspaces
+      .filter((workspace) => !workspace.rootManifestHanded)
+      .map((workspace) => workspace.root),
+  );
   const sharedNames = sharedArtifactNames(compared, sharers, directoryOf, workspaceRoot);
   for (const workspace of discovery.workspaces) {
     const messages = [
@@ -213,8 +212,7 @@ export async function cacheContext(
     }
   }
   // Each warning once, from the first entry of the plugin that receives a
-  // project it concerns, also where several entries receive one workspace
-  // or a warning names crates of several entries.
+  // crate it concerns, also where it names crates of several entries.
   const concerned = new Map<string, string[]>();
   for (const [manifest, messages] of warnings) {
     for (const message of messages) {

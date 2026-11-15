@@ -966,7 +966,7 @@ describe("@convesoft/nx-rust", () => {
     );
 
     it(
-      "fails graph creation when two entries give the workspace different test runners",
+      "fails graph creation when two entries split a workspace between them",
       () => {
         writeFileSync(
           join(projectDirectory, "nx.json"),
@@ -975,7 +975,6 @@ describe("@convesoft/nx-rust", () => {
               {
                 plugin: "@convesoft/nx-rust",
                 include: ["rust/Cargo.toml", "rust/crates/api/**"],
-                options: { testRunner: "nextest" },
               },
               {
                 plugin: "@convesoft/nx-rust",
@@ -996,8 +995,9 @@ describe("@convesoft/nx-rust", () => {
         });
 
         expect(status).toBe(1);
+        // Each workspace belongs to one entry (DES-PLUGIN-OPTIONS, "Several entries").
         expect(withoutColours(`${stdout}${stderr}`)).toContain(
-          'give it different values of "testRunner": plugins[0] sets "nextest"; plugins[1] does not set it, which gives the default "cargo"',
+          "nx-rust: the entries plugins[0] and plugins[1] of @convesoft/nx-rust in nx.json both receive manifests of the Cargo workspace in rust/ (plugins[0] receives rust/Cargo.toml and 1 more of its manifests, plugins[1] receives rust/crates/codegen/Cargo.toml and 2 more of its manifests)",
         );
       },
       HARNESS_TIMEOUT,
