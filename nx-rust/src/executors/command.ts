@@ -101,8 +101,12 @@ export interface CrateSelection {
 export interface CommandSubject {
   /** The default name of the task's target, which decides the command. */
   target: InferredTargetName;
-  /** The crate that the task selects; absent for a workspace project without a crate. */
-  crate?: CrateSelection;
+  /**
+   * The crates that the command selects, all of one workspace, in this
+   * order: the task's own crate, or for a group of several tasks one crate
+   * per task (`TERM-GROUP`). Absent for a workspace project without a crate.
+   */
+  crates?: readonly CrateSelection[];
   /** Whether the command runs in locked mode (`DES-INVOCATION`). */
   locked: boolean;
   /** The binary's arguments, which `run` passes after `--`; none for other targets. */
@@ -146,13 +150,13 @@ const crateCommands: Partial<Record<InferredTargetName, readonly string[]>> = {
 // @mara implements DES-WORKSPACE-TARGETS
 // @mara implements REQ-TEST-RUNNER
 export function cargoArguments(subject: CommandSubject, options: CargoTargetOptions): string[] {
-  const { target, crate, locked } = subject;
+  const { target, crates, locked } = subject;
   const taken: CargoTargetOptions = Object.fromEntries(
     Object.entries(options).filter(([name]) => targetTakes(target, name)),
   );
   const crateCommand = crateCommands[target];
   if (crateCommand !== undefined) {
-    if (crate === undefined) {
+    if (crates === undefined || crates.length === 0) {
       throw new Error(`The target "${target}" runs for a crate, and the project has none.`);
     }
     const formatting = target === "fmt" || target === "fmt-check";
@@ -160,7 +164,8 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
     return [
       ...crateCommand,
       ...flag(taken.allTargets, "--all-targets"),
-      ...crateSelection(target, [crate]),
+      ...(crates.length > 1 ? sharedCommandFlags(target) : []),
+      ...crateSelection(target, crates),
       ...compilingFlags(taken),
       ...(taken.bin !== undefined ? ["--bin", taken.bin] : []),
       ...flag(locked && !formatting, "--locked"),
@@ -186,6 +191,28 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
       return ["update", "--workspace", ...flag(locked, "--locked")];
   }
   throw new Error(`nx-rust has no command for the target "${target}".`);
+}
+
+/**
+ * The flags that a command for several crates adds, so that cargo goes on
+ * after a crate fails and its output shows each crate's result (`DES-BATCH`):
+ * `--keep-going` and JSON messages for `build`, `check` and `lint`, and
+ * `--no-fail-fast` for `test`. A command for one crate, as every group runs
+ * until a strategy of `DES-UNIFICATION` lets crates share a command, adds
+ * none, so that it is the command that the task runs on its own.
+ */
+// @mara implements DES-BATCH
+export function sharedCommandFlags(target: InferredTargetName): string[] {
+  switch (target) {
+    case "build":
+    case "check":
+    case "lint":
+      return ["--keep-going", "--message-format=json"];
+    case "test":
+      return ["--no-fail-fast"];
+    default:
+      return [];
+  }
 }
 
 /**

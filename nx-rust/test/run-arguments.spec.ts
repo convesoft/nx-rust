@@ -362,7 +362,7 @@ args = "--name 'a b'"
             },
           ]);
           expect(linesWith(built.output, "ignoring")).toEqual([
-            'cli:build: ignoring option `allTargets`, which this target does not take. It comes from the workspace\'s configuration: run `nx show target cli:build --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by "@convesoft/nx-rust:cargo".',
+            'cli:build: ignoring option `allTargets`, which this target does not take. It comes from the workspace\'s configuration: run `nx show target cli:build --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by "@convesoft/nx-rust:cargo-outputs".',
           ]);
 
           // In the crate's own table, the same option fails graph creation.

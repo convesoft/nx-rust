@@ -94,6 +94,20 @@ export function commandBlock(tasks: string, invocation: CargoInvocation): string
 }
 
 /**
+ * Writes the lines of {@link commandBlock} for `invocation` to this
+ * process's standard error, and resolves once they are out, so that they
+ * come before what cargo prints (`DES-INVOCATION`, "Printing the command").
+ * A task run on its own and a batch both print through it: a task's
+ * standard error is its own output, and a batch process's is the batch's,
+ * which belongs to no task.
+ */
+// @mara implements DES-INVOCATION
+export function printCommand(tasks: string, invocation: CargoInvocation): Promise<void> {
+  const block = commandBlock(tasks, invocation);
+  return new Promise((resolve) => process.stderr.write(block, () => resolve()));
+}
+
+/**
  * `word` as a POSIX shell reads it back: as it is where it holds only
  * letters, digits and `_ - . / : @ % + , =`, and does not start with `=`,
  * which zsh expands, and else in single quotes, with each single quote

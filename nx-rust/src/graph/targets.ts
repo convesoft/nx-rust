@@ -12,10 +12,25 @@ import { memberManifests } from "./inputs";
 import type { TargetNames } from "./options";
 
 /**
- * The plugin's cargo executor, which runs every inferred target but `run`
- * and `lockfile`. It has a batch implementation (`DES-BATCH`).
+ * The plugin's cargo executor, which runs every inferred target but `build`
+ * and `doc`, `run` and `lockfile`. It has a batch implementation (`DES-BATCH`).
  */
 export const cargoExecutor = "@convesoft/nx-rust:cargo";
+
+/**
+ * The executor of `build` and `doc`, the targets whose files Nx stores: the
+ * cargo executor under a name of its own, with the same implementation,
+ * batch implementation and schema, so that Nx batches and stores these
+ * tasks apart from the tasks that wait for them (`DES-BATCH`, "Two batch
+ * executors"; `ADR-TEST-AFTER-BUILD`).
+ */
+export const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
+
+/**
+ * The inferred targets, by their default names, that run
+ * {@link cargoOutputsExecutor} in place of {@link cargoExecutor}.
+ */
+export const outputsTargets: ReadonlySet<InferredTargetName> = new Set(["build", "doc"]);
 
 /**
  * The executor of the lockfile task, which has no batch implementation, so
@@ -397,7 +412,7 @@ function inferredTarget(
 ): TargetConfiguration {
   const metadata: TargetCargoMetadata = { target: inferred, locked };
   return {
-    executor: cargoExecutor,
+    executor: outputsTargets.has(inferred) ? cargoOutputsExecutor : cargoExecutor,
     options,
     cache: cachedTargets.has(inferred),
     metadata: {

@@ -19,7 +19,7 @@ import {
   HARNESS_TIMEOUT,
   packageSpec,
   pinnedToolchain,
-  pinnedToolchainAvailable,
+  pinnedToolchainBesideDefault,
   pluginWorkers,
   programVersion,
   taskCalls as harnessTaskCalls,
@@ -234,6 +234,14 @@ describe("a run with the plugin's executor", () => {
             .filter((call) => call.args.join(" ") === memberReport.args.join(" ")),
         ).toEqual([memberReport, memberReport]);
         expect(taskCalls(workspace)).toEqual([]);
+
+        // In a batch, the group's report of the members fails the task alike.
+        const batched = await nx(workspace, ["run", "cli:check", "--batch"], env);
+        expect(batched.status).toBe(1);
+        expect(batched.output).toContain(
+          "cli:check: `cargo metadata` could not list the members of the Cargo workspace for this task",
+        );
+        expect(taskCalls(workspace)).toEqual([]);
       } finally {
         workspace.remove();
       }
@@ -305,7 +313,7 @@ describe("a run with the plugin's executor", () => {
           'It turns on caching for "build", which nx-rust leaves uncached',
         );
         expect(result.output).toContain("cli (rust/crates/cli/Cargo.toml)");
-        expect(result.output).toContain('"@convesoft/nx-rust:cargo": {}');
+        expect(result.output).toContain('"@convesoft/nx-rust:cargo-outputs": {}');
         expect(taskCalls(workspace)).toEqual([]);
         // Where the plugin caches build, the same entry fails nothing.
         expect((await nx(workspace, ["run", "cli:build"])).status).toBe(0);
@@ -369,8 +377,13 @@ describe("a run with the plugin's executor", () => {
         ".env.doc": `CARGO_BUILD_TARGET=${hostTriple()}\n`,
       });
       try {
-        for (const task of ["cli:build", "rust:doc"]) {
-          const failed = await nx(workspace, ["run", task]);
+        for (const [task, flags] of [
+          ["cli:build", []],
+          ["rust:doc", []],
+          ["cli:build", ["--batch"]],
+          ["rust:doc", ["--batch"]],
+        ] as [string, string[]][]) {
+          const failed = await nx(workspace, ["run", task, ...flags]);
           const target = task.split(":")[1];
           expect(failed.status).toBe(1);
           expect(failed.output).toContain(
@@ -406,15 +419,17 @@ describe("a run with the plugin's executor", () => {
         "rust/crates/cli/.env": "CARGO_BUILD_TARGET=host-tuple\n",
       });
       try {
-        const failed = await nx(workspace, ["run", "cli:build"]);
+        for (const flags of [[], ["--batch"]]) {
+          const failed = await nx(workspace, ["run", "cli:build", ...flags]);
 
-        expect(failed.status).toBe(1);
-        expect(failed.output).toContain(
-          'cli:build: CARGO_BUILD_TARGET picks the target triple "host-tuple", whose folder @convesoft/nx-rust cannot name',
-        );
-        expect(failed.output).toContain(
-          "and this run of the cached build names no triple in the targetTriple option. Give the triple as the targetTriple option instead.",
-        );
+          expect(failed.status).toBe(1);
+          expect(failed.output).toContain(
+            'cli:build: CARGO_BUILD_TARGET picks the target triple "host-tuple", whose folder @convesoft/nx-rust cannot name',
+          );
+          expect(failed.output).toContain(
+            "and this run of the cached build names no triple in the targetTriple option. Give the triple as the targetTriple option instead.",
+          );
+        }
         expect(taskCalls(workspace)).toEqual([]);
       } finally {
         workspace.remove();
@@ -428,13 +443,20 @@ describe("a run with the plugin's executor", () => {
     async () => {
       const workspace = FixtureWorkspace.create("crate-shapes");
       try {
-        for (const [task, profile, instead] of [
-          ["cli:build", "dev", "Build with no profile"],
-          ["cli:build", "test", "Build with no profile"],
-          ["cli:build", "bench", "Build with the profile release"],
-          ["rust:doc", "bench", "Build with the profile release"],
+        for (const [task, profile, instead, batch] of [
+          ["cli:build", "dev", "Build with no profile", ""],
+          ["cli:build", "test", "Build with no profile", ""],
+          ["cli:build", "bench", "Build with the profile release", ""],
+          ["rust:doc", "bench", "Build with the profile release", ""],
+          ["cli:build", "dev", "Build with no profile", "--batch"],
+          ["rust:doc", "bench", "Build with the profile release", "--batch"],
         ]) {
-          const result = await nx(workspace, ["run", task, `--profile=${profile}`]);
+          const result = await nx(workspace, [
+            "run",
+            task,
+            `--profile=${profile}`,
+            ...(batch === "" ? [] : [batch]),
+          ]);
           expect({ task, profile, status: result.status }).toEqual({ task, profile, status: 1 });
           expect(result.output).toContain(
             `${task}: the profile ${profile} puts cargo's artifacts in the folder of another profile`,
@@ -591,12 +613,25 @@ describe("a run with the plugin's executor", () => {
         expect(restored.output).toMatch(new RegExp(hit));
         expect(contents(artifact)).toEqual(built);
 
-        const cleared = await nx(workspace, ["run", "cli:build", "--configuration=plain"]);
+        for (const flags of [[], ["--batch"]]) {
+          const cleared = await nx(workspace, [
+            "run",
+            "cli:build",
+            "--configuration=plain",
+            ...flags,
+          ]);
 
-        expect(cleared.status).toBe(1);
-        expect(cleared.output).toContain(
-          `cli:build: build.target in rust/.cargo/config.toml picks the target triple "host-tuple", whose folder @convesoft/nx-rust cannot name: cargo replaces it with the host's triple, and this run of the cached build names no triple in the targetTriple option.`,
-        );
+          expect(cleared.status).toBe(1);
+          expect(cleared.output).toContain(
+            `cli:build: build.target in rust/.cargo/config.toml picks the target triple "host-tuple", whose folder @convesoft/nx-rust cannot name: cargo replaces it with the host's triple, and this run of the cached build names no triple in the targetTriple option.`,
+          );
+          // The remedy of the check of what graph creation found, not the one
+          // of the check of what the task's environment picks.
+          expect(cleared.output).toContain(
+            "Run it with the triple that the target's options give, and remove what clears the option for this run",
+          );
+        }
+        const cleared = await nx(workspace, ["run", "cli:build", "--configuration=plain"]);
         expect(cleared.output).toContain(
           "Run it with the triple that the target's options give, and remove what clears the option for this run",
         );
@@ -802,9 +837,15 @@ function hostTriple(): string {
 
 // The two wrong restores of EVD-CARGO-COMPILER-SELECTION, in real runs:
 // the compiler behind the path that RUSTC names replaced, and build.rustc
-// set in the Cargo home. They need a second installed toolchain, which CI
-// installs; elsewhere they skip where rustup lacks 1.91.0.
-(pinnedToolchainAvailable() ? describe : describe.skip)(
+// set in the Cargo home. They need 1.91.0 beside a default toolchain of
+// another version, which CI installs; elsewhere they skip where rustup lacks
+// 1.91.0 or has it as its default.
+if (!pinnedToolchainBesideDefault()) {
+  it.todo(
+    `a run with a compiler that a setting names: these runs need ${pinnedToolchain} installed beside a default toolchain of another version`,
+  );
+}
+(pinnedToolchainBesideDefault() ? describe : describe.skip)(
   "a run with a compiler that a setting names",
   () => {
     /** `tools` in two-workspaces, changed to print the version of the compiler that built it. */

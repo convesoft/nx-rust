@@ -36,6 +36,7 @@ each fixture still has the workspaces and members listed there, and with
 | `undeclared-files`     | Crates in the `rust/` workspace read files in `shared/` that nothing declares. `reader`, which depends on `base`, has a build script that names `shared/proto.txt` and the folder `shared/assets` with `rerun-if-changed`, and a library that includes `shared/banner.txt`. `multi` has a library and the binaries `one`, `two`, which includes `shared/tool.txt`, and `three`, which requires the feature `extra` and includes `shared/extra.txt`. `macros` is a proc macro that includes `shared/macro.txt`, `plain` an `rlib` that includes `shared/plain.txt`, and `cola`, with a library, and `colb` each have a binary `cli` that includes `shared/cli.txt`. The workspace defines the profiles `ctest` and `cbench`, which inherit from `test` and `bench`. |
 | `shared-names`         | `good` in the `rust/` workspace depends on `third_party/good`, another package named `good` with another version, which the fixture's `nx.json` excludes from the plugin, so that `cargo test -p good` is ambiguous. `kit`, in the folder `crates/toolkit`, gets a dependency on a registry package `kit` of its own version in the tests that need one.                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `binary-tests`         | Binaries in the `rust/` workspace beside the library `flavour`, whose feature `extra` each binary's dev-dependency on it turns on, so that `cargo test` builds another executable than `cargo build`. Each crate has one shape of `DES-TARGETS`' rule for `test` waiting for `build`: `app`'s integration test runs `CARGO_BIN_EXE_app` and expects `extra`, `harnessless` has a test without harness, `benched` a bench with `test = true` and `gated` a binary with `required-features` beside an integration test; `showcase` has an example only, `unit` unit tests only, `untested` a `[[test]]` with `test = false`, `timed` a bench without `test`, `library` a library with an integration test and `addon` a `cdylib` and `staticlib` with one.           |
+| `batch-groups`         | Crates in the `rust/` workspace whose failures the batch tests switch on by replacing one file: `dep` depends on `base`, `user` on `breakable`, and `devuser` has `breakable` as a dev-dependency of its only test, a unit test; `indep` has an integration test, `base` a doctest and `scripted` a build script. Every crate passes as checked in.                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `release-crates`       | Release groups in `nx.json`: `core` and `api` in `rust/` inherit `version.workspace = true`, as the fixed group `crates`; the other crates with a project, but `unreleased`, form the group `others`. `base` 0.1.0 is required in every form: normal, build, renamed and optional, `cfg(unix)`, dev, without a version, `*`, through `[workspace.dependencies]`, from `hidden` (excluded, behind which `via-hidden` uses it), `private` (`publish = false`) and `tools/`'s `xtask`. `rust/`'s `[patch.crates-io]` redirects `base` and `fork` (`third_party/fork`, excluded), which `registry-user` uses. `cli` 0.3.0 depends on `api`.                                                                                                                            |
 | `shared-executables`   | Two crates of the `rust/` workspace whose binaries are both called `cli`: `alpha` with a `[[bin]]` table, whose integration test runs `CARGO_BIN_EXE_cli` and passes with either crate's executable, and `beta` with `src/bin/cli.rs`; `gamma` has a binary of its own name. The standalone crate `tools` has a binary called `cli` too, in an artifact directory of its own until a test gives both workspaces one.                                                                                                                                                                                                                                                                                                                                               |
 
@@ -277,6 +278,16 @@ links to: the package in this repository names a built entry point that only
 the compiled copy has. The end-to-end tests cover graph creation with the
 installed package.
 
+**`nxInTerminal(args, env, seconds)`** runs Nx as `nx` does, but in a
+pseudo-terminal of its own, through util-linux's `script -qfec`, so that Nx
+sees a terminal and runs the dynamic output styles, the terminal UI and its own
+pseudo-terminal for a single task as for a user; coreutils' `timeout` stops it
+after `seconds`. It runs on Linux only, where CI runs, and throws elsewhere,
+since macOS's `script` takes other arguments
+(`RISK-TERMINAL-ENVIRONMENT-MACOS`). The copy's `nx.json` must set `analytics`,
+or Nx asks in the terminal whether to share usage data and waits; it throws
+there too. Give the terminal UI `--tui-auto-exit`, or it waits for a key.
+
 **`compilePlugin()`**, which the unit tests' global setup calls after
 `startTestRun()`, compiles the plugin's source into the test run's folder,
 laid out as its built package, and every fixture copy of the run loads that
@@ -468,6 +479,14 @@ also in plugin workers, where a test cannot reach the plugin's state.
 **`pinnedToolchainAvailable()`** says whether checks of `different-toolchains`
 can run: rustup has the toolchain that `pinned/` names
 (`pinnedToolchain`), or the tests run in CI, which installs it.
+**`installedToolchains()`** and **`defaultToolchain()`** list rustup's
+toolchains and name its default one in the tests' environment, which keeps
+`RUSTUP_HOME`, so a private rustup home whose default is 1.91.0 counts. A
+check that needs a toolchain besides the default asks
+**`otherToolchain()`**, which gives `pinnedToolchain`, or `stable` where
+`pinnedToolchain` is the default, and a check that compares
+`pinnedToolchain` with the default asks **`pinnedToolchainBesideDefault()`**
+and skips, saying why, where the default is `pinnedToolchain` itself.
 
 Each helper that runs Nx or cargo takes a few seconds at most; give such
 tests the `HARNESS_TIMEOUT`.

@@ -252,3 +252,106 @@ describe("the cargo command of a task", () => {
     HARNESS_TIMEOUT * 2,
   );
 });
+
+// The batch executor of DES-BATCH: with `--batch`, the plugin's tasks run in
+// batches, whose process prints each cargo command's lines itself, once per
+// command, so that they belong to no task (DES-INVOCATION, "Printing the
+// command"). Until nxr-8f9dz2 every task is a group of one crate, so every
+// command names one task.
+describe("the cargo command of a batch", () => {
+  // kit is the crate in crates/toolkit.
+  const command = ["run-many", "-t", "check", "build", "-p", "good", "kit", "--batch"];
+  const tasks = ["good:check", "kit:check", "good:build", "kit:build"];
+  const folders: Record<string, string> = { good: "/crates/good#", kit: "/crates/toolkit#" };
+
+  it(
+    "is printed once for each command of a verbose batch, before cargo runs, as lines that run the same command by hand, and stored with no task",
+    () =>
+      inFixture("shared-names", undefined, async (workspace) => {
+        const run = await runNx(workspace, [...command, "--verbose"]);
+        expect({ status: run.status, output: run.output }).toEqual({
+          status: 0,
+          output: expect.stringMatching(/Running 2 tasks with @convesoft\/nx-rust:cargo-outputs/),
+        });
+        // printedLines fails unless each heading is there exactly once.
+        const lines = Object.fromEntries(
+          tasks.map((task) => [task, printedLines(run.output, task)]),
+        );
+        expect(taskCalls(workspace)).toHaveLength(4);
+        // As runByHand logs them, with absolute folders.
+        const calls = workspace.cargo.calls();
+        for (const task of tasks) {
+          const [crate, target] = task.split(":");
+          const ran = calls.filter(
+            (call) => call.args[0] === target && call.args.join(" ").includes(folders[crate]),
+          );
+          expect({ task, calls: ran.length }).toEqual({ task, calls: 1 });
+          const byHand = runByHand(workspace, lines[task]);
+          expect({ task, status: byHand.status }).toEqual({ task, status: 0 });
+          expect(byHand.calls).toEqual(ran);
+        }
+
+        // The lines belong to no task: a run that restores every task from
+        // the cache replays none of them, unlike the lines of a task run on
+        // its own (ADR-VERBOSE-COMMAND).
+        const restored = await runNx(workspace, [...command]);
+        expect({ status: restored.status, output: restored.output }).toEqual({
+          status: 0,
+          output: expect.stringMatching(hit),
+        });
+        for (const task of tasks) {
+          expect(restored.output).toMatch(new RegExp(`nx run ${task}\\s+\\[`));
+        }
+        expect(restored.output).not.toContain("@convesoft/nx-rust runs cargo as these lines do");
+      }),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "is printed by no batch with --verbose=false, also where NX_VERBOSE_LOGGING is true",
+    () =>
+      inFixture("shared-names", undefined, async (workspace) => {
+        const run = await runNx(workspace, [...command, "--skip-nx-cache", "--verbose=false"], {
+          NX_VERBOSE_LOGGING: "true",
+        });
+        expect({ status: run.status, output: run.output }).toEqual({
+          status: 0,
+          output: expect.stringMatching(/Running 2 tasks with @convesoft\/nx-rust:cargo\b/),
+        });
+        // Positive control: the tasks ran their cargo commands.
+        expect(taskCalls(workspace)).toHaveLength(4);
+        expect(run.output).not.toContain("@convesoft/nx-rust runs cargo as these lines do");
+      }),
+    HARNESS_TIMEOUT,
+  );
+
+  it.each<[string, Env]>([
+    ["without the Nx daemon", { NX_DAEMON: "false" }],
+    ["with the Nx daemon", { NX_DAEMON: "true" }],
+  ])(
+    "follows the run's verbose mode where a crate's .env gives its task another NX_VERBOSE_LOGGING, %s",
+    async (_case, daemon) => {
+      const workspace = FixtureWorkspace.create("shared-names", {
+        ".env": "NX_VERBOSE_LOGGING=false\n",
+        "rust/crates/good/.env": "NX_VERBOSE_LOGGING=true\n",
+      });
+      try {
+        const shown = async (args: string[]) => {
+          workspace.cargo.clear();
+          const run = await runNx(workspace, [...command, "--skip-nx-cache", ...args], daemon);
+          expect({ args, status: run.status }).toEqual({ args, status: 0 });
+          expect({ args, calls: taskCalls(workspace).length }).toEqual({ args, calls: 4 });
+          return tasks.filter((task) => run.output.includes(heading(task)));
+        };
+
+        expect(await shown(["--verbose=false"])).toEqual([]);
+        expect(await shown([])).toEqual([]);
+        expect(await shown(["--verbose"])).toEqual(tasks);
+      } finally {
+        await workspace.nx(["daemon", "--stop"], daemon);
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
+});

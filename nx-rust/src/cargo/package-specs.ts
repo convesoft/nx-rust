@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import type { CargoMetadata } from "./metadata";
+import type { CargoMetadata, CargoPackage } from "./metadata";
 
 /** Cargo could not report the members of a workspace, such as with their package ID specifications. */
 export class PackageSpecReportError extends Error {
@@ -44,6 +44,30 @@ export function memberSpecs(workspaceRoot: string, env: NodeJS.ProcessEnv): Map<
     }
   }
   return specs;
+}
+
+/**
+ * The members of the Cargo workspace whose root folder is `workspaceRoot`,
+ * by package name, from the same report as {@link memberSpecs}: each with
+ * its `id`, the package ID specification, and the targets, features and
+ * dependencies that the report lists. A group of several crates reads from
+ * it which of each crate's targets its cargo command builds (`DES-BATCH`).
+ *
+ * @throws {PackageSpecReportError} When cargo cannot be started, fails or
+ *   prints no report.
+ */
+// @mara implements DES-INVOCATION
+export function memberPackages(
+  workspaceRoot: string,
+  env: NodeJS.ProcessEnv,
+): Map<string, CargoPackage> {
+  const members = new Map<string, CargoPackage>();
+  for (const pkg of workspaceReport(workspaceRoot, env).packages) {
+    if (typeof pkg?.name === "string" && typeof pkg.id === "string") {
+      members.set(pkg.name, pkg);
+    }
+  }
+  return members;
 }
 
 /**

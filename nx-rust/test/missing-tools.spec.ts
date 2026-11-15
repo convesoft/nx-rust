@@ -158,9 +158,13 @@ describe("a task whose tool is missing", () => {
   });
 
   /** Runs a task of the workspace project in rust, by default with the hidden tools. */
-  async function run(target: string, env: Record<string, string> = tools.env()) {
+  async function run(
+    target: string,
+    env: Record<string, string> = tools.env(),
+    flags: string[] = [],
+  ) {
     const { status, output } = await workspace.nx(
-      ["run", `rust:${target}`, "--output-style=static"],
+      ["run", `rust:${target}`, "--output-style=static", ...flags],
       env,
     );
     return { status, output: withoutColours(output) };
@@ -170,16 +174,18 @@ describe("a task whose tool is missing", () => {
     ["audit", "cargo-audit"],
     ["deny", "cargo-deny"],
   ])(
-    "fails %s before cargo runs, naming the tool, the target and how to get it, and installs nothing",
+    "fails %s before cargo runs, alone and in a batch, naming the tool, the target and how to get it, and installs nothing",
     async (target, id) => {
       const tool = optionalTools.find((candidate) => candidate.id === id)!;
 
-      const missing = await run(target);
+      for (const flags of [[], ["--batch"]]) {
+        const missing = await run(target, tools.env(), flags);
 
-      expect(missing.status).toBe(1);
-      expect(missing.output).toContain(
-        `rust:${target}: ${missingToolMessage(tool, [`the ${target} target of the Cargo workspace in rust`])}`,
-      );
+        expect({ flags, status: missing.status }).toEqual({ flags, status: 1 });
+        expect(missing.output).toContain(
+          `rust:${target}: ${missingToolMessage(tool, [`the ${target} target of the Cargo workspace in rust`])}`,
+        );
+      }
       expect(taskCalls(workspace)).toEqual([]);
       expect(readdirSync(tools.path)).toEqual([]);
       expect(readdirSync(join(tools.cargoHome, "bin"))).toEqual([]);

@@ -736,8 +736,18 @@ describe("a task's output of the warnings about targetDefaults", () => {
           daemon,
         );
         const other = await runNx(workspace, ["run", "api:fmt"], daemon);
+        // A task of a batch prints it once in its own output as well.
+        const inBatch = await runNx(
+          workspace,
+          ["run", "api:fmt-check", "--exclude-task-dependencies", "--batch", "--skip-nx-cache"],
+          daemon,
+        );
 
         expect({ status: task.status, count: occurrences(task.output, warning) }).toEqual({
+          status: 0,
+          count: 1,
+        });
+        expect({ status: inBatch.status, count: occurrences(inBatch.output, warning) }).toEqual({
           status: 0,
           count: 1,
         });

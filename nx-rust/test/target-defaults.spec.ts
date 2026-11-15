@@ -30,6 +30,7 @@ import {
 const pluginName = "@convesoft/nx-rust";
 const nxVersion: string = require("nx/package.json").version;
 const cargoExecutor = "@convesoft/nx-rust:cargo";
+const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
 const runExecutor = "@convesoft/nx-rust:run";
 const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 /** The dependency of the crates' cached targets on the lockfile task of `rust`. */
@@ -165,7 +166,7 @@ describe("a target default that adds dependencies on other projects' tasks", () 
         `Give the entry a "filter" that leaves these projects out, which needs the entry written as a list: "build": [{ "filter": { "projects": ["!tag:lang:rust"] }, ... }] where the crates carry the tag lang:rust, or a filter on the "executor" of the targets the entry is meant for.`,
       );
       expect(output).toContain(
-        `Add an empty entry keyed by the executor of these targets, "${cargoExecutor}": {}.`,
+        `Add an empty entry keyed by the executor of these targets, "${cargoOutputsExecutor}": {}.`,
       );
       expect(output).not.toContain('"..."');
     },
@@ -196,7 +197,7 @@ describe("a target default that fails graph creation", () => {
         ),
       ).toEqual([]);
       expect(output).toContain(`To narrow the entry (${targetDefaultsGuide}), do one of these:`);
-      expect(output).toContain(`"${cargoExecutor}": {}`);
+      expect(output).toContain(`"${cargoOutputsExecutor}": {}`);
     },
     HARNESS_TIMEOUT,
   );
@@ -547,7 +548,7 @@ describe("nothing is reported", () => {
     async () => {
       const { output, projects } = await created({
         build: { cache: true, dependsOn: ["^build"] },
-        [cargoExecutor]: {},
+        [cargoOutputsExecutor]: {},
       });
 
       expect(output).not.toContain("targetDefaults");
@@ -1107,11 +1108,11 @@ describe("combinations", () => {
     async () => {
       const output = await failed({
         [cargoExecutor]: { cache: true },
-        build: { dependsOn: ["^build"] },
+        lint: { dependsOn: ["^lint"] },
       });
 
       expect(output).toContain(`The targetDefaults entry "${cargoExecutor}" in nx.json changes`);
-      expect(output).not.toContain('The targetDefaults entry "build"');
+      expect(output).not.toContain('The targetDefaults entry "lint"');
     },
     HARNESS_TIMEOUT,
   );
@@ -2177,7 +2178,7 @@ exports.createNodes = [
           ["build", "check", "lint", "test"].map((name) => [name, api.targets?.[name]?.executor]),
         );
         expect(executors).toEqual({
-          build: cargoExecutor,
+          build: cargoOutputsExecutor,
           check: cargoExecutor,
           lint: "@nx/oxlint:lint",
           test: "nx:run-commands",
@@ -2287,9 +2288,14 @@ describe("init", () => {
   }
 
   /** The empty entries that init adds for the plugin's executors. */
-  const added = { [cargoExecutor]: {}, [runExecutor]: {}, [lockfileExecutor]: {} };
+  const added = {
+    [cargoExecutor]: {},
+    [cargoOutputsExecutor]: {},
+    [runExecutor]: {},
+    [lockfileExecutor]: {},
+  };
   /** How init's line names them. */
-  const addedNames = `"${cargoExecutor}": {}, "${runExecutor}": {} and "${lockfileExecutor}": {}`;
+  const addedNames = `"${cargoExecutor}": {}, "${cargoOutputsExecutor}": {}, "${runExecutor}": {} and "${lockfileExecutor}": {}`;
 
   /** Init's line about the entries it added. */
   const addedLine = (entries: string) =>
@@ -2320,6 +2326,7 @@ describe("init", () => {
       expect(Object.keys(nxJson.targetDefaults as object)).toEqual([
         ...Object.keys(defaults),
         cargoExecutor,
+        cargoOutputsExecutor,
         runExecutor,
         lockfileExecutor,
       ]);
@@ -2394,15 +2401,24 @@ describe("init", () => {
       expect(status).toBe(0);
       expect(changed).toEqual(["nx.json"]);
       expect(nxJson).toEqual({
-        targetDefaults: { ...defaults, [runExecutor]: {}, [lockfileExecutor]: {} },
+        targetDefaults: {
+          ...defaults,
+          [cargoOutputsExecutor]: {},
+          [runExecutor]: {},
+          [lockfileExecutor]: {},
+        },
         plugins: [pluginName],
       });
-      expect(output).toContain(addedLine(`"${runExecutor}": {} and "${lockfileExecutor}": {}`));
+      expect(output).toContain(
+        addedLine(
+          `"${cargoOutputsExecutor}": {}, "${runExecutor}": {} and "${lockfileExecutor}": {}`,
+        ),
+      );
       expect(output).toContain(
         `The targetDefaults entry "${cargoExecutor}" in nx.json changes targets that nx-rust infers:`,
       );
       expect(output).toContain(
-        'It adds "^build" to the dependsOn of "build", "check", "fmt", "fmt-check", "lint" and "test"',
+        'It adds "^build" to the dependsOn of "check", "fmt", "fmt-check", "lint" and "test"',
       );
       expect(output).toContain(`To narrow the entry (${targetDefaultsGuide}), do one of these:`);
     },
@@ -2410,13 +2426,14 @@ describe("init", () => {
   );
 
   it(
-    "adds nothing when all three entries are there, and leaves nx.json as it was apart from the plugin entry",
+    "adds nothing when all four entries are there, and leaves nx.json as it was apart from the plugin entry",
     async () => {
       const defaults = {
         build: { cache: true },
         [runExecutor]: {},
         [lockfileExecutor]: {},
         [cargoExecutor]: {},
+        [cargoOutputsExecutor]: {},
       };
       const { status, output, nxJson } = await init(defaults);
 
@@ -2424,6 +2441,35 @@ describe("init", () => {
       expect(nxJson).toEqual({ targetDefaults: defaults, plugins: [pluginName] });
       expect(Object.keys(nxJson.targetDefaults as object)).toEqual(Object.keys(defaults));
       expect(output).not.toContain(addedAny);
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "an empty entry keyed by @convesoft/nx-rust:cargo alone, as in a repository set up before build and doc got their own executor: an entry keyed build reaches the crates' build, and init adds the missing entry",
+    async () => {
+      const before = {
+        build: { dependsOn: ["^build"] },
+        [cargoExecutor]: {},
+        [runExecutor]: {},
+        [lockfileExecutor]: {},
+      };
+      const output = await failed(before);
+
+      expect(output).toContain(
+        'The targetDefaults entry "build" in nx.json changes targets that nx-rust infers:',
+      );
+      expect(output).toContain('It replaces the dependsOn that nx-rust declares for "build"');
+      expect(output).toContain(
+        `Add an empty entry keyed by the executor of these targets, "${cargoOutputsExecutor}": {}.`,
+      );
+
+      const { status, nxJson } = await init(before);
+      expect(status).toBe(0);
+      expect(nxJson).toEqual({
+        targetDefaults: { ...before, [cargoOutputsExecutor]: {} },
+        plugins: [pluginName],
+      });
     },
     HARNESS_TIMEOUT,
   );

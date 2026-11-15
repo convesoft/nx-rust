@@ -546,7 +546,7 @@ describe("graph-creation errors", () => {
         ),
       },
       [
-        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build] sets "executor" to "nx:run-commands" on the inferred target "build", which runs "@convesoft/nx-rust:cargo".',
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build] sets "executor" to "nx:run-commands" on the inferred target "build", which runs "@convesoft/nx-rust:cargo-outputs".',
         "To run something else, define a target under a name of its own.",
       ],
     ],
@@ -788,8 +788,8 @@ describe("options in the target tables", () => {
         ),
       },
       [
-        'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc.options] sets the option "open", which @convesoft/nx-rust:cargo, the executor of the inferred target "doc", does not know. The options that "doc" takes are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple" and "noDeps".',
-        'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc.configurations.ci] sets the option "documentPrivateItems", which @convesoft/nx-rust:cargo, the executor of the inferred target "doc", does not know.',
+        'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc.options] sets the option "open", which @convesoft/nx-rust:cargo-outputs, the executor of the inferred target "doc", does not know. The options that "doc" takes are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple" and "noDeps".',
+        'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc.configurations.ci] sets the option "documentPrivateItems", which @convesoft/nx-rust:cargo-outputs, the executor of the inferred target "doc", does not know.',
       ],
     ],
     [
@@ -831,7 +831,7 @@ describe("options in the target tables", () => {
         ),
       },
       [
-        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build.options] sets the option "no-default-features", which @convesoft/nx-rust:cargo, the executor of the inferred target "build", does not know. Did you mean "noDefaultFeatures"?',
+        'rust/crates/model/Cargo.toml: [package.metadata.nx.targets.build.options] sets the option "no-default-features", which @convesoft/nx-rust:cargo-outputs, the executor of the inferred target "build", does not know. Did you mean "noDefaultFeatures"?',
       ],
     ],
     [

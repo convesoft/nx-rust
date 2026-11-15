@@ -26,11 +26,17 @@ import {
 } from "../../nx-rust/test/harness";
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
+const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
 const runExecutor = "@convesoft/nx-rust:run";
 const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 
 /** The empty target defaults that init adds for the plugin's executors. */
-const executorEntries = { [cargoExecutor]: {}, [runExecutor]: {}, [lockfileExecutor]: {} };
+const executorEntries = {
+  [cargoExecutor]: {},
+  [cargoOutputsExecutor]: {},
+  [runExecutor]: {},
+  [lockfileExecutor]: {},
+};
 
 /** The line with which init says which target defaults it added. */
 function addedLine(executors: string[]): string {
@@ -282,7 +288,12 @@ describe("@convesoft/nx-rust", () => {
           expect({ name, target }).toMatchObject({
             name,
             target: {
-              executor: name === "lockfile" ? lockfileExecutor : cargoExecutor,
+              executor:
+                name === "lockfile"
+                  ? lockfileExecutor
+                  : name === "build" || name === "doc"
+                    ? cargoOutputsExecutor
+                    : cargoExecutor,
               cache: cached.includes(name),
             },
           });
@@ -1089,10 +1100,15 @@ describe("@convesoft/nx-rust", () => {
 
       expect(status).toBe(0);
       expect(JSON.parse(readNxJson())).toEqual({
-        targetDefaults: { ...defaults, [runExecutor]: {}, [lockfileExecutor]: {} },
+        targetDefaults: {
+          ...defaults,
+          [cargoOutputsExecutor]: {},
+          [runExecutor]: {},
+          [lockfileExecutor]: {},
+        },
         plugins: ["@convesoft/nx-rust"],
       });
-      expect(output).toContain(addedLine([runExecutor, lockfileExecutor]));
+      expect(output).toContain(addedLine([cargoOutputsExecutor, runExecutor, lockfileExecutor]));
       expect(output).toContain(
         `The targetDefaults entry "${cargoExecutor}" in nx.json changes targets that nx-rust infers:`,
       );

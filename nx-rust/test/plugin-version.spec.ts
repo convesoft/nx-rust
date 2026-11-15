@@ -24,6 +24,7 @@ import {
 // because Nx has no node for its package there.
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
+const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
 const runExecutor = "@convesoft/nx-rust:run";
 const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 const pluginVersion: string = JSON.parse(
@@ -33,8 +34,12 @@ const pluginVersion: string = JSON.parse(
 const reason =
   "Only nx-rust sets this option: it carries the plugin's version into the cache key, and another value would take its place, so that Nx could restore results of another version of the plugin.";
 
-/** The inferred targets of each crate of `subfolder-workspace`, in the order the plugin gives them. */
-const crateTargets = '"build", "check", "lint", "test", "fmt-check" and "fmt"';
+/**
+ * The inferred targets of each crate of `subfolder-workspace` that run the
+ * cargo executor, in the order the plugin gives them; `build` runs
+ * `@convesoft/nx-rust:cargo-outputs` (DES-BATCH).
+ */
+const cargoTargets = '"check", "lint", "test", "fmt-check" and "fmt"';
 
 const options = { options: { pluginVersion: "0.0.0" } };
 
@@ -84,6 +89,7 @@ describe("a pluginVersion that the plugin did not set fails graph creation", () 
       const output = await inPluginWorkers.failed({
         "nx.json": withTargetDefaults({
           [cargoExecutor]: options,
+          [cargoOutputsExecutor]: options,
           [runExecutor]: options,
           [lockfileExecutor]: options,
         }),
@@ -92,11 +98,21 @@ describe("a pluginVersion that the plugin did not set fails graph creation", () 
       expect(output).toContain(
         [
           `The targetDefaults entry "${cargoExecutor}" in nx.json sets the option "pluginVersion" on targets that nx-rust infers. ${reason} Remove it there. It reaches:`,
-          `  - api (rust/crates/api/Cargo.toml): ${crateTargets}`,
-          `  - codegen (rust/crates/codegen/Cargo.toml): ${crateTargets}`,
-          `  - model (rust/crates/model/Cargo.toml): ${crateTargets}`,
-          `  - testkit (rust/crates/testkit/Cargo.toml): ${crateTargets}`,
-          '  - rust (rust/Cargo.toml): "doc", "audit" and "update"',
+          `  - api (rust/crates/api/Cargo.toml): ${cargoTargets}`,
+          `  - codegen (rust/crates/codegen/Cargo.toml): ${cargoTargets}`,
+          `  - model (rust/crates/model/Cargo.toml): ${cargoTargets}`,
+          `  - testkit (rust/crates/testkit/Cargo.toml): ${cargoTargets}`,
+          '  - rust (rust/Cargo.toml): "audit" and "update"',
+        ].join("\n"),
+      );
+      expect(output).toContain(
+        [
+          `The targetDefaults entry "${cargoOutputsExecutor}" in nx.json sets the option "pluginVersion" on targets that nx-rust infers. ${reason} Remove it there. It reaches:`,
+          '  - api (rust/crates/api/Cargo.toml): "build"',
+          '  - codegen (rust/crates/codegen/Cargo.toml): "build"',
+          '  - model (rust/crates/model/Cargo.toml): "build"',
+          '  - testkit (rust/crates/testkit/Cargo.toml): "build"',
+          '  - rust (rust/Cargo.toml): "doc"',
         ].join("\n"),
       );
       // The lockfile task carries the plugin's version like every inferred target.
@@ -271,6 +287,18 @@ describe("a pluginVersion that only the run gives", () => {
         expect(failedRun.status).toBe(1);
         expect(failedRun.output).toContain(
           'core-lib:check: this run gives the option "pluginVersion" the value "0.0.0", but only @convesoft/nx-rust sets that option, to carry its version into the cache key. The value comes from the command line, such as --pluginVersion, or from a task that forwards its options to this one: leave it out. The task does not run, so that Nx stores no result for it.',
+        );
+        expect(taskCalls(workspace)).toEqual([]);
+
+        // A task of a batch alike.
+        const inBatch = await runNx(
+          workspace,
+          ["run", "core-lib:check", "--pluginVersion=0.0.0", "--skip-nx-cache", "--batch"],
+          pluginWorkers,
+        );
+        expect(inBatch.status).toBe(1);
+        expect(inBatch.output).toContain(
+          'core-lib:check: this run gives the option "pluginVersion" the value "0.0.0", but only @convesoft/nx-rust sets that option',
         );
         expect(taskCalls(workspace)).toEqual([]);
 

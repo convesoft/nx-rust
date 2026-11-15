@@ -47,6 +47,7 @@ const unregistered: FileChanges = { "nx.json": "{}\n" };
 /** The empty `targetDefaults` entries that init adds for the plugin's executors. */
 const executorEntries = {
   "@convesoft/nx-rust:cargo": {},
+  "@convesoft/nx-rust:cargo-outputs": {},
   "@convesoft/nx-rust:run": {},
   "@convesoft/nx-rust:lockfile": {},
 };
@@ -122,7 +123,7 @@ describe("init", () => {
           registeredNxJson,
         );
         expect(output).toContain(
-          'Added "@convesoft/nx-rust:cargo": {}, "@convesoft/nx-rust:run": {} and "@convesoft/nx-rust:lockfile": {} to targetDefaults in nx.json',
+          'Added "@convesoft/nx-rust:cargo": {}, "@convesoft/nx-rust:cargo-outputs": {}, "@convesoft/nx-rust:run": {} and "@convesoft/nx-rust:lockfile": {} to targetDefaults in nx.json',
         );
         // Its check read the workspace as graph creation does.
         expect(workspace.cargoCalls()).toEqual([workspaceCall("rust")]);
@@ -266,10 +267,14 @@ describe("init", () => {
           expect(changed).toEqual(["nx.json"]);
           expect(JSON.parse(readFileSync(join(workspace.root, "nx.json"), "utf8"))).toEqual({
             plugins,
-            targetDefaults: { ...targetDefaults, "@convesoft/nx-rust:cargo": {} },
+            targetDefaults: {
+              ...targetDefaults,
+              "@convesoft/nx-rust:cargo": {},
+              "@convesoft/nx-rust:cargo-outputs": {},
+            },
           });
           expect(output).toContain(
-            'Added "@convesoft/nx-rust:cargo": {} to targetDefaults in nx.json',
+            'Added "@convesoft/nx-rust:cargo": {} and "@convesoft/nx-rust:cargo-outputs": {} to targetDefaults in nx.json',
           );
         },
         ["--skipProjectGraph"],

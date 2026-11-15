@@ -325,6 +325,31 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["untested", "flavour"],
     ],
   },
+  "batch-groups": {
+    cargoFolders: ["rust"],
+    projects: {
+      base: "rust/crates/base",
+      breakable: "rust/crates/breakable",
+      dep: "rust/crates/dep",
+      devuser: "rust/crates/devuser",
+      indep: "rust/crates/indep",
+      scripted: "rust/crates/scripted",
+      user: "rust/crates/user",
+      rust: "rust",
+    },
+    edges: [
+      ["dep", "base"],
+      ["devuser", "breakable"],
+      ["rust", "base"],
+      ["rust", "breakable"],
+      ["rust", "dep"],
+      ["rust", "devuser"],
+      ["rust", "indep"],
+      ["rust", "scripted"],
+      ["rust", "user"],
+      ["user", "breakable"],
+    ],
+  },
   // Every crate that names base by path has an edge to it, of every kind
   // and also without a version; registry-user's possible use through
   // [patch] is one too, and via-hidden reaches it through hidden, which has

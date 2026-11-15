@@ -21,7 +21,8 @@ import {
   HARNESS_TIMEOUT,
   includedAncestorFiles,
   pinnedToolchain,
-  pinnedToolchainAvailable,
+  otherToolchain,
+  pinnedToolchainBesideDefault,
   pluginSourceEntry,
   pnpmLockfile,
   programVersion,
@@ -1110,8 +1111,11 @@ describe("keys with the toolchain", () => {
     HARNESS_TIMEOUT,
   );
 
-  // Another installed toolchain; CI installs it for the different-toolchains fixture.
-  if (pinnedToolchainAvailable()) {
+  // Another installed toolchain than rustup's default: 1.91.0, which CI
+  // installs for the different-toolchains fixture, or stable where 1.91.0 is
+  // the default.
+  const other = otherToolchain();
+  if (other !== undefined) {
     it(
       "differ after RUSTUP_TOOLCHAIN chooses another toolchain, also through a crate's .env, for that crate only",
       async () => {
@@ -1123,11 +1127,11 @@ describe("keys with the toolchain", () => {
           const tasks = ["api:test", "model:test", "testkit:test"];
           const base = await workspace.hashTasks(tasks);
           const shell = await workspace.hashTasks(tasks, {
-            env: { RUSTUP_TOOLCHAIN: pinnedToolchain },
+            env: { RUSTUP_TOOLCHAIN: other },
           });
           writeFileSync(
             join(workspace.root, "rust/crates/api/.env"),
-            `RUSTUP_TOOLCHAIN=${pinnedToolchain}\n`,
+            `RUSTUP_TOOLCHAIN=${other}\n`,
           );
           const dotenv = await workspace.hashTasks(tasks);
 
@@ -1224,7 +1228,14 @@ describe("keys with the toolchain", () => {
   // they skip where rustup lacks 1.91.0. Each points links at 1.91.0 and
   // then at rustup's default toolchain, so that the compiler behind a path
   // changes while the path and every file and variable stay the same.
-  (pinnedToolchainAvailable() ? describe : describe.skip)(
+  // These checks replace the default toolchain's compiler with 1.91.0's and
+  // back, so they need 1.91.0 beside another default.
+  if (!pinnedToolchainBesideDefault()) {
+    it.todo(
+      `where a setting names the compiler: these checks need ${pinnedToolchain} installed beside a default toolchain of another version`,
+    );
+  }
+  (pinnedToolchainBesideDefault() ? describe : describe.skip)(
     "where a setting names the compiler",
     () => {
       /** The cached targets of api and the workspace's doc. */

@@ -499,9 +499,38 @@ describe("the cargo executor", () => {
     HARNESS_TIMEOUT,
   );
 
-  it(
-    "fails a target that is not inferred and runs no cargo",
-    () =>
+  it.each<[string, string[]]>([
+    ["", []],
+    [", also in a batch", ["--batch"]],
+  ])(
+    "fails a task whose project's metadata a project.json replaced, so that it names no Cargo workspace, and runs no cargo%s",
+    (_case, flags) =>
+      inFixture(
+        "crate-shapes",
+        {
+          "rust/crates/core/project.json": JSON.stringify({
+            metadata: { cargo: { workspaceManifest: false } },
+          }),
+        },
+        async (workspace) => {
+          const result = await nx(workspace, ["run", "core-lib:check", ...flags]);
+
+          expect(result.status).toBe(1);
+          expect(result.output).toContain(
+            'core-lib:check: the project carries no Cargo workspace in its metadata, which @convesoft/nx-rust gives each project that it creates. Make sure that a project.json or package.json in the folder rust/crates/core does not replace the project\'s "metadata".',
+          );
+          expect(taskCalls(workspace)).toEqual([]);
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  it.each<[string, string[]]>([
+    ["", []],
+    [", also in a batch", ["--batch"]],
+  ])(
+    "fails a target that is not inferred and runs no cargo%s",
+    (_case, flags) =>
       inFixture(
         "crate-shapes",
         {
@@ -510,7 +539,7 @@ describe("the cargo executor", () => {
           }),
         },
         async (workspace) => {
-          const result = await nx(workspace, ["run", "core-lib:extra"]);
+          const result = await nx(workspace, ["run", "core-lib:extra", ...flags]);
 
           expect(result.status).toBe(1);
           expect(result.output).toContain(
@@ -561,6 +590,29 @@ describe("a target that the plugin leaves uncached and the configuration caches"
           expect(result.output).not.toContain("[local cache]");
         }
         expect(taskCalls(workspace)).toEqual([]);
+      }),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails a task in a batch without running cargo when a project.json caches fmt, and leaves the other task of the batch its result",
+    () =>
+      inFixture("crate-shapes", cachedIn("core", "fmt"), async (workspace) => {
+        const result = await nx(workspace, [
+          "run-many",
+          "-t",
+          "fmt",
+          "-p",
+          "core-lib",
+          "cli",
+          "--batch",
+        ]);
+
+        expect(result.status).toBe(1);
+        expect(result.output).toContain(
+          'core-lib:fmt: the configuration of this target sets "cache": true, but @convesoft/nx-rust leaves `fmt` uncached in this project, because',
+        );
+        expect(taskCalls(workspace)).toEqual([rust(["fmt", "-p", "cli"])]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -680,11 +732,18 @@ describe("locked mode", () => {
     HARNESS_TIMEOUT,
   );
 
-  it(
-    "fails a task when NX_RUST_LOCKED is neither true nor false",
-    () =>
+  it.each<[string, string[]]>([
+    ["", []],
+    [", also in a batch", ["--batch"]],
+  ])(
+    "fails a task when NX_RUST_LOCKED is neither true nor false%s",
+    (_case, flags) =>
       inFixture("crate-shapes", undefined, async (workspace) => {
-        const result = await nx(workspace, ["run", "core-lib:build"], { NX_RUST_LOCKED: "1" });
+        // fmt-check depends on no lockfile task, which would fail first.
+        const result = await nx(workspace, ["run", "core-lib:fmt-check", ...flags], {
+          NX_RUST_LOCKED: "1",
+        });
+        expect(workspace.cargoCalls().filter((call) => call.args[0] === "update")).toEqual([]);
 
         expect(result.status).toBe(1);
         expect(result.output).toContain(
@@ -752,7 +811,9 @@ describe("locked mode", () => {
           const before = lockfile(workspace);
           const check = await nx(workspace, ["run", "internal:check"]);
           expect(check.status).toBe(1);
-          expect(check.output).toContain("because --locked was passed to prevent this");
+          // Cargo 1.91 writes "needs to be updated but --locked was passed",
+          // later versions "cannot update ... because --locked was passed".
+          expect(check.output).toContain("--locked was passed to prevent this");
           expect(lockfile(workspace)).toEqual(before);
 
           // fmt reads no lockfile, and passes.

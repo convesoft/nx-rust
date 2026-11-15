@@ -314,6 +314,45 @@ export class FixtureWorkspace {
   }
 
   /**
+   * Runs the Nx command line as {@link nx} does, but in a pseudo-terminal of
+   * its own, as in a terminal: through util-linux's `script -qfec <command>
+   * /dev/null`, which needs no terminal around the test and no dependency.
+   * Nx then sees a terminal on its standard streams, so that the dynamic
+   * output style and the terminal UI run as for a user; give the terminal UI
+   * `--tui-auto-exit`, or it waits for a key. coreutils' `timeout` stops the
+   * command after `seconds`, so that nothing waits forever.
+   *
+   * It runs on Linux only: macOS's `script` takes other arguments, and macOS
+   * has no `timeout`. In a terminal, Nx 24 asks whether to share usage data
+   * unless nx.json sets `analytics` (`ensureAnalyticsPreferenceSet`), and
+   * then waits for an answer, so the fixture's nx.json has to set it.
+   *
+   * @throws {Error} On another system, or where nx.json does not set `analytics`.
+   */
+  nxInTerminal(
+    args: string[],
+    env: Record<string, string | undefined> = {},
+    seconds = 180,
+  ): Promise<{ status: number | null; output: string }> {
+    if (process.platform !== "linux") {
+      throw new Error(`nxInTerminal runs on Linux only, through util-linux's script`);
+    }
+    const nxJson = join(this.root, "nx.json");
+    if (typeof JSON.parse(readFileSync(nxJson, "utf8")).analytics !== "boolean") {
+      throw new Error(
+        `${nxJson} sets no "analytics", so Nx would ask for it in the terminal and wait`,
+      );
+    }
+    const command = [process.execPath, join(this.root, "node_modules", "nx", nxBin), ...args]
+      .map((word) => `'${word.split("'").join(`'"'"'`)}'`)
+      .join(" ");
+    return run("timeout", ["-k", "5", String(seconds), "script", "-qfec", command, "/dev/null"], {
+      cwd: this.root,
+      env: this.environment({ NX_TUI: "false", INIT_CWD: undefined, ...env }),
+    });
+  }
+
+  /**
    * Deletes the workspace and the cargo wrapper, unless `NX_RUST_KEEP_FIXTURES`
    * is set, and the folder for its sockets once the processes of its Nx have
    * stopped ({@link removeSocketFolder}).

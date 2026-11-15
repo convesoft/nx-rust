@@ -8,7 +8,12 @@ import {
   type NxJsonConfiguration,
 } from "@nx/devkit";
 import { targetDefaultsGuide } from "../../graph/target-defaults";
-import { cargoExecutor, lockfileExecutor, runExecutor } from "../../graph/targets";
+import {
+  cargoExecutor,
+  cargoOutputsExecutor,
+  lockfileExecutor,
+  runExecutor,
+} from "../../graph/targets";
 import {
   checkGraphCreation,
   GraphCheckError,
@@ -25,7 +30,12 @@ export type InitGeneratorSchema = Record<string, never>;
  * The executors of the plugin's targets, each of which gets an empty
  * `targetDefaults` entry where `nx.json` has none for it.
  */
-export const shieldedExecutors = [cargoExecutor, runExecutor, lockfileExecutor];
+export const shieldedExecutors = [
+  cargoExecutor,
+  cargoOutputsExecutor,
+  runExecutor,
+  lockfileExecutor,
+];
 
 /**
  * The generator that `nx add @convesoft/nx-rust` runs once Nx has installed

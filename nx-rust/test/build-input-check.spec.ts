@@ -175,6 +175,12 @@ describe("the check of a build's dependency files", () => {
           'A pattern for the folder shared/assets, "../../../shared/assets/**", also covers the files that are added to it later.',
         );
 
+        // A batch runs the check after its group's command, and fails alike.
+        const inBatch = await nx(workspace, ["run", "reader:build", "--batch"]);
+        expect(inBatch.status).not.toBe(0);
+        expect(inBatch.output).toContain(`reader:build: ${failure}`);
+        expect(listedFiles(inBatch.output, "reader")).toEqual(files);
+
         // Nothing is stored, so the next run builds again, compiling nothing.
         const second = await nx(workspace, ["run", "reader:build"]);
         expect(second.status).not.toBe(0);
@@ -869,14 +875,20 @@ describe("the check of a build's dependency files", () => {
           module,
           '"use strict";\nObject.defineProperty(exports, "__esModule", { value: true });\n',
         );
+        const skipped =
+          "nx-rust: reader:build: the build input check did not run, because the installed Nx lacks HashPlanInspector in nx/src/hasher/hash-plan-inspector, so Nx caches the result without it. Use an Nx version that @convesoft/nx-rust supports, or a version of @convesoft/nx-rust that supports the installed one.";
+        // In a batch, the line is in the task's own output too.
+        const inBatch = await nx(workspace, ["run", "reader:build", "--batch", "--skip-nx-cache"]);
+        expect(inBatch.status).toBe(0);
+        expect(
+          linesWith(inBatch.output, "the build input check did not run").map((line) => line.trim()),
+        ).toEqual([skipped]);
         const first = await nx(workspace, ["run", "reader:build"]);
         expect(first.output).not.toContain(failure);
         expect(first.status).toBe(0);
         expect(
           linesWith(first.output, "the build input check did not run").map((line) => line.trim()),
-        ).toEqual([
-          "nx-rust: reader:build: the build input check did not run, because the installed Nx lacks HashPlanInspector in nx/src/hasher/hash-plan-inspector, so Nx caches the result without it. Use an Nx version that @convesoft/nx-rust supports, or a version of @convesoft/nx-rust that supports the installed one.",
-        ]);
+        ).toEqual([skipped]);
         const next = await nx(workspace, ["run", "reader:build"]);
         expect(next.status).toBe(0);
         expect(restored(next.output, "reader:build")).toBe(true);

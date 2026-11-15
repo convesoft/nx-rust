@@ -688,6 +688,13 @@ describe("crates whose artifacts share a file name in one artifact directory", (
           "alpha:build: tools:build writes cli into the same artifact directory, target, where cargo keeps one file for both crates, that of the one it built last, so that a result stored for alpha:build could hold the other crate's file.\n@convesoft/nx-rust left alpha:build cached because it did not see tools:build when it created the graph, as where another installation of the plugin, registered in nx.json under another name, creates it. The task does not run, so that Nx stores no result for it.\nGive one of the binaries another name, with the name key of its [[bin]] table in Cargo.toml, or for a library of its [lib] table, or register both Cargo workspaces through one installation of the plugin, which then leaves both builds uncached.",
         );
         expect(calls(workspace)).toEqual([]);
+        // A task of a batch runs the same check before any cargo call.
+        const batched = await nx(workspace, ["run", "alpha:build", "--batch"]);
+        expect(batched.status).toBe(1);
+        expect(batched.output).toContain(
+          "alpha:build: tools:build writes cli into the same artifact directory, target, where cargo keeps one file for both crates",
+        );
+        expect(calls(workspace)).toEqual([]);
 
         // alpha's integration test runs that file too; tools' build fails
         // the same way, as its installation sees alpha's.

@@ -25,6 +25,7 @@ const workspaceTargets = ["doc", "lockfile", "audit", "update"];
 const withDeny = ["doc", "lockfile", "audit", "deny", "update"];
 const allTargets = [...crateTargets, "bench", "run", ...withDeny];
 const cargoExecutor = "@convesoft/nx-rust:cargo";
+const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
 const runExecutor = "@convesoft/nx-rust:run";
 const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 /** The targets that DES-TARGETS caches. */
@@ -172,7 +173,7 @@ describe("inferred targets", () => {
       const graph = await loadFixtureGraph("crate-shapes", { files: { "rust/deny.toml": "" } });
       const target = (project: string, name: string) => graph.projects[project].targets[name];
       const expected: [project: string, target: string, settings: TargetConfiguration][] = [
-        ["core-lib", "build", { executor: cargoExecutor, options: {} }],
+        ["core-lib", "build", { executor: cargoOutputsExecutor, options: {} }],
         ["core-lib", "check", { executor: cargoExecutor, options: { allTargets: true } }],
         ["core-lib", "lint", { executor: cargoExecutor, options: { allTargets: true } }],
         ["core-lib", "test", { executor: cargoExecutor, options: {} }],
@@ -180,7 +181,7 @@ describe("inferred targets", () => {
         ["core-lib", "fmt", { executor: cargoExecutor, options: {} }],
         ["perf", "bench", { executor: cargoExecutor, options: {}, parallelism: false }],
         ["server", "run", { executor: runExecutor, options: {}, continuous: false }],
-        ["rust", "doc", { executor: cargoExecutor, options: { noDeps: true } }],
+        ["rust", "doc", { executor: cargoOutputsExecutor, options: { noDeps: true } }],
         ["rust", "audit", { executor: cargoExecutor, options: {} }],
         ["rust", "lockfile", { executor: lockfileExecutor, options: {} }],
         ["rust", "deny", { executor: cargoExecutor, options: {} }],

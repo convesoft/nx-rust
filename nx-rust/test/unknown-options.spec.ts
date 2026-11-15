@@ -17,10 +17,11 @@ import {
   withTargetDefaults,
 } from "./harness";
 
-// VER-UNKNOWN-OPTIONS, as far as one cargo call per task can show it: real Nx
-// runs in the crate-shapes fixture, whose tasks run cargo through the logging
-// wrapper of the harness. The parts about groups wait for the batching of
-// milestone 0.2.
+// VER-UNKNOWN-OPTIONS: real Nx runs in the crate-shapes fixture, whose tasks
+// run cargo through the logging wrapper of the harness, on their own and in a
+// batch (`--batch`). That an ignored option splits no group of several crates
+// is checked where groups are formed, in group-run.spec.ts, since the batch
+// forms groups of one crate until nxr-8f9dz2.
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 
@@ -119,7 +120,7 @@ describe("an option that the executor does not know", () => {
         );
 
         setTargetDefaults(workspace, passWithNoTests);
-        for (const extra of [[], ["--batch=false"]]) {
+        for (const extra of [[], ["--batch=false"], ["--batch"]]) {
           workspace.cargo.clear();
           const result = await runNx(workspace, [...command, "--coverage", ...extra]);
 
@@ -435,7 +436,7 @@ describe("an option passed on the command line", () => {
 
           expect(result.status).toBe(0);
           expect(linesWith(result.output, "ignoring").sort()).toEqual([
-            fromConfiguration("core-lib:build", "passWithNoTests"),
+            fromConfiguration("core-lib:build", "passWithNoTests", "cargo-outputs"),
             fromConfiguration("core-lib:test", "passWithNoTests"),
           ]);
         },

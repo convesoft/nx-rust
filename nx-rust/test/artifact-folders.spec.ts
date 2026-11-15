@@ -229,6 +229,12 @@ describe("a cached build or doc whose artifact directory moves after graph creat
         expect(moved.output).toContain(
           `${notRun} Set the variable in the environment of the nx command or in the repository's root .env file, or set the folder as build.target-dir in a .cargo/config.toml of the workspace instead.`,
         );
+        // A batch asks cargo once for the group's directories, and fails alike.
+        const movedInBatch = await runNx(workspace, ["run", "cli:build", "--batch"]);
+        expect(movedInBatch.status).toBe(1);
+        expect(movedInBatch.output).toContain(
+          `cli:build: cargo puts the artifacts of this run of the cached build in rust/out, but its outputs name the artifact directory rust/target: CARGO_TARGET_DIR is "out" in the task's environment and was unset when Nx created the graph.`,
+        );
 
         // 3. A new source under the dotenv file fails as well.
         writeFileSync(join(workspace.root, "rust/crates/cli/src/main.rs"), cliPrinting("v2"));
@@ -344,18 +350,21 @@ describe("a cached build or doc whose artifact directory moves after graph creat
         mkdirSync(home);
         writeFileSync(join(home, "config.toml"), "[build\n");
         writeFileSync(join(workspace.root, "rust/crates/cli/.env"), `CARGO_HOME=${home}\n`);
-        const run = await runNx(workspace, ["run", "cli:build"]);
+        for (const flags of [[], ["--batch"]]) {
+          const run = await runNx(workspace, ["run", "cli:build", ...flags]);
 
-        expect({ status: run.status, output: run.output }).toEqual({
-          status: 1,
-          output: expect.stringContaining(
-            "cli:build: `cargo metadata` could not report Cargo's directories for this task, so @convesoft/nx-rust cannot tell where cargo puts its files: cargo exited with status 101.",
-          ),
-        });
-        expect(run.output).toContain("could not load Cargo configuration");
-        expect(run.output).toContain(
-          `${notRun} Correct what cargo reports, such as a manifest or a configuration file that it cannot read, and run the task again.`,
-        );
+          expect({ flags, status: run.status, output: run.output }).toEqual({
+            flags,
+            status: 1,
+            output: expect.stringContaining(
+              "cli:build: `cargo metadata` could not report Cargo's directories for this task, so @convesoft/nx-rust cannot tell where cargo puts its files: cargo exited with status 101.",
+            ),
+          });
+          expect(run.output).toContain("could not load Cargo configuration");
+          expect(run.output).toContain(
+            `${notRun} Correct what cargo reports, such as a manifest or a configuration file that it cannot read, and run the task again.`,
+          );
+        }
         expect(taskCalls(workspace)).toEqual([]);
       } finally {
         workspace.remove();
@@ -390,14 +399,17 @@ describe("a cached build or doc whose targetTriple option cargo names another fo
       const host = hostTriple();
       const target = task.split(":")[1];
       try {
-        const run = await runNx(workspace, ["run", task, "--targetTriple=host-tuple"]);
+        for (const flags of [[], ["--batch"]]) {
+          const run = await runNx(workspace, ["run", task, "--targetTriple=host-tuple", ...flags]);
 
-        expect({ status: run.status, output: run.output }).toEqual({
-          status: 1,
-          output: expect.stringContaining(
-            `${task}: the targetTriple option of this run of the cached ${target} is "host-tuple", and @convesoft/nx-rust cannot name the folder that cargo writes to for this value: cargo replaces it with the host's triple. ${notRun} Pass the host's triple itself in place of host-tuple: --targetTriple=${host}.`,
-          ),
-        });
+          expect({ flags, status: run.status, output: run.output }).toEqual({
+            flags,
+            status: 1,
+            output: expect.stringContaining(
+              `${task}: the targetTriple option of this run of the cached ${target} is "host-tuple", and @convesoft/nx-rust cannot name the folder that cargo writes to for this value: cargo replaces it with the host's triple. ${notRun} Pass the host's triple itself in place of host-tuple: --targetTriple=${host}.`,
+            ),
+          });
+        }
         expect(taskCalls(workspace)).toEqual([]);
 
         const named = await runNx(workspace, ["run", task, `--targetTriple=${host}`]);

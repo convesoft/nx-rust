@@ -10,7 +10,8 @@ import {
   reportedDirectories,
 } from "../cargo/directories";
 import type { PackageVersion } from "../cargo/lockfile";
-import { memberSpecs, PackageSpecReportError } from "../cargo/package-specs";
+import type { CargoPackage } from "../cargo/metadata";
+import { memberPackages, PackageSpecReportError } from "../cargo/package-specs";
 import {
   configuredTriples,
   describeFolders,
@@ -57,10 +58,17 @@ import {
 import {
   type CargoInvocation,
   cargoEnvironment,
-  commandBlock,
+  printCommand,
   taskRunsVerbosely,
 } from "./cargo-invocation";
 import { checkDigests, DigestCheck, DigestWrite, writeDigests } from "./digests";
+import { dotenvProblem } from "./dotenv-check";
+import {
+  cargoTaskEnvironment,
+  TaskEnvironmentError,
+  type TaskShape,
+  withoutUnloadedRootValues,
+} from "./task-env";
 import { type BuildInputCheck, checkBuildInputs } from "./input-check";
 import {
   NxTaskFilesError,
@@ -98,6 +106,24 @@ export class TaskError extends Error {
     super(message);
     this.name = "TaskError";
   }
+}
+
+/**
+ * What {@link cargoTaskEnvironment} needs to know of a task run on its own:
+ * its configuration, and whether the task graph gives it a continuous
+ * dependency, for which Nx sets `NX_READY_URL`.
+ */
+export function singleTaskShape(context: ExecutorContext): TaskShape {
+  const graph = context.taskGraph;
+  const task = Object.values(graph?.tasks ?? {}).find(
+    (candidate) =>
+      candidate.target.project === context.projectName &&
+      candidate.target.target === context.targetName &&
+      candidate.target.configuration === context.configurationName,
+  );
+  const continuous: unknown[] =
+    task === undefined ? [] : (graph?.continuousDependencies?.[task.id] ?? []);
+  return { configuration: context.configurationName, continuousDependency: continuous.length > 0 };
 }
 
 /**
@@ -163,9 +189,27 @@ export async function runTask(
   for (const warning of projectWarnings(context)) {
     console.warn(warning);
   }
+  // The task's environment without the variables by which Nx tells the task
+  // how it runs and records it, which a batch cannot give its tasks: every
+  // check and every cargo command of the task uses it, as in a batch
+  // (`DES-BATCH`).
   let invocation: TaskInvocation;
+  let env: NodeJS.ProcessEnv;
   try {
-    invocation = taskInvocation(executor, options, context, process.env);
+    try {
+      env = withoutUnloadedRootValues(
+        cargoTaskEnvironment(process.env, singleTaskShape(context)),
+        context.root,
+      );
+    } catch (error) {
+      if (!(error instanceof TaskEnvironmentError)) {
+        throw error;
+      }
+      throw new TaskError(
+        `${context.projectName}:${context.targetName}: @convesoft/nx-rust cannot build this task's environment, because ${error.message}. The task does not run, so that Nx stores no result for it. Use an Nx version that @convesoft/nx-rust supports.`,
+      );
+    }
+    invocation = taskInvocation(executor, options, context, env);
   } catch (error) {
     if (error instanceof TaskError) {
       console.error(error.message);
@@ -173,15 +217,20 @@ export async function runTask(
     }
     throw error;
   }
+  // A task run on its own, as with --batch=false, runs the command of a
+  // group of one crate with cargo's standard streams as its own.
   for (const warning of invocation.warnings) {
     console.warn(warning);
   }
   const task = `${context.projectName ?? ""}:${context.targetName ?? ""}`;
   const shownFor = taskRunsVerbosely(context) ? task : undefined;
-  if (!(await runCargo(invocation, shownFor))) {
+  if (!(await runCargo(invocation, env, shownFor))) {
     return { success: false };
   }
-  const failures = await checksAfterCargo(invocation, context);
+  const { failures, warnings } = await checksAfterCargo(invocation, context);
+  for (const warning of warnings) {
+    console.warn(warning);
+  }
   for (const failure of failures) {
     console.error(failure);
   }
@@ -196,15 +245,17 @@ export async function runTask(
  * that cargo recorded with the task's inputs (`DES-BUILD-INPUT-CHECK`). Both
  * run, so that a failed task names every problem at once.
  *
- * @returns The failure messages; the task succeeds without any.
+ * @returns The failure messages, without which the task succeeds, and the
+ *   warning that the input check did not run, for the task's output.
  */
 // @mara implements DES-LOCKFILE-HASHING
 // @mara implements DES-BUILD-INPUT-CHECK
-async function checksAfterCargo(
-  invocation: TaskInvocation,
+export async function checksAfterCargo(
+  invocation: Pick<TaskInvocation, "digests" | "inputCheck">,
   context: ExecutorContext,
-): Promise<string[]> {
+): Promise<{ failures: string[]; warnings: string[] }> {
   const failures: string[] = [];
+  const warnings: string[] = [];
   const step = invocation.digests;
   const digestFailure =
     step === undefined
@@ -232,17 +283,85 @@ async function checksAfterCargo(
       if (!(error instanceof NxTaskFilesError)) {
         throw error;
       }
-      console.warn(skippedCheckWarning(check.task, error));
+      warnings.push(skippedCheckWarning(check.task, error));
     }
   }
-  return failures;
+  return { failures, warnings };
 }
 
 /**
- * The cargo command of a task, from the options that its target takes
- * ({@link taskOptions}), the metadata that the plugin gave the target and its
- * project, and locked mode, together with the warning lines for the options
- * that it ignores.
+ * The cargo command of a task run on its own, from the options that its
+ * target takes ({@link taskInvocation}), the metadata that the plugin gave the
+ * target and its project, and locked mode, together with the warning lines
+ * for the options that it ignores: the command of a group of one crate,
+ * {@link prepareTask} followed by {@link groupInvocations}.
+ *
+ * @throws {TaskError} As {@link prepareTask} and {@link groupInvocations} do.
+ */
+export function taskInvocation(
+  executor: PluginExecutor,
+  options: CargoTargetOptions,
+  context: ExecutorContext,
+  env: NodeJS.ProcessEnv,
+): TaskInvocation {
+  const prepared = prepareTask(executor, options, context, env);
+  const [finished] = groupInvocations([prepared], context.root);
+  if (typeof finished === "string") {
+    throw new TaskError(finished);
+  }
+  return {
+    args: finished.args,
+    cwd: finished.cwd,
+    warnings: prepared.warnings,
+    ...(finished.digests === undefined ? {} : { digests: finished.digests }),
+    ...(finished.inputCheck === undefined ? {} : { inputCheck: finished.inputCheck }),
+  };
+}
+
+/**
+ * A task whose checks before cargo have passed, waiting for the cargo
+ * command of its group (`TERM-GROUP`): what its command depends on, and
+ * what the task does after the command.
+ */
+export interface PreparedTask {
+  /** The task as messages name it, `<project>:<target>`. */
+  task: string;
+  /** The default name of the task's target, which decides the command. */
+  target: InferredTargetName;
+  /** The options that the target takes ({@link taskOptions}). */
+  options: CargoTargetOptions;
+  /** The binary's arguments, for `run`; empty for every other target. */
+  binaryArguments: string[];
+  /** One warning line per option that the task ignores (`DES-UNKNOWN-OPTIONS`). */
+  warnings: string[];
+  /** Whether the command runs in locked mode (`DES-INVOCATION`). */
+  locked: boolean;
+  /** The workspace's root folder, relative to the repository root. */
+  workspaceRoot: string;
+  /** The absolute path of the workspace root, where cargo starts. */
+  cwd: string;
+  /** The crate's package name; absent for a workspace project without a crate. */
+  crate?: string;
+  /** The crate's manifest, relative to the repository root. */
+  manifest?: string;
+  /** What the task does with the lockfile's digests after cargo ({@link TaskInvocation.digests}). */
+  digests?: DigestStep;
+  /**
+   * On a cached `build` or `doc` whose outputs name the artifact directory:
+   * the target's metadata, against which the group's directories are
+   * checked before cargo builds (`DES-OUTPUTS`).
+   */
+  artifactCheck?: TargetCargoMetadata;
+  /** On a crate's `build`: what graph creation reported for the records (`DES-BUILD-INPUT-CHECK`). */
+  records?: BuildRecordSource;
+  /** The task's environment, with which its checks ran and its cargo runs. */
+  env: NodeJS.ProcessEnv;
+}
+
+/**
+ * The checks of a task before cargo runs, and what its command depends on,
+ * apart from what a group asks cargo once for all its tasks: the crates'
+ * package ID specifications and Cargo's directories ({@link groupInvocations}).
  *
  * @param env The task's environment, with `NX_RUST_LOCKED`, `NX_RUST_RUN_ID`
  *   and the record of the `nx` command ({@link recordedNxCommand}).
@@ -253,33 +372,28 @@ async function checksAfterCargo(
  *   the task's environment and Cargo's configuration pick a triple whose
  *   folder the plugin cannot name or other triples than its outputs name,
  *   or is cached while its `targetTriple` option is `host-tuple` or a
- *   target specification file, or while cargo reports another artifact
- *   directory for the task than the one its outputs name, or cannot report
- *   one (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is neither `true` nor
- *   `false`, when `args` does not split into words, when the run gives
- *   `pluginVersion` another value than the target's (`DES-PLUGIN-OPTIONS`),
- *   when a task whose target hashes digests does not depend on its
- *   workspace's lockfile task in a run that does not exclude task
- *   dependencies (`DES-LOCKFILE-HASHING`), when the run holds the `build` of
- *   a crate whose `test` replaces its executables without an order between
- *   the two (`DES-TARGETS`), when the tool that the target runs besides
- *   cargo is not installed where `env` and the workspace root say
- *   (`DES-DIAGNOSTICS`), or when cargo cannot give the crate's package ID
- *   specification (`DES-INVOCATION`). The checks of what reaches the task's
- *   key, the cache guard, `pluginVersion` and the lockfile dependency, and
- *   the check of the order of `test` and `build` all run before the cargo
- *   command is built, and the check for the tool and the specification
- *   after them.
+ *   target specification file (`DES-OUTPUTS`), when `NX_RUST_LOCKED` is
+ *   neither `true` nor `false`, when `args` does not split into words, when
+ *   the run gives `pluginVersion` another value than the target's
+ *   (`DES-PLUGIN-OPTIONS`), when a task whose target hashes digests does not
+ *   depend on its workspace's lockfile task in a run that does not exclude
+ *   task dependencies (`DES-LOCKFILE-HASHING`), when the run holds the
+ *   `build` of a crate whose `test` replaces its executables without an
+ *   order between the two (`DES-TARGETS`), or when the tool that the target
+ *   runs besides cargo is not installed where `env` and the workspace root
+ *   say (`DES-DIAGNOSTICS`). The checks of what reaches the task's key, the
+ *   cache guard, `pluginVersion` and the lockfile dependency, and the check
+ *   of the order of `test` and `build` all run before the check for the tool.
  */
 // @mara implements DES-OUTPUTS
 // @mara implements DES-PLUGIN-OPTIONS
 // @mara implements DES-DIAGNOSTICS
-export function taskInvocation(
+export function prepareTask(
   executor: PluginExecutor,
   options: CargoTargetOptions,
   context: ExecutorContext,
   env: NodeJS.ProcessEnv,
-): TaskInvocation {
+): PreparedTask {
   const projectName = context.projectName ?? "";
   const targetName = context.targetName ?? "";
   const task = `${projectName}:${targetName}`;
@@ -288,6 +402,40 @@ export function taskInvocation(
     throw new TaskError(
       `${task}: ${executor.name} runs only the targets that @convesoft/nx-rust infers for a crate or a Cargo workspace, and ${task} is not one of them. To run another cargo command, define a target with a "command" under a name of its own.`,
     );
+  }
+  // Dotenv files whose expansion would differ between the ways of running
+  // the task (`DES-BATCH`, "Dotenv files").
+  let dotenv: string | undefined;
+  try {
+    if (context.projectGraph === undefined) {
+      throw new TaskEnvironmentError("Nx gave the task no project graph");
+    }
+    dotenv = dotenvProblem(
+      {
+        id: task,
+        target: {
+          project: projectName,
+          target: targetName,
+          ...(context.configurationName === undefined
+            ? {}
+            : { configuration: context.configurationName }),
+        },
+        projectRoot: context.projectsConfigurations?.projects?.[projectName]?.root,
+      },
+      context.projectGraph,
+      context.root,
+      env,
+    );
+  } catch (error) {
+    if (!(error instanceof TaskEnvironmentError)) {
+      throw error;
+    }
+    throw new TaskError(
+      `${task}: @convesoft/nx-rust cannot check the dotenv files of this task, because ${error.message}. The task does not run, so that Nx stores no result for it. Use an Nx version that @convesoft/nx-rust supports.`,
+    );
+  }
+  if (dotenv !== undefined) {
+    throw new TaskError(`${task}: ${dotenv}`);
   }
   // What the plugin decided for this project's target; a graph from before
   // that decision was recorded falls back to the target's default name.
@@ -398,17 +546,6 @@ export function taskInvocation(
   ) {
     checkPickedTriples(task, metadata, cwd, context.root, env);
   }
-  // Cargo's directories for this task, with its environment, which a dotenv
-  // file that Nx loads only for the task can change (`DES-OUTPUTS`,
-  // `DES-BUILD-INPUT-CHECK`).
-  let directories: CargoDirectories | undefined;
-  if (
-    (metadata.target === "build" || metadata.target === "doc") &&
-    context.target?.cache === true &&
-    metadata.artifactDirectory !== undefined
-  ) {
-    directories = checkArtifactDirectory(task, metadata, cwd, context.root, env);
-  }
   const lockfile = join(cwd, "Cargo.lock");
   const folder = join(context.root, digestFolder(workspaceRoot));
   // The private copies of this nx command's lockfile tasks.
@@ -448,44 +585,207 @@ export function taskInvocation(
       throw error instanceof MissingToolError ? new TaskError(`${task}: ${error.message}`) : error;
     }
   }
-  const crate: CrateSelection | undefined =
-    cargo.packageName === undefined
-      ? undefined
-      : {
-          name: cargo.packageName,
-          ...(selectsBySpecification(metadata.target)
-            ? { spec: packageSpec(task, cargo.packageName, workspaceRoot, cwd, env) }
-            : {}),
-        };
-  const args = cargoArguments(
-    {
-      target: metadata.target,
-      ...(crate === undefined ? {} : { crate }),
-      locked,
-      binaryArguments: examined.binaryArguments,
-    },
-    examined.options,
-  );
-  const inputCheck: BuildInputCheck | undefined =
-    metadata.target === "build" && metadata.records !== undefined && cargo.packageName !== undefined
-      ? {
-          task,
-          crate: cargo.packageName,
-          manifest: cargo.manifest,
-          records: metadata.records,
-          directories: directories ?? taskDirectories(task, cwd, env),
-          selection: examined.options,
-          env,
-          cwd,
-        }
-      : undefined;
   return {
-    args,
-    cwd,
+    task,
+    target: metadata.target,
+    options: examined.options,
+    binaryArguments: examined.binaryArguments,
     warnings: examined.warnings,
+    locked,
+    workspaceRoot,
+    cwd,
+    ...(cargo.packageName === undefined
+      ? {}
+      : { crate: cargo.packageName, manifest: cargo.manifest }),
     ...(digests === undefined ? {} : { digests }),
-    ...(inputCheck === undefined ? {} : { inputCheck }),
+    ...((metadata.target === "build" || metadata.target === "doc") &&
+    context.target?.cache === true &&
+    metadata.artifactDirectory !== undefined
+      ? { artifactCheck: metadata }
+      : {}),
+    ...(metadata.target === "build" && metadata.records !== undefined
+      ? { records: metadata.records }
+      : {}),
+    env,
   };
+}
+
+/** The cargo command of a group, and what each of its tasks does after it. */
+export interface GroupInvocation extends CargoInvocation {
+  /** The task's crate as the command selects it; absent for a workspace project. */
+  crate?: CrateSelection;
+  /**
+   * The crate as the group's report of the members gives it, with its
+   * targets and features; absent where the command selects crates by name.
+   */
+  package?: CargoPackage;
+  /**
+   * What the task does with the lockfile's digests after the command
+   * (`DES-LOCKFILE-HASHING`, "Post-check"), as its preparation decided:
+   * every check after cargo comes from here, for a task run on its own and
+   * in a batch alike.
+   */
+  digests?: DigestStep;
+  /** On a crate's `build`: the check of the files that cargo recorded (`DES-BUILD-INPUT-CHECK`). */
+  inputCheck?: BuildInputCheck;
+}
+
+/**
+ * Completes the cargo command of a group of prepared tasks, all of one
+ * workspace, kind, environment and command options (`TERM-GROUP`): asks
+ * cargo once for the package ID specifications of the group's crates,
+ * where its command selects them so (`DES-INVOCATION`), and once for
+ * Cargo's directories, where a task of the group is a cached `build` or
+ * `doc` or checks a build's inputs (`DES-OUTPUTS`, `DES-BUILD-INPUT-CHECK`),
+ * both in the workspace root with the group's environment, and checks each
+ * cached `build` and `doc` against the artifact directory its outputs name.
+ *
+ * @returns For each task, in order, the command of the whole group with
+ *   what the task does after it, or the message with which the task fails
+ *   before cargo runs: cargo cannot report the specifications or the
+ *   directories, the workspace has no member of the crate's name any more,
+ *   or cargo reports another artifact directory than the outputs name.
+ *   Every task of a group gets the same `args` where none fails.
+ */
+// @mara implements DES-INVOCATION
+// @mara implements DES-OUTPUTS
+// @mara implements DES-BATCH
+export function groupInvocations(
+  tasks: readonly PreparedTask[],
+  root: string,
+): (GroupInvocation | string)[] {
+  const [first] = tasks;
+  if (first === undefined) {
+    return [];
+  }
+  const { cwd, env, workspaceRoot, target } = first;
+  // One report of Cargo's directories for the group, and then one of the
+  // members, where its command selects crates by their specifications: the
+  // order in which a task run on its own has always asked.
+  const directories: CargoDirectories | DirectoryReportError | undefined = tasks.some(
+    (task) => task.artifactCheck !== undefined || task.records !== undefined,
+  )
+    ? directoryReport(cwd, env)
+    : undefined;
+  const specs: SpecReport | undefined =
+    selectsBySpecification(target) && tasks.some((task) => task.crate !== undefined)
+      ? specReport(cwd, env)
+      : undefined;
+  const finished = tasks.map(
+    (
+      task,
+    ):
+      | { crate?: CrateSelection; package?: CargoPackage; directories?: CargoDirectories }
+      | string => {
+      try {
+        const reached =
+          directories instanceof DirectoryReportError
+            ? directoryFailure(task.task, directories)
+            : directories;
+        if (task.artifactCheck !== undefined && reached !== undefined) {
+          checkArtifactDirectory(task.task, task.artifactCheck, cwd, root, env, reached);
+        }
+        const pkg =
+          task.crate === undefined || !selectsBySpecification(task.target)
+            ? undefined
+            : packageSpec(task.task, task.crate, workspaceRoot, specs);
+        const crate: CrateSelection | undefined =
+          task.crate === undefined
+            ? undefined
+            : { name: task.crate, ...(pkg === undefined ? {} : { spec: pkg.id }) };
+        return {
+          ...(crate === undefined ? {} : { crate }),
+          ...(pkg === undefined ? {} : { package: pkg }),
+          ...(reached === undefined ? {} : { directories: reached }),
+        };
+      } catch (error) {
+        if (error instanceof TaskError) {
+          return error.message;
+        }
+        throw error;
+      }
+    },
+  );
+  // The command selects the crates of the tasks that passed their checks;
+  // a task that failed before cargo takes no part in it.
+  const crates = finished.flatMap((entry) =>
+    typeof entry === "string" || entry.crate === undefined ? [] : [entry.crate],
+  );
+  return tasks.map((task, index) => {
+    const entry = finished[index];
+    if (typeof entry === "string") {
+      return entry;
+    }
+    const args = cargoArguments(
+      {
+        target: task.target,
+        ...(crates.length === 0 ? {} : { crates }),
+        locked: task.locked,
+        binaryArguments: task.binaryArguments,
+      },
+      task.options,
+    );
+    const inputCheck: BuildInputCheck | undefined =
+      task.records !== undefined &&
+      task.crate !== undefined &&
+      task.manifest !== undefined &&
+      entry.directories !== undefined
+        ? {
+            task: task.task,
+            crate: task.crate,
+            manifest: task.manifest,
+            records: task.records,
+            directories: entry.directories,
+            selection: task.options,
+            env,
+            cwd,
+          }
+        : undefined;
+    return {
+      args,
+      cwd,
+      ...(entry.crate === undefined ? {} : { crate: entry.crate }),
+      ...(entry.package === undefined ? {} : { package: entry.package }),
+      ...(task.digests === undefined ? {} : { digests: task.digests }),
+      ...(inputCheck === undefined ? {} : { inputCheck }),
+    };
+  });
+}
+
+/**
+ * What cargo reported for a group's members, by package name, each with its
+ * package ID specification as `id`, or why it could not report them.
+ */
+type SpecReport = Map<string, CargoPackage> | PackageSpecReportError;
+
+// The members in the workspace root with the group's environment, as the
+// group's command starts (`DES-INVOCATION`), from one report for the group.
+function specReport(cwd: string, env: NodeJS.ProcessEnv): SpecReport {
+  try {
+    return memberPackages(cwd, env);
+  } catch (error) {
+    if (error instanceof PackageSpecReportError) {
+      return error;
+    }
+    throw error;
+  }
+}
+
+// Cargo's directories in the workspace root with the group's environment,
+// as physical paths, or why cargo could not report them.
+function directoryReport(
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): CargoDirectories | DirectoryReportError {
+  try {
+    const reported = reportedDirectories(cwd, env);
+    return { artifact: physicalPath(reported.artifact), build: physicalPath(reported.build) };
+  } catch (error) {
+    if (error instanceof DirectoryReportError) {
+      return error;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -691,26 +991,32 @@ export function lockedMode(option: boolean, variable: string | undefined): boole
  * invocation, which no command of this version has, and with the task's
  * standard streams. Signals that stop the executor reach cargo too.
  *
+ * @param taskEnv The task's environment without the variables by which Nx
+ *   tells it how it runs and records it ({@link cargoTaskEnvironment}).
+ *
  * Unlike graph creation (`runCargoForGraph`), a task sets no
  * `RUSTUP_AUTO_INSTALL`, so rustup behaves as for plain cargo.
  *
  * @param shownFor In a verbose run, the task whose command it is: the
- *   command's lines ({@link commandBlock}), built from the same invocation,
+ *   command's lines ({@link printCommand}), built from the same invocation,
  *   go to standard error before cargo starts (`DES-INVOCATION`, "Printing the
  *   command"). Undefined in every other run, which prints nothing of it.
  * @returns Whether cargo exited with status 0.
  */
 // @mara implements DES-INVOCATION
-export async function runCargo(invocation: CargoInvocation, shownFor?: string): Promise<boolean> {
+export async function runCargo(
+  invocation: CargoInvocation,
+  taskEnv: NodeJS.ProcessEnv,
+  shownFor?: string,
+): Promise<boolean> {
   if (shownFor !== undefined) {
-    const block = commandBlock(shownFor, invocation);
     // Written out before cargo starts, whose output goes to the same streams.
-    await new Promise<void>((resolve) => process.stderr.write(block, () => resolve()));
+    await printCommand(shownFor, invocation);
   }
   return new Promise((resolve) => {
     const child = spawn("cargo", invocation.args, {
       cwd: invocation.cwd,
-      env: cargoEnvironment(invocation, process.env),
+      env: cargoEnvironment(invocation, taskEnv),
       stdio: "inherit",
     });
     const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -856,27 +1162,23 @@ function hostTriple(cwd: string, env: NodeJS.ProcessEnv): string | undefined {
 // crate: the one that cargo reports for the member of that name when it
 // starts in the workspace root with the task's environment, as the command
 // does (`DES-INVOCATION`). It holds the absolute path of the crate's folder
-// and goes into the command only, into no input, output or option.
+// and goes into the command only, into no input, output or option. A group
+// asks cargo once for all its crates ({@link specReport}).
 // @mara implements DES-INVOCATION
 // @mara implements DES-DIAGNOSTICS
 function packageSpec(
   task: string,
   packageName: string,
   workspaceRoot: string,
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-): string {
-  let specs: Map<string, string>;
-  try {
-    specs = memberSpecs(cwd, env);
-  } catch (error) {
-    if (!(error instanceof PackageSpecReportError)) {
-      throw error;
-    }
-    const stderr = error.stderr.trim();
+  specs: SpecReport | undefined,
+): CargoPackage {
+  if (!(specs instanceof Map)) {
+    const failure: PackageSpecReportError =
+      specs ?? new PackageSpecReportError("no report was asked for", "");
+    const stderr = failure.stderr.trim();
     throw new TaskError(
       [
-        `${task}: \`cargo metadata\` could not list the members of the Cargo workspace for this task, so @convesoft/nx-rust cannot name the crate ${packageName} to cargo: ${error.message}.`,
+        `${task}: \`cargo metadata\` could not list the members of the Cargo workspace for this task, so @convesoft/nx-rust cannot name the crate ${packageName} to cargo: ${failure.message}.`,
         ...(stderr === "" ? [] : [stderr]),
         "The task does not run, so that Nx stores no result for it. Correct what cargo reports, such as a manifest or a configuration file that it cannot read, and run the task again.",
       ].join("\n"),
@@ -900,22 +1202,20 @@ function packageSpec(
 // files the check of `DES-BUILD-INPUT-CHECK` leaves out.
 // @mara implements DES-BUILD-INPUT-CHECK
 function taskDirectories(task: string, cwd: string, env: NodeJS.ProcessEnv): CargoDirectories {
-  try {
-    const reported = reportedDirectories(cwd, env);
-    return { artifact: physicalPath(reported.artifact), build: physicalPath(reported.build) };
-  } catch (error) {
-    if (!(error instanceof DirectoryReportError)) {
-      throw error;
-    }
-    const stderr = error.stderr.trim();
-    throw new TaskError(
-      [
-        `${task}: \`cargo metadata\` could not report Cargo's directories for this task, so @convesoft/nx-rust cannot tell where cargo puts its files: ${error.message}.`,
-        ...(stderr === "" ? [] : [stderr]),
-        "The task does not run, so that Nx stores no result for it. Correct what cargo reports, such as a manifest or a configuration file that it cannot read, and run the task again.",
-      ].join("\n"),
-    );
-  }
+  const report = directoryReport(cwd, env);
+  return report instanceof DirectoryReportError ? directoryFailure(task, report) : report;
+}
+
+// Fails a task whose cargo could not report Cargo's directories.
+function directoryFailure(task: string, error: DirectoryReportError): never {
+  const stderr = error.stderr.trim();
+  throw new TaskError(
+    [
+      `${task}: \`cargo metadata\` could not report Cargo's directories for this task, so @convesoft/nx-rust cannot tell where cargo puts its files: ${error.message}.`,
+      ...(stderr === "" ? [] : [stderr]),
+      "The task does not run, so that Nx stores no result for it. Correct what cargo reports, such as a manifest or a configuration file that it cannot read, and run the task again.",
+    ].join("\n"),
+  );
 }
 
 // Fails a cached `build` or `doc` for which cargo reports, with the task's
@@ -928,7 +1228,7 @@ function taskDirectories(task: string, cwd: string, env: NodeJS.ProcessEnv): Car
 // give another directory as well, Cargo's configuration has changed since
 // graph creation, as a file that Nx does not watch can under the Nx daemon;
 // otherwise the task's environment moves it, as a dotenv file of the task
-// does. Returns the task's directories where they agree.
+// does. A group asks cargo once for its directories ({@link directoryReport}).
 // @mara implements DES-OUTPUTS
 // @mara implements DES-DIAGNOSTICS
 function checkArtifactDirectory(
@@ -937,12 +1237,12 @@ function checkArtifactDirectory(
   cwd: string,
   root: string,
   env: NodeJS.ProcessEnv,
-): CargoDirectories {
-  const directories = taskDirectories(task, cwd, env);
+  directories: CargoDirectories,
+): void {
   const named = metadata.artifactDirectory as string;
   const now = repositoryFolder(directories.artifact, root);
   if (now.inside && now.path === named) {
-    return directories;
+    return;
   }
   const end = "The task does not run, so that Nx stores no result for it.";
   const graphVariables = metadata.directoryVariables ?? {};
@@ -993,7 +1293,7 @@ function checkArtifactDirectory(
 // does not hash, which no key holds, so that a cache hit replays them as the
 // run that stored the result printed them.
 // @mara implements DES-DIAGNOSTICS
-function projectWarnings(context: ExecutorContext): string[] {
+export function projectWarnings(context: ExecutorContext): string[] {
   const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];
   const cargo = project === undefined ? undefined : cargoMetadataOf(project);
   const warnings: unknown[] = [

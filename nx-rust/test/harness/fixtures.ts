@@ -33,6 +33,7 @@ export const fixtureNames = [
   "undeclared-files",
   "shared-names",
   "binary-tests",
+  "batch-groups",
   "release-crates",
   "shared-executables",
 ] as const;
@@ -54,13 +55,73 @@ export function pinnedToolchainAvailable(): boolean {
   if (process.env.CI) {
     return true;
   }
+  return installedToolchains().some(({ name }) => name.startsWith(`${pinnedToolchain}-`));
+}
+
+/**
+ * Whether rustup has {@link pinnedToolchain} beside a default toolchain that
+ * is another one, which the checks that compare the two need: in CI, which
+ * installs it beside the default, always; elsewhere where it is installed
+ * and is not the default, as it is where the tests run with 1.91.0 as the
+ * default through a private rustup home.
+ */
+export function pinnedToolchainBesideDefault(): boolean {
+  return (
+    pinnedToolchainAvailable() && defaultToolchain()?.startsWith(`${pinnedToolchain}-`) !== true
+  );
+}
+
+/**
+ * The toolchains that rustup has in the tests' environment, by their full
+ * names, such as `stable-x86_64-unknown-linux-gnu`, each marked where it is
+ * rustup's default toolchain, as `rustup toolchain list` gives them; none
+ * where rustup cannot list them. The environment keeps `RUSTUP_HOME`, so a
+ * private rustup home whose default is another toolchain counts.
+ */
+export function installedToolchains(): { name: string; isDefault: boolean }[] {
   const result = spawnSync("rustup", ["toolchain", "list"], {
     env: testEnvironment(),
     encoding: "utf8",
   });
-  return (
-    result.status === 0 &&
-    result.stdout.split("\n").some((line) => line.startsWith(`${pinnedToolchain}-`))
+  if (result.status !== 0) {
+    return [];
+  }
+  return result.stdout.split("\n").flatMap((line) => {
+    const match = /^(\S+)(?: \(([^)]*)\))?$/.exec(line.trim());
+    return match === null
+      ? []
+      : [{ name: match[1], isDefault: (match[2] ?? "").split(", ").includes("default") }];
+  });
+}
+
+/**
+ * rustup's default toolchain in the tests' environment, by its full name,
+ * such as `stable-x86_64-unknown-linux-gnu` or, with a private rustup home,
+ * `1.91.0-x86_64-unknown-linux-gnu`; what rustup gives a crate as
+ * `RUSTUP_TOOLCHAIN` where nothing else chooses one. Undefined where rustup
+ * names none.
+ */
+export function defaultToolchain(): string | undefined {
+  return installedToolchains().find(({ isDefault }) => isDefault)?.name;
+}
+
+/**
+ * A toolchain that rustup has besides its default one, for a check that a
+ * task runs with another toolchain than the default: {@link pinnedToolchain}
+ * where it is installed and not the default, or else `stable` where that is
+ * installed and not the default, as where the tests run with 1.91.0 as the
+ * default. Undefined where rustup has neither; the check then cannot run.
+ * In CI, which installs {@link pinnedToolchain} beside the default, that one
+ * unless it is the default.
+ */
+export function otherToolchain(): string | undefined {
+  const installed = installedToolchains();
+  const isDefault = (channel: string) =>
+    installed.some(({ name, isDefault }) => isDefault && name.startsWith(`${channel}-`));
+  const has = (channel: string) => installed.some(({ name }) => name.startsWith(`${channel}-`));
+  return [pinnedToolchain, "stable"].find(
+    (channel) =>
+      !isDefault(channel) && (has(channel) || (process.env.CI && channel === pinnedToolchain)),
   );
 }
 

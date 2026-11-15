@@ -125,6 +125,19 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       ],
     },
   },
+  "batch-groups": {
+    workspaces: {
+      rust: [
+        "rust/crates/base",
+        "rust/crates/breakable",
+        "rust/crates/dep",
+        "rust/crates/devuser",
+        "rust/crates/indep",
+        "rust/crates/scripted",
+        "rust/crates/user",
+      ],
+    },
+  },
   "release-crates": {
     workspaces: {
       rust: [
