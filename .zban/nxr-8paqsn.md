@@ -2,6 +2,9 @@
 title: Find why a build's OUT_DIR test sees target/ where Cargo 1.91.0 is rustup's default
 status: todo
 type: bug
+priority: deferred
+tags:
+  - backlog
 discovered_from: nxr-s12cpg
 created_at: 2026-11-14T20:43:21Z
 ---

@@ -2,7 +2,9 @@
 title: Check the Cargo version that a task's own environment selects
 status: todo
 type: bug
-priority: low
+priority: deferred
+tags:
+  - backlog
 discovered_from: nxr-sefq12
 created_at: 2026-11-14T16:39:08Z
 ---

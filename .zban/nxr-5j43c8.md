@@ -2,7 +2,9 @@
 title: Tests that compare { status, output } with expect.any(String) hide a failing command's output
 status: todo
 type: task
-priority: low
+priority: deferred
+tags:
+  - backlog
 discovered_from: nxr-cq1cx1
 created_at: 2026-11-15T12:14:12Z
 ---

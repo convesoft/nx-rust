@@ -2,7 +2,9 @@
 title: Judge other layers by Nx's native hash plan, not by a re-derived reading of the lists
 status: todo
 type: bug
-parent: nxr-9y4eh8
+priority: deferred
+tags:
+  - backlog
 discovered_from: nxr-vnb0ph
 created_at: 2026-11-15T13:54:25Z
 ---
@@ -18,3 +20,16 @@ Context: nxr-vnb0ph made graph creation fail where another plugin takes away or 
 - [ ] Case 3, two false refusals. A later plugin adds `"!{workspaceRoot}/rust/crates/api/src/**/*"`, or `{ "fileset": "!{projectRoot}/src/**/*", "dependencies": true }`, to `api:check`. The guard refuses both, because `leavesOut` (about line 657) counts every added pattern that starts with `!`. The native plan shows the same file sets before and after, and source changes still change the hash.
 - [ ] Case 4, the reading of absent inputs. For a crate target without `inputs` from a later plugin, with a project-level `default` of `["{projectRoot}/Cargo.toml"]`, the native plan held `api:rust/crates/api/**/*`, and source edits still changed the hash. The JS helpers' expansion of `DEFAULT_INPUTS` through that `default`, which the guard copies, does not give that.
 - [ ] Tests with the real Nx in both plugin modes: each case first, then its fix; the existing tests of "another layer" stay green. Update `DES-TARGET-DEFAULT-GUARD`, `VER-TARGET-DEFAULT-GUARD` and `RISK-GUARD-HASH-PLAN` (mitigated, or retired where nothing is left).
+
+## Handoff (2026-11-15T15:18:22Z)
+
+- Moved to the backlog on 15 November 2026 by the maintainer's rule for exotic findings: the cases need a second Nx plugin that rewrites a crate's own targets. Nothing here starts without the maintainer. The known gaps stay recorded in `RISK-GUARD-HASH-PLAN`.
+- Work stopped mid-way. Local branch `fix/target-default-guard-plan` (not pushed, not merged; based on local `main` at 5acde83): commit 2b2d371 "fix: judge what other layers do to Rust targets' inputs by Nx's native hash plan" and a wip commit bb90deb with an unfinished test of a missing planner part and its line in `VER-TARGET-DEFAULT-GUARD`. If the branch is gone, the findings below are what is left.
+- Found: Nx's native `HashPlanner` can be built and asked for a task's plan inside `createDependencies`. It worked with the plugin in Nx's own process, in a plugin worker and under the daemon, in 1 to 3 ms for a small plan. The lead in this issue (`nx/src/hasher/hash-plan-inspector.js`) was right.
+- What it needs: the merged projects, the plugin's own crate edges, one task graph from Nx's `createTaskGraph` (on copies, because it rewrites the `dependsOn` it reads), and the file list that `createDependencies` already receives.
+- How two plans were compared: an instruction that appears in both plans hashes the same thing in both. A file set that differs is first compared by its patterns; if that does not settle it, it is expanded to today's files with Nx's own glob matcher, so a negated pattern counts only once it leaves out a file. The check runs at every graph creation.
+- Cost on a generated workspace of 300 crates and 1,800 tasks, best of three, plugin in Nx's own process / in a worker: nothing changes a Rust target 1.5 s / 1.9 s (no extra cost); a later plugin widens one target 1.5 s / 1.9 s; an entry keyed by the cargo executor adds an input to every target 3.2 s / 3.7 s (about 1.6 s before, because the old guard skipped it); a later plugin redefines `default` for a crate that 150 others depend on 5.4 s, ending in the error.
+- Result on the cases of this issue, on 2b2d371: cases 1 and 2 refused in both plugin modes, and `nx run api:check` fails before cargo runs; case 3, both forms, creates the graph and a source change still changes the key; case 4 cannot arise through the plugin itself (every inferred target declares `inputs`, and Nx's merge never removes a list) and was tested against Nx's planner directly.
+- Checks that ran on 2b2d371: the full `pnpm nx run-many -t build lint test` passed (45 suites, 1,564 tests, 1 todo); 26 new tests; `mara project validate` valid with complete evaluation. Not run: `format:check --all`, the end-to-end suite, anything on bb90deb. No review happened.
+- Left open by that implementation, as the worker listed it: edges that other plugins add are not compared; the plan's instructions come back as strings whose kind is read from their shape, leaning towards an error where unclear; a negated pattern that matches no file today draws nothing until such a file appears; Nx Cloud's Ultracache plans tasks differently.
+- A finding to keep in mind for nxr-wqwn7w, which the same branch implemented: an entry keyed by the cargo executor that adds the usual `production` named input was refused, because the plugin's own `default` for the workspace project leaves `Cargo.lock` out and `production` so drops `Cargo.lock` from the keys of `audit` and `update`.

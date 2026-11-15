@@ -2,10 +2,10 @@
 title: Track the stabilisation of Cargo's feature-unification setting
 status: todo
 type: task
-priority: low
+priority: deferred
 tags:
   - spike
-parent: nxr-nm0jd6
+  - backlog
 created_at: 2026-11-12T18:20:01Z
 ---
 

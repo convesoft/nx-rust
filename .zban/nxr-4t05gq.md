@@ -2,10 +2,10 @@
 title: Measure baseline drift and choose a default threshold
 status: todo
 type: task
-priority: low
+priority: deferred
 tags:
   - spike
-parent: nxr-m3k3w8
+  - backlog
 created_at: 2026-11-12T18:20:01Z
 ---
 

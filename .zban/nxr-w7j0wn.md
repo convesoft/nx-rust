@@ -2,10 +2,10 @@
 title: Check how napi crates link under cargo test
 status: todo
 type: task
-priority: low
+priority: deferred
 tags:
   - spike
-parent: nxr-z9jq1n
+  - backlog
 created_at: 2026-11-12T18:20:01Z
 ---
 
