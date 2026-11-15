@@ -12,7 +12,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LockfileError, memberDigest, parseLockfile } from "../src/cargo/lockfile";
-import { checkDigests, commandCopyLifetime, writeDigests } from "../src/executors/digests";
+import {
+  checkDigests,
+  commandCopyLifetime,
+  heldMembers,
+  writeDigests,
+} from "../src/executors/digests";
 import {
   commandRecords,
   excludesTaskDependencies,
@@ -353,3 +358,24 @@ describe("the digests of a run", () => {
 function readdirNames(path: string): string[] {
   return readdirSync(path).sort();
 }
+
+describe("the members that the check after cargo's call compares", () => {
+  const member = (name: string) => ({ name, version: "0.1.0" });
+  const members = ["a", "b", "c"].map(member);
+
+  it("are the crate's own where the key holds its own digest only", () => {
+    expect(heldMembers([member("b")], false, members)).toEqual([member("b")]);
+  });
+
+  it("are every member of the workspace, the crate's own first, where the key holds every member's digest", () => {
+    // The target names its own member once; the lockfile task names them all.
+    expect(heldMembers([member("b")], true, members)).toEqual(["b", "a", "c"].map(member));
+    // A workspace project without a crate names none of its own.
+    expect(heldMembers([], true, members)).toEqual(members);
+  });
+
+  it("cannot be known where the key holds every member's digest and the lockfile task names none", () => {
+    expect(heldMembers([member("b")], true, undefined)).toBeUndefined();
+    expect(heldMembers([member("b")], true, [])).toBeUndefined();
+  });
+});

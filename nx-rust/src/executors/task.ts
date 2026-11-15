@@ -61,7 +61,7 @@ import {
   printCommand,
   taskRunsVerbosely,
 } from "./cargo-invocation";
-import { checkDigests, DigestCheck, DigestWrite, writeDigests } from "./digests";
+import { checkDigests, DigestCheck, DigestWrite, heldMembers, writeDigests } from "./digests";
 import { dotenvProblem } from "./dotenv-check";
 import {
   cargoTaskEnvironment,
@@ -557,19 +557,29 @@ export function prepareTask(
   let digests: DigestStep | undefined;
   if (metadata.target === "lockfile") {
     digests = { kind: "write", lockfile, folder, commandFolder, members: metadata.members ?? [] };
-  } else if (
-    metadata.digests !== undefined &&
-    keyHoldsDigests(context, cargo.workspaceManifest, env)
-  ) {
-    digests = {
-      kind: "check",
-      task,
-      lockfile,
-      folder,
-      commandFolder,
-      members: metadata.digests,
-      workspace: workspaceRoot,
-    };
+  } else if (metadata.digests !== undefined) {
+    const lockfileTask = keyHoldsDigests(context, cargo.workspaceManifest, env);
+    if (lockfileTask !== undefined) {
+      const members = heldMembers(
+        metadata.digests,
+        metadata.everyDigest === true,
+        lockfileTask.members,
+      );
+      if (members === undefined) {
+        throw new TaskError(
+          `${task}: the cache key of this task holds the digests of every member of its Cargo workspace, ${workspaceRoot === "." ? "at the repository root" : `in ${workspaceRoot}`}, but the metadata of the lockfile task ${lockfileTask.id} names no member, so nx-rust cannot check them after cargo's call. The task does not run, so that Nx stores no result for it. Run \`nx reset\` so that Nx creates the project graph again.`,
+        );
+      }
+      digests = {
+        kind: "check",
+        task,
+        lockfile,
+        folder,
+        commandFolder,
+        members,
+        workspace: workspaceRoot,
+      };
+    }
   }
   const tool = targetTools[metadata.target];
   if (tool !== undefined) {
@@ -791,7 +801,9 @@ function directoryReport(
 /**
  * Whether the key of a task whose target hashes digests holds them, so that
  * the task checks them after cargo's call (`DES-LOCKFILE-HASHING`,
- * "Post-check"). A run that excludes task dependencies, which the plugin's
+ * "Post-check"): the lockfile task that it depends on, by its id, with the
+ * members that its metadata names, from which a key that holds every
+ * member's digest takes them, or `undefined`. A run that excludes task dependencies, which the plugin's
  * hook marks with a new `NX_RUST_RUN_ID`, runs no lockfile task, and the
  * task's key, which holds that value, is never computed again, so nothing
  * is checked. A task invoked outside a task graph that holds it, such as
@@ -808,39 +820,40 @@ function keyHoldsDigests(
   context: ExecutorContext,
   workspaceManifest: string,
   env: NodeJS.ProcessEnv,
-): boolean {
+): { id: string; members?: PackageVersion[] } | undefined {
   if ((env[runIdVariable] ?? "") !== "") {
-    return false;
+    return undefined;
   }
   const graphTask = graphTaskOf(context);
   if (graphTask === undefined) {
-    return false;
+    return undefined;
   }
   const projects = context.projectsConfigurations?.projects ?? {};
   // An edge is an object with the task's id; older task graphs held the id itself.
   const edges: unknown[] = context.taskGraph?.dependencies?.[graphTask.id] ?? [];
-  const dependsOnLockfile = edges.some((edge) => {
+  for (const edge of edges) {
     const id = typeof edge === "string" ? edge : (edge as { id?: string } | null)?.id;
     const dependency = id === undefined ? undefined : context.taskGraph?.tasks?.[id]?.target;
     const project = dependency === undefined ? undefined : projects[dependency.project];
     const target = project?.targets?.[dependency?.target ?? ""];
-    return (
-      targetMetadata(target?.metadata?.[targetCargoMetadataKey])?.target === "lockfile" &&
+    const metadata = targetMetadata(target?.metadata?.[targetCargoMetadataKey]);
+    if (
+      id !== undefined &&
+      metadata?.target === "lockfile" &&
       project !== undefined &&
       cargoMetadataOf(project)?.workspaceManifest === workspaceManifest
-    );
-  });
-  if (!dependsOnLockfile) {
-    const task = `${context.projectName ?? ""}:${context.targetName ?? ""}`;
-    const folder = dirname(workspaceManifest);
-    throw new TaskError(
-      [
-        `${task}: this task does not depend on the lockfile task of its Cargo workspace, ${folder === "." ? "at the repository root" : `in ${folder}`}, so its cache key holds no digest of the crate's locked dependencies, and Nx could restore its result after Cargo.lock has changed. The task does not run, so that Nx stores no result for it.`,
-        `Make sure that the workspace's folder is an Nx project with the plugin's lockfile target, and that no configuration replaces the dependsOn of ${task}: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry. A run with --exclude-task-dependencies runs the task without the lockfile task, and Nx never restores what it stores then.`,
-      ].join("\n"),
-    );
+    ) {
+      return { id, ...(metadata.members === undefined ? {} : { members: metadata.members }) };
+    }
   }
-  return true;
+  const task = `${context.projectName ?? ""}:${context.targetName ?? ""}`;
+  const folder = dirname(workspaceManifest);
+  throw new TaskError(
+    [
+      `${task}: this task does not depend on the lockfile task of its Cargo workspace, ${folder === "." ? "at the repository root" : `in ${folder}`}, so its cache key holds no digest of the crate's locked dependencies, and Nx could restore its result after Cargo.lock has changed. The task does not run, so that Nx stores no result for it.`,
+      `Make sure that the workspace's folder is an Nx project with the plugin's lockfile target, and that no configuration replaces the dependsOn of ${task}: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry. A run with --exclude-task-dependencies runs the task without the lockfile task, and Nx never restores what it stores then.`,
+    ].join("\n"),
+  );
 }
 
 /**
@@ -1330,6 +1343,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
     directoryVariables: variables,
     members,
     digests,
+    everyDigest,
     records,
     waitsForBuild,
   } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
@@ -1351,6 +1365,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
           : {}),
         ...(isPackageList(members) ? { members } : {}),
         ...(isPackageList(digests) ? { digests } : {}),
+        ...(everyDigest === true ? { everyDigest } : {}),
         ...(isRecordSource(records) ? { records } : {}),
         ...(waitsForBuild === true ? { waitsForBuild } : {}),
       }

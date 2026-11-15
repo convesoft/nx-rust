@@ -1,5 +1,15 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   applyFileChanges,
@@ -192,8 +202,9 @@ describe("the lockfile task", () => {
       "Cargo.lock missing",
       "missing",
       // Cargo locks the newest zzlib, which model and api use, and the same
-      // yylib; codegen and testkit keep their digests and are restored.
-      ["api", "model"],
+      // yylib. codegen and testkit keep their digests, but under the
+      // workspace-build strategy every member's key holds model's.
+      ["api", "codegen", "model", "testkit"],
     ],
   ])(
     "updates or creates the lockfile with %s as cargo build would, and runs the crates whose dependencies changed",
@@ -345,7 +356,7 @@ describe("nx affected after a change to Cargo.lock", () => {
     ["without the daemon", pluginWorkers],
     ["with the daemon", { NX_DAEMON: "true" }],
   ])(
-    "selects the cached targets of that workspace's crates and none of the other workspace, runs those whose dependencies changed and restores the others, %s",
+    "selects the cached targets of that workspace's crates and none of the other workspace, and runs them all under the workspace-build strategy, %s",
     async (_case, daemon) => {
       // app, in the workspace at the root, depends on util and on zzlib;
       // tools and scaffold form the other workspace.
@@ -378,8 +389,12 @@ describe("nx affected after a change to Cargo.lock", () => {
         for (const task of ["tools:test", "scaffold:test", "tools:lockfile"]) {
           expect(run.output).not.toContain(`nx run ${task}`);
         }
-        expect(ran(workspace)).toEqual([`.: test -p ${packageSpec(workspace.root, ".", "app")}`]);
-        expect(restored(run.output, "util:test")).toBe(true);
+        // util does not reach zzlib, but its key holds app's digest
+        // (DES-INPUTS, "Whole-workspace builds").
+        expect(ran(workspace)).toEqual(
+          ["app", "util"].map((crate) => `.: test -p ${packageSpec(workspace.root, ".", crate)}`),
+        );
+        expect(restored(run.output, "util:test")).toBe(false);
       } finally {
         if (daemon.NX_DAEMON === "true") {
           await workspace.nx(["daemon", "--stop"], { ...env, ...daemon });
@@ -706,6 +721,123 @@ describe("the check after cargo's call", () => {
         hold.release();
         hold.remove();
         workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each<[string, string[], Env]>([
+    ["", [], {}],
+    [", also in a batch", ["--batch"], {}],
+    [", and with NX_CACHE_FAILURES=true stores the failure", [], { NX_CACHE_FAILURES: "true" }],
+  ])(
+    "fails a task whose own digest stays the same while another member's changes during the run, under the workspace-build strategy, and the next run builds it under a new key%s",
+    async (_case, flags, cacheFailures) => {
+      // The workspace of EVD-HAKARI-UNIFICATION, "A sibling's lockfile
+      // change": a depends on the member c, and b on g, a crate in a git
+      // repository whose first commit asks c for fx and whose second for fy;
+      // the workspace's [patch] gives g's c the member's path. Moving g to
+      // the second commit changes only g's source in Cargo.lock, which b
+      // reaches and a does not, while a build of the whole workspace then
+      // compiles a with fy.
+      const repository = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-g-")));
+      const commits = ["fx", "fy"].map((feature) => {
+        mkdirSync(join(repository, "src"), { recursive: true });
+        writeFileSync(
+          join(repository, "Cargo.toml"),
+          `[package]\nname = "g"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nc = { version = "0.1", features = ["${feature}"] }\n`,
+        );
+        writeFileSync(join(repository, "src", "lib.rs"), "");
+        const run = (...args: string[]) =>
+          execFileSync(
+            "git",
+            ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args],
+            { cwd: repository, env: testEnvironment(), encoding: "utf8", stdio: "pipe" },
+          );
+        if (!existsSync(join(repository, ".git"))) {
+          run("init", "-q");
+        }
+        run("add", "-A");
+        run("commit", "-q", "-m", feature);
+        return run("rev-parse", "HEAD").trim();
+      });
+      const crate = (name: string, ...lines: string[]) =>
+        [
+          `[package]`,
+          `name = "${name}"`,
+          'version = "0.1.0"',
+          'edition = "2024"',
+          "",
+          ...lines,
+          "",
+        ].join("\n");
+      const workspace = FixtureWorkspace.create("subfolder-workspace", {
+        "sibling/Cargo.toml":
+          '[workspace]\nmembers = ["a", "b", "c"]\nresolver = "2"\n\n[patch.crates-io]\nc = { path = "c" }\n',
+        "sibling/a/Cargo.toml": crate("a", "[dependencies]", 'c = { path = "../c" }'),
+        "sibling/a/src/lib.rs": "pub fn features() -> &'static str {\n    c::features()\n}\n",
+        "sibling/b/Cargo.toml": crate(
+          "b",
+          "[dependencies]",
+          `g = { git = "file://${repository}" }`,
+        ),
+        "sibling/b/src/lib.rs": "",
+        "sibling/c/Cargo.toml": crate("c", "[features]", "fx = []", "fy = []"),
+        "sibling/c/src/lib.rs":
+          'pub fn features() -> &\'static str {\n    if cfg!(feature = "fy") {\n        "fy"\n    } else if cfg!(feature = "fx") {\n        "fx"\n    } else {\n        "none"\n    }\n}\n',
+      });
+      const hold = holdCargo("build");
+      try {
+        cargo(workspace, "sibling", "generate-lockfile");
+        cargo(workspace, "sibling", "update", "-p", "g", "--precise", commits[0]);
+        const first = read(workspace, "sibling/Cargo.lock");
+        const raced = nx(workspace, ["run", "a:build", ...flags], {
+          ...hold.env,
+          ...cacheFailures,
+        });
+        await hold.held();
+        cargo(workspace, "sibling", "update", "-p", "g", "--precise", commits[1]);
+        const second = read(workspace, "sibling/Cargo.lock");
+        // Only g's source line changed, which a does not reach.
+        expect(second).not.toBe(first);
+        expect(second.replace(commits[1], commits[0])).toBe(first);
+        hold.release();
+        const run = await raced;
+
+        const build = [`sibling: build -p ${packageSpec(workspace.root, "sibling", "a")}`];
+        expect(run.status).toBe(1);
+        expect(ran(workspace)).toEqual(build);
+        expect(run.output).toContain("a:build: the locked dependencies of b had the digest");
+        expect(run.output).toContain("now Cargo.lock gives");
+
+        // With the first lockfile back, Nx replays the failure where it
+        // stores failures, without running cargo (Nx 24 marks no replayed
+        // failure as restored), and otherwise has nothing to restore.
+        writeFileSync(join(workspace.root, "sibling", "Cargo.lock"), first);
+        const again = await nx(workspace, ["run", "a:build"], cacheFailures);
+        expect({
+          status: again.status,
+          ran: ran(workspace),
+          failure: again.output.includes("a:build: the locked dependencies of b had the digest"),
+        }).toEqual(
+          cacheFailures.NX_CACHE_FAILURES === "true"
+            ? { status: 1, ran: [], failure: true }
+            : { status: 0, ran: build, failure: false },
+        );
+
+        // With the second, a builds under a new key, and the result is stored.
+        writeFileSync(join(workspace.root, "sibling", "Cargo.lock"), second);
+        const next = await nx(workspace, ["run", "a:build"]);
+        expect(next.status).toBe(0);
+        expect(ran(workspace)).toEqual(build);
+        const stored = await nx(workspace, ["run", "a:build"]);
+        expect(restored(stored.output, "a:build")).toBe(true);
+        expect(ran(workspace)).toEqual([]);
+      } finally {
+        hold.release();
+        hold.remove();
+        workspace.remove();
+        rmSync(repository, { recursive: true, force: true });
       }
     },
     HARNESS_TIMEOUT,

@@ -259,8 +259,14 @@ Under `hakari` a crate's key holds the hack crate's manifest and
 `workspace-build` and `cargo`, which build with the features of the whole
 workspace, it holds what any member can change: every member's manifest, the
 locked packages of every member, and the path crates outside the workspace
-that any member uses. A change to `Cargo.lock` then runs every crate of the
-workspace again ([Caching](caching.mara.md#lockfile-changes)).
+that any member uses. A change to `Cargo.lock` that moves any member's
+packages, or to such a crate, then runs every crate of the workspace again
+([Caching](caching.mara.md#lockfile-changes)). The key does not hold the
+other members' sources: a compile error in another member fails the `test`
+tasks that run in the same cargo command, but a crate's cached result, which
+says that its own tests passed, is still restored. With
+`NX_CACHE_FAILURES=true`, such a failure is stored under a key that does not
+hold its cause ([What is stored](caching.mara.md#what-is-stored)).
 
 ## Feature sets and target triples
 

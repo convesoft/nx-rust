@@ -235,14 +235,12 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
     },
     before: { prepare: lockedAt("rust", "yylib", "1.0.0") },
     after: { prepare: lockedAt("rust", "yylib", "1.0.1") },
-    keys: {
-      "model:test": "must differ",
-      "api:test": "must differ",
-      "codegen:test": "must not differ",
-    },
+    // Under the workspace-build strategy, codegen's key holds model's digest too.
+    keys: { "model:test": "must differ", "api:test": "must differ", "codegen:test": "must differ" },
   },
   {
-    change: "a change of only the commit of a git dependency",
+    change:
+      "a change of only the commit of a git dependency, also for a member that does not reach it, under the workspace-build strategy",
     fixture: "subfolder-workspace",
     lockfileTask: true,
     base: {
@@ -260,7 +258,10 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
       prepare: (workspace, stateEnv) =>
         lockedAt("rust", "gitlib", gitCommits[1])(workspace, stateEnv),
     },
-    keys: { "model:test": "must differ", "testkit:test": "must not differ" },
+    // A new commit of a package that only another member reaches can switch
+    // on a feature of a shared dependency in a build of the whole workspace
+    // (EVD-HAKARI-UNIFICATION, "A sibling's lockfile change").
+    keys: { "model:test": "must differ", "testkit:test": "must differ" },
   },
   {
     change:
@@ -332,11 +333,9 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
         }
       },
     },
-    keys: {
-      "model:test": "must differ",
-      "api:test": "must differ",
-      "testkit:test": "must not differ",
-    },
+    // testkit does not reach vvlib; under the workspace-build strategy its
+    // key holds model's digest all the same.
+    keys: { "model:test": "must differ", "api:test": "must differ", "testkit:test": "must differ" },
   },
   {
     change:
@@ -373,55 +372,68 @@ describeCacheKeyMatrix("keys with the lockfile task: must differ after", [
   },
 ]);
 
-describeCacheKeyMatrix("keys with the lockfile task: must not differ after", [
-  {
-    change: "a locked version bump of an external crate outside the crate's resolved dependencies",
-    fixture: "subfolder-workspace",
-    lockfileTask: true,
-    base: subfolderBase,
-    before: { prepare: lockedAt("rust", "yylib", "1.0.0") },
-    after: { prepare: lockedAt("rust", "yylib", "1.0.1") },
-    keys: {
-      ...all(
-        compiling.map((target) => `model:${target}`),
-        "must not differ",
-      ),
-      "codegen:test": "must not differ",
+// Under the workspace-build strategy, which every workspace uses until the
+// strategies of DES-UNIFICATION are implemented, a crate's key holds the
+// digests of every member of its workspace (DES-INPUTS, "Whole-workspace
+// builds"). Under hakari these rows must not differ (nxr-k64tm5).
+describeCacheKeyMatrix(
+  "keys with the lockfile task under the workspace-build strategy: must differ after",
+  [
+    {
+      change:
+        "a locked version bump of an external crate outside the crate's resolved dependencies, which only other members reach",
+      fixture: "subfolder-workspace",
+      lockfileTask: true,
+      base: subfolderBase,
+      before: { prepare: lockedAt("rust", "yylib", "1.0.0") },
+      after: { prepare: lockedAt("rust", "yylib", "1.0.1") },
       // testkit uses yylib, and api dev-depends on testkit.
-      "testkit:test": "must differ",
-      "api:test": "must differ",
-    },
-  },
-  {
-    change:
-      "such a bump for the crate at the root of its workspace and for a crate that depends on it",
-    // tools is the crate of tools/'s root manifest; extra is a member that
-    // tools does not depend on, and consumer a member that depends on tools.
-    fixture: "two-workspaces",
-    lockfileTask: true,
-    base: {
-      files: {
-        "tools/Cargo.toml": (manifest) =>
-          (manifest ?? "").replace(
-            'members = ["scaffold"]',
-            'members = ["scaffold", "extra", "consumer"]',
-          ),
-        ...crate("tools/extra", "extra", 'zzlib = "1"'),
-        ...crate("tools/consumer", "consumer", 'tools = { path = ".." }'),
+      keys: {
+        ...all(
+          compiling.map((target) => `model:${target}`),
+          "must differ",
+        ),
+        "codegen:test": "must differ",
+        "testkit:test": "must differ",
+        "api:test": "must differ",
+        "rust:doc": "must differ",
+        "model:fmt-check": "must not differ",
       },
-      env,
     },
-    before: { prepare: lockedAt("tools", "zzlib", "1.0.0") },
-    after: { prepare: lockedAt("tools", "zzlib", "1.0.1") },
-    keys: {
-      "tools:test": "must not differ",
-      "tools:build": "must not differ",
-      "scaffold:test": "must not differ",
-      "consumer:test": "must not differ",
-      "app:test": "must not differ",
-      "extra:test": "must differ",
+    {
+      change:
+        "such a bump for the crate at the root of its workspace and for a crate that depends on it, and for no crate of another workspace",
+      // tools is the crate of tools/'s root manifest; extra is a member that
+      // tools does not depend on, and consumer a member that depends on tools.
+      fixture: "two-workspaces",
+      lockfileTask: true,
+      base: {
+        files: {
+          "tools/Cargo.toml": (manifest) =>
+            (manifest ?? "").replace(
+              'members = ["scaffold"]',
+              'members = ["scaffold", "extra", "consumer"]',
+            ),
+          ...crate("tools/extra", "extra", 'zzlib = "1"'),
+          ...crate("tools/consumer", "consumer", 'tools = { path = ".." }'),
+        },
+        env,
+      },
+      before: { prepare: lockedAt("tools", "zzlib", "1.0.0") },
+      after: { prepare: lockedAt("tools", "zzlib", "1.0.1") },
+      keys: {
+        "tools:test": "must differ",
+        "tools:build": "must differ",
+        "scaffold:test": "must differ",
+        "consumer:test": "must differ",
+        "extra:test": "must differ",
+        "app:test": "must not differ",
+      },
     },
-  },
+  ],
+);
+
+describeCacheKeyMatrix("keys with the lockfile task: must not differ after", [
   {
     change:
       "a bump in the lockfile of a standalone crate, for a crate of another workspace that depends on it",

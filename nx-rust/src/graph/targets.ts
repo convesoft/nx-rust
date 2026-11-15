@@ -145,12 +145,21 @@ export interface TargetCargoMetadata {
    */
   members?: PackageVersion[];
   /**
-   * On a cached target that depends on the lockfile task: the members whose
-   * digests its key holds, the crate itself or, on `doc`, every member. The
-   * executor computes them again after cargo's call (`DES-LOCKFILE-HASHING`,
-   * "Post-check").
+   * On a cached target that depends on the lockfile task: the crate's own
+   * member, whose digest its key holds, or nothing for a workspace project
+   * without a crate. The executor computes the digests again after cargo's
+   * call, the crate's own first (`DES-LOCKFILE-HASHING`, "Post-check").
    */
   digests?: PackageVersion[];
+  /**
+   * On such a target whose key holds the digests of every member of its
+   * workspace (`holdsEveryDigest` in `inputs.ts`): the executor compares
+   * those of the other members as well, which it takes from the
+   * {@link TargetCargoMetadata.members} of the lockfile task that the task
+   * depends on. Naming them once per workspace, on the lockfile task, keeps
+   * the graph from carrying every member on every target.
+   */
+  everyDigest?: boolean;
   /**
    * On a crate's `build`: what the executor names the dependency files of
    * the crate's library and binaries from, which it compares with the

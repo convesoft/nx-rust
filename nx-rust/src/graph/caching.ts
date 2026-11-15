@@ -22,6 +22,7 @@ import {
   InputSettings,
   InputSubject,
   lockfileInputs,
+  holdsEveryDigest,
   pluginVersionInput,
   repositoryDefaultInputs,
   targetInputs,
@@ -85,7 +86,8 @@ export interface CacheContext extends InputContext {
  * found need beyond each project: how the plugin's version reaches the keys,
  * the crates without a project that path dependencies and redirections
  * reach, the redirected crates whose edges are left out with the crates
- * that cargo builds with them, and where each
+ * that cargo builds with them, the path crates outside each workspace that
+ * a build of the whole workspace compiles, and where each
  * workspace's artifact directory lies; and the warnings of `DES-DIAGNOSTICS`
  * that these give, together with those about Cargo directories that Nx reads
  * ({@link unignoredDirectoryWarnings}), which it also prints, each once. A
@@ -139,6 +141,10 @@ export async function cacheContext(
   }
   const pathDependencyInputs = new Map<string, Input[]>();
   const redirectedInputs = new Map<string, Input[]>();
+  const outsideCrateInputs = new Map<string, Input[]>();
+  for (const [key, crates] of folders.outsideWorkspace) {
+    outsideCrateInputs.set(key, uniqueInputs(crates.flatMap(crateInputs)));
+  }
   const repositoryRoot = realPath(workspaceRoot);
   for (const workspace of discovery.workspaces) {
     for (const crate of workspace.members) {
@@ -234,6 +240,7 @@ export async function cacheContext(
     repositoryDefault: repositoryDefaultInputs(nxJson?.namedInputs),
     pathDependencyInputs,
     redirectedInputs,
+    outsideCrateInputs,
     declaredFileProblems: folders.problems,
     declaredPatterns: folders.patterns,
     pathPackageManifests: pathPackageManifests(discovery),
@@ -348,12 +355,15 @@ export interface CacheOptions {
  * A target that stays cached, other than `fmt-check`, depends on the
  * lockfile task of its workspace, the project at the workspace's root
  * folder, and hashes the digests it writes; where the workspace has no
- * lockfile task, such a target is left uncached instead; its metadata names the members
- * whose digests those are, for the executor's check after cargo's call
- * (`DES-LOCKFILE-HASHING`). It is the one dependency of a crate's target on
- * a task of another project (`REQ-NO-RUST-TASK-DEPS`); the one on a task of
- * the crate itself, of `test` on `build`, comes from `inferTargets` in
- * `targets.ts`.
+ * lockfile task, such a target is left uncached instead. Its metadata names
+ * the crate's own member and, with `everyDigest`, says that its key holds
+ * every member's digest, as `holdsEveryDigest` decides, for the executor's
+ * check after cargo's call, which compares each of them, the other members
+ * as the lockfile task's metadata names them (`DES-LOCKFILE-HASHING`,
+ * "Post-check"). It is the one dependency of a
+ * crate's target on a task of another project (`REQ-NO-RUST-TASK-DEPS`);
+ * the one on a task of the crate itself, of `test` on `build`, comes from
+ * `inferTargets` in `targets.ts`.
  */
 // @mara implements DES-INPUTS
 // @mara implements DES-OUTPUTS
@@ -419,8 +429,10 @@ export function configureCaching(
     if (readsDigest) {
       target.dependsOn = [lockfileDependency(workspaceRoot, options.lockfileTarget ?? "lockfile")];
       if (metadata !== undefined) {
-        metadata.digests =
-          name === "doc" || subject.pkg === undefined ? members : [packageVersion(subject.pkg)];
+        metadata.digests = subject.pkg === undefined ? [] : [packageVersion(subject.pkg)];
+        if (subject.pkg === undefined || holdsEveryDigest(name, subject, settings)) {
+          metadata.everyDigest = true;
+        }
       }
     }
     const inputs =

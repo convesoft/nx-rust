@@ -683,10 +683,17 @@ describe("declared files", () => {
           changed: "shared/input.txt",
         });
 
+        // Under the workspace-build strategy the cached targets of other,
+        // which reads digests, hold the file too, as a file that a crate
+        // outside the workspace declares (DES-INPUTS).
+        const selected = [
+          ...apiAndDependents,
+          ...["build", "check", "lint", "test"].map((target) => `other:${target}`),
+        ].sort();
         expect(outcome).toEqual({
           keysDiffer: bothDiffer,
-          afterCommit: apiAndDependents,
-          withFiles: apiAndDependents,
+          afterCommit: selected,
+          withFiles: selected,
         });
       },
       HARNESS_TIMEOUT,

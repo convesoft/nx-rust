@@ -6,8 +6,9 @@ import {
   knownCargoDirectories,
   pluginProjectRoots,
 } from "./declared-files";
-import type { CargoDiscovery } from "./discovery";
+import type { CargoDiscovery, CargoWorkspace } from "./discovery";
 import type { Input, InputDefinition } from "./inputs";
+import { projectsReachedByPath } from "./reached-projects";
 import { realPath } from "./real-path";
 import type { RedirectedUse } from "./redirected-uses";
 import { readCrateAddedInputs, readCrateFileInputs } from "./settings";
@@ -64,6 +65,20 @@ export interface CrateFolders {
    * go onto the crate's targets.
    */
   leftOutEdges: Map<string, PathDependency[]>;
+  /**
+   * The path crates outside a crate's workspace that any member of the
+   * workspace reaches, with a project or without, which a build of the
+   * whole workspace compiles with the crate (`DES-INPUTS`, "Crates outside
+   * the workspace"), without those whose folders the crate's inputs hold
+   * already, by the key of `wholeWorkspaceKey` in `inputs.ts`: the crate's
+   * manifest, or the root manifest of a virtual workspace for its
+   * workspace project. Each comes as a path dependency without a project
+   * does: its folder, the root manifest of its workspace and its declared
+   * files where Nx sees them, and the variables and commands it adds, also
+   * where Nx does not. Under the `cargo` and `workspace-build` strategies
+   * they go onto the targets that read digests.
+   */
+  outsideWorkspace: Map<string, PathDependency[]>;
   /**
    * The problems of the declared files of those crates, each once, which
    * stop graph creation (`declaredFiles` in `declared-files.ts`).
@@ -198,11 +213,22 @@ export async function findCrateFolders(
     reached.set(member, [...(reached.get(member) ?? []), ...crates]);
   }
 
+  // The crates outside each workspace that its members reach, by the
+  // workspace's root manifest.
+  const outsideReached = new Map<string, Reached[]>();
+  for (const workspace of discovery.workspaces) {
+    outsideReached.set(
+      join(workspace.report.workspace_root, "Cargo.toml"),
+      outsideCrates(workspace, uses, byRealFolder),
+    );
+  }
+
   const located = locate(reached);
   const locatedBehind = locate(behindLeftOut);
+  const locatedOutside = locate(outsideReached);
   const seen = await foldersNxSees(workspaceRoot, [
     ...new Set(
-      [...located.values(), ...locatedBehind.values()]
+      [...located.values(), ...locatedBehind.values(), ...locatedOutside.values()]
         .flat()
         .map((crate) => crate.inside)
         .filter((path): path is string => path !== undefined),
@@ -225,7 +251,92 @@ export async function findCrateFolders(
       crates.filter((crate) => !folders.has(crate.folder) && folders.add(crate.folder)),
     );
   }
-  return { withoutProject, leftOutEdges, problems: [...problems], patterns };
+  // The crates with a project that each crate has an edge to, by its
+  // manifest path, worked out once.
+  const useEdges = new Map<string, string[]>();
+  for (const use of uses) {
+    if (use.edge && use.projectRoot !== undefined) {
+      const member = use.member.manifest_path;
+      useEdges.set(member, [...(useEdges.get(member) ?? []), use.folder]);
+    }
+  }
+  const edgesOf = new Map<string, string[]>();
+  const outsideWorkspace = new Map<string, PathDependency[]>();
+  for (const workspace of discovery.workspaces) {
+    const rootManifest = join(workspace.report.workspace_root, "Cargo.toml");
+    const crates = (locatedOutside.get(rootManifest) ?? []).map((crate) => pathDependency(crate));
+    for (const key of new Set([
+      ...workspace.members.map((pkg) => pkg.manifest_path),
+      rootManifest,
+    ])) {
+      if (crates.length === 0) {
+        outsideWorkspace.set(key, []);
+        continue;
+      }
+      const held = heldFolders(key, workspace, rootManifest);
+      outsideWorkspace.set(
+        key,
+        crates.filter((crate) => !held.has(crate.folder)),
+      );
+    }
+  }
+  return { withoutProject, leftOutEdges, outsideWorkspace, problems: [...problems], patterns };
+
+  // The folders, as `PathDependency.folder` names them, that the inputs of
+  // the project whose crate's manifest, or whose workspace's root manifest,
+  // is `key` hold already (`DES-INPUTS`, "Crates outside the workspace"):
+  // those of the crates without a project and the left-out edges on its
+  // own targets, and through its `^` inputs those of every project that it
+  // reaches through edges, to any depth, with the crates without a project
+  // in their named inputs. The edges are those of `projectEdges` in
+  // `edges.ts` that this entry knows: path dependencies, the redirected
+  // uses with an edge, and from a workspace project to each member.
+  function heldFolders(key: string, workspace: CargoWorkspace, rootManifest: string): Set<string> {
+    const held = new Set<string>();
+    const name = (folder: string) => inside(repositoryRoot, folder) ?? folder;
+    const start = workspace.members.filter(
+      (pkg) => pkg.manifest_path === key || key === rootManifest,
+    );
+    for (const crate of leftOutEdges.get(key) ?? []) {
+      held.add(crate.folder);
+    }
+    const visited = new Set(start.map((pkg) => realPath(dirname(pkg.manifest_path))));
+    for (const folder of visited) {
+      held.add(name(folder));
+    }
+    const queue = [...start];
+    while (queue.length > 0) {
+      const pkg = queue.shift();
+      for (const crate of withoutProject.get(pkg.manifest_path) ?? []) {
+        held.add(crate.folder);
+      }
+      let edges = edgesOf.get(pkg.manifest_path);
+      if (edges === undefined) {
+        edges = [
+          ...projectsReachedByPath(
+            pkg,
+            (folder) => withProject.has(folder),
+            byRealFolder,
+            realPath,
+          ),
+          ...(useEdges.get(pkg.manifest_path) ?? []),
+        ];
+        edgesOf.set(pkg.manifest_path, edges);
+      }
+      for (const folder of edges) {
+        if (visited.has(folder)) {
+          continue;
+        }
+        visited.add(folder);
+        held.add(name(folder));
+        const next = byRealFolder.get(folder);
+        if (next !== undefined) {
+          queue.push(next);
+        }
+      }
+    }
+    return held;
+  }
 
   // Each folder once per crate, relative to the repository root where it
   // lies inside.
@@ -405,6 +516,59 @@ function reachedWithoutProject(
       reached.push({ name: pkg?.name ?? dependency.name, folder });
       if (pkg !== undefined) {
         queue.push(pkg);
+      }
+    }
+  }
+  return reached;
+}
+
+// The path crates outside `workspace` that its members reach, each once, in
+// the order the walk meets them, by package name and the real path of its
+// folder (`DES-INPUTS`, "Crates outside the workspace"): through the path
+// dependencies of every kind of each member, the members without a project
+// included, and the redirected crates that any member may use (`uses`), and
+// behind those through normal and build path dependencies, through any
+// number of crates with a project or without. A member is never among them;
+// the walk goes on from each member as from the first. A crate that no
+// report describes counts, and what it depends on stays unknown.
+function outsideCrates(
+  workspace: CargoWorkspace,
+  uses: readonly RedirectedUse[],
+  known: ReadonlyMap<string, CargoPackage>,
+): { name: string; folder: string; via: PathDependency["via"] }[] {
+  const ids = new Set(workspace.report.workspace_members);
+  const members = workspace.report.packages.filter((pkg) => ids.has(pkg.id));
+  const reached: { name: string; folder: string; via: PathDependency["via"] }[] = [];
+  const visited = new Set(members.map((pkg) => realPath(dirname(pkg.manifest_path))));
+  const queue: { pkg: CargoPackage; via: PathDependency["via"] }[] = [];
+  const reach = (folder: string, name: string, via: PathDependency["via"]) => {
+    if (visited.has(folder)) {
+      return;
+    }
+    visited.add(folder);
+    const pkg = known.get(folder);
+    reached.push({ name: pkg?.name ?? name, folder, via });
+    if (pkg !== undefined) {
+      queue.push({ pkg, via });
+    }
+  };
+  for (const member of members) {
+    for (const dependency of member.dependencies) {
+      if (typeof dependency.path === "string") {
+        reach(realPath(dependency.path), dependency.name, "path");
+      }
+    }
+  }
+  for (const use of uses) {
+    if (use.workspace === workspace) {
+      reach(use.folder, basename(use.folder), "redirection");
+    }
+  }
+  while (queue.length > 0) {
+    const { pkg, via } = queue.shift();
+    for (const dependency of pkg.dependencies) {
+      if (typeof dependency.path === "string" && dependency.kind !== "dev") {
+        reach(realPath(dependency.path), dependency.name, via);
       }
     }
   }

@@ -52,6 +52,36 @@ export interface DigestWrite {
   members: PackageVersion[];
 }
 
+/**
+ * The members whose digests a task's key holds, in the order the check
+ * after cargo's call compares them ({@link checkDigests}): those that the
+ * target's metadata names, the crate's own, and where the metadata says
+ * that the key holds every member's digest (`everyDigest`), each other
+ * member of the workspace as its lockfile task's metadata names them
+ * (`DES-LOCKFILE-HASHING`, "Post-check"). So the check names the crate's own
+ * digest where that changed, and another member's only where the crate's
+ * stayed the same.
+ *
+ * @param workspaceMembers The members that the lockfile task writes digests for.
+ * @returns `undefined` where the key holds every member's digest but the
+ *   lockfile task names no member, so that the list cannot be known.
+ */
+// @mara implements DES-LOCKFILE-HASHING
+export function heldMembers(
+  own: readonly PackageVersion[],
+  everyDigest: boolean,
+  workspaceMembers: readonly PackageVersion[] | undefined,
+): PackageVersion[] | undefined {
+  if (!everyDigest) {
+    return [...own];
+  }
+  if (workspaceMembers === undefined || workspaceMembers.length === 0) {
+    return undefined;
+  }
+  const names = new Set(own.map((member) => member.name));
+  return [...own, ...workspaceMembers.filter((member) => !names.has(member.name))];
+}
+
 /** How old a private copy may get before a lockfile task removes it, in milliseconds. */
 export const commandCopyLifetime = 24 * 60 * 60 * 1000;
 

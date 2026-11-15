@@ -8,6 +8,7 @@ import { listsPackage } from "../src/graph/plugin-package";
 import {
   FileChanges,
   FixtureGraph,
+  FixtureName,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
@@ -171,14 +172,27 @@ describe("caching", () => {
         });
       }
 
-      // The crate's digest from the workspace's lockfile task, on which the
-      // target depends, and no Cargo.lock as a file (DES-LOCKFILE-HASHING).
+      // Every member's digest from the workspace's lockfile task, on which
+      // the target depends, under the workspace-build strategy, and no
+      // Cargo.lock as a file (DES-LOCKFILE-HASHING). The metadata names the
+      // crate's own member and says that the post-check compares every
+      // member's, which the lockfile task's metadata names once.
       for (const name of ["build", "check", "lint", "test"]) {
         expect(inputsOf(api.targets[name], "dependentTasksOutputFiles")).toEqual([
-          { dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/rust/api.digest" },
+          { dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/rust/*.digest" },
         ]);
         expect(api.targets[name].dependsOn).toEqual([lockfileDependency("rust")]);
+        expect({ name, metadata: api.targets[name].metadata?.cargo }).toEqual({
+          name,
+          metadata: expect.objectContaining({
+            digests: [{ name: "api", version: "0.1.0" }],
+            everyDigest: true,
+          }),
+        });
       }
+      expect(graph.projects.rust.targets.lockfile.metadata?.cargo.members).toEqual(
+        ["api", "codegen", "model", "testkit"].map((crate) => ({ name: crate, version: "0.1.0" })),
+      );
       for (const name of ["fmt-check", "fmt"]) {
         expect(inputsOf(api.targets[name], "dependentTasksOutputFiles")).toEqual([]);
         expect(api.targets[name].dependsOn).toBeUndefined();
@@ -269,7 +283,7 @@ describe("caching", () => {
       ]) {
         const target = graph.projects[project].targets[name];
         const digest = {
-          dependentTasksOutputFiles: `.nx/workspace-data/nx-rust/lockfile/rust/${project}.digest`,
+          dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/rust/*.digest",
         };
         expect(target.cache).toBe(false);
         expect(target.dependsOn).toBeUndefined();
@@ -319,14 +333,14 @@ describe("caching", () => {
       expect(backend.targets.lockfile.dependsOn).toBeUndefined();
       expect(shared.targets.doc).toMatchObject({
         dependsOn: [lockfileDependency("shared")],
-        metadata: { cargo: { digests: [{ name: "model", version: "0.1.0" }] } },
+        metadata: { cargo: { digests: [], everyDigest: true } },
       });
       expect(inputsOf(shared.targets.doc, "dependentTasksOutputFiles")).toEqual([
         { dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/shared/*.digest" },
       ]);
-      // model's own targets read the digest of its home workspace.
+      // model's own targets read the digests of its home workspace.
       expect(inputsOf(graph.projects.model.targets.test, "dependentTasksOutputFiles")).toEqual([
-        { dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/shared/model.digest" },
+        { dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/shared/*.digest" },
       ]);
     },
     HARNESS_TIMEOUT,
@@ -448,8 +462,7 @@ describe("caching", () => {
       expect(inputsOf(graph.projects.xtask.targets.test, "fileset")).toEqual([]);
       expect(inputsOf(graph.projects.xtask.targets.test, "dependentTasksOutputFiles")).toEqual([
         {
-          dependentTasksOutputFiles:
-            ".nx/workspace-data/nx-rust/lockfile/tools%2Fxtask/xtask.digest",
+          dependentTasksOutputFiles: ".nx/workspace-data/nx-rust/lockfile/tools%2Fxtask/*.digest",
         },
       ]);
       // The root manifest is among the crate's files.
@@ -511,6 +524,72 @@ describe("caching", () => {
     },
     HARNESS_TIMEOUT,
   );
+
+  describe("under the workspace-build strategy", () => {
+    /** A member without dependencies in `folder`. */
+    const member = (folder: string): FileChanges => ({
+      [`${folder}/Cargo.toml`]: '[package]\nname = "other"\nversion = "0.1.0"\nedition = "2024"\n',
+      [`${folder}/src/lib.rs`]: "",
+    });
+    const digestTargets = ["build", "check", "lint", "test"];
+
+    it.each<[string, FixtureName, FileChanges, string[], Record<string, string[]>]>([
+      [
+        "behind another member's path dependency without a project",
+        "vendored-crate",
+        member("rust/crates/other"),
+        ["{workspaceRoot}/vendor/parser/**/*", "{workspaceRoot}/vendor/lexer/**/*"],
+        // lib holds them in its named input, and app and the workspace's
+        // doc through their edges to lib.
+        { other: digestTargets, lib: [], app: [], rust: [] },
+      ],
+      [
+        "of another workspace that another member depends on, with that workspace's root manifest",
+        "cross-workspace-path",
+        member("backend/crates/other"),
+        ["{workspaceRoot}/shared/crates/model/**/*", "{workspaceRoot}/shared/Cargo.toml"],
+        // server has an edge to model, and the workspace's doc one to server.
+        { other: digestTargets, server: [], backend: [] },
+      ],
+      [
+        "that a redirection puts in place of other members' registry dependencies",
+        "patched-workspaces",
+        {},
+        [
+          "{workspaceRoot}/third_party/fork/**/*",
+          "{workspaceRoot}/shared/crates/types/**/*",
+          "{workspaceRoot}/shared/Cargo.toml",
+        ],
+        // plain has no registry dependency; api may use fork, which has no
+        // project, so its named input holds it, and uses types through an
+        // edge. model, which the redirection names too, is a member.
+        { plain: digestTargets, api: [] },
+      ],
+    ])(
+      "gives the targets that read digests the folders of the path crates outside the workspace %s, once each, and no other target",
+      async (_case, fixture, files, folders, holding) => {
+        const graph = await loadFixtureGraph(fixture, { files });
+
+        for (const [project, targets] of Object.entries(holding)) {
+          for (const [name, target] of Object.entries(graph.projects[project].targets)) {
+            const inputs = fileInputs(target);
+            const held = folders.filter((folder) => inputs.includes(folder));
+            expect({ project, name, held }).toEqual({
+              project,
+              name,
+              held: targets.includes(name) ? folders : [],
+            });
+            expect({ project, name, repeated: inputs.length - new Set(inputs).size }).toEqual({
+              project,
+              name,
+              repeated: 0,
+            });
+          }
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
 
   it(
     "warns about a redirected crate without a project whose files Nx cannot see",

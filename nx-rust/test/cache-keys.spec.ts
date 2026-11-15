@@ -95,6 +95,12 @@ const assumedUseFiles: FileChanges = {
   "nx.json": excludedFromPlugin("shared/**"),
 };
 
+/** A member without dependencies in `folder`, which the workspace's `crates/*` takes in. */
+const otherMember = (folder: string): FileChanges => ({
+  [`${folder}/Cargo.toml`]: crate("other"),
+  [`${folder}/src/lib.rs`]: "",
+});
+
 const withLeaf: FileChanges = {
   "rust/crates/leaf/Cargo.toml": '[package]\nname = "leaf"\nversion = "0.1.0"\nedition = "2024"\n',
   "rust/crates/leaf/src/lib.rs": "",
@@ -155,12 +161,14 @@ describeCacheKeyMatrix("keys must differ after", [
       },
     },
     after: { files: { "rust/vendor/src/lib.rs": 'compile_error!("vendored source changed");\n' } },
+    // Under the workspace-build strategy, core-lib's key holds the folder as
+    // well, as a path crate outside the workspace that another member reaches.
     keys: {
       "cli:check": "must differ",
       "cli:build": "must differ",
       "cli:test": "must differ",
       "cli:lint": "must differ",
-      "core-lib:check": "must not differ",
+      "core-lib:check": "must differ",
     },
   },
   {
@@ -232,7 +240,7 @@ describeCacheKeyMatrix("keys must differ after", [
       ["paths", { "rust/.cargo/config.toml": 'paths = ["../vendor/itoa"]\n' }],
     ] as const
   ).map(([table, redirection]): CacheKeyRow => ({
-    change: `a change in a crate without a project that ${table} redirects to, for the members with a registry dependency and no other`,
+    change: `a change in a crate without a project that ${table} redirects to, for the members with a registry dependency, and under the workspace-build strategy for the others`,
     fixture: "subfolder-workspace",
     base: {
       files: {
@@ -254,10 +262,12 @@ describeCacheKeyMatrix("keys must differ after", [
       },
     },
     after: { files: { "vendor/itoa/src/lib.rs": changed } },
+    // api may use itoa; testkit, which has no registry dependency, holds its
+    // folder as a crate outside the workspace that another member reaches.
     keys: {
       "api:check": "must differ",
       "api:build": "must differ",
-      "testkit:check": "must not differ",
+      "testkit:check": "must differ",
     },
   })),
   {
@@ -344,6 +354,89 @@ describeCacheKeyMatrix("keys must differ after", [
     // testkit depends on no other crate.
     keys: { "testkit:test": "must differ", "testkit:build": "must differ" },
   },
+  // Under the workspace-build strategy, a crate's key holds the folders of
+  // the path crates outside its workspace that any member reaches, which a
+  // build of the whole workspace compiles with it (DES-INPUTS, "Whole-
+  // workspace builds"); fmt-check reads no digest and holds none.
+  ...(
+    [
+      ["a crate without a project that only another member depends on", "vendor/parser/src/lib.rs"],
+      ["a crate without a project behind it", "vendor/lexer/src/lib.rs"],
+    ] as const
+  ).map(([crate, file]): CacheKeyRow => ({
+    change: `a change in the folder of ${crate}, by path, under the workspace-build strategy`,
+    // lib depends on vendor/parser, which depends on vendor/lexer; other
+    // depends on neither.
+    fixture: "vendored-crate",
+    base: { files: otherMember("rust/crates/other") },
+    after: { files: { [file]: changed } },
+    keys: {
+      ...all(["other:build", "other:check", "other:lint", "other:test"], "must differ"),
+      "other:fmt-check": "must not differ",
+    },
+  })),
+  ...(
+    [
+      [
+        "a crate of another workspace that only another member depends on",
+        "shared/crates/model/src/lib.rs",
+      ],
+      ["the root manifest of that crate's workspace", "shared/Cargo.toml"],
+    ] as const
+  ).map(([crate, file]): CacheKeyRow => ({
+    change: `a change in ${crate}, under the workspace-build strategy`,
+    // server, in backend, depends by path on model, a member of shared.
+    fixture: "cross-workspace-path",
+    base: { files: otherMember("backend/crates/other") },
+    after: { files: { [file]: file.endsWith(".rs") ? changed : appended("\n# changed\n") } },
+    keys: { "other:test": "must differ", "other:build": "must differ" },
+  })),
+  // The reviewer's case: b depends on a local fork that Nx ignores, which
+  // asks the member c for a feature and hashes its own manifest through
+  // runtimeInputs, as the warning about such a crate advises. Asking for
+  // another feature changes neither Cargo.lock nor a file that Nx sees, but
+  // a build of the whole workspace compiles a against c with it.
+  {
+    change:
+      "a change in the manifest of a path crate outside the workspace that Nx cannot see and that only another member reaches, through the command that it adds, under the workspace-build strategy",
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        ".gitignore": appended("vendor/fork/\n"),
+        "ws/Cargo.toml": '[workspace]\nmembers = ["a", "b", "c"]\nresolver = "3"\n',
+        "ws/a/Cargo.toml": `${crate("a")}\n[dependencies]\nc = { path = "../c" }\n`,
+        "ws/a/src/lib.rs": "",
+        "ws/b/Cargo.toml": `${crate("b")}\n[dependencies]\nfork = { path = "../../vendor/fork" }\n`,
+        "ws/b/src/lib.rs": "",
+        "ws/c/Cargo.toml": `${crate("c")}\n[features]\nfx = []\nfy = []\n`,
+        "ws/c/src/lib.rs": "",
+        "vendor/fork/Cargo.toml": `${crate("fork")}\n[workspace]\n\n[dependencies]\nc = { path = "../../ws/c", features = ["fx"] }\n\n[package.metadata.nx]\nruntimeInputs = ["cat vendor/fork/Cargo.toml"]\n`,
+        "vendor/fork/src/lib.rs": "",
+      },
+    },
+    after: {
+      files: {
+        "vendor/fork/Cargo.toml": (manifest) => (manifest ?? "").replace('["fx"]', '["fy"]'),
+      },
+    },
+    keys: {
+      ...all(["a:build", "a:check", "a:lint", "a:test"], "must differ"),
+      "a:fmt-check": "must not differ",
+    },
+  },
+  ...(
+    [
+      ["a redirected crate without a project", "third_party/fork/src/lib.rs"],
+      ["a redirected crate of another workspace", "shared/crates/types/src/lib.rs"],
+    ] as const
+  ).map(([crate, file]): CacheKeyRow => ({
+    change: `a change in ${crate} that other members may use, for a member without registry or git dependencies, under the workspace-build strategy`,
+    // api and viaw use fork, and api and util types, through registry
+    // dependencies that rust's [patch] redirects; plain has no dependency.
+    fixture: "patched-workspaces",
+    after: { files: { [file]: changed } },
+    keys: { "plain:test": "must differ", "plain:build": "must differ" },
+  })),
 ]);
 
 describeCacheKeyMatrix("keys must not differ after", [
@@ -354,15 +447,10 @@ describeCacheKeyMatrix("keys must not differ after", [
     keys: all(["model:build", "model:test", "testkit:lint", "codegen:check"], "must not differ"),
   },
   {
-    change: "a change in a redirected crate, for a member without registry or git dependencies",
+    change:
+      "a change in a source of another member that the workspace's [patch] redirects to, for a member that does not depend on it",
     fixture: "patched-workspaces",
-    after: {
-      files: {
-        "third_party/fork/src/lib.rs": changed,
-        "rust/crates/model/src/lib.rs": changed,
-        "shared/crates/types/src/lib.rs": changed,
-      },
-    },
+    after: { files: { "rust/crates/model/src/lib.rs": changed } },
     keys: { "plain:test": "must not differ", "plain:build": "must not differ" },
   },
   {
@@ -777,7 +865,10 @@ describeCacheKeyMatrix("keys with the declared files of a crate without an edge"
       },
     },
     after: { files: { "shared/token.txt": appended("changed\n") } },
-    keys: { "api:test": "must differ", "app:test": "must differ", "other:test": "must not differ" },
+    // other, a member that reaches neither, holds token's declared files under
+    // the workspace-build strategy, as a crate outside the workspace that
+    // another member reaches.
+    keys: { "api:test": "must differ", "app:test": "must differ", "other:test": "must differ" },
   },
   {
     change:
@@ -792,11 +883,10 @@ describeCacheKeyMatrix("keys with the declared files of a crate without an edge"
       },
     },
     after: { files: { "schema/fork.sql": appended("-- changed\n") } },
-    keys: {
-      "api:test": "must differ",
-      "viaw:test": "must differ",
-      "plain:test": "must not differ",
-    },
+    // plain may use none of them, but holds fork's declared files under the
+    // workspace-build strategy, as a crate outside the workspace that other
+    // members may use.
+    keys: { "api:test": "must differ", "viaw:test": "must differ", "plain:test": "must differ" },
   },
   {
     change:
@@ -866,11 +956,15 @@ describeCacheKeyMatrix("keys with the variables and commands of a crate without 
     base: { files: tokenBehindLexer(table) },
     before: { env: { REVIEW_ADDED: "a" } },
     after: { env: { REVIEW_ADDED: "b" } },
+    // other reaches neither crate; under the workspace-build strategy it
+    // holds what they add, as crates outside the workspace that another
+    // member reaches.
     keys: {
       "api:test": "must differ",
       "api:build": "must differ",
       "app:test": "must differ",
-      "other:test": "must not differ",
+      "other:test": "must differ",
+      "other:fmt-check": "must not differ",
     },
   })),
   {
@@ -884,7 +978,7 @@ describeCacheKeyMatrix("keys with the variables and commands of a crate without 
     },
     before: { env: { REVIEW_RUNTIME: "a" } },
     after: { env: { REVIEW_RUNTIME: "b" } },
-    keys: { "api:test": "must differ", "app:test": "must differ", "other:test": "must not differ" },
+    keys: { "api:test": "must differ", "app:test": "must differ", "other:test": "must differ" },
   },
   {
     change:
@@ -898,7 +992,7 @@ describeCacheKeyMatrix("keys with the variables and commands of a crate without 
     },
     before: { env: { REVIEW_ADDED: "a" } },
     after: { env: { REVIEW_ADDED: "b" } },
-    keys: { "api:test": "must differ", "other:test": "must not differ" },
+    keys: { "api:test": "must differ", "other:test": "must differ" },
   },
   {
     change: "a change of a variable that a redirected crate without a project adds",
@@ -912,11 +1006,8 @@ describeCacheKeyMatrix("keys with the variables and commands of a crate without 
     },
     before: { env: { REVIEW_ADDED: "a" } },
     after: { env: { REVIEW_ADDED: "b" } },
-    keys: {
-      "api:test": "must differ",
-      "viaw:test": "must differ",
-      "plain:test": "must not differ",
-    },
+    // plain holds it under the workspace-build strategy (above).
+    keys: { "api:test": "must differ", "viaw:test": "must differ", "plain:test": "must differ" },
   },
   {
     change:
@@ -935,24 +1026,31 @@ describeCacheKeyMatrix("keys with the variables and commands of a crate without 
   },
   ...(
     [
+      // b is a member, whose additions no other member's key holds; c, in
+      // shared, is a crate outside the workspace that b reaches, so under
+      // the workspace-build strategy d holds what c and its workspace add.
       [
         "a variable that the crate whose edge is left out adds in its own table",
         leftOutEdge('\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n', "", ""),
+        "must not differ",
       ],
       [
         "a variable that a crate behind it, in another workspace, adds in its own table",
         leftOutEdge("", '\n[package.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n', ""),
+        "must differ",
       ],
       [
         "a variable that the workspace of a crate behind it adds in its table",
         leftOutEdge("", "", '\n[workspace.metadata.nx]\nenvInputs = ["REVIEW_ADDED"]\n'),
+        "must differ",
       ],
       [
         "the output of a command that a crate behind it adds",
         leftOutEdge("", '\n[package.metadata.nx]\nruntimeInputs = ["echo $REVIEW_ADDED"]\n', ""),
+        "must differ",
       ],
     ] as const
-  ).map(([what, files]): CacheKeyRow => ({
+  ).map(([what, files, d]): CacheKeyRow => ({
     change: `a change of ${what}, for a member whose edge to that crate is left out`,
     fixture: "patched-workspaces",
     base: { files },
@@ -962,7 +1060,7 @@ describeCacheKeyMatrix("keys with the variables and commands of a crate without 
       "a:test": "must differ",
       "a:build": "must differ",
       "a:check": "must differ",
-      "d:test": "must not differ",
+      "d:test": d,
     },
   })),
 ]);

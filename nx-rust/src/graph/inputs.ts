@@ -124,6 +124,19 @@ export interface InputContext {
    */
   redirectedInputs: ReadonlyMap<string, readonly Input[]>;
   /**
+   * The inputs for the path crates outside a crate's workspace that any
+   * member of the workspace reaches, which a build of the whole workspace
+   * compiles with it (`DES-INPUTS`, "Crates outside the workspace"), by the
+   * key of {@link wholeWorkspaceKey}: each one's folder, the root manifest
+   * of its workspace, its declared files and the variables and commands it
+   * adds, as for a path dependency without a project, without the crates
+   * whose folders the crate's inputs hold already (`findCrateFolders` in
+   * `path-dependencies.ts`). A crate's own manifest decides the features it
+   * asks of a member, and a variable or command it adds can stand for files
+   * that Nx cannot see, such as that manifest.
+   */
+  outsideCrateInputs?: ReadonlyMap<string, readonly Input[]>;
+  /**
    * The manifests inside the repository of the path packages that each
    * workspace's members reach, by the workspace's root folder relative to
    * the repository root, as `{workspaceRoot}` paths: the crates of path
@@ -326,11 +339,20 @@ export function repositoryDefaultInputs(namedInputs: unknown): Input[] {
  * The inputs of one of the project's targets, in the order of the table in
  * `DES-INPUTS`: the crate's files and those of its dependencies, the
  * workspace files, the redirected crates that the crate may use without an
- * edge, the members' manifests, the tool's configuration, the external
- * dependencies, the environment, the toolchain with Cargo's profile and
- * target variables, and the plugin. A variable or command that a redirected
- * crate without an edge adds appears once, and not where the crate's named
- * input or another entry of the target holds it.
+ * edge, the members' manifests, the path crates outside the workspace that
+ * any member reaches, the tool's configuration, the external dependencies,
+ * the environment, the toolchain with Cargo's profile and target
+ * variables, and the plugin. A variable or command that a redirected crate
+ * without an edge or a crate outside the workspace adds appears once, and
+ * not where the crate's named input or another entry of the target holds
+ * it.
+ *
+ * Under the `cargo` and `workspace-build` strategies, a target that reads
+ * digests holds what a build of the whole workspace compiles the crate
+ * with: the digests of every member ({@link holdsEveryDigest}) and the
+ * crates outside the workspace that any member reaches
+ * ({@link InputContext.outsideCrateInputs}), beside every member's manifest
+ * (`DES-INPUTS`, "Whole-workspace builds").
  *
  * @param readsDigest Whether the target depends on the workspace's lockfile
  *   task and hashes digests of it: a cached target other than `fmt-check`
@@ -358,12 +380,21 @@ export function targetInputs(
     subject.pkg === undefined
       ? []
       : (context.redirectedInputs.get(subject.pkg.manifest_path) ?? []);
+  const named = namedInputs(subject, context, settings)[crateInputName];
+  const outside =
+    readsDigest && settings.featureUnification !== "hakari"
+      ? withoutHeldInputs(context.outsideCrateInputs?.get(wholeWorkspaceKey(subject)) ?? [], [
+          ...named,
+          ...redirected,
+        ])
+      : [];
   const after: Input[] = [
     ...(settings.featureUnification === "hakari" ? [] : memberManifestInputs(subject, context)),
+    ...outside,
     ...toolConfigurationInputs(target, subject, workspaceRoot, settings),
     ...(target === "fmt" || target === "fmt-check"
       ? []
-      : externalDependencyInputs(target, subject, workspaceRoot, readsDigest)),
+      : externalDependencyInputs(target, subject, workspaceRoot, readsDigest, settings)),
     ...environmentInputs(target),
     {
       runtime: toolchainCommand(
@@ -378,12 +409,50 @@ export function targetInputs(
     crateInputName,
     `^${crateInputName}`,
     ...workspaceFiles(subject, context.repositoryRoot),
-    ...withoutRepeatedAdditions(redirected, [
-      ...namedInputs(subject, context, settings)[crateInputName],
-      ...after,
-    ]),
+    ...withoutRepeatedAdditions(redirected, [...named, ...after]),
     ...after,
   ];
+}
+
+/**
+ * The key under which {@link InputContext.outsideCrateInputs} holds a
+ * project's inputs: the manifest of its crate, or for a workspace project
+ * without one, the root manifest of its workspace, whose `doc` builds every
+ * member.
+ */
+export function wholeWorkspaceKey(subject: Pick<InputSubject, "pkg" | "workspace">): string {
+  return subject.pkg?.manifest_path ?? join(subject.workspace.report.workspace_root, "Cargo.toml");
+}
+
+/**
+ * Whether a target that depends on the lockfile task holds the digests of
+ * every member of its workspace rather than its crate's own
+ * (`DES-LOCKFILE-HASHING`, "Crate targets"): `doc`, which builds every
+ * member, a workspace project without a crate, and every such target under
+ * the `cargo` and `workspace-build` strategies, which build each crate with
+ * the features of the whole workspace (`DES-INPUTS`, "External
+ * dependencies"). Under `hakari`, the others hold their crate's own.
+ */
+// @mara implements DES-LOCKFILE-HASHING
+export function holdsEveryDigest(
+  target: InferredTargetName,
+  subject: Pick<InputSubject, "pkg">,
+  settings: Pick<InputSettings, "featureUnification">,
+): boolean {
+  return target === "doc" || subject.pkg === undefined || settings.featureUnification !== "hakari";
+}
+
+/**
+ * `inputs` without those that `held` holds already: an entry equal to one
+ * of `held`, and an `env` or `runtime` entry whose variable or command
+ * `held` names, so that what the crate's own inputs hold, through its path
+ * dependencies or a redirection, is not named again.
+ */
+function withoutHeldInputs(inputs: readonly Input[], held: readonly Input[]): Input[] {
+  const entries = new Set(held.map((input) => JSON.stringify(input)));
+  return withoutRepeatedAdditions(inputs, held).filter(
+    (input) => !entries.has(JSON.stringify(input)),
+  );
 }
 
 /** The targets whose cargo command runs rustdoc: `doc`, and `test` for doctests. */
@@ -471,10 +540,11 @@ function toolConfigurationInputs(
 /**
  * The external dependencies of the crate (`DES-INPUTS`, "External
  * dependencies"). A target that depends on the workspace's lockfile task
- * hashes the crate's digest among that task's outputs, and on `doc` the
- * digests of every member, through a `dependentTasksOutputFiles` input,
- * with an `env` input for `NX_RUST_RUN_ID`, which a run that excludes task
- * dependencies sets to a new value (`DES-LOCKFILE-HASHING`). It has no
+ * hashes digests among that task's outputs: those of every member where
+ * {@link holdsEveryDigest} says so, otherwise the crate's own, through a
+ * `dependentTasksOutputFiles` input, with an `env` input for
+ * `NX_RUST_RUN_ID`, which a run that excludes task dependencies sets to a
+ * new value (`DES-LOCKFILE-HASHING`). It has no
  * `Cargo.lock` as a file input: Nx hashes such an input before the run
  * starts, before the lockfile task can update the file
  * (`EVD-NX-24-LOCKFILE-UPDATE`).
@@ -494,12 +564,13 @@ export function externalDependencyInputs(
   subject: InputSubject,
   workspaceRoot: string,
   readsDigest: boolean,
+  settings: Pick<InputSettings, "featureUnification"> = defaultInputSettings,
 ): InputDefinition[] {
   if (!readsDigest) {
     return [{ fileset: fromRoot(workspaceRoot, "Cargo.lock"), includeIgnored: true }];
   }
   const digests =
-    target === "doc" || subject.pkg === undefined
+    subject.pkg === undefined || holdsEveryDigest(target, subject, settings)
       ? `${digestFolder(workspaceRoot)}/*.digest`
       : digestFile(workspaceRoot, subject.pkg.name);
   return [{ dependentTasksOutputFiles: digests }, { env: runIdVariable }];
