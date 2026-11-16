@@ -12,6 +12,8 @@ blocked_by:
   - nxr-6q2chq
   - nxr-5rrkay
   - nxr-43zkh8
+  - nxr-sv61dx
+  - nxr-bhh3mm
 created_at: 2026-11-12T18:20:01Z
 ---
 
