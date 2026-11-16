@@ -29,7 +29,7 @@ import {
   workspaceArgs,
 } from "./harness";
 
-// Checks VER-BUILD-INPUT-CHECK apart from its batch paragraph, with real Nx
+// Checks VER-BUILD-INPUT-CHECK, its batch paragraph included, with real Nx
 // runs of the plugin's executor and a real cargo, and that the check fails
 // the build of no fixture whose crates read only files their inputs cover.
 //
@@ -908,6 +908,166 @@ describe("the check of a build's dependency files", () => {
         ]);
         expect(output).not.toContain(failure);
         expect(status).toBe(0);
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+/** The tasks that Nx lists as failed at the end of a run, sorted. */
+function failedTasks(output: string): string[] {
+  const list = /Failed tasks:\n\n((?:- \S+\n?)+)/.exec(output)?.[1] ?? "";
+  return [...list.matchAll(/^- (\S+)$/gm)].map((match) => match[1]).sort();
+}
+
+/** The tasks that Nx says it restored from the cache, sorted. */
+function restoredTasks(output: string): string[] {
+  return [...output.matchAll(new RegExp(String.raw`nx run (\S+)[^\n]*?${hit}`, "g"))]
+    .map((match) => match[1])
+    .sort();
+}
+
+/** A new member `rust/crates/<name>` with a library, its dependencies and its own table. */
+function newCrate(
+  name: string,
+  {
+    dependencies = [],
+    library,
+    table = [],
+  }: { dependencies?: string[]; library: string; table?: string[] },
+): FileChanges {
+  return {
+    [`rust/crates/${name}/Cargo.toml`]: [
+      "[package]",
+      `name = "${name}"`,
+      'version = "0.1.0"',
+      'edition = "2024"',
+      "",
+      "[dependencies]",
+      ...dependencies,
+      ...(table.length === 0 ? [] : ["", "[package.metadata.nx]", ...table]),
+      "",
+    ].join("\n"),
+    [`rust/crates/${name}/src/lib.rs`]: library,
+  };
+}
+
+// The batch paragraph of VER-BUILD-INPUT-CHECK: `nx run-many -t build`,
+// without `--batch`, hands the batch executor the `build` tasks, which form
+// one group that runs a single `cargo build --workspace` (DES-BATCH), and
+// the check then runs for each task of the group with its own inputs.
+describe("the check of a build's dependency files in a group of several crates", () => {
+  const buildAll = workspaceArgs("build").join(" ");
+
+  it(
+    "fails only the task whose crate read an undeclared file, and caches the other two",
+    async () => {
+      // reader reads undeclared files; base reads none, and plain declares its own.
+      const files: FileChanges = {
+        "rust/crates/plain/Cargo.toml": crateTable('fileInputs = ["../../../shared/plain.txt"]'),
+      };
+      await inFixture("undeclared-files", files, async (workspace) => {
+        const args = ["run-many", "-t", "build", "-p", "reader", "base", "plain"];
+        const first = await nx(workspace, args);
+        expect(first.status).not.toBe(0);
+        expect(cargoCalls(workspace)).toEqual([buildAll]);
+        expect(failedTasks(first.output)).toEqual(["reader:build"]);
+        expect(first.output).toContain(`reader:build: ${failure}`);
+        expect(listedFiles(first.output, "reader")).toEqual([
+          "shared/assets/logo.txt, in the folder shared/assets, which cargo records as a whole",
+          "shared/banner.txt",
+          "shared/proto.txt",
+        ]);
+        expect(first.output).not.toContain(`base:build: ${failure}`);
+        expect(first.output).not.toContain(`plain:build: ${failure}`);
+
+        // base and plain were cached; reader runs and fails again.
+        const second = await nx(workspace, args);
+        expect(second.status).not.toBe(0);
+        expect(restoredTasks(second.output)).toEqual(["base:build", "plain:build"]);
+        expect(failedTasks(second.output)).toEqual(["reader:build"]);
+        expect(cargoCalls(workspace)).toEqual([buildAll]);
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails the task of the crate that leaves out a file that a shared path dependency's build script reads, and passes the one that declares it",
+    async () => {
+      const files: FileChanges = {
+        "rust/crates/schema/Cargo.toml":
+          '[package]\nname = "schema"\nversion = "0.1.0"\nedition = "2024"\n',
+        "rust/crates/schema/build.rs": [
+          "fn main() {",
+          '    let proto = "../../../shared/proto.txt";',
+          '    println!("cargo::rerun-if-changed={proto}");',
+          '    std::fs::read_to_string(proto).expect("the shared definition");',
+          "}",
+          "",
+        ].join("\n"),
+        "rust/crates/schema/src/lib.rs": "pub fn generated() -> u8 {\n    1\n}\n",
+        ...newCrate("left", {
+          dependencies: ['schema = { path = "../schema" }'],
+          library: "pub fn left() -> u8 {\n    schema::generated()\n}\n",
+          table: ['fileInputs = ["../../../shared/proto.txt"]'],
+        }),
+        ...newCrate("right", {
+          dependencies: ['schema = { path = "../schema" }'],
+          library: "pub fn right() -> u8 {\n    schema::generated()\n}\n",
+        }),
+      };
+      await inFixture("undeclared-files", files, async (workspace) => {
+        const { status, output } = await nx(workspace, [
+          "run-many",
+          "-t",
+          "build",
+          "-p",
+          "left",
+          "right",
+        ]);
+        expect(status).not.toBe(0);
+        expect(cargoCalls(workspace)).toEqual([buildAll]);
+        expect(failedTasks(output)).toEqual(["right:build"]);
+        expect(listedFiles(output, "right")).toEqual(["shared/proto.txt"]);
+        expect(output).not.toContain(`left:build: ${failure}`);
+        // The record of left names the file all the same.
+        expect(read(workspace, "rust/target/debug/libleft.d")).toContain("shared/proto.txt");
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "does not check a binary whose required feature only another crate of the command turns on, and still fails that crate for its own file",
+    async () => {
+      // wants turns on multi's feature extra, which multi's binary three
+      // requires, and itself includes an undeclared file; multi declares
+      // the file of its binary two, and leaves out the one that three reads.
+      const files: FileChanges = {
+        "rust/crates/multi/Cargo.toml": crateTable('fileInputs = ["../../../shared/tool.txt"]'),
+        ...newCrate("wants", {
+          dependencies: ['multi = { path = "../multi", features = ["extra"] }'],
+          library:
+            'pub fn wants() -> &\'static str {\n    include_str!("../../../../shared/plain.txt")\n}\n',
+        }),
+      };
+      await inFixture("undeclared-files", files, async (workspace) => {
+        const { status, output } = await nx(workspace, [
+          "run-many",
+          "-t",
+          "build",
+          "-p",
+          "multi",
+          "wants",
+        ]);
+        expect(status).not.toBe(0);
+        expect(cargoCalls(workspace)).toEqual([buildAll]);
+        expect(failedTasks(output)).toEqual(["wants:build"]);
+        expect(listedFiles(output, "wants")).toEqual(["shared/plain.txt"]);
+        expect(output).not.toContain(`multi:build: ${failure}`);
+        // The command built three, whose record names the undeclared file.
+        expect(read(workspace, "rust/target/debug/three.d")).toContain("shared/extra.txt");
       });
     },
     HARNESS_TIMEOUT,
