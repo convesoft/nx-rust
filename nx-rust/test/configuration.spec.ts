@@ -20,6 +20,9 @@ import {
   pluginWorkers,
   testEnvironment,
   withoutColours,
+  withoutRunner,
+  workspaceArgs,
+  workspaceTestSteps,
 } from "./harness";
 
 // Checks the parts of VER-CONFIGURATION about the metadata tables and the
@@ -1662,13 +1665,10 @@ describe("tasks of targets that the tables configure", () => {
         }
 
         expect(taskCalls(workspace)).toEqual([
-          { cwd: "rust", args: ["check", "-p", packageSpec(workspace.root, "rust", "core-lib")] },
-          { cwd: "rust", args: ["clippy", "-p", packageSpec(workspace.root, "rust", "core-lib")] },
+          { cwd: "rust", args: workspaceArgs("check", [], false) },
+          { cwd: "rust", args: workspaceArgs("clippy", [], false) },
           // A crate without the table keeps the inferred option.
-          {
-            cwd: "rust",
-            args: ["check", "--all-targets", "-p", packageSpec(workspace.root, "rust", "cli")],
-          },
+          { cwd: "rust", args: workspaceArgs("check") },
         ]);
       } finally {
         workspace.remove();
@@ -1774,18 +1774,10 @@ describe("tasks of targets that the tables configure", () => {
         const result = await run(workspace, ["run", "model:test"]);
 
         expect(result.status).toBe(0);
-        expect(taskCalls(workspace)).toEqual([
-          {
-            cwd: "rust",
-            args: [
-              "test",
-              "-p",
-              packageSpec(workspace.root, "rust", "model"),
-              "--profile",
-              "review",
-            ],
-          },
-        ]);
+        // Every step of the group passes the profile.
+        expect(taskCalls(workspace).map((call) => withoutRunner(call.args.join(" ")))).toEqual(
+          workspaceTestSteps(["--profile", "review"]),
+        );
         expect(existsSync(join(workspace.root, "rust", "target", "review"))).toBe(true);
       } finally {
         workspace.remove();

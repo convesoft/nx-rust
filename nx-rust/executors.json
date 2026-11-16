@@ -3,12 +3,14 @@
     "cargo": {
       "implementation": "./src/executors/cargo/executor",
       "batchImplementation": "./src/executors/cargo/executor#batch",
+      "preferBatch": true,
       "schema": "./src/executors/cargo/schema.json",
       "description": "Runs the cargo command of an inferred target of a crate or a Cargo workspace, other than build and doc."
     },
     "cargo-outputs": {
       "implementation": "./src/executors/cargo/executor#outputsTask",
       "batchImplementation": "./src/executors/cargo/executor#outputsBatch",
+      "preferBatch": true,
       "schema": "./src/executors/cargo/schema.json",
       "description": "Runs the cargo command of the build target of a crate or the doc target of a Cargo workspace, whose files Nx stores."
     },

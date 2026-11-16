@@ -24,6 +24,7 @@ import {
   pinnedToolchainAvailable,
   runNx,
   testEnvironment,
+  taskOutput,
 } from "./harness";
 
 // Checks the parts of VER-GRAPH about crates that [patch], [replace] and
@@ -209,10 +210,7 @@ async function printedByTask(
   env: Record<string, string> = {},
 ): Promise<{ task: string; status: number | null; warned: boolean }> {
   const { status, output } = await runNx(workspace, ["run", task], env);
-  const header = output.indexOf(`> nx run ${task}`);
-  const next = output.indexOf("> nx run ", header + 1);
-  const own = header < 0 ? "" : output.slice(header, next < 0 ? undefined : next);
-  return { task, status, warned: own.includes(text) };
+  return { task, status, warned: taskOutput(output, task).includes(text) };
 }
 
 /**

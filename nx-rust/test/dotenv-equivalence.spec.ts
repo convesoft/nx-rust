@@ -348,7 +348,7 @@ function runCase(seed: number): {
       outputs: [],
       hash: "hash",
     } as unknown as Task;
-    const shape = { configuration: generated.configuration, continuousDependency: false };
+    const shape = { configuration: generated.configuration, readyUrlDependency: false };
     const { env: nxEnv, skipNxCache } = nxProcess(root, generated);
     const taskPaths = taskEnv.getEnvFilesForTask(task, graph).map((file) => join(root, file));
     const unloadedNx = { ...nxEnv };

@@ -412,14 +412,29 @@ describe("task dependencies", () => {
     HARNESS_TIMEOUT,
   );
 
-  describe("of a crate whose cargo test replaces the executables of its build", () => {
+  describe("of a test whose cargo test replaces the executables of a build", () => {
     // One crate per shape of the rule in DES-TARGETS: these have a binary and
-    // a test or bench that cargo test builds, the others do not.
+    // a test or bench that cargo test builds, the others do not. Under
+    // workspace-build, every test of the workspace builds them all
+    // (ADR-WORKSPACE-TEST-EXECUTABLES).
     const waiting = ["app", "benched", "gated", "harnessless"];
     const others = ["addon", "flavour", "library", "showcase", "timed", "unit", "untested"];
+    /** The builds that every test waits for, with the lockfile task. */
+    const waited = (build = "build", own?: string) => [
+      ...waiting.map((crate) => (crate === "app" && own !== undefined ? own : `${crate}:${build}`)),
+      "rust:lockfile",
+    ];
+    /** The builds of the crates that every test waits for, as tasks of the graph. */
+    const builds = (build = "build", own?: string) =>
+      Object.fromEntries(
+        waiting.map((crate) => [
+          crate === "app" && own !== undefined ? own : `${crate}:${build}`,
+          ["rust:lockfile"],
+        ]),
+      );
 
     it(
-      "lead from test to the crate's own build for each shape of the rule, and from no other test",
+      "lead from every test of the workspace to the build of each crate of that shape, its own among them, and to no other build",
       async () => {
         const workspace = FixtureWorkspace.create("binary-tests");
         try {
@@ -430,9 +445,8 @@ describe("task dependencies", () => {
               [...waiting, ...others].map((crate) => [`${crate}:build`, ["rust:lockfile"]]),
             ),
             ...Object.fromEntries(
-              waiting.map((crate) => [`${crate}:test`, [`${crate}:build`, "rust:lockfile"]]),
+              [...waiting, ...others].map((crate) => [`${crate}:test`, waited()]),
             ),
-            ...Object.fromEntries(others.map((crate) => [`${crate}:test`, ["rust:lockfile"]])),
             "rust:lockfile": [],
           });
         } finally {
@@ -443,15 +457,23 @@ describe("task dependencies", () => {
     );
 
     it.each<[string, string[], Record<string, string[]>]>([
+      ["nx run of test alone", ["run", "app:test"], { "app:test": waited(), ...builds() }],
       [
-        "nx run of test alone",
-        ["run", "app:test"],
-        { "app:test": ["app:build", "rust:lockfile"], "app:build": ["rust:lockfile"] },
+        "nx run of the test of a crate without a binary",
+        ["run", "library:test"],
+        { "library:test": waited(), ...builds() },
       ],
       [
+        // Nx counts the dependency on app's build as one on app, so a change
+        // in app affects every test that waits for that build.
         "nx affected -t test",
         ["affected", "-t", "test", "--files=rust/crates/app/src/main.rs"],
-        { "app:test": ["app:build", "rust:lockfile"], "app:build": ["rust:lockfile"] },
+        {
+          ...Object.fromEntries(
+            [...waiting, ...others].map((crate) => [`${crate}:test`, waited()]),
+          ),
+          ...builds(),
+        },
       ],
       [
         "a run that excludes task dependencies and names both targets",
@@ -488,15 +510,11 @@ describe("task dependencies", () => {
         "both targets have",
         "build",
         {
-          "app:test:release": ["app:build:release", "rust:lockfile"],
-          "app:build:release": ["rust:lockfile"],
+          "app:test:release": waited("build", "app:build:release"),
+          ...builds("build", "app:build:release"),
         },
       ],
-      [
-        "only test has",
-        "check",
-        { "app:test:release": ["app:build", "rust:lockfile"], "app:build": ["rust:lockfile"] },
-      ],
+      ["only test has", "check", { "app:test:release": waited(), ...builds() }],
     ])(
       "reach the build in a configuration that %s",
       async (_case, other, expected) => {
@@ -522,7 +540,7 @@ describe("task dependencies", () => {
     );
 
     it(
-      "keep the edge under the names that targetNames gives both targets",
+      "keep the edges under the names that targetNames gives both targets",
       async () => {
         const workspace = FixtureWorkspace.create("binary-tests", {
           "nx.json": pluginOptions({ targetNames: { build: "compile", test: "verify" } }),
@@ -531,8 +549,8 @@ describe("task dependencies", () => {
           const graph = await taskGraph(workspace, ["run", "app:verify"]);
 
           expect(graph.dependencies).toEqual({
-            "app:verify": ["app:compile", "rust:lockfile"],
-            "app:compile": ["rust:lockfile"],
+            "app:verify": waited("compile"),
+            ...builds("compile"),
             "rust:lockfile": [],
           });
         } finally {

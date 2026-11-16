@@ -7,6 +7,7 @@ import {
   runNx,
   taskCalls,
   testEnvironment,
+  workspaceArgs,
 } from "./harness";
 
 // Checks the part of VER-CARGO-UNCHANGED about the command that a task
@@ -32,13 +33,27 @@ const failingTest = (source: string) =>
  * once.
  */
 function printedLines(output: string, task: string): { cd: string; command: string } {
+  const [only, ...more] = printedSteps(output, task);
+  expect({ task, headings: 1 + more.length }).toEqual({ task, headings: 1 });
+  return only;
+}
+
+/**
+ * The shell lines of each cargo command that `task`, or the group of tasks
+ * that `task` names joined with ", ", printed in `output`, in order: one per
+ * step of its target (DES-BATCH). The command line may start with the
+ * variables that the plugin sets for it.
+ */
+function printedSteps(output: string, task: string): { cd: string; command: string }[] {
   const lines = output.split("\n");
   const at = lines.flatMap((line, index) => (line === heading(task) ? [index] : []));
-  expect({ task, headings: at.length }).toEqual({ task, headings: 1 });
-  const [cd, command] = lines.slice(at[0] + 1, at[0] + 3);
-  expect(cd).toMatch(/^ {2}cd /);
-  expect(command).toMatch(/^ {2}cargo /);
-  return { cd: cd.trim(), command: command.trim() };
+  expect({ task, found: at.length > 0 }).toEqual({ task, found: true });
+  return at.map((index) => {
+    const [cd, command] = lines.slice(index + 1, index + 3);
+    expect(cd).toMatch(/^ {2}cd /);
+    expect(command).toMatch(/^ {2}(\S+=\S+ )*cargo /);
+    return { cd: cd.trim(), command: command.trim() };
+  });
 }
 
 /**
@@ -87,7 +102,8 @@ describe("the cargo command of a task", () => {
         async (workspace) => {
           // A failing test: cargo's hint names the crate by a name that is
           // ambiguous here.
-          const test = await runNx(workspace, ["run", "good:test", "--verbose"]);
+          // On its own, the task's output holds the lines (ADR-VERBOSE-COMMAND).
+          const test = await runNx(workspace, ["run", "good:test", "--verbose", "--batch=false"]);
           expect({ status: test.status, output: test.output }).toEqual({
             status: 1,
             output: expect.stringContaining("-p good --lib"),
@@ -99,19 +115,23 @@ describe("the cargo command of a task", () => {
           });
           expect(hint.stderr).toContain("specification `good` is ambiguous");
 
+          // Under workspace-build, the build step and the test binaries' step,
+          // after which every task has failed and the doctests are left out.
           const testCalls = workspace.cargo.calls().filter((call) => call.args[0] === "test");
-          expect(testCalls).toHaveLength(1);
-          const testLines = printedLines(test.output, "good:test");
+          expect(testCalls).toHaveLength(2);
+          const testSteps = printedSteps(test.output, "good:test");
+          expect(testSteps).toHaveLength(2);
           // The lines come before cargo's own output.
           expect(test.output.indexOf(heading("good:test"))).toBeLessThan(
             test.output.indexOf("test result: FAILED"),
           );
-          const testByHand = runByHand(workspace, testLines);
-          expect(testByHand.status).toBe(101);
-          expect(testByHand.output).toContain("failing::fails");
-          expect(testByHand.calls).toEqual(testCalls);
+          // Each step runs by hand as it ran, the selecting runner included.
+          const byHand = testSteps.map((lines) => runByHand(workspace, lines));
+          expect(byHand.map((run) => run.status)).toEqual([0, 101]);
+          expect(byHand[1].output).toContain("failing::fails");
+          expect(byHand.flatMap((run) => run.calls)).toEqual(testCalls);
 
-          const build = await runNx(workspace, ["run", "good:build", "--verbose"]);
+          const build = await runNx(workspace, ["run", "good:build", "--verbose", "--batch=false"]);
           expect({ status: build.status, output: build.output }).toEqual({
             status: 0,
             output: expect.any(String),
@@ -121,11 +141,7 @@ describe("the cargo command of a task", () => {
           const buildByHand = runByHand(workspace, printedLines(build.output, "good:build"));
           expect(buildByHand.status).toBe(0);
           expect(buildByHand.calls).toEqual(buildCalls);
-          expect(buildCalls[0].args).toEqual([
-            "build",
-            "-p",
-            `path+file://${workspace.root}/rust/crates/good#0.1.0`,
-          ]);
+          expect(buildCalls[0].args).toEqual(workspaceArgs("build"));
         },
       ),
     HARNESS_TIMEOUT,
@@ -135,7 +151,15 @@ describe("the cargo command of a task", () => {
     "is printed by the lockfile task for its own command, separately from the crate task's",
     () =>
       inFixture("shared-names", undefined, async (workspace) => {
-        const run = await runNx(workspace, ["run-many", "-t", "check", "-p", "good", "--verbose"]);
+        const run = await runNx(workspace, [
+          "run-many",
+          "-t",
+          "check",
+          "-p",
+          "good",
+          "--verbose",
+          "--batch=false",
+        ]);
 
         expect({ status: run.status, output: run.output }).toEqual({
           status: 0,
@@ -143,8 +167,8 @@ describe("the cargo command of a task", () => {
         });
         const lockfile = printedLines(run.output, "rust:lockfile");
         expect(lockfile.command).toBe("cargo update --workspace");
-        expect(printedLines(run.output, "good:check").command).toMatch(
-          /^cargo check --all-targets -p 'path\+file:\/\/.*\/rust\/crates\/good#0\.1\.0'$/,
+        expect(printedLines(run.output, "good:check").command).toBe(
+          `cargo ${workspaceArgs("check").join(" ")}`,
         );
         const byHand = runByHand(workspace, lockfile);
         expect(byHand.status).toBe(0);
@@ -166,7 +190,8 @@ describe("the cargo command of a task", () => {
           expect({ task, hash: verbose[task].value }).toEqual({ task, hash: plain[task].value });
         }
 
-        const first = await runNx(workspace, ["run", "good:test", "--verbose"]);
+        // On its own, the task's output, which Nx stores, holds the lines.
+        const first = await runNx(workspace, ["run", "good:test", "--verbose", "--batch=false"]);
         expect({ status: first.status, output: first.output }).toEqual({
           status: 0,
           output: expect.stringContaining(heading("good:test")),
@@ -176,7 +201,7 @@ describe("the cargo command of a task", () => {
 
         // Nx stores a task's terminal output and replays it on a hit, the
         // lines of the verbose run included (ADR-VERBOSE-COMMAND).
-        const second = await runNx(workspace, ["run", "good:test"]);
+        const second = await runNx(workspace, ["run", "good:test", "--batch=false"]);
         expect({ status: second.status, output: second.output }).toEqual({
           status: 0,
           output: expect.stringMatching(hit),
@@ -253,16 +278,19 @@ describe("the cargo command of a task", () => {
   );
 });
 
-// The batch executor of DES-BATCH: with `--batch`, the plugin's tasks run in
-// batches, whose process prints each cargo command's lines itself, once per
-// command, so that they belong to no task (DES-INVOCATION, "Printing the
-// command"). Until nxr-8f9dz2 every task is a group of one crate, so every
-// command names one task.
+// The batch executor of DES-BATCH: the plugin's tasks run in batches, whose
+// process prints each cargo command's lines itself, once per command, with
+// the tasks of its group, so that they belong to no task (DES-INVOCATION,
+// "Printing the command").
 describe("the cargo command of a batch", () => {
   // kit is the crate in crates/toolkit.
-  const command = ["run-many", "-t", "check", "build", "-p", "good", "kit", "--batch"];
+  const command = ["run-many", "-t", "check", "build", "-p", "good", "kit"];
   const tasks = ["good:check", "kit:check", "good:build", "kit:build"];
-  const folders: Record<string, string> = { good: "/crates/good#", kit: "/crates/toolkit#" };
+  // Each target's two tasks share one command.
+  const groups: Record<string, string> = {
+    check: "good:check, kit:check",
+    build: "good:build, kit:build",
+  };
 
   it(
     "is printed once for each command of a verbose batch, before cargo runs, as lines that run the same command by hand, and stored with no task",
@@ -273,21 +301,21 @@ describe("the cargo command of a batch", () => {
           status: 0,
           output: expect.stringMatching(/Running 2 tasks with @convesoft\/nx-rust:cargo-outputs/),
         });
-        // printedLines fails unless each heading is there exactly once.
+        // printedLines fails unless each group's heading is there exactly once.
         const lines = Object.fromEntries(
-          tasks.map((task) => [task, printedLines(run.output, task)]),
+          Object.entries(groups).map(([target, group]) => [
+            target,
+            printedLines(run.output, group),
+          ]),
         );
-        expect(taskCalls(workspace)).toHaveLength(4);
+        expect(taskCalls(workspace)).toHaveLength(2);
         // As runByHand logs them, with absolute folders.
         const calls = workspace.cargo.calls();
-        for (const task of tasks) {
-          const [crate, target] = task.split(":");
-          const ran = calls.filter(
-            (call) => call.args[0] === target && call.args.join(" ").includes(folders[crate]),
-          );
-          expect({ task, calls: ran.length }).toEqual({ task, calls: 1 });
-          const byHand = runByHand(workspace, lines[task]);
-          expect({ task, status: byHand.status }).toEqual({ task, status: 0 });
+        for (const target of Object.keys(groups)) {
+          const ran = calls.filter((call) => call.args[0] === target);
+          expect({ target, calls: ran.length }).toEqual({ target, calls: 1 });
+          const byHand = runByHand(workspace, lines[target]);
+          expect({ target, status: byHand.status }).toEqual({ target, status: 0 });
           expect(byHand.calls).toEqual(ran);
         }
 
@@ -318,8 +346,8 @@ describe("the cargo command of a batch", () => {
           status: 0,
           output: expect.stringMatching(/Running 2 tasks with @convesoft\/nx-rust:cargo\b/),
         });
-        // Positive control: the tasks ran their cargo commands.
-        expect(taskCalls(workspace)).toHaveLength(4);
+        // Positive control: the tasks ran their cargo commands, one per group.
+        expect(taskCalls(workspace)).toHaveLength(2);
         expect(run.output).not.toContain("@convesoft/nx-rust runs cargo as these lines do");
       }),
     HARNESS_TIMEOUT,
@@ -340,13 +368,13 @@ describe("the cargo command of a batch", () => {
           workspace.cargo.clear();
           const run = await runNx(workspace, [...command, "--skip-nx-cache", ...args], daemon);
           expect({ args, status: run.status }).toEqual({ args, status: 0 });
-          expect({ args, calls: taskCalls(workspace).length }).toEqual({ args, calls: 4 });
-          return tasks.filter((task) => run.output.includes(heading(task)));
+          expect({ args, calls: taskCalls(workspace).length }).toEqual({ args, calls: 2 });
+          return Object.values(groups).filter((group) => run.output.includes(heading(group)));
         };
 
         expect(await shown(["--verbose=false"])).toEqual([]);
         expect(await shown([])).toEqual([]);
-        expect(await shown(["--verbose"])).toEqual(tasks);
+        expect(await shown(["--verbose"])).toEqual(Object.values(groups));
       } finally {
         await workspace.nx(["daemon", "--stop"], daemon);
         workspace.remove();

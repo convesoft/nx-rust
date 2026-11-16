@@ -13,6 +13,7 @@ import {
   runNx,
   sortedCalls,
   taskCalls,
+  workspaceArgs,
 } from "./harness";
 
 // The run cases of VER-TARGETS and VER-UNKNOWN-OPTIONS: what the binary of a
@@ -355,12 +356,7 @@ args = "--name 'a b'"
           workspace.cargo.clear();
           const built = await runNx(workspace, ["run", "cli:build"]);
           expect(built.status).toBe(0);
-          expect(taskCalls(workspace)).toEqual([
-            {
-              cwd: "rust",
-              args: ["build", "-p", packageSpec(workspace.root, "rust", "cli")],
-            },
-          ]);
+          expect(taskCalls(workspace)).toEqual([{ cwd: "rust", args: workspaceArgs("build") }]);
           expect(linesWith(built.output, "ignoring")).toEqual([
             'cli:build: ignoring option `allTargets`, which this target does not take. It comes from the workspace\'s configuration: run `nx show target cli:build --json` and look under `sourceMap` for the file and entry. If it is a `targetDefaults` entry in nx.json, add a `filter` to it or add an empty entry keyed by "@convesoft/nx-rust:cargo-outputs".',
           ]);

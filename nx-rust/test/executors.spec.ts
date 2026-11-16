@@ -14,6 +14,10 @@ import {
   testEnvironment,
   ToolFolders,
   withoutColours,
+  runnerConfig,
+  withoutRunner,
+  workspaceArgs,
+  workspaceTestSteps,
 } from "./harness";
 
 // Checks what the plugin's executors run, with a real cargo and real Nx task
@@ -112,6 +116,26 @@ const select = (workspace: FixtureWorkspace, crate: string, folder = "rust"): st
   packageSpec(workspace.root, folder, crate),
 ];
 
+/**
+ * A call with the runner's paths written as `withoutRunner` writes them, and
+ * the crates of a shared `cargo fmt` in a fixed order.
+ */
+const normalized = (call: CargoCall): CargoCall => {
+  const args = withoutRunner(call.args.join("\u0000")).split("\u0000");
+  if (args[0] !== "fmt") {
+    return { ...call, args };
+  }
+  const head = args.filter((_, index) => args[index] !== "-p" && args[index - 1] !== "-p");
+  const crates = args.flatMap((arg, index) => (args[index - 1] === "-p" ? [arg] : [])).sort();
+  return { ...call, args: [...head, ...crates.flatMap((crate) => ["-p", crate])] };
+};
+
+/** The test steps of a group under workspace-build, as calls in the workspace root. */
+const testSteps = (tail: string[] = [], doctests = true): CargoCall[] =>
+  workspaceTestSteps(tail, doctests).map((step) =>
+    rust(step.split(" ").map((word) => (word === runnerConfig ? runnerConfig : word))),
+  );
+
 describe("the cargo executor", () => {
   it(
     "runs each crate target's command in the workspace root, selecting the crate by its package ID specification, and by its package name for cargo fmt",
@@ -134,17 +158,17 @@ describe("the cargo executor", () => {
 
         expect(result).toEqual({ status: 0, output: expect.any(String) });
         const calls = taskCalls(workspace);
-        expect(sorted(calls)).toEqual(
+        // The tasks of each target share their commands, which select the
+        // whole workspace where they compile and each crate for cargo fmt.
+        expect(sorted(calls.map(normalized))).toEqual(
           sorted([
-            ...["core-lib", "perf"].flatMap((crate) => [
-              rust(["build", ...select(workspace, crate)]),
-              rust(["check", "--all-targets", ...select(workspace, crate)]),
-              rust(["clippy", "--all-targets", ...select(workspace, crate)]),
-              rust(["test", ...select(workspace, crate)]),
-              rust(["fmt", "--check", "-p", crate]),
-              rust(["fmt", "-p", crate]),
-            ]),
-            // Only perf has a bench target.
+            rust(workspaceArgs("build")),
+            rust(workspaceArgs("check")),
+            rust(workspaceArgs("clippy")),
+            ...testSteps(),
+            rust(["fmt", "--check", "-p", "core-lib", "-p", "perf"]),
+            rust(["fmt", "-p", "core-lib", "-p", "perf"]),
+            // Only perf has a bench target, which runs on its own.
             rust(["bench", ...select(workspace, "perf")]),
           ]),
         );
@@ -164,31 +188,28 @@ describe("the cargo executor", () => {
         const result = await nx(workspace, ["run", "rust-engine:build"]);
 
         expect(result.status).toBe(0);
-        expect(taskCalls(workspace)).toEqual([
-          { cwd: "libs/rust", args: ["build", ...select(workspace, "engine", "libs/rust")] },
-        ]);
+        expect(taskCalls(workspace)).toEqual([{ cwd: "libs/rust", args: workspaceArgs("build") }]);
       }),
     HARNESS_TIMEOUT,
   );
 
   // Each case: targetNames, and the names to run with the cargo command that
-  // each runs.
-  // The commands select core-lib with `-p` and its specification after them.
+  // each runs, which selects the whole workspace.
   it.each<[string, Record<string, string>, [string, string[]][]]>([
     [
       "one name passed on to another target",
       { lint: "clippy", build: "lint" },
       [
-        ["clippy", ["clippy", "--all-targets"]],
-        ["lint", ["build"]],
+        ["clippy", workspaceArgs("clippy")],
+        ["lint", workspaceArgs("build")],
       ],
     ],
     [
       "two targets that swap their names",
       { lint: "check", check: "lint" },
       [
-        ["lint", ["check", "--all-targets"]],
-        ["check", ["clippy", "--all-targets"]],
+        ["lint", workspaceArgs("check")],
+        ["check", workspaceArgs("clippy")],
       ],
     ],
   ])(
@@ -203,9 +224,7 @@ describe("the cargo executor", () => {
             expect({ name, status: result.status }).toEqual({ name, status: 0 });
           }
 
-          expect(taskCalls(workspace)).toEqual(
-            runs.map(([, command]) => rust([...command, ...select(workspace, "core-lib")])),
-          );
+          expect(taskCalls(workspace)).toEqual(runs.map(([, command]) => rust(command)));
         },
       ),
     HARNESS_TIMEOUT,
@@ -258,12 +277,13 @@ describe("the cargo executor", () => {
             "--profile",
             "release",
           ];
-          expect(taskCalls(workspace)).toEqual([
-            rust(["build", ...select(workspace, "core-lib"), ...flags, "--target", triple]),
-            rust(["check", ...select(workspace, "core-lib")]),
-            rust(["clippy", ...select(workspace, "core-lib")]),
+          expect(taskCalls(workspace).map(normalized)).toEqual([
+            // The host's triple keeps the build on the whole workspace.
+            rust(workspaceArgs("build", [...flags, "--target", triple])),
+            rust(workspaceArgs("check", [], false)),
+            rust(workspaceArgs("clippy", [], false)),
             // test runs on the host triple only.
-            rust(["test", ...select(workspace, "core-lib"), ...flags]),
+            ...testSteps(flags),
             rust(["fmt", "-p", "core-lib"]),
             rust(["doc", "--workspace"]),
             rust([
@@ -289,9 +309,7 @@ describe("the cargo executor", () => {
         const result = await nx(workspace, ["run", "core-lib:check", "--release", "--jobs=1"]);
 
         expect(result.status).toBe(0);
-        expect(taskCalls(workspace)).toEqual([
-          rust(["check", "--all-targets", ...select(workspace, "core-lib")]),
-        ]);
+        expect(taskCalls(workspace)).toEqual([rust(workspaceArgs("check"))]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -387,7 +405,7 @@ describe("the cargo executor", () => {
           const result = await nx(workspace, ["run", "core-lib:build"]);
 
           expect(result.status).toBe(0);
-          expect(taskCalls(workspace)).toEqual([rust(["build", ...select(workspace, "core-lib")])]);
+          expect(taskCalls(workspace)).toEqual([rust(workspaceArgs("build"))]);
           // The file applies to a cargo started in the crate's folder.
           const inCrate = spawnSync("cargo", ["build"], {
             cwd: join(workspace.root, "rust/crates/core"),
@@ -425,11 +443,7 @@ describe("the cargo executor", () => {
             args: ["metadata", "--format-version", "1", "--no-deps"],
             env: { RUSTUP_AUTO_INSTALL: null },
           },
-          {
-            cwd: "rust",
-            args: ["check", "--all-targets", ...select(workspace, "core-lib")],
-            env: { RUSTUP_AUTO_INSTALL: null },
-          },
+          { cwd: "rust", args: workspaceArgs("check"), env: { RUSTUP_AUTO_INSTALL: null } },
         ]);
       }),
     HARNESS_TIMEOUT,
@@ -482,10 +496,10 @@ describe("the cargo executor", () => {
           expect(result.status).toBe(0);
         }
 
-        const calls = taskCalls(workspace).map((call) => call.args.join(" "));
+        const calls = taskCalls(workspace).map((call) => normalized(call).args.join(" "));
         for (const call of [
-          "fmt -p perf",
-          "fmt -p cli",
+          // The two fmt tasks share a command.
+          "fmt -p cli -p perf",
           ["bench", ...select(workspace, "perf")].join(" "),
           ["run", ...select(workspace, "cli")].join(" "),
           "update",
@@ -661,7 +675,7 @@ describe("locked mode", () => {
     return [...taskCalls(workspace), ...lockfileCalls(workspace)]
       .map((call) => {
         expect(call.cwd).toBe("rust");
-        return call.args.join(" ");
+        return normalized(call).args.join(" ");
       })
       .sort();
   }
@@ -669,24 +683,19 @@ describe("locked mode", () => {
   // The commands of runAll with the locked option, sorted.
   const locked = (workspace: FixtureWorkspace): string[] => {
     const [cli, perf] = ["cli", "perf"].map((crate) => select(workspace, crate).join(" "));
+    // The tasks of each target share their commands.
     return [
       "audit",
       `bench ${perf} --locked`,
-      `build ${cli} --locked`,
-      `build ${perf} --locked`,
-      `check --all-targets ${cli} --locked`,
-      `check --all-targets ${perf} --locked`,
-      `clippy --all-targets ${cli} --locked`,
-      `clippy --all-targets ${perf} --locked`,
+      workspaceArgs("build", ["--locked"]).join(" "),
+      workspaceArgs("check", ["--locked"]).join(" "),
+      workspaceArgs("clippy", ["--locked"]).join(" "),
       "deny --locked check",
       "doc --no-deps --workspace --locked",
-      "fmt --check -p cli",
-      "fmt --check -p perf",
-      "fmt -p cli",
-      "fmt -p perf",
+      "fmt --check -p cli -p perf",
+      "fmt -p cli -p perf",
       `run ${cli} --locked`,
-      `test ${cli} --locked`,
-      `test ${perf} --locked`,
+      ...workspaceTestSteps(["--locked"]),
       "update",
       "update --workspace --locked",
     ].sort();
@@ -725,9 +734,7 @@ describe("locked mode", () => {
 
         const flag = passed ? ["--locked"] : [];
         expect(lockfileCalls(workspace)).toEqual([rust(["update", "--workspace", ...flag])]);
-        expect(taskCalls(workspace)).toEqual([
-          rust(["build", ...select(workspace, "perf"), ...flag]),
-        ]);
+        expect(taskCalls(workspace)).toEqual([rust(workspaceArgs("build", flag))]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -917,11 +924,8 @@ describe("a mixed repository", () => {
 
           expect(result.status).toBe(0);
           expect(result.output).toContain("web lint ran");
-          expect(sorted(taskCalls(workspace))).toEqual(
-            ["api", "codegen", "model", "testkit"].map((crate) =>
-              rust(["clippy", "--all-targets", ...select(workspace, crate)]),
-            ),
-          );
+          // The four crates' lint tasks share one clippy of the whole workspace.
+          expect(taskCalls(workspace)).toEqual([rust(workspaceArgs("clippy"))]);
         },
       ),
     HARNESS_TIMEOUT,

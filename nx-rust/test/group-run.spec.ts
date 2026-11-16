@@ -34,10 +34,10 @@ import {
 // The part of VER-BATCHING that runs a group of several crates with one cargo
 // command per step (DES-BATCH), with a real cargo in copies of the
 // batch-groups fixture: the group runner that the batch executor uses for
-// every group. Until a strategy of DES-UNIFICATION lets crates share a
-// command (nxr-8f9dz2), the batch forms only groups of one crate
-// (groupsShareCommands), so these tests form their groups with sharing on and
-// run them through the runner, as the batch would.
+// every group. These tests form their groups as the batch does and select
+// each crate with -p, as a strategy that selects crates does (`hakari` and
+// `cargo`, nxr-k64tm5); workspace-build.spec.ts covers groups that select the
+// whole workspace.
 
 const executors: Record<string, PluginExecutor> = {
   cargo: {
@@ -87,17 +87,25 @@ async function prepare(
   target: string,
   crates: readonly string[],
   env: NodeJS.ProcessEnv = workspace.cargo.environment(testEnvironment()),
+  layers: { own?: Record<string, unknown>; configuration?: Record<string, unknown> } = {},
 ): Promise<Prepared[]> {
   const { projects } = await workspace.graph();
   const configurations: Record<string, ProjectConfiguration> = projects;
   return crates.map((crate) => {
+    const configured = configurations[crate].targets?.[target];
+    // The target as Nx gives it: options of its own, which the crate's
+    // table, a project.json or targetDefaults set, without the configuration's.
+    const ownTarget =
+      layers.own === undefined || configured === undefined
+        ? configured
+        : { ...configured, options: { ...configured.options, ...layers.own } };
     const context: ExecutorContext = {
       root: workspace.root,
       cwd: workspace.root,
       isVerbose: false,
       projectName: crate,
       targetName: target,
-      target: configurations[crate].targets?.[target],
+      target: ownTarget,
       projectsConfigurations: { version: 2, projects: configurations },
       nxJsonConfiguration: {},
       // As Nx gives it to an executor: a node for each project, which Nx's
@@ -111,7 +119,7 @@ async function prepare(
       taskGraph: { tasks: {}, dependencies: {}, continuousDependencies: {}, roots: [] },
     };
     const executor = outputsTargets.has(target as never) ? executors.outputs : executors.cargo;
-    const options = { ...configurations[crate].targets?.[target]?.options };
+    const options = { ...ownTarget?.options, ...layers.configuration };
     const { records: _records, ...prepared } = prepareTask(executor, options, context, env);
     return { ...prepared, context };
   });
@@ -157,8 +165,8 @@ function passed(results: Record<string, { success: boolean }>): string[] {
 const all = ["base", "breakable", "dep", "devuser", "indep", "scripted", "user"];
 
 describe("a group of several crates", () => {
-  it("is not formed by the batch until a strategy lets crates share a command (nxr-8f9dz2)", () => {
-    expect(groupsShareCommands).toBe(false);
+  it("is formed by the batch since workspace-build lets crates share a command (nxr-8f9dz2)", () => {
+    expect(groupsShareCommands).toBe(true);
   });
 
   it(
@@ -407,8 +415,14 @@ describe("the groups of a batch", () => {
           ["indep"],
           ["scripted"],
         ]);
-        // The batch's own grouping, until nxr-8f9dz2: one crate per group.
+        // The batch's own grouping, with sharing on.
         expect(crates(formGroups(tasks))).toEqual([
+          ["base", "dep", "user"],
+          ["indep"],
+          ["scripted"],
+        ]);
+        // Without sharing, every task is a group of its own.
+        expect(crates(formGroups(tasks, false))).toEqual([
           ["base"],
           ["dep"],
           ["indep"],
@@ -427,6 +441,22 @@ describe("the groups of a batch", () => {
         // Tasks of two kinds never share a group.
         const tests = await prepare(workspace, "test", ["base"], env);
         expect(crates(formGroups([tasks[0], tests[0]], true))).toEqual([["base"], ["base"]]);
+        // A feature set that the crate's own options give it shares no group,
+        // also with tasks to which a configuration gives the same flags
+        // ("Groups of one crate" in DES-BATCH); the configuration's tasks do.
+        const fromConfiguration = await prepare(workspace, "check", ["base", "user"], env, {
+          configuration: { allFeatures: true },
+        });
+        const own = await prepare(workspace, "check", ["dep"], env, { own: { allFeatures: true } });
+        expect(own[0].ownFeatureSet).toBe(true);
+        expect(fromConfiguration.map((task) => task.ownFeatureSet)).toEqual([undefined, undefined]);
+        expect(
+          crates(formGroups([fromConfiguration[0], own[0], fromConfiguration[1]], true)),
+        ).toEqual([["base", "user"], ["dep"]]);
+        expect(crates(formGroups([own[0], fromConfiguration[0]], true))).toEqual([
+          ["dep"],
+          ["base"],
+        ]);
       } finally {
         workspace.remove();
       }

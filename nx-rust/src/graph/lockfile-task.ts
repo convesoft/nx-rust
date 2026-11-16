@@ -87,8 +87,14 @@ export function commandDigestFolder(workspaceRoot: string, commandId: string): s
  * @param target The lockfile task's name, as `targetNames` gives it.
  */
 export function lockfileDependency(workspaceRoot: string, target: string): TargetDependencyConfig {
-  return {
-    projects: [`directory:${workspaceRoot.replace(/[\\*?[\](){}!+@]/g, "\\$&")}`],
-    target,
-  };
+  return { projects: [directoryPattern(workspaceRoot)], target };
+}
+
+/**
+ * The `directory:` pattern with which a `dependsOn` entry names the project
+ * whose root is `root`, relative to the repository root, whatever name a
+ * `package.json` or `project.json` gives it ({@link lockfileDependency}).
+ */
+export function directoryPattern(root: string): string {
+  return `directory:${root.replace(/[\\*?[\](){}!+@]/g, "\\$&")}`;
 }

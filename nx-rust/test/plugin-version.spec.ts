@@ -14,6 +14,7 @@ import {
   taskCalls,
   withoutColours,
   withTargetDefaults,
+  workspaceArgs,
 } from "./harness";
 
 // The pluginVersion cases of VER-CACHE-KEYS and VER-SETUP: a pluginVersion
@@ -322,10 +323,7 @@ describe("a pluginVersion that only the run gives", () => {
         );
         expect(ownValue.status).toBe(0);
         expect(taskCalls(workspace)).toEqual<CargoCall[]>([
-          {
-            cwd: "rust",
-            args: ["check", "--all-targets", "-p", packageSpec(workspace.root, "rust", "core-lib")],
-          },
+          { cwd: "rust", args: workspaceArgs("check") },
         ]);
 
         workspace.cargo.clear();

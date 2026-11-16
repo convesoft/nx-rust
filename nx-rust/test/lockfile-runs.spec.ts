@@ -21,12 +21,14 @@ import {
   holdCargo,
   LocalRegistry,
   lockfileCalls,
-  packageSpec,
   pluginWorkers,
   pnpmLockfile,
   runNx,
   taskCalls,
   testEnvironment,
+  withoutRunner,
+  workspaceArgs,
+  workspaceTestSteps,
 } from "./harness";
 
 // Runs of the lockfile task with a real cargo and real Nx runs: the
@@ -61,9 +63,12 @@ function restored(output: string, task: string): boolean {
 /** The tasks that ran, by the cargo calls they made, as `<cwd>: <args>`, sorted. */
 function ran(workspace: FixtureWorkspace): string[] {
   return taskCalls(workspace)
-    .map((call) => `${call.cwd}: ${call.args.join(" ")}`)
+    .map((call) => withoutRunner(`${call.cwd}: ${call.args.join(" ")}`))
     .sort();
 }
+
+/** The check of the whole workspace in `folder` that a group of check tasks shares. */
+const checkAll = (folder = "rust") => `${folder}: ${workspaceArgs("check").join(" ")}`;
 
 /** A change that adds dependency lines to a manifest's `[dependencies]`, which it may lack. */
 function dependencies(...lines: string[]): (manifest: string | undefined) => string {
@@ -227,11 +232,8 @@ describe("the lockfile task", () => {
 
         expect(run.status).toBe(0);
         expect(read(workspace, "rust/Cargo.lock")).toBe(read(plain, "rust/Cargo.lock"));
-        expect(ran(workspace)).toEqual(
-          running.map(
-            (crate) => `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", crate)}`,
-          ),
-        );
+        // The tasks that run share one check of the whole workspace.
+        expect(ran(workspace)).toEqual(running.length === 0 ? [] : [checkAll()]);
         for (const crate of ["api", "codegen", "model", "testkit"]) {
           expect({ crate, restored: restored(run.output, `${crate}:check`) }).toEqual({
             crate,
@@ -392,7 +394,9 @@ describe("nx affected after a change to Cargo.lock", () => {
         // util does not reach zzlib, but its key holds app's digest
         // (DES-INPUTS, "Whole-workspace builds").
         expect(ran(workspace)).toEqual(
-          ["app", "util"].map((crate) => `.: test -p ${packageSpec(workspace.root, ".", crate)}`),
+          workspaceTestSteps()
+            .map((step) => `.: ${step}`)
+            .sort(),
         );
         expect(restored(run.output, "util:test")).toBe(false);
       } finally {
@@ -560,9 +564,7 @@ describe("the check after cargo's call", () => {
 
         expect(first.status).toBe(1);
         expect(first.output).toContain("api:check: the locked dependencies of api had the digest");
-        expect(ran(workspace)).toEqual([
-          `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "api")}`,
-        ]);
+        expect(ran(workspace)).toEqual([checkAll()]);
 
         // The next run keys api on the new digest and stores it.
         rmSync(join(workspace.root, "rust", "crates", "api", "project.json"));
@@ -604,9 +606,7 @@ describe("the check after cargo's call", () => {
 
           // The task runs, also the second time, and repeats the warning.
           expect({ run, status: result.status }).toEqual({ run, status: 0 });
-          expect(ran(workspace)).toEqual([
-            `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "model")}`,
-          ]);
+          expect(ran(workspace)).toEqual([checkAll()]);
           expect(lockfileCalls(workspace)).toEqual([]);
           expect(result.output).toContain(warning);
           expect(restored(result.output, "model:check")).toBe(false);
@@ -726,13 +726,21 @@ describe("the check after cargo's call", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each<[string, string[], Env]>([
-    ["", [], {}],
-    [", also in a batch", ["--batch"], {}],
-    [", and with NX_CACHE_FAILURES=true stores the failure", [], { NX_CACHE_FAILURES: "true" }],
+  it.each<[string, string[], Env, string[]]>([
+    ["", [], {}, ["a"]],
+    [", also in a batch", ["--batch"], {}, ["a"]],
+    [
+      ", and with NX_CACHE_FAILURES=true stores the failure",
+      [],
+      { NX_CACHE_FAILURES: "true" },
+      ["a"],
+    ],
+    // a and c share one cargo command, after which each compares every
+    // digest that its own key holds.
+    [", also for each task of a group of two crates", [], {}, ["a", "c"]],
   ])(
     "fails a task whose own digest stays the same while another member's changes during the run, under the workspace-build strategy, and the next run builds it under a new key%s",
-    async (_case, flags, cacheFailures) => {
+    async (_case, flags, cacheFailures, crates) => {
       // The workspace of EVD-HAKARI-UNIFICATION, "A sibling's lockfile
       // change": a depends on the member c, and b on g, a crate in a git
       // repository whose first commit asks c for fx and whose second for fy;
@@ -791,10 +799,13 @@ describe("the check after cargo's call", () => {
         cargo(workspace, "sibling", "generate-lockfile");
         cargo(workspace, "sibling", "update", "-p", "g", "--precise", commits[0]);
         const first = read(workspace, "sibling/Cargo.lock");
-        const raced = nx(workspace, ["run", "a:build", ...flags], {
-          ...hold.env,
-          ...cacheFailures,
-        });
+        const raced = nx(
+          workspace,
+          crates.length === 1
+            ? ["run", "a:build", ...flags]
+            : ["run-many", "-t", "build", "-p", ...crates, ...flags],
+          { ...hold.env, ...cacheFailures },
+        );
         await hold.held();
         cargo(workspace, "sibling", "update", "-p", "g", "--precise", commits[1]);
         const second = read(workspace, "sibling/Cargo.lock");
@@ -804,10 +815,14 @@ describe("the check after cargo's call", () => {
         hold.release();
         const run = await raced;
 
-        const build = [`sibling: build -p ${packageSpec(workspace.root, "sibling", "a")}`];
+        const build = [`sibling: ${workspaceArgs("build").join(" ")}`];
         expect(run.status).toBe(1);
         expect(ran(workspace)).toEqual(build);
-        expect(run.output).toContain("a:build: the locked dependencies of b had the digest");
+        for (const name of crates) {
+          expect(run.output).toContain(
+            `${name}:build: the locked dependencies of b had the digest`,
+          );
+        }
         expect(run.output).toContain("now Cargo.lock gives");
 
         // With the first lockfile back, Nx replays the failure where it
@@ -922,9 +937,7 @@ describe("a run that excludes task dependencies", () => {
       try {
         const first = await nx(workspace, ["run-many", "-t", "check", "-p", "model"], daemon);
         expect(first.status).toBe(0);
-        expect(ran(workspace)).toEqual([
-          `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "model")}`,
-        ]);
+        expect(ran(workspace)).toEqual([checkAll()]);
 
         for (const flag of [
           ["run", "model:check", "--exclude-task-dependencies"],
@@ -944,7 +957,7 @@ describe("a run that excludes task dependencies", () => {
           expect({ flag, status: run.status }).toEqual({ flag, status: 0 });
           expect({ flag, ran: ran(workspace) }).toEqual({
             flag,
-            ran: [`rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "model")}`],
+            ran: [checkAll()],
           });
           expect(lockfileCalls(workspace)).toEqual([]);
         }
@@ -955,9 +968,7 @@ describe("a run that excludes task dependencies", () => {
           ["run", "model:check", "--exclude-task-dependencies"],
           daemon,
         );
-        expect(ran(workspace)).toEqual([
-          `rust: check --all-targets -p ${packageSpec(workspace.root, "rust", "model")}`,
-        ]);
+        expect(ran(workspace)).toEqual([checkAll()]);
         expect(excluded.status).toBe(0);
         cargo(workspace, "rust", "update", "-p", "zzlib", "--precise", "1.0.0");
 

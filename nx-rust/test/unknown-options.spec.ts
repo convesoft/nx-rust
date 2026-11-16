@@ -15,6 +15,9 @@ import {
   taskCalls,
   testEnvironment,
   withTargetDefaults,
+  withoutRunner,
+  workspaceArgs,
+  workspaceTestSteps,
 } from "./harness";
 
 // VER-UNKNOWN-OPTIONS: real Nx runs in the crate-shapes fixture, whose tasks
@@ -59,6 +62,18 @@ const select = (workspace: FixtureWorkspace, crate: string): string[] => [
   "-p",
   packageSpec(workspace.root, "rust", crate),
 ];
+
+/** The cargo calls of tasks, with the selecting runner's paths written as `withoutRunner` writes them. */
+const calls = (workspace: FixtureWorkspace) =>
+  taskCalls(workspace).map((call) => ({
+    ...call,
+    args: withoutRunner(call.args.join("\u0000")).split("\u0000"),
+  }));
+
+/** The build and the test steps of crate-shapes' crates under workspace-build. */
+const buildCall = rust(workspaceArgs("build"));
+const checkCall = rust(workspaceArgs("check"));
+const testCalls = workspaceTestSteps().map((step) => rust(step.split(" ")));
 
 /** How Nx marks a task that it restored from the cache, with or without copying outputs. */
 const hit = String.raw`\[(?:local cache|existing outputs match the cache, left as is)\]`;
@@ -109,15 +124,9 @@ describe("an option that the executor does not know", () => {
       inFixture("crate-shapes", undefined, async (workspace) => {
         const command = ["run-many", "-t", "test", "build", "-p", "core-lib", "cli"];
         expect((await runNx(workspace, command)).status).toBe(0);
-        const plain = sortedCalls(taskCalls(workspace));
-        expect(plain).toEqual(
-          sortedCalls(
-            ["core-lib", "cli"].flatMap((crate) => [
-              rust(["test", ...select(workspace, crate)]),
-              rust(["build", ...select(workspace, crate)]),
-            ]),
-          ),
-        );
+        const plain = sortedCalls(calls(workspace));
+        // Each target's two tasks share their commands.
+        expect(plain).toEqual(sortedCalls([buildCall, ...testCalls]));
 
         setTargetDefaults(workspace, passWithNoTests);
         for (const extra of [[], ["--batch=false"], ["--batch"]]) {
@@ -125,7 +134,18 @@ describe("an option that the executor does not know", () => {
           const result = await runNx(workspace, [...command, "--coverage", ...extra]);
 
           expect(result.status).toBe(0);
-          expect(sortedCalls(taskCalls(workspace))).toEqual(plain);
+          // Run on its own, each task runs its group's steps itself: cli has
+          // no library and so no doctest step.
+          expect(sortedCalls(calls(workspace))).toEqual(
+            extra[0] === "--batch=false"
+              ? sortedCalls([
+                  buildCall,
+                  buildCall,
+                  ...testCalls,
+                  ...workspaceTestSteps([], false).map((step) => rust(step.split(" "))),
+                ])
+              : plain,
+          );
           for (const crate of ["core-lib", "cli"]) {
             expect(linesFor(result.output, `${crate}:test`, "passWithNoTests")).toEqual([
               fromConfiguration(`${crate}:test`, "passWithNoTests"),
@@ -177,7 +197,7 @@ describe("an option that the executor does not know", () => {
 
         expect(changed.status).toBe(0);
         expect(restoredTasks(changed.output)).toEqual([]);
-        expect(sortedCalls(taskCalls(workspace))).toEqual(plain);
+        expect(sortedCalls(calls(workspace))).toEqual(plain);
       }),
     HARNESS_TIMEOUT,
   );
@@ -335,7 +355,7 @@ describe("an option passed on the command line", () => {
   const test = ["test"];
   /**
    * A command line, the lines that its run prints about ignored options, and
-   * its cargo call up to the selection of core-lib, which comes last.
+   * what its cargo calls are: those of `test`, or the check.
    */
   type Run = [args: string[], lines: string[], command: string[]];
   const coverage: Run = [
@@ -382,8 +402,8 @@ describe("an option passed on the command line", () => {
             expect({ args, status: result.status }).toEqual({ args, status: 0 });
             expect({ args, lines: linesWith(result.output, "ignoring") }).toEqual({ args, lines });
           }
-          expect(taskCalls(workspace)).toEqual(
-            runs.map(([, , command]) => rust([...command, ...select(workspace, "core-lib")])),
+          expect(calls(workspace)).toEqual(
+            runs.flatMap(([, , command]) => (command === test ? testCalls : [checkCall])),
           );
           // The daemon ran the hook where it was on.
           expect(workspace.daemonLog() !== "").toBe(env.NX_DAEMON === "true");
@@ -414,10 +434,7 @@ describe("an option passed on the command line", () => {
         expect(linesWith(ignored.output, "ignoring")).toEqual([
           fromCommandLine("core-lib:test", "coverage"),
         ]);
-        expect(taskCalls(workspace)).toEqual([
-          rust(["build", ...select(workspace, "core-lib")]),
-          rust(["test", ...select(workspace, "core-lib")]),
-        ]);
+        expect(calls(workspace)).toEqual([buildCall, ...testCalls]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -503,9 +520,7 @@ describe("an option passed on the command line", () => {
         expect(linesWith(result.output, "ignoring")).toEqual([
           fromCommandLine("internal:check", "coverage"),
         ]);
-        expect(taskCalls(workspace)).toEqual([
-          rust(["check", "--all-targets", ...select(workspace, "internal")]),
-        ]);
+        expect(taskCalls(workspace)).toEqual([checkCall]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -531,10 +546,7 @@ describe("an option that the target does not take", () => {
         expect(linesWith(allTargets.output, "ignoring")).toEqual([
           notTakenFromCommandLine("core-lib:build", "allTargets"),
         ]);
-        expect(taskCalls(workspace)).toEqual([
-          rust(["test", ...select(workspace, "core-lib")]),
-          rust(["build", ...select(workspace, "core-lib")]),
-        ]);
+        expect(calls(workspace)).toEqual([...testCalls, buildCall]);
       }),
     HARNESS_TIMEOUT,
   );
@@ -620,7 +632,7 @@ describe("an option of a target that another executor starts in code", () => {
           const builds = taskCalls(workspace).filter((call) => call.args[0] === "build");
           expect(builds.length).toBe(dependsOn.length === 0 ? 2 : 4);
           for (const call of builds) {
-            expect(call).toEqual(rust(["build", ...select(workspace, "core-lib")]));
+            expect(call).toEqual(buildCall);
           }
         },
       ),
@@ -639,9 +651,7 @@ describe("a command whose arguments are too long to record", () => {
         const result = await runNx(workspace, ["run", "core-lib:check", ...long]);
 
         expect(result.status).toBe(0);
-        expect(taskCalls(workspace)).toEqual([
-          rust(["check", "--all-targets", ...select(workspace, "core-lib")]),
-        ]);
+        expect(taskCalls(workspace)).toEqual([checkCall]);
         expect(linesWith(result.output, "ignoring")).toEqual(
           names.map((name) => fromConfiguration("core-lib:check", name)),
         );

@@ -37,6 +37,7 @@ export const fixtureNames = [
   "release-crates",
   "shared-executables",
   "publish-crates",
+  "workspace-tests",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

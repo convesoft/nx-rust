@@ -1,18 +1,39 @@
 import type { ExecutorContext } from "@nx/devkit";
 import { spawn } from "node:child_process";
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  fstatSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { type CargoInvocation, cargoEnvironment, printCommand } from "./cargo-invocation";
 import {
   type CommandEnd,
   commandEnd,
   type CrateOutcome,
   type OutputCrate,
+  type OutputScope,
   readJsonStep,
   readTestStep,
 } from "./cargo-output";
+import type { CargoStep } from "./command";
 import { checksAfterCargo, type GroupInvocation, type PreparedTask } from "./task";
+import { packagesVariable, type RecordEntry, recordVariable } from "./test-runner";
+import {
+  readDoctestStep,
+  readTestBinariesStep,
+  readTestsBuildStep,
+  type RunnerRecord,
+  type RunnerRecords,
+} from "./test-steps";
 
 /** A task of a group whose checks before cargo passed, with the group's command. */
 export interface GroupMember {
@@ -33,75 +54,173 @@ export interface MemberResult {
 }
 
 /**
+ * What a batch shows of cargo's output while a group's command runs, besides
+ * each task's result (`DES-BATCH`, "Cargo's output while a batch runs"):
+ *
+ * - `lines`: cargo's lines as they arrive, on the batch process's standard
+ *   error, where Nx's terminal UI shows them in the batch's pane;
+ * - `status`: one line each time a cargo command starts, naming the command,
+ *   its crates and the step;
+ * - `none`: nothing, as for a task run on its own, whose output is its own.
+ *
+ * Neither line belongs to a task: no task's stored output changes.
+ */
+export type LiveOutput = "lines" | "status" | "none";
+
+/**
+ * What a batch process shows of cargo's output while it runs
+ * ({@link LiveOutput}): its lines under Nx's terminal UI, which Nx tells the
+ * batch process with `NX_TUI=true`, and a status line in every other output
+ * style, which the batch process cannot tell apart (`EVD-NX-24-BATCHES`,
+ * "Terminal output"). The maintainer chose this on 15 November 2026.
+ *
+ * @param batchEnv The batch process's own environment.
+ */
+// @mara implements DES-BATCH
+export function batchLiveOutput(batchEnv: NodeJS.ProcessEnv): LiveOutput {
+  return batchEnv.NX_TUI === "true" ? "lines" : "status";
+}
+
+/**
  * Runs a group of tasks (`TERM-GROUP`): one cargo command for each step of
  * their target, in the workspace root with the group's environment, and the
- * checks that follow cargo for each task whose crate passed (`DES-BATCH`).
- * Every target has one step for now: the `test` of the nextest runner,
- * which has more (`DES-TEST-RUN`), is not implemented yet.
+ * checks that follow cargo for each task whose crate passed every step
+ * (`DES-BATCH`).
  *
  * Cargo's standard output and error go to one file, so that the output
- * keeps the order in which cargo and the test executables wrote it, and
- * nothing of it reaches the batch process's own output, which belongs to no
- * task (`EVD-NX-24-BATCHES`).
+ * keeps the order in which cargo and the test executables wrote it, and only
+ * what {@link LiveOutput} asks for reaches the batch process's own output,
+ * which belongs to no task (`EVD-NX-24-BATCHES`).
  *
- * A group of one crate runs the command that the task runs on its own and
- * passes where cargo exits with status 0, with the whole output as its
- * own. A group of several crates reads which crates passed from cargo's
- * output ({@link readJsonStep}, {@link readTestStep}); a step whose output
- * shows no result per crate, such as that of `cargo fmt`, fails every task
- * of the group when cargo fails. A task passes only where cargo's output
- * shows that its crate passed.
+ * Each step runs even where a step before it failed for some crates, and a
+ * step is left out where no crate of the group can take part any more:
+ * where every task has failed, and for the doctests where no crate of the
+ * group has a library. A group of one crate, and a group of one task that
+ * selects its crate, runs the command that its task runs on its own and
+ * passes where cargo exits with status 0, with the whole output as its own.
+ * A group that selects the whole workspace, and a group of several crates,
+ * reads which crates passed from cargo's output ({@link readJsonStep},
+ * {@link readTestStep} and the steps of `test-steps.ts`); a step whose
+ * output shows no result per crate, such as that of `cargo fmt`, fails
+ * every task of the group when cargo fails. A task passes only where cargo's
+ * output shows that its crate passed.
  *
  * Then each task whose crate passed runs the checks that a task run on its
  * own runs after cargo (`DES-LOCKFILE-HASHING`, "Post-check";
  * `DES-BUILD-INPUT-CHECK`), so that no task of a batch skips one.
  *
- * In a verbose run, the batch process prints each command's lines itself,
- * once, before cargo starts, with a first line that names the tasks of the
- * command, so that they belong to no task's output (`DES-INVOCATION`,
- * "Printing the command"): from the invocation that cargo is started with,
- * through {@link printCommand}, as a task run on its own prints them.
+ * In a verbose run, each command's lines are printed once, before cargo
+ * starts, with a first line that names the tasks of the command, so that
+ * they belong to no task's output in a batch (`DES-INVOCATION`, "Printing
+ * the command"): from the invocation that cargo is started with, through
+ * {@link printCommand}.
  *
  * @param members The tasks of one group, all with the same command.
- * @param verbose Whether the batch runs verbosely, as `batchRunsVerbosely`
- *   decides once for the batch from the batch process's own environment.
+ * @param verbose Whether the run is verbose: as `batchRunsVerbosely`
+ *   decides once for the batch, or `taskRunsVerbosely` for a task on its own.
+ * @param live What the batch shows of cargo's output while it runs.
  * @returns One result per member, in order.
  */
 // @mara implements DES-BATCH
 // @mara implements DES-INVOCATION
+// @mara implements DES-TEST-RUN
 export async function runGroup(
   members: readonly GroupMember[],
   verbose = false,
+  live: LiveOutput = "none",
 ): Promise<MemberResult[]> {
   const [first] = members;
   if (first === undefined) {
     return [];
   }
-  // The group's command, which cargo is started with and which a verbose
-  // run prints.
-  const invocation: CargoInvocation = {
-    args: first.invocation.args,
-    cwd: first.invocation.cwd,
-    ...(first.invocation.env === undefined ? {} : { env: first.invocation.env }),
-  };
-  if (verbose) {
-    await printCommand(members.map((member) => member.prepared.task).join(", "), invocation);
+  const { cwd } = first.invocation;
+  const steps: CargoStep[] = (
+    first.invocation.steps ?? [{ kind: "command", args: first.invocation.args }]
+  ).filter((step) => step.kind !== "doctests" || members.some(hasLibrary));
+  const crates: OutputCrate[] = members.map(({ prepared, invocation }) => ({
+    task: prepared.task,
+    name: prepared.crate ?? "",
+    spec: invocation.crate?.spec ?? "",
+    ...(invocation.package === undefined ? {} : { package: invocation.package }),
+    selection: prepared.options,
+  }));
+  const scope: OutputScope | undefined =
+    first.invocation.workspaceMembers === undefined
+      ? undefined
+      : { members: first.invocation.workspaceMembers, root: cwd };
+  const state = members.map(() => ({ failed: false, lines: [] as string[] }));
+  const label = members.map((member) => member.prepared.task).join(", ");
+  for (const [index, step] of steps.entries()) {
+    if (state.every((entry) => entry.failed)) {
+      break;
+    }
+    const record =
+      step.kind === "test-binaries" ? mkdtempSync(join(tmpdir(), "nx-rust-record-")) : undefined;
+    const packages = `:${crates.map((crate) => crate.name).join(":")}:`;
+    const invocation: CargoInvocation = {
+      args: step.args,
+      cwd,
+      ...(record === undefined
+        ? first.invocation.env === undefined
+          ? {}
+          : { env: first.invocation.env }
+        : {
+            env: {
+              ...first.invocation.env,
+              [packagesVariable]: packages,
+              [recordVariable]: record,
+            },
+          }),
+    };
+    try {
+      if (live === "status") {
+        await writeStderr(
+          `@convesoft/nx-rust: cargo ${step.args[0]} for ${members
+            .map((member) => member.prepared.crate ?? member.prepared.task.split(":")[0])
+            .join(", ")} (step ${index + 1} of ${steps.length})\n`,
+        );
+      }
+      if (verbose) {
+        await printCommand(label, invocation);
+      }
+      const run = await runCaptured(invocation, first.prepared.env, live === "lines");
+      const end = commandEnd(run.code, run.signal, run.failure);
+      const outcomes = readStep(
+        step,
+        run.output,
+        end,
+        crates,
+        members,
+        scope,
+        record,
+        packages,
+        first.invocation.runner,
+      );
+      outcomes.forEach((outcome, at) => {
+        const entry = state[at];
+        if (outcome.output !== "") {
+          entry.lines.push(outcome.output);
+        }
+        if (end.kind === "unexplained") {
+          entry.lines.push(`${members[at].prepared.task}: ${end.reason}.`);
+        }
+        if (outcome.message !== undefined) {
+          entry.lines.push(outcome.message);
+        }
+        if (!outcome.passed) {
+          entry.failed = true;
+        }
+      });
+    } finally {
+      if (record !== undefined) {
+        removeRecord(record);
+      }
+    }
   }
-  const run = await runCaptured(invocation, first.prepared.env);
-  const end = commandEnd(run.code, run.signal, run.failure);
-  const outcomes: CrateOutcome[] =
-    members.length === 1
-      ? [{ passed: end.kind === "succeeded", output: run.output }]
-      : sharedOutcomes(members, run.output, end);
   return Promise.all(
     members.map(async (member, index) => {
-      const outcome = outcomes[index];
-      const lines = [
-        ...(outcome.output === "" ? [] : [outcome.output]),
-        ...(end.kind === "unexplained" ? [`${member.prepared.task}: ${end.reason}.`] : []),
-        ...(outcome.message === undefined ? [] : [outcome.message]),
-      ];
-      if (!outcome.passed) {
+      const { failed, lines } = state[index];
+      if (failed) {
         return { success: false, output: lines.join("\n") };
       }
       const { failures, warnings } = await checksAfterCargo(member.invocation, member.context);
@@ -113,25 +232,71 @@ export async function runGroup(
   );
 }
 
-// What the output of a command for several crates shows for each of them.
-function sharedOutcomes(
-  members: readonly GroupMember[],
+// Whether a member's crate has a library, whose doctests the doctest step runs.
+function hasLibrary(member: GroupMember): boolean {
+  return (member.invocation.package?.targets ?? []).some(
+    (target) =>
+      !target.kind.some((kind) =>
+        ["bin", "test", "example", "bench", "custom-build"].includes(kind),
+      ),
+  );
+}
+
+// What one step's output shows for each crate.
+function readStep(
+  step: CargoStep,
   output: string,
   end: CommandEnd,
+  crates: readonly OutputCrate[],
+  members: readonly GroupMember[],
+  scope: OutputScope | undefined,
+  record: string | undefined,
+  packages: string,
+  runner: readonly string[] | undefined,
 ): CrateOutcome[] {
-  const crates: OutputCrate[] = members.map(({ prepared, invocation }) => ({
-    task: prepared.task,
-    name: prepared.crate ?? "",
-    spec: invocation.crate?.spec ?? "",
-    ...(invocation.package === undefined ? {} : { package: invocation.package }),
-    selection: prepared.options,
-  }));
+  switch (step.kind) {
+    case "tests-build":
+      return readTestsBuildStep(output, end, crates, scope as OutputScope);
+    case "test-binaries":
+      return readTestBinariesStep(
+        output,
+        end,
+        crates,
+        scope as OutputScope,
+        readRecords(record as string),
+        { command: runner ?? [], packages },
+      );
+    case "doctests":
+      return readDoctestStep(output, end, crates, scope as OutputScope);
+    case "command":
+      if (members.length === 1 && scope === undefined) {
+        return [{ passed: end.kind === "succeeded", output }];
+      }
+      return sharedOutcomes(members, crates, output, end, scope);
+  }
+}
+
+// What the output of a command for several crates, or for the whole
+// workspace, shows for each crate.
+function sharedOutcomes(
+  members: readonly GroupMember[],
+  crates: readonly OutputCrate[],
+  output: string,
+  end: CommandEnd,
+  scope: OutputScope | undefined,
+): CrateOutcome[] {
   switch (members[0].prepared.target) {
     case "build":
-      return readJsonStep(output, end, crates, false);
+      return readJsonStep(output, end, crates, false, scope);
     case "check":
     case "lint":
-      return readJsonStep(output, end, crates, members[0].prepared.options.allTargets === true);
+      return readJsonStep(
+        output,
+        end,
+        crates,
+        members[0].prepared.options.allTargets === true,
+        scope,
+      );
     case "test":
       return readTestStep(output, end, crates);
     default:
@@ -145,6 +310,58 @@ function sharedOutcomes(
             },
       );
   }
+}
+
+/**
+ * What the selecting runner recorded in `folder` ({@link RunnerRecords}):
+ * one record per file, each a start followed by what came after it.
+ */
+export function readRecords(folder: string): RunnerRecords {
+  let files: string[];
+  try {
+    files = readdirSync(folder).sort();
+  } catch (error) {
+    return { unreadable: error instanceof Error ? error.message : String(error) };
+  }
+  const records: RunnerRecord[] = [];
+  for (const file of files) {
+    let text: string;
+    try {
+      text = readFileSync(join(folder, file), "utf8");
+    } catch (error) {
+      return { unreadable: error instanceof Error ? error.message : String(error) };
+    }
+    const record: RunnerRecord = { file, after: [] };
+    const lines = text.split("\n").filter((line) => line !== "");
+    for (const [index, line] of lines.entries()) {
+      let entry: RecordEntry;
+      try {
+        entry = JSON.parse(line) as RecordEntry;
+      } catch {
+        record.malformed ??= line;
+        continue;
+      }
+      if (index === 0 && "start" in entry) {
+        record.start = entry.start;
+      } else if (index > 0 && !("start" in entry)) {
+        record.after.push(entry);
+      } else {
+        record.malformed ??= line;
+      }
+    }
+    records.push(record);
+  }
+  return { records };
+}
+
+// Removes a record folder, also one whose permissions a test took away.
+function removeRecord(folder: string): void {
+  try {
+    chmodSync(folder, 0o700);
+  } catch {
+    // Already gone or not ours: rmSync reports nothing either way.
+  }
+  rmSync(folder, { recursive: true, force: true });
 }
 
 /** What a cargo command printed and how it ended. */
@@ -161,19 +378,25 @@ interface CapturedRun {
 
 /**
  * Runs cargo with the group's environment and the variables of the
- * invocation, which no command of this version has, as for a task run on its
- * own (`DES-INVOCATION`), and its standard output and error both written to
- * one file in a folder of its own under the system's temporary folder, which
- * is removed afterwards. Signals that stop the batch reach cargo too.
+ * invocation, as for a task run on its own (`DES-INVOCATION`), and its
+ * standard output and error both written to one file in a folder of its own
+ * under the system's temporary folder, which is removed afterwards. Signals
+ * that stop the process reach cargo too.
+ *
+ * @param showLines Whether cargo's lines also go to this process's standard
+ *   error as they arrive ({@link LiveOutput}): read back from the file, so
+ *   that the file, and with it every task's output, is the same either way.
  */
 // @mara implements DES-INVOCATION
 async function runCaptured(
   invocation: CargoInvocation,
   taskEnv: NodeJS.ProcessEnv,
+  showLines: boolean,
 ): Promise<CapturedRun> {
   const folder = mkdtempSync(join(tmpdir(), "nx-rust-"));
   const file = join(folder, "output");
   let fd: number | undefined = openSync(file, "w");
+  const shown = showLines ? new LineForwarder(file) : undefined;
   try {
     const end = await new Promise<{
       code: number | null;
@@ -210,6 +433,7 @@ async function runCaptured(
     });
     closeSync(fd);
     fd = undefined;
+    await shown?.stop();
     return {
       code: end.code,
       signal: end.signal,
@@ -217,9 +441,90 @@ async function runCaptured(
       ...(end.failure === undefined ? {} : { failure: end.failure }),
     };
   } finally {
+    shown?.close();
     if (fd !== undefined) {
       closeSync(fd);
     }
     rmSync(folder, { recursive: true, force: true });
   }
+}
+
+/**
+ * Writes the lines that cargo adds to a file to this process's standard
+ * error while cargo runs: each line of text as it is, the rendered
+ * diagnostic of a JSON `compiler-message`, and no other JSON message, which
+ * is for the plugin and not for people.
+ */
+class LineForwarder {
+  private readonly fd: number;
+  private offset = 0;
+  private partial = "";
+  private readonly decoder = new StringDecoder("utf8");
+  private readonly timer: NodeJS.Timeout;
+
+  constructor(file: string) {
+    this.fd = openSync(file, "r");
+    this.timer = setInterval(() => this.pump(), 100);
+  }
+
+  /** Writes what is left once cargo has ended, and resolves once it is out. */
+  async stop(): Promise<void> {
+    clearInterval(this.timer);
+    this.pump();
+    this.partial += this.decoder.end();
+    if (this.partial !== "") {
+      this.emit(this.partial);
+      this.partial = "";
+    }
+    await writeStderr("");
+  }
+
+  close(): void {
+    clearInterval(this.timer);
+    try {
+      closeSync(this.fd);
+    } catch {
+      // Closed already.
+    }
+  }
+
+  private pump(): void {
+    const size = fstatSync(this.fd).size;
+    if (size <= this.offset) {
+      return;
+    }
+    const buffer = Buffer.alloc(size - this.offset);
+    const read = readSync(this.fd, buffer, 0, buffer.length, this.offset);
+    this.offset += read;
+    const text = this.partial + this.decoder.write(buffer.subarray(0, read));
+    const lines = text.split("\n");
+    this.partial = lines.pop() ?? "";
+    for (const line of lines) {
+      this.emit(line);
+    }
+  }
+
+  private emit(line: string): void {
+    if (line.startsWith('{"reason":')) {
+      try {
+        const message = JSON.parse(line) as {
+          reason?: string;
+          message?: { rendered?: string | null };
+        };
+        const rendered = message.reason === "compiler-message" ? message.message?.rendered : null;
+        if (typeof rendered === "string" && rendered !== "") {
+          process.stderr.write(rendered.endsWith("\n") ? rendered : `${rendered}\n`);
+        }
+        return;
+      } catch {
+        // Not cargo's: shown as text.
+      }
+    }
+    process.stderr.write(`${line}\n`);
+  }
+}
+
+// Writes to this process's standard error and resolves once it is out.
+function writeStderr(text: string): Promise<void> {
+  return new Promise((resolve) => process.stderr.write(text, () => resolve()));
 }

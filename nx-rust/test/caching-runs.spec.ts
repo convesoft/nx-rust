@@ -26,6 +26,8 @@ import {
   testEnvironment,
   toolchainProgram,
   withoutColours,
+  taskOutput,
+  workspaceArgs,
 } from "./harness";
 
 // Checks with real Nx runs of the plugin's executor what the caching of
@@ -140,8 +142,8 @@ describe("a run with the plugin's executor", () => {
 
         const output = await run();
 
-        // Only the uncached fmt ran cargo again.
-        expect(taskCalls(workspace)).toEqual(["fmt -p cli", "fmt -p core-lib"]);
+        // Only the uncached fmt ran cargo again, one command for both crates.
+        expect(taskCalls(workspace)).toEqual(["fmt -p cli -p core-lib"]);
         for (const task of ["cli:build", "core-lib:test", "cli:lint", "rust:doc"]) {
           expect(output).toMatch(new RegExp(`nx run ${task}\\s+${hit}`));
         }
@@ -180,9 +182,7 @@ describe("a run with the plugin's executor", () => {
         expect(second.status).toBe(0);
         expect(second.output).toMatch(new RegExp(hit));
         expect(second.output).not.toContain('sets "cache": true');
-        expect(taskCalls(workspace)).toEqual([
-          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
-        ]);
+        expect(taskCalls(workspace)).toEqual([workspaceArgs("build").join(" ")]);
       } finally {
         workspace.remove();
       }
@@ -275,9 +275,9 @@ describe("a run with the plugin's executor", () => {
         const result = await nx(workspace, ["run", task], env(workspace.root));
         expect(result.status).toBe(0);
         // The task's own output starts after its header; graph creation prints before it.
-        const taskOutput = result.output.slice(result.output.indexOf(`> nx run ${task}`));
-        expect(taskOutput).toContain(warning);
-        expect(taskOutput).toContain(remedy);
+        const ownOutput = taskOutput(result.output, task);
+        expect(ownOutput).toContain(warning);
+        expect(ownOutput).toContain(remedy);
 
         workspace.reset({
           "nx.json": "{}\n",
@@ -359,7 +359,7 @@ describe("a run with the plugin's executor", () => {
         const env = { CARGO_BUILD_TARGET: hostTriple() };
         await expectRestored(workspace, env, [hostTriple()]);
         expect(taskCalls(workspace)).toEqual([
-          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+          workspaceArgs("build").join(" "),
           "doc --no-deps --workspace",
         ]);
       } finally {
@@ -484,7 +484,7 @@ describe("a run with the plugin's executor", () => {
       try {
         await expectRestored(workspace, {}, [hostTriple()]);
         expect(taskCalls(workspace)).toEqual([
-          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
+          workspaceArgs("build").join(" "),
           "doc --no-deps --workspace",
         ]);
       } finally {
@@ -750,9 +750,7 @@ describe("a run with the plugin's executor", () => {
         expect(restored.output).toMatch(new RegExp(`nx run tools:build\\s+${hit}`));
         expect(existsSync(binary)).toBe(true);
         expect(existsSync(join(workspace.root, "tools", "target"))).toBe(false);
-        expect(taskCalls(workspace)).toEqual([
-          `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
-        ]);
+        expect(taskCalls(workspace)).toEqual([workspaceArgs("build").join(" ")]);
       } finally {
         workspace.remove();
       }
@@ -915,8 +913,8 @@ if (!pinnedToolchainBesideDefault()) {
           );
           expect(programVersion(links.rustc)).not.toBe(old);
           expect(taskCalls(workspace)).toEqual([
-            `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
-            `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
+            workspaceArgs("build").join(" "),
+            workspaceArgs("build").join(" "),
           ]);
         } finally {
           workspace.remove();
@@ -945,8 +943,8 @@ if (!pinnedToolchainBesideDefault()) {
             () => programVersion(pinned),
           );
           expect(taskCalls(workspace)).toEqual([
-            `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
-            `build -p ${packageSpec(workspace.root, "tools", "tools")}`,
+            workspaceArgs("build").join(" "),
+            workspaceArgs("build").join(" "),
           ]);
         } finally {
           workspace.remove();

@@ -1,4 +1,4 @@
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import type { CargoPackage, CargoTarget } from "../cargo/metadata";
 import { type BuildSelection, enabledFeatures } from "./build-records";
 
@@ -20,6 +20,25 @@ export interface OutputCrate {
   package?: CargoPackage;
   /** The task's feature selection, which decides the targets whose required features are on. */
   selection: BuildSelection;
+}
+
+/**
+ * Escape sequences that a terminal reads: CSI sequences such as colours, and
+ * OSC sequences such as hyperlinks, which cargo writes where
+ * `CARGO_TERM_COLOR=always` or `term.hyperlinks` asks for them.
+ */
+// eslint-disable-next-line no-control-regex
+const escapeSequences = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
+
+/**
+ * A line of cargo's human-readable output without terminal escape
+ * sequences, which the reading matches, while a task's output keeps the
+ * line as cargo wrote it: cargo colours its status lines, errors and lists
+ * where `CARGO_TERM_COLOR=always` asks it to, as CI configurations set it.
+ * JSON messages are written without them.
+ */
+export function plainLine(line: string): string {
+  return line.includes("\u001b") ? line.replace(escapeSequences, "") : line;
 }
 
 /** What a step's output shows for one crate. */
@@ -69,10 +88,24 @@ export function commandEnd(
 }
 
 /**
+ * The members of the workspace of a command that selects the whole
+ * workspace (`DES-UNIFICATION`), so that the reading can tell a crate
+ * outside the group from a crate outside the workspace: what concerns only
+ * a member outside the group is left out of every task's output, and a
+ * failure there is reported as one outside the selection.
+ */
+export interface OutputScope {
+  /** Every member of the workspace, as `cargo metadata --no-deps` reports it. */
+  members: readonly CargoPackage[];
+  /** The absolute path of the workspace root, where cargo ran. */
+  root: string;
+}
+
+/**
  * Fails every crate of a command whose output the reading cannot trust, with
  * a message that says why ({@link readJsonStep}, {@link readTestStep}).
  */
-function failEvery(
+export function failEvery(
   crates: readonly OutputCrate[],
   parts: readonly string[],
   why: string,
@@ -197,6 +230,68 @@ interface CargoMessage {
   message?: { level?: string; rendered?: string | null };
 }
 
+/** The members of a workspace outside a group, and how to tell their lines. */
+export interface OutsideMembers {
+  /** Their package ID specifications. */
+  ids: ReadonlySet<string>;
+  /** Their package names. */
+  names: ReadonlySet<string>;
+  /**
+   * Whether a line of cargo's text that starts a block concerns one of them
+   * alone: a status line that names one by its name and folder, a
+   * diagnostic's summary that names one, or a location in its folder.
+   */
+  ownsLine(line: string): boolean;
+  /** The member outside the group whose folder holds `path`, relative to the workspace root. */
+  atPath(path: string): CargoPackage | undefined;
+}
+
+/** The members outside the group of `crates` ({@link OutsideMembers}); none without a scope. */
+export function outsideMembers(
+  crates: readonly OutputCrate[],
+  scope: OutputScope | undefined,
+): OutsideMembers {
+  const inGroup = new Set(crates.map((crate) => crate.spec));
+  const members = (scope?.members ?? []).filter((member) => !inGroup.has(member.id));
+  const folders = members
+    .map((member) => ({ member, folder: resolve(dirname(member.manifest_path)) }))
+    .sort((a, b) => b.folder.length - a.folder.length);
+  const atPath = (path: string): CargoPackage | undefined => {
+    const file = resolve(scope?.root ?? ".", path);
+    // The deepest member folder that holds the file, among every member, so
+    // that a member nested in another's folder is told apart.
+    const all = (scope?.members ?? [])
+      .map((member) => ({ member, folder: resolve(dirname(member.manifest_path)) }))
+      .sort((a, b) => b.folder.length - a.folder.length);
+    const holder = all.find(
+      ({ folder }) =>
+        file === folder || file.startsWith(folder.endsWith(sep) ? folder : folder + sep),
+    );
+    return holder !== undefined && !inGroup.has(holder.member.id) ? holder.member : undefined;
+  };
+  return {
+    ids: new Set(members.map((member) => member.id)),
+    names: new Set(members.map((member) => member.name)),
+    atPath,
+    ownsLine: (raw) => {
+      const line = plainLine(raw);
+      const status = /^\s*[A-Z][a-z]+ (\S+) v\S+ \(([^)]+)\)/.exec(line);
+      if (status !== null) {
+        return folders.some(
+          ({ member, folder }) => member.name === status[1] && folder === resolve(status[2]),
+        );
+      }
+      const summary = /^warning: `([^`]+)` \(/.exec(line) ?? /^\s*-->\s+(.+?):\d+:\d+$/.exec(line);
+      if (summary === null) {
+        return false;
+      }
+      return line.includes("-->")
+        ? atPath(summary[1]) !== undefined
+        : members.some((member) => member.name === summary[1]);
+    },
+  };
+}
+
 // The command's output, line by line, with each line that holds a JSON
 // message of cargo parsed.
 function outputLines(output: string): OutputLine[] {
@@ -249,8 +344,11 @@ export function readJsonStep(
   end: CommandEnd,
   crates: readonly OutputCrate[],
   allTargets: boolean,
+  scope?: OutputScope,
 ): CrateOutcome[] {
   const lines = outputLines(output);
+  // The members outside the group, whose own lines no task shows.
+  const outside = outsideMembers(crates, scope);
   const messages = lines.flatMap((line) => ("json" in line ? [line.json] : []));
   const bySpec = new Map(crates.map((crate, index) => [crate.spec, index]));
   // The packages that the messages name, by their names, to tell where a
@@ -266,6 +364,7 @@ export function readJsonStep(
   const parts = crates.map(() => [] as string[]);
   const everyone = (text: string) => parts.forEach((part) => part.push(text));
   let current: number | undefined;
+  let dropped = false;
   for (const line of lines) {
     if ("malformed" in line) {
       everyone(line.malformed);
@@ -277,16 +376,28 @@ export function readJsonStep(
       if (typeof rendered === "string" && rendered !== "") {
         const index = bySpec.get(json.package_id ?? "");
         const text = rendered.replace(/\n$/, "");
-        if (index === undefined) {
-          everyone(text);
-        } else {
+        if (index !== undefined) {
           parts[index].push(text);
+        } else if (
+          !outside.ids.has(json.package_id ?? "") ||
+          (json.message?.level ?? "").startsWith("error")
+        ) {
+          // A member outside the group shows only its errors, which can
+          // explain why a task that needs it fails.
+          everyone(text);
         }
       }
       continue;
     }
     if (startsBlock(line.text)) {
       current = owner(line.text);
+      dropped =
+        current === undefined &&
+        !plainLine(line.text).startsWith("error") &&
+        outside.ownsLine(line.text);
+    }
+    if (dropped) {
+      continue;
     }
     if (current === undefined) {
       everyone(line.text);
@@ -348,10 +459,11 @@ export function readJsonStep(
         ),
     );
     if (missing !== undefined && missing.length === 0 && !errors) {
+      const beyond = failed.filter((name) => outside.names.has(name.slice(1, -1)));
       return {
         passed: true,
         output: text,
-        message: `${crate.task}: cargo failed, but not for ${crate.name}: its output shows every target of ${crate.name} that this task builds as built, and no error in it.${failed.length === 0 ? "" : ` cargo reported ${describeList(failed)} as failed.`}`,
+        message: `${crate.task}: cargo failed, but not for ${crate.name}: its output shows every target of ${crate.name} that this task builds as built, and no error in it.${failed.length === 0 ? "" : ` cargo reported ${describeList(failed)} as failed.`}${beyond.length === 0 ? "" : ` ${describeList(beyond)} ${beyond.length === 1 ? "is" : "are"} outside the selection of this run: under workspace-build, every cargo command builds the whole workspace, and a failure in a crate that no task of the run needs fails no task.`}`,
       };
     }
     const why =
@@ -423,7 +535,7 @@ export function readTestStep(
   // print a line that looks like its first line, so only the last such line
   // counts, and only where the list after it ends the output.
   const headers = lines.flatMap((line, index) =>
-    /^error: \d+ targets? failed:$/.test(line) ? [index] : [],
+    /^error: \d+ targets? failed:$/.test(plainLine(line)) ? [index] : [],
   );
   const listStart = headers.length === 0 ? -1 : headers[headers.length - 1];
   const body = listStart === -1 ? lines : lines.slice(0, listStart);
@@ -434,7 +546,7 @@ export function readTestStep(
   let candidates: number[] = all;
   const flush = () => {
     const rerun = block
-      .map((line) => /to rerun pass `-p (\S+)/.exec(line)?.[1])
+      .map((line) => /to rerun pass `-p (\S+)/.exec(plainLine(line))?.[1])
       .find((name) => name !== undefined);
     const named = rerun === undefined ? -1 : crates.findIndex((crate) => crate.name === rerun);
     for (const index of named === -1 ? candidates : [named]) {
@@ -462,8 +574,11 @@ export function readTestStep(
   // Every line of the list after its first names one failed target, as
   // `-p <package> <target flag>` in backquotes, and there are as many as the
   // first line announces.
-  const entries = list.slice(1).filter((line) => line.trim() !== "");
-  const announced = listStart === -1 ? 0 : Number(/^error: (\d+)/.exec(list[0])?.[1]);
+  const entries = list
+    .slice(1)
+    .map(plainLine)
+    .filter((line) => line.trim() !== "");
+  const announced = listStart === -1 ? 0 : Number(/^error: (\d+)/.exec(plainLine(list[0]))?.[1]);
   const malformed = entries.find((line) => !/^\s+`-p \S+ [^`]+`$/.test(line));
   if (end.kind === "failed" && listStart !== -1 && malformed !== undefined) {
     return failEvery(
@@ -486,7 +601,7 @@ export function readTestStep(
   const notCompiled = [
     ...new Set(
       lines.flatMap((line) => {
-        const name = /^error: could not compile `([^`]+)`/.exec(line)?.[1];
+        const name = /^error: could not compile `([^`]+)`/.exec(plainLine(line))?.[1];
         return name === undefined ? [] : [name];
       }),
     ),
@@ -529,7 +644,8 @@ export function readTestStep(
 // file name of the test executable without its hash, as in `Running
 // unittests src/lib.rs (target/debug/deps/good-1a2b3c)`, or the library of
 // `Doc-tests good`.
-function testBlockTarget(line: string): string | undefined {
+function testBlockTarget(raw: string): string | undefined {
+  const line = plainLine(raw);
   const doc = /^\s+Doc-tests (\S+)$/.exec(line);
   if (doc !== undefined && doc !== null) {
     return doc[1];
@@ -550,9 +666,12 @@ function hasTarget(crate: OutputCrate, name: string): boolean {
   );
 }
 
-// Whether a line of cargo's text output starts a block of its own: an
-// error, a warning or a note, or one of cargo's status lines.
-function startsBlock(line: string): boolean {
+/**
+ * Whether a line of cargo's text output starts a block of its own: an
+ * error, a warning or a note, or one of cargo's status lines.
+ */
+export function startsBlock(raw: string): boolean {
+  const line = plainLine(raw);
   return (
     /^(error|warning|note)(\[[^\]]*\])?: /.test(line) ||
     /^\s*(Compiling|Checking|Fresh|Finished|Running|Doc-tests|Documenting|Building|Blocking|Downloading|Downloaded|Updating|Locking|Adding|Removing|Packaging|Scraping|Waiting|Dirty|Ignored)\b/.test(
@@ -570,7 +689,8 @@ function textOwner(
   crates: readonly OutputCrate[],
   idsByName: ReadonlyMap<string, ReadonlySet<string>>,
 ): (line: string) => number | undefined {
-  return (line) => {
+  return (raw) => {
+    const line = plainLine(raw);
     const status = /^\s*[A-Z][a-z]+ (\S+) v\S+ \(([^)]+)\)/.exec(line);
     const quoted = /`([A-Za-z0-9_-]+)(?: v[^ `]+(?: \(([^)]+)\))?)?`/.exec(line);
     const match = status ?? quoted;
@@ -615,9 +735,10 @@ function failedPackages(lines: readonly OutputLine[]): string[] {
     if (!("text" in line)) {
       continue;
     }
+    const text = plainLine(line.text);
     const failed =
-      /^error: failed to run custom build command for `(\S+)/.exec(line.text) ??
-      /^error: could not compile `([^`]+)`/.exec(line.text);
+      /^error: failed to run custom build command for `(\S+)/.exec(text) ??
+      /^error: could not compile `([^`]+)`/.exec(text);
     if (failed !== null) {
       names.push(failed[1]);
     }
@@ -651,7 +772,7 @@ function describeUnit(unit: Unit): string {
   return unit.test ? `${target} compiled as a test` : target;
 }
 
-function describeList(items: readonly string[]): string {
+export function describeList(items: readonly string[]): string {
   return items.length <= 1
     ? (items[0] ?? "")
     : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;

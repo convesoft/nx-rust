@@ -142,6 +142,24 @@ async function failed(defaults: object, files: FileChanges = {}, env: Env = {}):
   return output;
 }
 
+/**
+ * Every crate of binary-tests, whose tests all wait for the builds of the
+ * crates with a binary and a test or bench that cargo test builds.
+ */
+const binaryTestCrates = [
+  "addon",
+  "app",
+  "benched",
+  "flavour",
+  "gated",
+  "harnessless",
+  "library",
+  "showcase",
+  "timed",
+  "unit",
+  "untested",
+];
+
 describe("a target default that adds dependencies on other projects' tasks", () => {
   it.each([
     ["the ^ form", "^build", '"^build"'],
@@ -280,7 +298,7 @@ describe("a target default that fails graph creation", () => {
   );
 
   it(
-    "replaces the dependsOn of test that holds only the crate's own build, in exactly the crates whose test depends on it",
+    "replaces the dependsOn of test that holds only builds, in every crate of a workspace with a crate whose binaries cargo test builds",
     async () => {
       // Without the workspace's lockfile task, test is uncached and depends
       // on nothing but the crate's build, where it depends on that.
@@ -302,27 +320,16 @@ describe("a target default that fails graph creation", () => {
 
         expect(status).not.toBe(0);
         const shown = withoutColours(output);
-        // The crates with a binary and a test or bench that cargo test builds.
+        // Every test of the workspace waits for the builds of the crates with
+        // a binary and a test or bench that cargo test builds
+        // (ADR-WORKSPACE-TEST-EXECUTABLES).
         expect(
           missingFromReport(
             shown,
-            `It replaces the dependsOn that nx-rust declares for "test", so that the task no longer depends on a task that it needs: the lockfile task, whose output its cache key reads, or, for a test, the crate's own build, whose executables cargo test replaces.`,
-            ["app", "benched", "gated", "harnessless"].map(
-              (crate) => `${crate} (rust/crates/${crate}/Cargo.toml)`,
-            ),
+            `It replaces the dependsOn that nx-rust declares for "test", so that the task no longer depends on a task that it needs: the lockfile task, whose output its cache key reads, or, for a test, the build of each crate whose executables its cargo test replaces.`,
+            binaryTestCrates.map((crate) => `${crate} (rust/crates/${crate}/Cargo.toml)`),
           ),
         ).toEqual([]);
-        for (const crate of [
-          "addon",
-          "flavour",
-          "library",
-          "showcase",
-          "timed",
-          "unit",
-          "untested",
-        ]) {
-          expect(shown).not.toContain(`${crate} (rust/crates/${crate}/Cargo.toml)`);
-        }
       } finally {
         workspace.remove();
       }
@@ -644,7 +651,7 @@ describe("a target default that writes out the dependency on the lockfile task",
   );
 
   it.each(modes)(
-    "reports only that it replaces the dependsOn of the crates whose test also depends on their build, %s",
+    "reports only that it replaces the dependsOn of the crates whose test also depends on builds, every crate of binary-tests, %s",
     async (_mode, env) => {
       const workspace = FixtureWorkspace.create(
         "binary-tests",
@@ -659,22 +666,9 @@ describe("a target default that writes out the dependency on the lockfile task",
           missingFromReport(
             shown,
             'It replaces the dependsOn that nx-rust declares for "test"',
-            ["app", "benched", "gated", "harnessless"].map(
-              (crate) => `${crate} (rust/crates/${crate}/Cargo.toml)`,
-            ),
+            binaryTestCrates.map((crate) => `${crate} (rust/crates/${crate}/Cargo.toml)`),
           ),
         ).toEqual([]);
-        for (const crate of [
-          "addon",
-          "flavour",
-          "library",
-          "showcase",
-          "timed",
-          "unit",
-          "untested",
-        ]) {
-          expect(shown).not.toContain(`${crate} (rust/crates/${crate}/Cargo.toml)`);
-        }
         expect(shown).not.toContain("It adds");
       } finally {
         workspace.remove();

@@ -1,4 +1,4 @@
-import { type InferredTargetName, inferredTargetNames } from "../graph/targets";
+import { compilingTargets, type InferredTargetName, inferredTargetNames } from "../graph/targets";
 
 /**
  * The options of the plugin's targets that its executors declare
@@ -36,15 +36,6 @@ export type TargetOptionName = keyof CargoTargetOptions;
 
 // The targets that take the feature and profile options, and those that
 // also take `targetTriple`.
-const compilingTargets: readonly InferredTargetName[] = [
-  "build",
-  "check",
-  "lint",
-  "test",
-  "bench",
-  "run",
-  "doc",
-];
 const tripleTargets = compilingTargets.filter((target) => target !== "test");
 
 /**
@@ -111,6 +102,36 @@ export interface CommandSubject {
   locked: boolean;
   /** The binary's arguments, which `run` passes after `--`; none for other targets. */
   binaryArguments?: readonly string[];
+  /**
+   * Whether the command selects the whole workspace with `--workspace` in
+   * place of its crates, as a group under `workspace-build` does on the
+   * host, however many tasks it holds (`DES-UNIFICATION`, "How each
+   * strategy selects"). Only the commands that compile take it:
+   * {@link selectsWorkspace}.
+   */
+  workspace?: boolean;
+}
+
+// The per-crate targets whose commands compile the crate, and which select
+// the whole workspace under `workspace-build`; `fmt` and `fmt-check` resolve
+// no features and keep selecting their crates (`DES-TARGET-COMMANDS`).
+const compilingCrateTargets: ReadonlySet<InferredTargetName> = new Set([
+  "build",
+  "check",
+  "lint",
+  "test",
+]);
+
+/**
+ * Whether a group of tasks of the target with this default name selects the
+ * whole workspace with `--workspace` under `workspace-build` on the host:
+ * `build`, `check`, `lint` and `test`, whose commands compile their crates
+ * with features that the selection would otherwise narrow
+ * (`DES-UNIFICATION`). `bench` never joins a batch (`DES-TARGETS`), and
+ * `cargo fmt` resolves no features.
+ */
+export function selectsWorkspace(target: InferredTargetName): boolean {
+  return compilingCrateTargets.has(target);
 }
 
 // The cargo subcommand of each per-crate target and its own flags, before the
@@ -161,11 +182,12 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
     }
     const formatting = target === "fmt" || target === "fmt-check";
     const binaryArguments = target === "run" ? (subject.binaryArguments ?? []) : [];
+    const workspace = subject.workspace === true && selectsWorkspace(target);
     return [
       ...crateCommand,
       ...flag(taken.allTargets, "--all-targets"),
-      ...(crates.length > 1 ? sharedCommandFlags(target) : []),
-      ...crateSelection(target, crates),
+      ...(crates.length > 1 || workspace ? sharedCommandFlags(target) : []),
+      ...(workspace ? ["--workspace"] : crateSelection(target, crates)),
       ...compilingFlags(taken),
       ...(taken.bin !== undefined ? ["--bin", taken.bin] : []),
       ...flag(locked && !formatting, "--locked"),
@@ -194,12 +216,12 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
 }
 
 /**
- * The flags that a command for several crates adds, so that cargo goes on
- * after a crate fails and its output shows each crate's result (`DES-BATCH`):
- * `--keep-going` and JSON messages for `build`, `check` and `lint`, and
- * `--no-fail-fast` for `test`. A command for one crate, as every group runs
- * until a strategy of `DES-UNIFICATION` lets crates share a command, adds
- * none, so that it is the command that the task runs on its own.
+ * The flags that a command for several crates, or for the whole workspace,
+ * adds, so that cargo goes on after a crate fails and its output shows each
+ * crate's result (`DES-BATCH`): `--keep-going` and JSON messages for
+ * `build`, `check` and `lint`, and `--no-fail-fast` for `test`. A command
+ * of a group of one crate adds none, so that it is the command that a plain
+ * `cargo` of that one crate runs.
  */
 // @mara implements DES-BATCH
 export function sharedCommandFlags(target: InferredTargetName): string[] {
@@ -270,4 +292,89 @@ function compilingFlags(taken: CargoTargetOptions): string[] {
 
 function flag(on: boolean | undefined, name: string): string[] {
   return on === true ? [name] : [];
+}
+
+/**
+ * What a step of a group reads from cargo's output (`DES-BATCH`): one
+ * command of the target (`command`), or one of the three steps of `test`
+ * with the `cargo` runner under `workspace-build` (`DES-TEST-RUN`, "Under
+ * `workspace-build`"): the build of every test executable (`tests-build`),
+ * the test binaries through the selecting runner (`test-binaries`) and the
+ * doctests (`doctests`).
+ */
+export type StepKind = "command" | "tests-build" | "test-binaries" | "doctests";
+
+/** One cargo command of a group, in the order in which the group runs them. */
+export interface CargoStep {
+  /** What the step is, which decides how its output is read. */
+  kind: StepKind;
+  /** The arguments after `cargo`. */
+  args: string[];
+}
+
+/** The selecting runner of the test binaries' step (`DES-TEST-RUN`, "The runner program"). */
+export interface SelectingRunner {
+  /** The host's triple, as `rustc -vV` names it in the workspace root with the group's environment. */
+  host: string;
+  /** The runner's program and its arguments, by absolute paths: Node and the script. */
+  command: readonly string[];
+}
+
+/**
+ * The steps of a group's cargo commands (`DES-BATCH`): one command, as
+ * {@link cargoArguments} builds it, for every target but `test` with the
+ * `cargo` runner on a group that selects the whole workspace, which has three
+ * (`DES-TEST-RUN`, "Under `workspace-build`"):
+ *
+ * 1. `cargo test --workspace --no-run`, which compiles every test executable,
+ *    the binaries that integration tests use and every example;
+ * 2. `cargo test --workspace --tests --no-fail-fast
+ *    --message-format=json-render-diagnostics` with the selecting runner
+ *    through `--config 'target.<host>.runner=[…]'`, in TOML strings;
+ * 3. `cargo test --workspace --doc --no-fail-fast`, without the runner.
+ *
+ * Each step passes the same feature and profile flags and `--locked` as
+ * the others, so that every step resolves the same features
+ * (`REQ-STABLE-FEATURES`) and reuses what the steps before it compiled.
+ *
+ * @param runner The selecting runner, which a `test` group that selects the
+ *   whole workspace needs.
+ * @throws {Error} As {@link cargoArguments} does, and for such a group
+ *   without a runner.
+ */
+// @mara implements DES-TEST-RUN
+// @mara implements DES-UNIFICATION
+export function cargoSteps(
+  subject: CommandSubject,
+  options: CargoTargetOptions,
+  runner?: SelectingRunner,
+): CargoStep[] {
+  if (!(subject.target === "test" && subject.workspace === true)) {
+    return [{ kind: "command", args: cargoArguments(subject, options) }];
+  }
+  if (runner === undefined) {
+    throw new Error("A test group that selects the whole workspace needs the selecting runner.");
+  }
+  const taken: CargoTargetOptions = Object.fromEntries(
+    Object.entries(options).filter(([name]) => targetTakes("test", name)),
+  );
+  const tail = [...compilingFlags(taken), ...flag(subject.locked, "--locked")];
+  const toml = `[${runner.command.map((word) => JSON.stringify(word)).join(", ")}]`;
+  return [
+    { kind: "tests-build", args: ["test", "--workspace", "--no-run", ...tail] },
+    {
+      kind: "test-binaries",
+      args: [
+        "test",
+        "--workspace",
+        "--tests",
+        "--no-fail-fast",
+        "--message-format=json-render-diagnostics",
+        ...tail,
+        "--config",
+        `target.${runner.host}.runner=${toml}`,
+      ],
+    },
+    { kind: "doctests", args: ["test", "--workspace", "--doc", "--no-fail-fast", ...tail] },
+  ];
 }

@@ -9,13 +9,13 @@ import {
   GraphCreationError,
   HARNESS_TIMEOUT,
   loadFixtureGraph,
-  packageSpec,
   pluginPackage,
   runNx,
   taskCalls,
   testEnvironment,
   withoutColours,
   withTargetDefaults,
+  workspaceArgs,
 } from "./harness";
 
 // The checks of VER-CARGO-UNCHANGED about crates whose final artifacts share
@@ -156,10 +156,11 @@ async function nx(
   return runNx(workspace, args);
 }
 
-/** How the plugin's `cargo build` selects a crate of the workspace in `folder`, as the wrapper logs it. */
-function build(workspace: FixtureWorkspace, folder: string, crate: string): string {
-  return `build -p ${packageSpec(workspace.root, folder, crate)}`;
-}
+/**
+ * The plugin's `cargo build` of a group of crates of one workspace, which
+ * selects the whole workspace under workspace-build (DES-UNIFICATION).
+ */
+const build = workspaceArgs("build").join(" ");
 
 /** What the executable at `path`, relative to the workspace root, prints. */
 function prints(workspace: FixtureWorkspace, path: string): string {
@@ -516,39 +517,34 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         expect(
           occurrences(first.output.slice(0, first.output.indexOf("> nx run ")), alphaAndBeta),
         ).toBe(1);
-        expect(calls(workspace)).toEqual(
-          [
-            build(workspace, "rust", "alpha"),
-            build(workspace, "rust", "beta"),
-            build(workspace, "rust", "gamma"),
-            build(workspace, "tools", "tools"),
-          ].sort(),
-        );
+        // The uncached builds of alpha and beta wait for no lockfile task,
+        // so they form a batch and a group of their own before gamma's.
+        expect(calls(workspace)).toEqual([build, build, build]);
 
         const second = await nx(workspace, ["run-many", "-t", "build"]);
         expectStatus(second, 0);
-        expect(calls(workspace)).toEqual(
-          [build(workspace, "rust", "alpha"), build(workspace, "rust", "beta")].sort(),
-        );
+        expect(calls(workspace)).toEqual([build]);
         expect(restored(second.output, "gamma:build")).toBe(true);
         expect(restored(second.output, "tools:build")).toBe(true);
         expect(restored(second.output, "alpha:build")).toBe(false);
         expect(restored(second.output, "beta:build")).toBe(false);
 
-        // Without the file, alpha's build runs cargo, which writes its own.
+        // Without the file, alpha's build runs cargo, which builds the whole
+        // workspace and writes the file of whichever crate it wrote last, as
+        // plain cargo build --workspace does; neither build is stored.
         rmSync(join(workspace.root, "rust/target/debug/cli"));
         const alone = await nx(workspace, ["run", "alpha:build"]);
         expectStatus(alone, 0);
-        expect(calls(workspace)).toEqual([build(workspace, "rust", "alpha")]);
-        expect(prints(workspace, "rust/target/debug/cli")).toBe("alpha");
+        expect(calls(workspace)).toEqual([build]);
+        expect(prints(workspace, "rust/target/debug/cli")).toMatch(/^(alpha|beta)$/);
 
         for (const run of ["first", "second"]) {
           const test = await nx(workspace, ["run", "alpha:test"]);
           expectStatus(test, 0, `The ${run} run of alpha:test`);
-          expect({ run, calls: taskCalls(workspace).map((call) => call.args[0]) }).toEqual({
+          expect({
             run,
-            calls: ["build", "test"],
-          });
+            calls: [...new Set(taskCalls(workspace).map((call) => call.args[0]))],
+          }).toEqual({ run, calls: ["build", "test"] });
         }
       } finally {
         workspace.remove();
@@ -570,9 +566,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         expectStatus(first, 0);
         const second = await nx(workspace, ["run-many", "-t", "build"]);
         expectStatus(second, 0);
-        expect(calls(workspace)).toEqual(
-          [build(workspace, "rust", "alpha"), build(workspace, "tools", "tools")].sort(),
-        );
+        expect(calls(workspace)).toEqual([build, build]);
         for (const task of ["beta:build", "gamma:build"]) {
           expect({ task, restored: restored(second.output, task) }).toEqual({
             task,
@@ -584,7 +578,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         rmSync(join(workspace.root, "target/debug/cli"));
         const alone = await nx(workspace, ["run", "tools:build"]);
         expectStatus(alone, 0);
-        expect(calls(workspace)).toEqual([build(workspace, "tools", "tools")]);
+        expect(calls(workspace)).toEqual([build]);
         expect(prints(workspace, "target/debug/cli")).toBe("tools");
       } finally {
         workspace.remove();
@@ -630,9 +624,10 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         const second = await nx(workspace, ["run-many", "-t", "build"]);
         expectStatus(second, 0);
         // alpha's build names the triple of its project.json where it has one.
-        expect(calls(workspace).map((call) => call.replace(/ --target \S+$/, ""))).toEqual(
-          [build(workspace, "rust", "alpha"), build(workspace, "tools", "tools")].sort(),
-        );
+        expect(calls(workspace).map((call) => call.replace(/ --target \S+$/, ""))).toEqual([
+          build,
+          build,
+        ]);
         for (const task of ["alpha:build", "tools:build"]) {
           expect({ task, restored: restored(second.output, task) }).toEqual({
             task,

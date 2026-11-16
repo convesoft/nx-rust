@@ -16,6 +16,7 @@ import {
   taskCalls,
   TaskHash,
   withoutColours,
+  taskOutput,
 } from "./harness";
 
 // Checks the part of VER-SETUP about "Warnings where they are seen" in
@@ -523,11 +524,7 @@ describe("a task's output", () => {
 // machine's Cargo home gives no keys of its own.
 describe("the warning about Cargo configuration that Nx does not hash", () => {
   /** The output of `task` alone, after its header and below what graph creation printed. */
-  const ownOutput = (output: string, task: string) => {
-    const header = output.indexOf(`> nx run ${task}`);
-    const next = output.indexOf("> nx run ", header + 1);
-    return header < 0 ? "" : output.slice(header, next < 0 ? undefined : next);
-  };
+  const ownOutput = taskOutput;
   const guide = '(see "Cargo configuration that Nx does not hash" in the nx-rust caching guide)';
   const remedy = `run \`nx reset\` after each change to it; --skip-nx-cache covers only the command it is given to ${guide}.`;
   const ignoredWarning =

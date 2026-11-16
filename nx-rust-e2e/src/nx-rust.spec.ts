@@ -18,11 +18,14 @@ import {
   fakeNxPackage,
   HARNESS_TIMEOUT,
   installFixture,
-  packageSpec,
   repositoryFiles,
   testEnvironment,
   ToolFolders,
   withoutColours,
+  taskOutput,
+  withoutRunner,
+  workspaceArgs,
+  workspaceTestSteps,
 } from "../../nx-rust/test/harness";
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
@@ -471,7 +474,6 @@ describe("@convesoft/nx-rust", () => {
     // it: the test project becomes a git repository of its own, with the
     // ignore rules of a real one.
     describe("when Nx runs the inferred targets", () => {
-      const crates = ["api", "codegen", "model", "testkit"];
       const rustFolder = () => join(projectDirectory, "rust");
       const git = (...args: string[]) =>
         execFileSync(
@@ -489,22 +491,22 @@ describe("@convesoft/nx-rust", () => {
           ],
           { cwd: projectDirectory, encoding: "utf8" },
         );
-      // The plain cargo commands that do what `nx run-many -t build test lint` does.
+      // The plain cargo commands that do what `nx run-many -t build test lint`
+      // does: under workspace-build, which the fixture uses, its commands
+      // select the whole workspace (DES-UNIFICATION).
       const plainCargo = () =>
-        crates
-          .flatMap((crate) => [
-            ["build", "-p", crate],
-            ["test", "-p", crate],
-            ["clippy", "--all-targets", "-p", crate],
-          ])
-          .map((args) => {
-            const result = spawnSync("cargo", args, {
-              cwd: rustFolder(),
-              env: cargo.environment(testEnvironment()),
-              encoding: "utf8",
-            });
-            return { args, status: result.status, output: `${result.stdout}${result.stderr}` };
+        [
+          ["build", "--workspace"],
+          ["test", "--workspace"],
+          ["clippy", "--all-targets", "--workspace"],
+        ].map((args) => {
+          const result = spawnSync("cargo", args, {
+            cwd: rustFolder(),
+            env: cargo.environment(testEnvironment()),
+            encoding: "utf8",
           });
+          return { args, status: result.status, output: `${result.stdout}${result.stderr}` };
+        });
       const compiles = /^\s*(Compiling|Checking) /m;
 
       beforeAll(() => {
@@ -534,7 +536,10 @@ describe("@convesoft/nx-rust", () => {
             reportRustDirectories,
             reportRustDirectories,
             listRustMembers,
-            { cwd: "rust", args: ["build", "-p", packageSpec(projectDirectory, "rust", "api")] },
+            {
+              cwd: "rust",
+              args: ["build", "--keep-going", "--message-format=json", "--workspace"],
+            },
           ]);
         },
         HARNESS_TIMEOUT,
@@ -603,13 +608,19 @@ describe("@convesoft/nx-rust", () => {
             reportRustDirectories,
             reportRustDirectories,
             listRustMembers,
-            { cwd: "rust", args: ["build", "-p", packageSpec(projectDirectory, "rust", "api")] },
+            {
+              cwd: "rust",
+              args: ["build", "--keep-going", "--message-format=json", "--workspace"],
+            },
             readRustWorkspace,
             updateRustLockfile,
             reportRustDirectories,
             reportRustDirectories,
             listRustMembers,
-            { cwd: "rust", args: ["build", "-p", packageSpec(projectDirectory, "rust", "api")] },
+            {
+              cwd: "rust",
+              args: ["build", "--keep-going", "--message-format=json", "--workspace"],
+            },
           ]);
         },
         HARNESS_TIMEOUT,
@@ -654,13 +665,38 @@ describe("@convesoft/nx-rust", () => {
             ]),
           );
           expect(output).toContain("Successfully ran targets build, test, lint for 4 projects");
-          expect(output).not.toMatch(compiles);
-          // Each task asked cargo for its crate's package ID specification
-          // and ran its command, which found everything up to date, and so
-          // did the lockfile task, once; each build asked cargo for its
-          // artifact directory twice.
-          expect(cargo.calls(projectDirectory)).toHaveLength(
-            2 + 2 * 3 * crates.length + 2 * crates.length,
+          // Only the test binaries' step compiles what plain cargo test builds
+          // otherwise: codegen, which api's build script uses and whose
+          // library only its doctests need besides, and api (DES-TEST-RUN).
+          const compiled = [...output.matchAll(/^\s*(?:Compiling|Checking) (\S+) /gm)].map(
+            (match) => match[1],
+          );
+          expect([...new Set(compiled)].sort()).toEqual(["api", "codegen"]);
+          for (const crate of ["api", "codegen", "model", "testkit"]) {
+            for (const target of ["build", "lint"]) {
+              expect({
+                task: `${crate}:${target}`,
+                compiled: compiles.test(taskOutput(output, `${crate}:${target}`)),
+              }).toEqual({
+                task: `${crate}:${target}`,
+                compiled: false,
+              });
+            }
+          }
+          // The tasks of each target shared their commands, which found
+          // everything up to date.
+          expect(
+            cargo
+              .calls(projectDirectory)
+              .filter((call) => ["build", "test", "clippy"].includes(call.args[0]))
+              .map((call) => withoutRunner(call.args.join(" ")))
+              .sort(),
+          ).toEqual(
+            [
+              workspaceArgs("build").join(" "),
+              workspaceArgs("clippy").join(" "),
+              ...workspaceTestSteps(),
+            ].sort(),
           );
         },
         HARNESS_TIMEOUT,
@@ -723,12 +759,7 @@ describe("@convesoft/nx-rust", () => {
               listRustMembers,
               {
                 cwd: "rust",
-                args: [
-                  "check",
-                  "--all-targets",
-                  "-p",
-                  packageSpec(projectDirectory, "rust", "model"),
-                ],
+                args: workspaceArgs("check"),
               },
             ]);
             // Cargo calls the lockfile current now.
@@ -764,12 +795,7 @@ describe("@convesoft/nx-rust", () => {
               listRustMembers,
               {
                 cwd: "rust",
-                args: [
-                  "check",
-                  "--all-targets",
-                  "-p",
-                  packageSpec(projectDirectory, "rust", "model"),
-                ],
+                args: workspaceArgs("check"),
               },
             ]);
           }

@@ -13,6 +13,9 @@ import {
   sortedCalls,
   taskCalls,
   testEnvironment,
+  withoutRunner,
+  workspaceArgs,
+  workspaceTestSteps,
 } from "./harness";
 
 // Checks the part of VER-CARGO-UNCHANGED about a member whose package name
@@ -44,16 +47,28 @@ function absoluteCalls(workspace: FixtureWorkspace, subcommand: string): string[
 
 /** The commands of a crate's targets, selecting it by `spec` and, in `cargo fmt`, by `name`. */
 function crateCommands(spec: string, name: string, targets: string[]): CargoCall[] {
-  const commands: Record<string, string[]> = {
-    build: ["build", "-p", spec],
-    check: ["check", "--all-targets", "-p", spec],
-    lint: ["clippy", "--all-targets", "-p", spec],
-    test: ["test", "-p", spec],
-    bench: ["bench", "-p", spec],
-    run: ["run", "-p", spec],
-    "fmt-check": ["fmt", "--check", "-p", name],
+  // Under workspace-build, the commands that compile select the whole
+  // workspace; bench and run select the crate by its specification.
+  const commands: Record<string, string[][]> = {
+    build: [workspaceArgs("build")],
+    check: [workspaceArgs("check")],
+    lint: [workspaceArgs("clippy")],
+    test: workspaceTestSteps().map((step) => step.split(" ")),
+    bench: [["bench", "-p", spec]],
+    run: [["run", "-p", spec]],
+    "fmt-check": [["fmt", "--check", "-p", name]],
   };
-  return sortedCalls(targets.map((target) => rust(commands[target])));
+  return sortedCalls(targets.flatMap((target) => commands[target].map(rust)));
+}
+
+/** The logged calls with the selecting runner's paths written as `withoutRunner` writes them. */
+function normalizedCalls(workspace: FixtureWorkspace): CargoCall[] {
+  return sortedCalls(
+    taskCalls(workspace).map((call) => ({
+      ...call,
+      args: withoutRunner(call.args.join("\u0000")).split("\u0000"),
+    })),
+  );
 }
 
 describe("a crate whose package name another package of the resolve shares", () => {
@@ -75,12 +90,12 @@ describe("a crate whose package name another package of the resolve shares", () 
         });
         // What the binary and the bench printed: the versions of both crates.
         expect(linesWith(result.output, "(1, 2)")).toHaveLength(2);
-        expect(sortedCalls(taskCalls(workspace))).toEqual(
+        expect(normalizedCalls(workspace)).toEqual(
           crateCommands("path+file://{workspaceRoot}/rust/crates/good#0.1.0", "good", targets),
         );
         // The specification names the crate's folder by its absolute path.
-        expect(absoluteCalls(workspace, "test")).toEqual([
-          ["test", "-p", `path+file://${workspace.root}/rust/crates/good#0.1.0`],
+        expect(absoluteCalls(workspace, "run")).toEqual([
+          ["run", "-p", `path+file://${workspace.root}/rust/crates/good#0.1.0`],
         ]);
       }),
     HARNESS_TIMEOUT,
@@ -113,7 +128,7 @@ describe("a crate whose package name another package of the resolve shares", () 
               status: 0,
               output: expect.any(String),
             });
-            expect(sortedCalls(taskCalls(workspace))).toEqual(
+            expect(normalizedCalls(workspace)).toEqual(
               crateCommands(
                 "path+file://{workspaceRoot}/rust/crates/toolkit#kit@0.1.0",
                 "kit",
@@ -138,15 +153,16 @@ describe("a crate whose package name another package of the resolve shares", () 
         expect(first.root).not.toBe(second.root);
         const targets = ["build", "check", "lint", "test", "fmt-check"];
         for (const workspace of [first, second]) {
-          const run = await runNx(workspace, ["run-many", "-t", ...targets, "-p", "good"]);
+          // run selects the crate by its specification, which names its folder.
+          const run = await runNx(workspace, ["run-many", "-t", ...targets, "run", "-p", "good"]);
           expect({ status: run.status, output: run.output }).toEqual({
             status: 0,
             output: expect.any(String),
           });
         }
-        expect([first, second].map((workspace) => absoluteCalls(workspace, "test"))).toEqual([
-          [["test", "-p", `path+file://${first.root}/rust/crates/good#0.1.0`]],
-          [["test", "-p", `path+file://${second.root}/rust/crates/good#0.1.0`]],
+        expect([first, second].map((workspace) => absoluteCalls(workspace, "run"))).toEqual([
+          [["run", "-p", `path+file://${first.root}/rust/crates/good#0.1.0`]],
+          [["run", "-p", `path+file://${second.root}/rust/crates/good#0.1.0`]],
         ]);
 
         const tasks = targets.map((target) => `good:${target}`);

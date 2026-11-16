@@ -1,7 +1,7 @@
 import type { NamedArtifact } from "./artifact-names";
 import type { TargetConfiguration } from "@nx/devkit";
 import { statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import type { PackageVersion } from "../cargo/lockfile";
 import type { CargoPackage } from "../cargo/metadata";
 import type { BuildRecordSource } from "./build-records";
@@ -9,6 +9,7 @@ import { cargoDenyConfigurationFiles } from "../tools/optional-tools";
 import { CacheContext, CacheOptions, configureCaching } from "./caching";
 import type { CargoWorkspace } from "./discovery";
 import { memberManifests } from "./inputs";
+import { directoryPattern } from "./lockfile-task";
 import type { TargetNames } from "./options";
 
 /**
@@ -85,6 +86,30 @@ export const inferredTargetNames = [
 
 /** The default name of an inferred target, which identifies it whatever `targetNames` calls it. */
 export type InferredTargetName = (typeof inferredTargetNames)[number];
+
+/**
+ * The inferred targets that compile, which take the feature and profile
+ * options (`DES-PLUGIN-OPTIONS`) and get the configuration for all features
+ * ({@link allFeaturesConfiguration}).
+ */
+export const compilingTargets: readonly InferredTargetName[] = [
+  "build",
+  "check",
+  "lint",
+  "test",
+  "bench",
+  "run",
+  "doc",
+];
+
+/**
+ * The configuration that every compiling target of every crate and
+ * workspace gets, the feature set of all features, beside the default
+ * features of its options (`DES-FEATURE-SETS`): `nx run-many -t test -c
+ * all-features`. A target table can lay its own configuration of that name
+ * over it.
+ */
+export const allFeaturesConfiguration = "all-features";
 
 /** The key of {@link TargetCargoMetadata} in the metadata of each inferred target. */
 export const targetCargoMetadataKey = "cargo";
@@ -185,11 +210,18 @@ export interface TargetCargoMetadata {
   /**
    * On a crate's `test`: `true` where `cargo test` replaces the executables
    * that the crate's `build` declares ({@link testReplacesExecutables}), so
-   * that the target depends on that `build`. The executor fails a task
-   * whose run holds that `build` without an order between the two
-   * (`DES-TARGETS`).
+   * that the target depends on that `build` (`DES-TARGETS`).
    */
   waitsForBuild?: boolean;
+  /**
+   * On a crate's `test`: the roots, relative to the repository root, of the
+   * crates whose `build` the target depends on because the test's cargo
+   * commands replace the executables that it declares ({@link testBuilds}),
+   * the crate's own among them where it has such executables. The executor
+   * fails a task whose run holds one of those `build` tasks without an order
+   * between the two (`DES-TARGETS`, "Guard").
+   */
+  waitsForBuilds?: string[];
   /**
    * On a crate's `build`, cached or not: the files that the crate's targets
    * put into the folders of its artifact directory, with whether they are
@@ -382,14 +414,50 @@ export function inferTargets(
   }
   configureCaching(targets, subject, context, caching);
   const test = targets.get("test");
-  if (pkg !== undefined && test !== undefined && testReplacesExecutables(pkg)) {
-    test.dependsOn = [...(test.dependsOn ?? []), { target: targetNames.build ?? "build" }];
+  const builds = pkg === undefined ? [] : testBuilds(subject, context.repositoryRoot);
+  if (pkg !== undefined && test !== undefined && builds.length > 0) {
+    const build = targetNames.build ?? "build";
+    const own = builds.includes(subject.root);
+    const others = builds.filter((root) => root !== subject.root);
+    test.dependsOn = [
+      ...(test.dependsOn ?? []),
+      ...(own ? [{ target: build }] : []),
+      ...(others.length > 0 ? [{ projects: others.map(directoryPattern), target: build }] : []),
+    ];
     const metadata = test.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
     if (metadata !== undefined) {
-      metadata.waitsForBuild = true;
+      if (own) {
+        metadata.waitsForBuild = true;
+      }
+      metadata.waitsForBuilds = builds;
     }
   }
   return targets;
+}
+
+/**
+ * The roots, relative to the repository root and sorted, of the crates whose
+ * `build` a crate's `test` waits for (`DES-TARGETS`, `ADR-WORKSPACE-TEST-EXECUTABLES`):
+ * every member of its workspace that has a project and for which `cargo
+ * test` replaces the executables that its `build` declares
+ * ({@link testReplacesExecutables}), the crate itself among them where it is
+ * one. Under `workspace-build`, every step of a `test` group selects the
+ * whole workspace, and such a command replaces those executables of every
+ * such member, of no other crate, and no `cdylib` or `staticlib` file, on
+ * Cargo 1.91.0 and 1.100.0 (`EVD-CARGO-ARTIFACT-WRITERS`, "Commands that
+ * select the whole workspace"); the rule counts a crate whatever the
+ * `required-features` of its targets, so that the set is a superset of the
+ * crates whose files cargo replaces. Every workspace uses `workspace-build`
+ * until the other strategies exist (nxr-k64tm5), under which a crate's
+ * `test` selects its crate alone and waits for its own `build` only.
+ */
+// @mara implements DES-TARGETS
+export function testBuilds(subject: TargetSubject, repositoryRoot: string): string[] {
+  return subject.workspace.members
+    .filter(testReplacesExecutables)
+    .map((member) => relative(repositoryRoot, dirname(member.manifest_path)) || ".")
+    .map((root) => root.split(sep).join("/"))
+    .sort();
 }
 
 /**
@@ -450,6 +518,9 @@ function inferredTarget(
   return {
     executor: outputsTargets.has(inferred) ? cargoOutputsExecutor : cargoExecutor,
     options,
+    ...(compilingTargets.includes(inferred)
+      ? { configurations: { [allFeaturesConfiguration]: { allFeatures: true } } }
+      : {}),
     cache: cachedTargets.has(inferred),
     metadata: {
       description,

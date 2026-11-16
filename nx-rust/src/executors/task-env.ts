@@ -56,6 +56,18 @@ export const nxRunVariables = [
 ] as const;
 
 /**
+ * The variables by which Nx names a task's project, which differ between the
+ * tasks of any two crates of one target, so that tasks that share a cargo
+ * command could not share an environment with them (`DES-BATCH`): Nx's
+ * `NX_TASK_TARGET_PROJECT` and `LERNA_PACKAGE_NAME`. The maintainer decided
+ * on 15 November 2026 that cargo never gets them, whether a task runs alone
+ * or in a batch (`ADR-TASK-NAME-VARIABLES`); a build script or test that
+ * needs its crate reads `CARGO_PKG_NAME`. The task's target and
+ * configuration, which the tasks of a group share, stay.
+ */
+export const taskNameVariables = ["NX_TASK_TARGET_PROJECT", "LERNA_PACKAGE_NAME"] as const;
+
+/**
  * What Nx sets for the process of a task run on its own after the task's
  * dotenv files and its own variables (`EVD-NX-24-BATCHES`, "Task
  * environment"): the fork's `NX_FORKED_TASK_EXECUTOR`
@@ -75,8 +87,61 @@ export const afterTaskLayer: Readonly<Record<string, string>> = {
 export interface TaskShape {
   /** The task's configuration, as Nx gives it to the task's own variables. */
   configuration: string | undefined;
-  /** Whether the task depends on a continuous task, for which Nx sets `NX_READY_URL`. */
-  continuousDependency: boolean;
+  /**
+   * Whether the task waits for a continuous task that reports ready by
+   * signal, for which Nx sets `NX_READY_URL` ({@link readyUrlProducers}).
+   */
+  readyUrlDependency: boolean;
+}
+
+/** The parts of Nx's task graph that {@link readyUrlProducers} reads. */
+interface ReadinessTaskGraph {
+  tasks: Record<string, { continuous?: boolean; target: { project: string; target: string } }>;
+  continuousDependencies?: Record<string, unknown[]>;
+}
+
+/** The parts of Nx's project graph that {@link readyUrlProducers} reads. */
+interface ReadinessProjectGraph {
+  nodes: Record<string, { data?: { targets?: Record<string, { readyWhen?: unknown }> } }>;
+}
+
+/**
+ * The continuous tasks from which Nx 24 gives the task `taskId`, run on its
+ * own, `NX_READY_URL`: those that an edge with `waitFor: "ready"` leads to
+ * and whose `readyWhen` reports ready by `signal`, the only check of Nx 24
+ * that reports a URL (`getReadyUrlEnv` in `task-orchestrator.js` and
+ * `mayReportReadyUrl` in `readiness/ready-when.js`, `EVD-NX-24-BATCHES`,
+ * "Continuous tasks"). Every other continuous dependency, with another check
+ * or none, gives the task nothing that a batch lacks (`DES-BATCH`).
+ */
+// @mara implements DES-BATCH
+export function readyUrlProducers(
+  taskId: string,
+  taskGraph: ReadinessTaskGraph,
+  projectGraph: ReadinessProjectGraph,
+): string[] {
+  const edges: unknown[] = taskGraph.continuousDependencies?.[taskId] ?? [];
+  return edges.flatMap((edge) => {
+    if (typeof edge !== "object" || edge === null) {
+      return [];
+    }
+    const { id, waitFor } = edge as { id?: unknown; waitFor?: unknown };
+    if (typeof id !== "string" || waitFor !== "ready") {
+      return [];
+    }
+    const producer = taskGraph.tasks[id];
+    if (producer === undefined || producer.continuous === false) {
+      return [];
+    }
+    const readyWhen =
+      projectGraph.nodes[producer.target.project]?.data?.targets?.[producer.target.target]
+        ?.readyWhen;
+    return typeof readyWhen === "object" &&
+      readyWhen !== null &&
+      (readyWhen as { signal?: unknown }).signal != null
+      ? [id]
+      : [];
+  });
 }
 
 /**
@@ -107,7 +172,8 @@ export const runDependentVariables: Readonly<Record<string, string>> = {
   NX_SKIP_NX_CACHE: "Nx sets it for a batch, and for a task only after its dotenv files",
   NX_INVOCATION_ANCESTOR_PIDS:
     "Nx adds its own process to it for a batch, and for a task only after its dotenv files",
-  NX_READY_URL: "Nx sets it for a task with continuous dependencies and removes it from batches",
+  NX_READY_URL:
+    "Nx sets it for a task that waits for a continuous task that reports ready by signal, and removes it from batches",
   NX_READY_SIGNAL_SOCKET:
     "Nx sets it for a task with continuous dependencies and removes it from batches",
   NX_READY_SIGNAL_TASK:
@@ -139,8 +205,8 @@ export const runDependentVariables: Readonly<Record<string, string>> = {
 
 /**
  * A task's environment as the plugin runs cargo with it, and asks cargo for
- * reports with it, as a new object: `env` without {@link nxRunVariables},
- * and with the variables that Nx gives the task in its own layer as that
+ * reports with it, as a new object: `env` without {@link nxRunVariables}
+ * and {@link taskNameVariables}, and with the variables that Nx gives the task in its own layer as that
  * layer gives them in every way of running the task. Nx's pseudo-terminal
  * lays the environment that Nx built for a task run on its own over the
  * `nx` process's own, so that a variable which that layer leaves without a
@@ -148,14 +214,15 @@ export const runDependentVariables: Readonly<Record<string, string>> = {
  * (`EVD-NX-24-BATCHES`, "Task environment"): `NX_SKIP_NX_CACHE` is `true`
  * for a run that skips the cache and absent otherwise, and
  * `NX_TASK_TARGET_CONFIGURATION` names the task's configuration or is
- * absent. `NX_READY_URL`, which Nx sets for a task with a continuous
- * dependency, can otherwise only be the value of a task that runs the `nx`
- * command, and is left out.
+ * absent. `NX_READY_URL`, which Nx sets only for a task that waits for a
+ * continuous task that reports ready by signal ({@link readyUrlProducers}),
+ * can otherwise only be the value of a task that runs the `nx` command, and
+ * is left out.
  */
 // @mara implements DES-BATCH
 export function cargoTaskEnvironment(env: NodeJS.ProcessEnv, task: TaskShape): NodeJS.ProcessEnv {
   const copy: NodeJS.ProcessEnv = { ...env };
-  for (const name of nxRunVariables) {
+  for (const name of [...nxRunVariables, ...taskNameVariables]) {
     delete copy[name];
   }
   if (copy.NX_SKIP_NX_CACHE !== "true") {
@@ -166,7 +233,7 @@ export function cargoTaskEnvironment(env: NodeJS.ProcessEnv, task: TaskShape): N
   } else {
     copy.NX_TASK_TARGET_CONFIGURATION = task.configuration;
   }
-  if (!task.continuousDependency) {
+  if (!task.readyUrlDependency) {
     delete copy.NX_READY_URL;
   }
   return copy;
@@ -248,8 +315,8 @@ export function withoutUnloadedRootValues(env: NodeJS.ProcessEnv, root: string):
  * which it gives a task run on its own too, where computed in the batch
  * process it would name that process as well; then {@link afterTaskLayer}, as
  * the fork and the task's process set them for a task run on its own; and
- * {@link cargoTaskEnvironment}. A task of a batch has no continuous
- * dependency ({@link refuseReadyUrl} in `batch.ts`).
+ * {@link cargoTaskEnvironment}. A task of a batch waits for no continuous
+ * task that reports ready by signal ({@link refuseReadyUrl} in `batch.ts`).
  *
  * @param processEnv The batch process's environment.
  */
@@ -281,7 +348,7 @@ export function batchTaskEnvironment(
   Object.assign(env, afterTaskLayer);
   return cargoTaskEnvironment(definedOnly(env), {
     configuration: task.target.configuration,
-    continuousDependency: false,
+    readyUrlDependency: false,
   });
 }
 

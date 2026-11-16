@@ -22,3 +22,5 @@ Implements `REQ-TEST-RUNNER`, `REQ-DOCTESTS`, `DES-TEST-PHASES` and steps 3 to 5
 - [ ] Give a `test` that nextest runs every variable whose name starts with `NEXTEST_` as an input, printed by the toolchain command as the `CARGO_PROFILE_` and `CARGO_TARGET_` variables are (`DES-INPUTS`), with the `VER-CACHE-KEYS` row
 
 Done when: the parts of the cited verification that cover this work pass, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
+
+- [ ] Under `workspace-build`, the nextest step of `DES-TEST-RUN` ("Under `workspace-build`"): `cargo nextest run --workspace` with the filterset `package(=a) | package(=b)` of the group's packages and `--no-tests=pass`, without the selecting runner, followed by the doctest step that the `cargo` runner's groups already run (`readDoctestStep` in `nx-rust/src/executors/test-steps.ts`), and the nextest case of "Tests under `workspace-build`" in `VER-BATCHING` (moved from nxr-8f9dz2, which implemented the `cargo` runner's steps)

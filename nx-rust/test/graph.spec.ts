@@ -450,6 +450,30 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["rust", "gamma"],
     ],
   },
+  "workspace-tests": {
+    cargoFolders: ["rust"],
+    projects: {
+      a: "rust/crates/a",
+      b: "rust/crates/b",
+      c: "rust/crates/c",
+      d: "rust/crates/d",
+      h: "rust/crates/h",
+      shared: "rust/crates/shared",
+      tool: "rust/crates/tool",
+      rust: "rust",
+    },
+    edges: [
+      ["a", "shared"],
+      ["b", "shared"],
+      ["rust", "a"],
+      ["rust", "b"],
+      ["rust", "c"],
+      ["rust", "d"],
+      ["rust", "h"],
+      ["rust", "shared"],
+      ["rust", "tool"],
+    ],
+  },
 };
 
 // Without the toolchain that it pins, cargo fails in different-toolchains/pinned.

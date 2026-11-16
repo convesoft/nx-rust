@@ -1,8 +1,8 @@
 import type { ExecutorContext, Task, TaskGraph } from "@nx/devkit";
 import { batchRunsVerbosely } from "./cargo-invocation";
 import type { CargoTargetOptions } from "./command";
-import { formGroups } from "./groups";
-import { type GroupMember, runGroup } from "./group-run";
+import { formGroups, type GroupSelection, planGroups } from "./groups";
+import { batchLiveOutput, type GroupMember, type LiveOutput, runGroup } from "./group-run";
 import {
   groupInvocations,
   type PluginExecutor,
@@ -12,7 +12,12 @@ import {
   TaskError,
 } from "./task";
 import { dotenvDefinitions } from "./dotenv-check";
-import { runDependentVariables, TaskEnvironmentError, taskEnvironments } from "./task-env";
+import {
+  readyUrlProducers,
+  runDependentVariables,
+  TaskEnvironmentError,
+  taskEnvironments,
+} from "./task-env";
 
 /** The result that a batch reports for one task, as Nx 24 takes it. */
 export interface BatchTaskResult {
@@ -100,6 +105,9 @@ export async function* runBatch(
     // environment, where a crate's .env can disagree with the run
     // (`DES-INVOCATION`, "Printing the command").
     const verbose = batchRunsVerbosely(process.env);
+    // What the batch shows of cargo while it runs, also decided once from
+    // the batch process's own environment, which Nx sets from the style.
+    const live = batchLiveOutput(process.env);
     let environmentOf: (task: Task) => NodeJS.ProcessEnv;
     try {
       if (context.projectGraph === undefined) {
@@ -176,18 +184,27 @@ export async function* runBatch(
     const done = new Map<string, boolean>(
       ids.filter((id) => !ready.has(id)).map((id) => [id, false]),
     );
+    // Tasks that this batch leaves unreported, so that Nx runs them in a
+    // following batch once it has stored this one's (writesStoredFiles), and
+    // the folders that the build groups of this batch have written.
+    const deferred = new Set<string>();
+    const written = new Set<string>();
     const dependencies = (id: string): string[] =>
       (taskGraph.dependencies?.[id] ?? []).flatMap((edge: unknown) => {
         const dependency = typeof edge === "string" ? edge : (edge as { id?: string } | null)?.id;
         return dependency !== undefined && dependency in taskGraph.tasks ? [dependency] : [];
       });
-    while (done.size < ids.length) {
+    while (done.size + deferred.size < ids.length) {
       const wave: ReadyTask[] = [];
       for (const [id, task] of ready) {
-        if (done.has(id)) {
+        if (done.has(id) || deferred.has(id)) {
           continue;
         }
         const deps = dependencies(id);
+        if (deps.some((dependency) => deferred.has(dependency))) {
+          deferred.add(id);
+          continue;
+        }
         const failed = deps.filter((dependency) => done.get(dependency) === false);
         if (failed.length > 0) {
           done.set(id, false);
@@ -205,9 +222,12 @@ export async function* runBatch(
           wave.push(task);
         }
       }
+      if (wave.length === 0 && done.size + deferred.size >= ids.length) {
+        break;
+      }
       if (wave.length === 0) {
         // Only a cycle, which Nx does not create, leaves tasks here.
-        for (const id of ids.filter((id) => !done.has(id))) {
+        for (const id of ids.filter((id) => !done.has(id) && !deferred.has(id))) {
           done.set(id, false);
           const now = Date.now();
           yield report(id, {
@@ -219,8 +239,24 @@ export async function* runBatch(
         }
         break;
       }
-      for (const group of formGroups(wave)) {
-        for (const entry of await runReadyGroup(group, context.root, verbose)) {
+      for (const group of wholeWorkspaceFirst(planGroups(formGroups(wave)))) {
+        const folder = writesStoredFiles(group);
+        if (folder !== undefined) {
+          if (group.selection.kind === "workspace" && written.has(folder)) {
+            for (const task of group.tasks) {
+              deferred.add(task.id);
+            }
+            continue;
+          }
+          written.add(folder);
+        }
+        for (const entry of await runReadyGroup(
+          group.tasks,
+          group.selection,
+          context.root,
+          verbose,
+          live,
+        )) {
           done.set(entry.task, entry.result.success);
           yield report(entry.task, entry.result);
         }
@@ -247,12 +283,19 @@ export async function* runBatch(
 // A failure of the plugin's own code fails every task of the group.
 async function runReadyGroup(
   group: readonly ReadyTask[],
+  selection: GroupSelection,
   root: string,
   verbose: boolean,
+  live: LiveOutput,
 ): Promise<BatchReport[]> {
   const start = Date.now();
+  // A group of one crate says why where its output names it.
+  const head = (task: ReadyTask): string[] =>
+    selection.kind === "alone" && selection.note !== undefined
+      ? [...task.head, selection.note]
+      : task.head;
   try {
-    const invocations = groupInvocations(group, root);
+    const invocations = groupInvocations(group, root, selection);
     const members: { task: ReadyTask; member: GroupMember }[] = [];
     const reports: BatchReport[] = [];
     group.forEach((task, index) => {
@@ -263,7 +306,7 @@ async function runReadyGroup(
           result: {
             success: false,
             status: "failure",
-            terminalOutput: [...task.head, invocation].join("\n"),
+            terminalOutput: [...head(task), invocation].join("\n"),
             startTime: start,
             endTime: Date.now(),
           },
@@ -275,6 +318,7 @@ async function runReadyGroup(
     const results = await runGroup(
       members.map(({ member }) => member),
       verbose,
+      live,
     );
     const end = Date.now();
     members.forEach(({ task }, index) => {
@@ -284,7 +328,7 @@ async function runReadyGroup(
         result: {
           success,
           status: success ? "success" : "failure",
-          terminalOutput: [...task.head, ...(output === "" ? [] : [output])].join("\n"),
+          terminalOutput: [...head(task), ...(output === "" ? [] : [output])].join("\n"),
           startTime: start,
           endTime: end,
         },
@@ -300,7 +344,7 @@ async function runReadyGroup(
         success: false,
         status: "failure",
         terminalOutput: [
-          ...task.head,
+          ...head(task),
           `${task.task}: @convesoft/nx-rust could not run the cargo command of this task's group. The task does not run, so that Nx stores no result for it.`,
           message,
         ].join("\n"),
@@ -312,29 +356,77 @@ async function runReadyGroup(
 }
 
 /**
- * Fails a task of a batch that depends on a continuous task, before cargo
- * runs. Nx gives such a task, run on its own, `NX_READY_URL` where the
- * continuous task has reported ready at a URL, and a batch, which Nx tells
- * nothing of that, cannot give it the same environment (`DES-BATCH`; the
- * batch's tasks get exactly the environment that they get alone). Its tests
- * could then pass or skip on a missing URL under the key that a run on its
- * own fills in.
+ * Fails a task of a batch, before cargo runs, where Nx gives the task run on
+ * its own an environment that a batch cannot give it (`DES-BATCH`): where an
+ * edge that waits for readiness (`waitFor: "ready"`) leads to a continuous
+ * task whose `readyWhen` reports ready by `signal`, the one check that
+ * reports a URL, which Nx then gives the task run on its own as
+ * `NX_READY_URL` and tells a batch nothing of (`EVD-NX-24-BATCHES`,
+ * "Continuous tasks"). Its tests could then pass or skip on a missing URL
+ * under the key that a run on its own fills in. Every other continuous
+ * dependency gives the task run on its own nothing that a batch lacks, and
+ * runs in the batch. The maintainer chose this on 15 November 2026.
  *
- * @throws {TaskError} Naming the continuous tasks and what to do instead.
+ * @throws {TaskError} Naming the producers and how to run the task on its
+ *   own, for one command and for the repository (`DES-DIAGNOSTICS`).
  */
 // @mara implements DES-BATCH
+// @mara implements DES-DIAGNOSTICS
 function refuseReadyUrl(task: Task, context: ExecutorContext): void {
-  const edges: unknown[] = context.taskGraph?.continuousDependencies?.[task.id] ?? [];
-  const producers = edges.flatMap((edge) => {
-    const id = typeof edge === "string" ? edge : (edge as { id?: string } | null)?.id;
-    return id === undefined ? [] : [id];
-  });
+  const producers =
+    context.taskGraph === undefined || context.projectGraph === undefined
+      ? []
+      : readyUrlProducers(task.id, context.taskGraph, context.projectGraph);
   if (producers.length === 0) {
     return;
   }
+  const named = producers.join(" and ");
   throw new TaskError(
-    `${taskLabel(task)}: this task depends on the continuous task ${producers.join(" and ")}, and Nx gives it, when it runs on its own, NX_READY_URL where that task reports ready at a URL, which a batch cannot give it. The task does not run in a batch, so that Nx stores no result for it under an environment that differs from the one a run on its own has. Run it with --batch=false.`,
+    `${taskLabel(task)}: this task waits for ${named} to be ready, and ${producers.length === 1 ? "that continuous task reports" : "those continuous tasks report"} ready by signal (readyWhen: { "signal": true }), so Nx gives the task NX_READY_URL when it runs on its own, which a batch cannot give it. The task does not run in this batch, so that Nx stores no result for it under an environment that differs from the one a run on its own has. Run the command with --batch=false, or, to run every task of the repository on its own, set NX_BATCH_MODE=false in the root .env; that turns batching off for every task, of @convesoft/nx-rust and of every other plugin.`,
   );
+}
+
+/**
+ * The groups of a wave with those that select the whole workspace first,
+ * each kind in the order in which they were formed, so that a group of one
+ * crate writes its crate's files after the whole-workspace group that
+ * writes them too (`DES-BATCH`, "Files that a batch stores").
+ */
+function wholeWorkspaceFirst<T extends { selection: GroupSelection }>(groups: readonly T[]): T[] {
+  return [
+    ...groups.filter((group) => group.selection.kind === "workspace"),
+    ...groups.filter((group) => group.selection.kind !== "workspace"),
+  ];
+}
+
+/**
+ * The workspace root of a group whose cargo command writes files that the
+ * `build` tasks of a batch store, or `undefined` for a group that writes none
+ * (`DES-BATCH`, "Files that a batch stores"). A group of `build` writes the
+ * executables, `cdylib` and `staticlib` files of `build`'s outputs in the
+ * folder of its profile and triple: every member's where it selects the whole
+ * workspace, and only its own crate's where it selects one crate, also where
+ * its feature set changes that of crates it depends on, as Cargo 1.91.0 and
+ * 1.100.0 do (`EVD-CARGO-ARTIFACT-WRITERS`). The key is the workspace root
+ * alone, so that two groups whose profiles or triples share a folder under
+ * other names, such as `dev` and `test`, count as writing the same files.
+ *
+ * `doc` is not concerned: it belongs to the workspace project, one task per
+ * Cargo workspace, and writes only its workspace's `doc` folder, which no
+ * `build` writes. `check`, `lint` and `test` run in the other batch executor
+ * and store no files; a `test` waits for every `build` whose executables its
+ * commands replace (`ADR-WORKSPACE-TEST-EXECUTABLES`).
+ *
+ * Nx stores a batch's outputs once the whole batch has ended
+ * (`EVD-NX-24-BATCHES`). So a group that selects the whole workspace runs
+ * only where no `build` group of this batch has run in the same workspace
+ * root before it; otherwise its tasks are left unreported, and Nx runs them in
+ * a following batch once it has stored this one's ("Tasks left unreported").
+ */
+// @mara implements DES-BATCH
+function writesStoredFiles(group: { tasks: readonly PreparedTask[] }): string | undefined {
+  const [first] = group.tasks;
+  return first === undefined || first.target !== "build" ? undefined : first.cwd;
 }
 
 /**

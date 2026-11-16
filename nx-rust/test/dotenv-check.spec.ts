@@ -316,12 +316,12 @@ describe("the environment that the plugin gives cargo", () => {
       NX_PSEUDO_TERMINAL_EXEC_ARGV: "",
     };
     expect(
-      cargoTaskEnvironment(fromTerminal, { configuration: undefined, continuousDependency: false }),
+      cargoTaskEnvironment(fromTerminal, { configuration: undefined, readyUrlDependency: false }),
     ).toEqual({ KEPT: "kept" });
     expect(
       cargoTaskEnvironment(
         { ...fromTerminal, NX_SKIP_NX_CACHE: "true" },
-        { configuration: "ci", continuousDependency: true },
+        { configuration: "ci", readyUrlDependency: true },
       ),
     ).toEqual({
       KEPT: "kept",

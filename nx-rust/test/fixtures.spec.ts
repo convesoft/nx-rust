@@ -176,6 +176,19 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       tools: ["tools"],
     },
   },
+  "workspace-tests": {
+    workspaces: {
+      rust: [
+        "rust/crates/a",
+        "rust/crates/b",
+        "rust/crates/c",
+        "rust/crates/d",
+        "rust/crates/h",
+        "rust/crates/shared",
+        "rust/crates/tool",
+      ],
+    },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.

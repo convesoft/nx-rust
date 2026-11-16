@@ -17,6 +17,7 @@ import {
   runNx,
   taskCalls as harnessTaskCalls,
   testEnvironment,
+  workspaceArgs,
 } from "./harness";
 
 // Checks with real Nx runs of the plugin's executor the parts of
@@ -239,9 +240,7 @@ describe("a cached build or doc whose artifact directory moves after graph creat
         // 3. A new source under the dotenv file fails as well.
         writeFileSync(join(workspace.root, "rust/crates/cli/src/main.rs"), cliPrinting("v2"));
         expect((await runNx(workspace, ["run", "cli:build"])).status).toBe(1);
-        expect(taskCalls(workspace)).toEqual([
-          `build -p ${packageSpec(workspace.root, "rust", "cli")}`,
-        ]);
+        expect(taskCalls(workspace)).toEqual([workspaceArgs("build").join(" ")]);
         expect(existsSync(join(workspace.root, "rust/out"))).toBe(false);
 
         // 4. Without the dotenv file and the folders, nothing of v1 is restored.

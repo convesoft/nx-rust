@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:net";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -16,8 +17,16 @@ import {
   taskCalls,
   testEnvironment,
   withoutColours,
+  taskOutput,
+  withoutRunner,
+  workspaceArgs,
+  workspaceTestSteps,
 } from "./harness";
-import { nxRunVariables, runDependentVariables } from "../src/executors/task-env";
+import {
+  nxRunVariables,
+  runDependentVariables,
+  taskNameVariables,
+} from "../src/executors/task-env";
 
 // VER-BATCHING through real Nx runs with `--batch`, which hands the plugin's
 // tasks to the batch implementation of DES-BATCH: until a strategy of
@@ -28,6 +37,20 @@ import { nxRunVariables, runDependentVariables } from "../src/executors/task-env
 
 /** How Nx marks a task that it restored from the cache, with or without copying outputs. */
 const hit = String.raw`\[(?:local cache|existing outputs match the cache, left as is)\]`;
+
+/** A port that nothing listens on now. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() =>
+        resolve(typeof address === "object" && address !== null ? address.port : 0),
+      );
+    });
+  });
+}
 
 /** The tasks that Nx says it restored from the cache, sorted. */
 const restoredTasks = (output: string) =>
@@ -41,15 +64,14 @@ function failedTasks(output: string): string[] {
   return [...list.matchAll(/^- (\S+)$/gm)].map((match) => match[1]).sort();
 }
 
-/** What Nx printed for one task: from its `> nx run` line to the next task's or the end. */
+/** What Nx printed for one task, which the test expects it to print. */
 function taskBlock(output: string, task: string): string {
-  const start = output.search(new RegExp(String.raw`> nx run ${task.replace(/[:]/g, ":")}(\s|$)`));
-  if (start === -1) {
+  const block = taskOutput(output, task);
+  if (block === "") {
     throw new Error(`Nx printed no block for ${task}:\n${output}`);
   }
-  const rest = output.slice(start + 1);
-  const end = rest.search(/> nx run |\n\s*NX\s+(Running|Successfully|Ran|Running target)/);
-  return end === -1 ? rest : rest.slice(0, end);
+  const end = block.search(/\n\s*NX\s+(Running|Successfully|Ran|Running target)/);
+  return end === -1 ? block : block.slice(0, end);
 }
 
 /** Runs Nx after forgetting the logged cargo calls. */
@@ -72,10 +94,13 @@ function cacheEntries(workspace: FixtureWorkspace): string[] {
     : [];
 }
 
-/** The task calls of cargo, as their arguments, in a stable order. */
+/** The task calls of cargo, as their arguments, in a stable order, the runner's paths left out. */
 function calls(workspace: FixtureWorkspace): string[] {
-  return sortedCalls(taskCalls(workspace)).map((call) => call.args.join(" "));
+  return sortedCalls(taskCalls(workspace)).map((call) => withoutRunner(call.args.join(" ")));
 }
+
+/** The check of the whole workspace that a group of check tasks shares. */
+const checkAll = workspaceArgs("check").join(" ");
 
 const crates = ["base", "breakable", "dep", "devuser", "indep", "scripted", "user"];
 
@@ -86,48 +111,91 @@ const brokenLibrary: FileChanges = {
 
 describe("a batch of the plugin's tasks", () => {
   it(
-    "runs when Nx is asked to batch, with the cargo commands of the tasks run on their own, and each task with its own status and output; a plain run batches nothing",
+    "runs the tasks of each target in shared cargo commands without --batch, one check and three test steps, each task with its own status and output; run on its own, each task runs its group's steps itself",
     async () => {
       const workspace = FixtureWorkspace.create("batch-groups");
       try {
-        const batched = await nx(workspace, [
-          "run-many",
-          "-t",
-          "check",
-          "test",
-          "--batch",
-          "--skip-nx-cache",
-        ]);
+        // A fresh copy: nothing is stored yet, and this run stores every task.
+        const batched = await nx(workspace, ["run-many", "-t", "check", "test"]);
         expect(batched.status).toBe(0);
         expect(batched.output).toMatch(/Running 14 tasks with @convesoft\/nx-rust:cargo\b/);
-        const inBatch = calls(workspace);
-        expect(inBatch).toHaveLength(2 * crates.length);
+        expect(calls(workspace)).toEqual([checkAll, ...workspaceTestSteps()].sort());
         for (const crate of crates) {
-          // Each task's output holds what its own cargo command printed.
+          // Each task's output holds its own crate's part of the command.
           const check = taskBlock(batched.output, `${crate}:check`);
           // A crate with a build script compiles it first: cargo says Compiling.
           expect(check).toMatch(new RegExp(`(Checking|Compiling) ${crate} v0\\.1\\.0`));
           expect(check).toMatch(/Finished `dev` profile/);
-          // A crate's dependencies are checked in its own command.
-          const unrelated = crates.filter(
-            (other) =>
-              other !== crate &&
-              !["dep:base", "user:breakable", "devuser:breakable"].includes(`${crate}:${other}`),
-          );
-          for (const other of unrelated) {
+          for (const other of crates.filter((other) => other !== crate)) {
             expect(check).not.toMatch(new RegExp(`(Checking|Compiling) ${other} v`));
           }
           expect(taskBlock(batched.output, `${crate}:test`)).toMatch(/test result: ok\./);
         }
         expect(taskBlock(batched.output, "dep:test")).toMatch(/dep_is_two \.\.\. ok/);
         expect(taskBlock(batched.output, "base:test")).not.toMatch(/dep_is_two/);
+        expect(taskBlock(batched.output, "base:test")).toMatch(/Doc-tests base/);
+        expect(taskBlock(batched.output, "dep:test")).not.toMatch(/Doc-tests base/);
 
-        // preferBatch is off until nxr-8f9dz2: a plain run runs each task in
-        // a process of its own, with the same cargo commands.
-        const plain = await nx(workspace, ["run-many", "-t", "check", "test", "--skip-nx-cache"]);
-        expect(plain.status).toBe(0);
-        expect(plain.output).not.toMatch(/Running \d+ tasks with @convesoft\/nx-rust/);
-        expect(calls(workspace)).toEqual(inBatch);
+        // A second run restores every task without a cargo call.
+        const again = await nx(workspace, ["run-many", "-t", "check", "test"]);
+        expect(again.status).toBe(0);
+        expect(restoredTasks(again.output)).toEqual(
+          crates.flatMap((crate) => [`${crate}:check`, `${crate}:test`]).sort(),
+        );
+        expect(taskCalls(workspace)).toEqual([]);
+
+        // With --batch=false, each task runs the steps of its group itself,
+        // which select the whole workspace as well.
+        const alone = await nx(workspace, [
+          "run-many",
+          "-t",
+          "check",
+          "test",
+          "--skip-nx-cache",
+          "--batch=false",
+        ]);
+        expect(alone.status).toBe(0);
+        expect(alone.output).not.toMatch(/Running \d+ tasks with @convesoft\/nx-rust/);
+        const ran = calls(workspace);
+        expect(ran.filter((call) => call === checkAll)).toHaveLength(crates.length);
+        expect(ran.filter((call) => call === workspaceTestSteps()[0])).toHaveLength(crates.length);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
+
+  it(
+    "prints one line for each cargo command that it starts in a static run, which belongs to no task and is never stored or replayed",
+    async () => {
+      const workspace = FixtureWorkspace.create("batch-groups");
+      try {
+        const run = await nx(workspace, ["run-many", "-t", "check", "-p", "base", "indep"]);
+        expect(run.status).toBe(0);
+        const status = run.output
+          .split("\n")
+          .filter((line) => line.startsWith("@convesoft/nx-rust: cargo"));
+        expect(status).toEqual(["@convesoft/nx-rust: cargo check for base, indep (step 1 of 1)"]);
+        // No task's stored output holds it, and a run from the cache shows none.
+        const outputs = join(workspace.root, ".nx", "cache", "terminalOutputs");
+        const stored = readdirSync(outputs).map((file) =>
+          readFileSync(join(outputs, file), "utf8"),
+        );
+        expect(stored.length).toBeGreaterThan(0);
+        expect(stored.join("\n")).not.toContain("@convesoft/nx-rust: cargo");
+        const again = await nx(workspace, [
+          "run-many",
+          "-t",
+          "check",
+          "-p",
+          "base",
+          "indep",
+          "--batch",
+        ]);
+        expect(again.status).toBe(0);
+        expect(again.output).not.toContain("@convesoft/nx-rust: cargo");
+        expect(taskBlock(again.output, "base:check")).toMatch(/Checking base v0\.1\.0/);
       } finally {
         workspace.remove();
       }
@@ -188,17 +256,19 @@ describe("a batch of the plugin's tasks", () => {
           '#[test]\nfn indep_is_three() {\n    assert_eq!(indep::indep(), 4, "indep is not four");\n}\n',
       });
       try {
-        const run = await nx(workspace, ["run-many", "-t", "test", "--batch"]);
+        const run = await nx(workspace, ["run-many", "-t", "test"]);
         expect(run.status).toBe(1);
         expect(failedTasks(run.output)).toEqual(["indep:test"]);
         expect(taskBlock(run.output, "indep:test")).toMatch(/indep is not four/);
         expect(taskBlock(run.output, "base:test")).not.toMatch(/indep is not four/);
-        // Nx stored the others, and runs only the failed one again.
-        const again = await nx(workspace, ["run-many", "-t", "test", "--batch"]);
+        // Nx stored the others, and runs only the failed one again, in a group
+        // that builds the whole workspace; once its test binaries have
+        // failed, its doctest step is left out.
+        const again = await nx(workspace, ["run-many", "-t", "test"]);
         expect(restoredTasks(again.output)).toEqual(
           crates.filter((crate) => crate !== "indep").map((crate) => `${crate}:test`),
         );
-        expect(calls(workspace)).toEqual([expect.stringMatching(/^test -p \S+\/indep#0\.1\.0$/)]);
+        expect(calls(workspace)).toEqual(workspaceTestSteps().slice(0, 2).sort());
       } finally {
         workspace.remove();
       }
@@ -214,26 +284,37 @@ describe("a batch of the plugin's tasks", () => {
           'fn main() {\n    panic!("the build script of scripted fails");\n}\n',
       });
       try {
-        const run = await nx(workspace, ["run-many", "-t", "check", "test", "--batch"]);
+        const run = await nx(workspace, ["run-many", "-t", "check", "test"]);
         expect(run.status).toBe(1);
-        expect(failedTasks(run.output)).toEqual([
-          "breakable:check",
-          "breakable:test",
-          "devuser:check",
-          "devuser:test",
-          "scripted:check",
-          "scripted:test",
-          "user:check",
-          "user:test",
-        ]);
+        // check keeps going after an error: only the failed crates and those
+        // that need them fail. The test build stops at a compile error, so
+        // every test task of the group fails (DES-BATCH, "Test runs").
+        expect(failedTasks(run.output)).toEqual(
+          [
+            "breakable:check",
+            "devuser:check",
+            "scripted:check",
+            "user:check",
+            ...crates.map((crate) => `${crate}:test`),
+          ].sort(),
+        );
         expect(taskBlock(run.output, "breakable:check")).toMatch(/not_defined_anywhere/);
-        expect(taskBlock(run.output, "user:check")).toMatch(/could not compile `breakable`/);
+        expect(taskBlock(run.output, "user:check")).toMatch(/cargo reported `breakable`/);
         expect(taskBlock(run.output, "scripted:check")).toMatch(
           /the build script of scripted fails/,
         );
-        // Each task runs its crate alone, so an unrelated crate's tests run.
-        expect(taskBlock(run.output, "indep:test")).toMatch(/indep_is_three \.\.\. ok/);
+        const indep = taskBlock(run.output, "indep:test");
+        expect(indep).toContain(
+          "indep:test: the tests of indep were not run: cargo test --no-run stopped before running any test, because ",
+        );
+        // In the order in which cargo reported them.
+        expect(indep).toMatch(
+          /because (`breakable` and `scripted`|`scripted` and `breakable`) did not compile/,
+        );
         expect(taskBlock(run.output, "base:check")).not.toMatch(/not_defined_anywhere/);
+        // Nothing of the step is stored: a second run runs every test task again.
+        const again = await nx(workspace, ["run-many", "-t", "test"]);
+        expect(restoredTasks(again.output)).toEqual([]);
       } finally {
         workspace.remove();
       }
@@ -242,7 +323,7 @@ describe("a batch of the plugin's tasks", () => {
   );
 
   it(
-    "runs each cargo command with the environment of its task: RUSTFLAGS in one crate's .env reaches that crate's command and no other",
+    "runs each cargo command with the environment of its task: RUSTFLAGS in one crate's .env reaches that crate's group and no other, and each group builds the whole workspace",
     async () => {
       const workspace = FixtureWorkspace.create("batch-groups", {
         "rust/crates/indep/.env": "RUSTFLAGS=--cfg nx_rust_flag\n",
@@ -252,17 +333,18 @@ describe("a batch of the plugin's tasks", () => {
           '#[cfg(nx_rust_flag)]\ncompile_error!("base got the RUSTFLAGS of indep");\n\npub fn base() -> u32 {\n    1\n}\n',
       });
       try {
-        const run = await nx(workspace, [
-          "run-many",
-          "-t",
-          "check",
-          "-p",
-          "base",
-          "indep",
-          "--batch",
-        ]);
-        expect(run.output).not.toMatch(/compile_error|needs the RUSTFLAGS|got the RUSTFLAGS/);
+        const run = await nx(workspace, ["run-many", "-t", "check", "-p", "base", "indep"]);
         expect(run.status).toBe(0);
+        // Two groups, one with indep's RUSTFLAGS, each checking the whole
+        // workspace: there the crate that needs the other environment fails
+        // outside the selection, which is a warning.
+        expect(calls(workspace)).toEqual([checkAll, checkAll]);
+        expect(taskBlock(run.output, "base:check")).toMatch(
+          /cargo reported `indep` as failed\. `indep` is outside the selection of this run/,
+        );
+        expect(taskBlock(run.output, "indep:check")).toMatch(
+          /cargo reported `base` as failed\. `base` is outside the selection of this run/,
+        );
       } finally {
         workspace.remove();
       }
@@ -372,7 +454,9 @@ async function dumpsOfRuns(
   for (const way of ways) {
     for (const batch of [false, true]) {
       const args = [
-        ...(batch ? ["run-many", "-t", "test", "-p", "indep", "--batch"] : ["run", "indep:test"]),
+        ...(batch
+          ? ["run-many", "-t", "test", "-p", "indep", "--batch"]
+          : ["run", "indep:test", "--batch=false"]),
         "--skip-nx-cache",
         ...way.args,
       ];
@@ -458,11 +542,10 @@ describe("the environment of a task in a batch", () => {
           await workspace.nx(["daemon", "--stop"], env);
         }
         const first = expectOneEnvironment(dumps);
-        // Nx's per-task layer and the task's dotenv files are there.
+        // Nx's per-task layer, but for the variables that name the task's
+        // project, and the task's dotenv files are there.
         expect(first).toMatchObject({
-          NX_TASK_TARGET_PROJECT: "indep",
           NX_TASK_TARGET_TARGET: "test",
-          LERNA_PACKAGE_NAME: "indep",
           NX_TUI: "false",
           NX_FORKED_TASK_EXECUTOR: "true",
           NX_CLI_SET: "true",
@@ -472,7 +555,11 @@ describe("the environment of a task in a batch", () => {
         });
         // What tells a task how Nx runs and records it is in none, nor what
         // the pseudo-terminal would give back.
-        for (const name of [...nxRunVariables, "NX_TASK_TARGET_CONFIGURATION"]) {
+        for (const name of [
+          ...nxRunVariables,
+          ...taskNameVariables,
+          "NX_TASK_TARGET_CONFIGURATION",
+        ]) {
           expect({ name, value: first[name] }).toEqual({ name, value: undefined });
         }
       } finally {
@@ -742,31 +829,104 @@ describe("the environment of a task in a batch", () => {
   );
 
   it(
-    "is not given to a task that depends on a continuous task, which fails before cargo runs, as the batch cannot give it NX_READY_URL",
+    "runs a task that depends on a continuous task in the batch, unless it waits for one that reports ready by signal, which Nx tells only a task run on its own",
     async () => {
-      const workspace = FixtureWorkspace.create("binary-tests", {
-        "rust/crates/app/project.json": JSON.stringify({
+      const port = await freePort();
+      const target = (name: string, readyWhen?: object) => ({
+        executor: "nx:run-commands",
+        options: { command: `node svc/server.js ${name} ${port}` },
+        continuous: true,
+        ...(readyWhen === undefined ? {} : { readyWhen }),
+      });
+      const workspace = FixtureWorkspace.create("batch-groups", {
+        "svc/project.json": JSON.stringify({
+          name: "svc",
           targets: {
-            test: { dependsOn: [{ projects: ["directory:rust"], target: "lockfile" }, "bridge"] },
-            bridge: {
-              executor: "nx:run-commands",
-              options: { command: 'node -e "setInterval(() => {}, 1000)"' },
-              continuous: true,
-              dependsOn: ["build"],
-            },
+            serve: target("plain"),
+            "serve-port": target("port", { port }),
+            "serve-signal": target("signal", { signal: true }),
           },
         }),
+        "svc/server.js": [
+          'const http = require("node:http");',
+          "const [kind, port] = process.argv.slice(2);",
+          "const server = http.createServer((_, response) => response.end());",
+          'server.listen(kind === "port" ? Number(port) : 0, "127.0.0.1", () => {',
+          '  if (kind === "signal") require("nx/src/devkit-exports.js").emitReadySignal(server);',
+          "});",
+          "",
+        ].join("\n"),
+        "rust/crates/indep/tests/ready.rs":
+          '#[test]\nfn writes_the_ready_url() {\n    let url = std::env::var("NX_READY_URL").unwrap_or_else(|_| "<unset>".into());\n    std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/ready-url.txt"), url).unwrap();\n}\n',
       });
+      const waitFor = (producer: string, ready: boolean) =>
+        JSON.stringify({
+          targets: {
+            test: {
+              dependsOn: [
+                { projects: ["directory:rust"], target: "lockfile" },
+                { projects: ["svc"], target: producer, ...(ready ? { waitFor: "ready" } : {}) },
+              ],
+            },
+          },
+        });
+      const readyUrl = () =>
+        readFileSync(join(workspace.root, "rust", "crates", "indep", "ready-url.txt"), "utf8");
       try {
-        const run = await nx(workspace, ["run-many", "-t", "test", "-p", "app", "--batch"]);
-        expect(run.status).toBe(1);
-        expect(run.output).toContain(
-          "app:test: this task depends on the continuous task app:bridge, and Nx gives it, when it runs on its own, NX_READY_URL where that task reports ready at a URL, which a batch cannot give it.",
+        for (const [producer, ready] of [
+          ["serve", false],
+          ["serve-port", true],
+        ] as const) {
+          writeFileSync(
+            join(workspace.root, "rust", "crates", "indep", "project.json"),
+            waitFor(producer, ready),
+          );
+          const run = await nx(workspace, [
+            "run-many",
+            "-t",
+            "test",
+            "-p",
+            "indep",
+            "--batch",
+            "--skip-nx-cache",
+          ]);
+          expect({ producer, status: run.status }).toEqual({ producer, status: 0 });
+          expect(run.output).toMatch(
+            /Running 1 task with @convesoft\/nx-rust:cargo|nx-rust: cargo test for indep/,
+          );
+          expect(readyUrl()).toBe("<unset>");
+        }
+        writeFileSync(
+          join(workspace.root, "rust", "crates", "indep", "project.json"),
+          waitFor("serve-signal", true),
         );
+        const refused = await nx(workspace, [
+          "run-many",
+          "-t",
+          "test",
+          "-p",
+          "indep",
+          "--batch",
+          "--skip-nx-cache",
+        ]);
+        expect(refused.status).toBe(1);
+        expect(refused.output).toContain(
+          'indep:test: this task waits for svc:serve-signal to be ready, and that continuous task reports ready by signal (readyWhen: { "signal": true }), so Nx gives the task NX_READY_URL when it runs on its own, which a batch cannot give it.',
+        );
+        expect(refused.output).toContain("set NX_BATCH_MODE=false in the root .env");
         expect(calls(workspace).filter((call) => call.startsWith("test "))).toEqual([]);
-        // On its own it runs.
-        const alone = await nx(workspace, ["run", "app:test"]);
+        // On its own it runs, with the URL.
+        const alone = await nx(workspace, [
+          "run-many",
+          "-t",
+          "test",
+          "-p",
+          "indep",
+          "--batch=false",
+          "--skip-nx-cache",
+        ]);
         expect(alone.status).toBe(0);
+        expect(readyUrl()).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/?$/);
       } finally {
         workspace.remove();
       }
@@ -846,7 +1006,51 @@ function printed(workspace: FixtureWorkspace): Record<string, string> {
   );
 }
 
+/** The crates of binary-tests whose executables a whole-workspace cargo test replaces. */
+const waitedBuilds = ["app", "benched", "gated", "harnessless"];
+
 describe("the two batch executors", () => {
+  it.each<[string, string[]]>([
+    ["off", ["--batch=false"]],
+    ["on", []],
+  ])(
+    "order every test after the builds whose executables its whole-workspace cargo test replaces, with batching %s, so that every stored build holds what cargo build writes",
+    async (_case, flags) => {
+      const workspace = FixtureWorkspace.create("binary-tests");
+      // Plain cargo warms the build directory for both kinds of executable.
+      cargo(workspace, "build", "--workspace");
+      cargo(workspace, "test", "--workspace", "--no-run");
+      const hold = holdCargo("test");
+      try {
+        const run = nx(workspace, ["run-many", "-t", "build", "test", ...flags], hold.env);
+        await hold.held();
+        // No test starts before every build that it waits for is stored.
+        const whileHeld = cacheEntries(workspace);
+        hold.release();
+        const { status } = await run;
+        expect(status).toBe(0);
+        expect(whileHeld.length).toBeGreaterThanOrEqual(waitedBuilds.length);
+        // The artifact directory holds what cargo test wrote last.
+        expect(printed(workspace).app).toBe("extra");
+        // Each build entry restores the executable of cargo build.
+        for (const name of binaries) {
+          rmSync(join(workspace.root, "rust", "target", "debug", name), { force: true });
+        }
+        const restored = await nx(workspace, ["run-many", "-t", "build", ...flags]);
+        expect(restored.status).toBe(0);
+        expect(taskCalls(workspace)).toEqual([]);
+        expect(printed(workspace)).toEqual(
+          Object.fromEntries(binaries.map((name) => [name, "plain"])),
+        );
+      } finally {
+        hold.release();
+        hold.remove();
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
+
   it(
     "run build and doc in batches of their own, and every stored build holds what cargo build writes after a run that also ran the tests",
     async () => {
@@ -897,12 +1101,17 @@ describe("the two batch executors", () => {
       try {
         const run = nx(workspace, ["run-many", ...targets, "-p", "app", "--batch"], hold.env);
         await hold.held();
-        // While app's cargo test waits, Nx has stored app's build.
+        // While app's cargo test waits, Nx has stored app's build and those
+        // of the other crates whose executables its whole-workspace cargo
+        // test replaces, which app's test waits for, unless the run excludes
+        // task dependencies.
         const whileHeld = cacheEntries(workspace);
         hold.release();
         const { status, output } = await run;
         expect(status).toBe(0);
-        expect(whileHeld).toHaveLength(1);
+        expect(whileHeld).toHaveLength(
+          targets.includes("--exclude-task-dependencies") ? 1 : waitedBuilds.length,
+        );
         expect(output).toMatch(/test runs_the_executable_that_cargo_test_built \.\.\. ok/);
         expect(printed(workspace).app).toBe("extra");
         if (targets.includes("--exclude-task-dependencies")) {
@@ -938,10 +1147,15 @@ describe("the two batch executors", () => {
         const run = await nx(workspace, ["run-many", "-t", "build", "test", "--batch"]);
         expect(run.status).toBe(1);
         expect(failedTasks(run.output)).toEqual(["app:test"]);
-        expect(taskBlock(run.output, "app:test")).toContain(
-          "app:test: cargo test replaces the executables that app:build declares as its outputs, because the crate has a binary and an integration test or a bench that cargo test builds, and this run holds app:build without the dependency of app:test on it that @convesoft/nx-rust infers.",
+        // Under workspace-build, app's test waits for the builds of every
+        // crate whose executables its cargo test replaces.
+        expect(run.output).toContain(
+          "app:test: the cargo test of this task, which builds the whole workspace under workspace-build, replaces the executables that app:build and benched:build and gated:build and harnessless:build declare as their outputs, because those crates have a binary and an integration test or a bench that cargo test builds, and this run holds app:build and benched:build and gated:build and harnessless:build without the dependency of app:test on them that @convesoft/nx-rust infers.",
         );
-        expect(calls(workspace).filter((call) => call.startsWith("test "))).toHaveLength(10);
+        // The other ten tests share the steps of one group.
+        expect(calls(workspace).filter((call) => call.startsWith("test "))).toEqual(
+          workspaceTestSteps().sort(),
+        );
         expect(calls(workspace)).not.toContainEqual(expect.stringMatching(/^test -p \S+\/app#/));
       } finally {
         workspace.remove();

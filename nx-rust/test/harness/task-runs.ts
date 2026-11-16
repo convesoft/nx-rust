@@ -130,3 +130,78 @@ export function expectStatus(
     );
   }
 }
+
+/**
+ * What Nx printed for `task`: from its last `> nx run <task>` header to the
+ * next header or the end. The last one, because Nx prints the header of the
+ * task that `nx run` names a first time, without output, when a batch that
+ * holds it starts, and again with the task's output once the batch reports it.
+ */
+export function taskOutput(output: string, task: string): string {
+  const header = new RegExp(
+    String.raw`> nx run ${task.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\s|$)`,
+    "g",
+  );
+  const starts = [...output.matchAll(header)].map((match) => match.index ?? 0);
+  if (starts.length === 0) {
+    return "";
+  }
+  const start = starts[starts.length - 1];
+  const next = output.indexOf("> nx run ", start + 1);
+  return output.slice(start, next < 0 ? undefined : next);
+}
+
+/** How {@link withoutRunner} writes the selecting runner's `--config` value. */
+export const runnerConfig = "target.HOST.runner=[RUNNER]";
+
+/**
+ * `text` with the `--config` value that passes cargo the selecting runner
+ * (`DES-TEST-RUN`) written as {@link runnerConfig}: the host's triple and the
+ * absolute paths of Node and the runner differ between machines.
+ */
+export function withoutRunner(text: string): string {
+  return text.replace(/target\.[A-Za-z0-9_.-]+\.runner=\[[^\]]*\]/g, runnerConfig);
+}
+
+/**
+ * The commands of a `test` group under `workspace-build`, as {@link withoutRunner}
+ * writes them: the build, the test binaries through the selecting runner and,
+ * where a crate of the group has a library, the doctests, each with `tail`,
+ * the feature, profile and `--locked` flags (`DES-TEST-RUN`).
+ */
+export function workspaceTestSteps(tail: readonly string[] = [], doctests = true): string[] {
+  return [
+    ["test", "--workspace", "--no-run", ...tail].join(" "),
+    [
+      "test",
+      "--workspace",
+      "--tests",
+      "--no-fail-fast",
+      "--message-format=json-render-diagnostics",
+      ...tail,
+      "--config",
+      runnerConfig,
+    ].join(" "),
+    ...(doctests ? [["test", "--workspace", "--doc", "--no-fail-fast", ...tail].join(" ")] : []),
+  ];
+}
+
+/**
+ * The arguments of a `build`, `check` or `clippy` group under
+ * `workspace-build`, which selects the whole workspace (`DES-UNIFICATION`),
+ * with `tail`, the feature, profile, triple and `--locked` flags.
+ */
+export function workspaceArgs(
+  subcommand: "build" | "check" | "clippy",
+  tail: readonly string[] = [],
+  allTargets = subcommand !== "build",
+): string[] {
+  return [
+    subcommand,
+    ...(allTargets ? ["--all-targets"] : []),
+    "--keep-going",
+    "--message-format=json",
+    "--workspace",
+    ...tail,
+  ];
+}

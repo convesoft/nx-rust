@@ -7,10 +7,12 @@ import {
   HARNESS_TIMEOUT,
   holdCargo,
   lockfileCalls,
-  packageSpec,
   runNx,
   taskCalls,
   testEnvironment,
+  withoutRunner,
+  workspaceArgs,
+  workspaceTestSteps,
 } from "./harness";
 
 // Runs of a crate whose cargo test replaces the executable of its build, with
@@ -32,8 +34,16 @@ function restored(output: string, task: string): boolean {
 
 /** The cargo calls of tasks, in the order the wrapper logged them, as their arguments. */
 function calls(workspace: FixtureWorkspace): string[] {
-  return taskCalls(workspace).map((call) => call.args.join(" "));
+  return taskCalls(workspace).map((call) => withoutRunner(call.args.join(" ")));
 }
+
+/**
+ * The cargo commands of a build group under workspace-build, which builds
+ * the whole workspace, and of a test group of binary crates, which have no
+ * doctest step (DES-TEST-RUN).
+ */
+const buildCall = workspaceArgs("build").join(" ");
+const testCalls = workspaceTestSteps([], false);
 
 /** Runs Nx after forgetting the logged cargo calls. */
 async function nx(
@@ -52,11 +62,6 @@ function cargo(workspace: FixtureWorkspace, ...args: string[]): void {
     env: testEnvironment(),
     stdio: "pipe",
   });
-}
-
-/** How the plugin's cargo commands select `crate` of binary-tests, as the wrapper logs it. */
-function spec(workspace: FixtureWorkspace, crate: string): string {
-  return packageSpec(workspace.root, "rust", crate);
 }
 
 /** What the executable at `path` prints. */
@@ -143,10 +148,7 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
 
         expect(early).toBe(false);
         expect(status).toBe(0);
-        expect(calls(workspace)).toEqual([
-          `build -p ${spec(workspace, "app")}`,
-          `test -p ${spec(workspace, "app")}`,
-        ]);
+        expect(calls(workspace)).toEqual([buildCall, ...testCalls]);
         expect(output).toMatch(/test runs_the_executable_that_cargo_test_built \.\.\. ok/);
         // The artifact directory holds what cargo test wrote last, as plain
         // cargo build and then cargo test leave it (VER-CARGO-UNCHANGED).
@@ -184,10 +186,9 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
       try {
         const first = await nx(workspace, ["run", "app:test"]);
         expect(first.status).toBe(0);
-        expect(calls(workspace)).toEqual([
-          `build -p ${spec(workspace, "app")}`,
-          `test -p ${spec(workspace, "app")}`,
-        ]);
+        // app's test waits for the build of every crate whose executables
+        // its whole-workspace cargo test replaces, which share one command.
+        expect(calls(workspace)).toEqual([buildCall, ...testCalls]);
 
         const second = await nx(workspace, ["run", "app:test"]);
         expect(second.status).toBe(0);
@@ -196,10 +197,12 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
         expect(calls(workspace)).toEqual([]);
         expect(lockfileCalls(workspace)).toHaveLength(1);
 
-        // showcase has a binary and an example only.
+        // showcase has a binary and an example only: its test waits for the
+        // same builds, which Nx restores.
         const other = await nx(workspace, ["run", "showcase:test"]);
         expect(other.status).toBe(0);
-        expect(calls(workspace)).toEqual([`test -p ${spec(workspace, "showcase")}`]);
+        expect(restored(other.output, "app:build")).toBe(true);
+        expect(calls(workspace)).toEqual(testCalls);
       } finally {
         workspace.remove();
       }
@@ -234,12 +237,12 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
         expect(both.output).toContain(
           `Make sure that no configuration replaces the dependsOn of app:${names.test}: run \`nx show target app:${names.test} --json\` and look under \`sourceMap\` for the file and entry, and keep the plugin's entries with "...", as in "dependsOn": ["...", "^codegen"].`,
         );
-        expect(calls(workspace)).toEqual([`build -p ${spec(workspace, "app")}`]);
+        expect(calls(workspace)).toEqual([buildCall]);
 
         // Without app's build in the run, nothing can overlap.
         const alone = await nx(workspace, ["run", `app:${names.test}`]);
         expect(alone.status).toBe(0);
-        expect(calls(workspace)).toEqual([`test -p ${spec(workspace, "app")}`]);
+        expect(calls(workspace)).toEqual(testCalls);
       } finally {
         workspace.remove();
       }
@@ -273,10 +276,7 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
 
         expect(run.status).toBe(0);
         expect(run.output).not.toContain("cargo test replaces the executables");
-        expect(calls(workspace)).toEqual([
-          `build -p ${spec(workspace, "app")}`,
-          `test -p ${spec(workspace, "app")}`,
-        ]);
+        expect(calls(workspace)).toEqual([buildCall, ...testCalls]);
       } finally {
         workspace.remove();
       }
@@ -302,7 +302,7 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
         expect(run.output).toContain(
           "app:test: cargo test replaces the executables that app:build declares as its outputs",
         );
-        expect(calls(workspace)).toEqual([`build -p ${spec(workspace, "app")}`]);
+        expect(calls(workspace)).toEqual([buildCall]);
       } finally {
         workspace.remove();
       }
@@ -315,9 +315,16 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
     async () => {
       // Nx records every edge into a continuous task as a continuous one, and
       // refuses to cache a continuous target.
+      // test keeps only its own build, so that it starts once that build has
+      // started: the builds of the other crates whose executables its
+      // whole-workspace cargo test replaces would hold it back until the
+      // continuous build had exited and Nx had ended the run.
       const workspace = FixtureWorkspace.create("binary-tests", {
         "rust/crates/app/project.json": JSON.stringify({
-          targets: { build: { continuous: true, cache: false } },
+          targets: {
+            build: { continuous: true, cache: false },
+            test: { dependsOn: [lockfileTask, "build"] },
+          },
         }),
       });
       try {
