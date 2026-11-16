@@ -14,6 +14,7 @@ Goal: a workspace-level target brings the coverage baseline up to date, and the 
 Implements `REQ-BASELINE` and `DES-BASELINE` (`nx-rust/docs/ci.mara.md`). Checked by `VER-TESTING`.
 
 - [ ] The collection target on the workspace project: `collect --diff`, or a full `collect` when there is no usable data or the threshold is exceeded
+- [ ] Collect with `--workspace --no-fail-fast`, the test runs' cargo arguments and git's `diff.relative`, into the database path that `DES-BASELINE` names (`EVD-CARGO-AFFECTED-REPORT`), and write the context record beside it (`DES-BASELINE`, `ADR-AFFECTED-BASELINE-CONTEXT`)
 - [ ] The threshold option
 - [ ] The optional switches listed in `DES-BASELINE`
 - [ ] A worked CI example in `ci.mara.md`

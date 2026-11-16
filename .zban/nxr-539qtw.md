@@ -13,7 +13,7 @@ Goal: the mode (`full` or `affected:<baseline commit>`) is part of every `test` 
 
 Implements `REQ-TEST-MODE-KEY` and `DES-TEST-MODE` (`nx-rust/docs/testing.mara.md`). Checked by `VER-TESTING` and `VER-CACHE-KEYS`. Depends on what the Nx 24 input spike found about runtime inputs.
 
-- [ ] The plugin command that prints the mode
+- [ ] The plugin command that prints the mode, which reads the baseline's commits from cargo-affected's database and never starts cargo-affected (`DES-TEST-MODE`, `EVD-CARGO-AFFECTED-COST`)
 - [ ] The runtime input on the `test` target
 - [ ] The mode rule of `DES-TEST-MODE`: `NX_RUST_TEST_MODE`, the default per environment, the fallback without a baseline, and `--affectedTests=false`
 - [ ] Matrix rows for mode and baseline changes

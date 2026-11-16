@@ -143,5 +143,9 @@ A full `collect` replaces `--diff` when the report shows no usable data (first r
 
 Collection is a target of the [[TERM-WORKSPACE-PROJECT]]. Restoring and saving the database are steps of the CI system, not of the plugin. Off by default and available as switches: a nightly full run for tests that depend on external state, scheduled or batched recollection after dependency updates, `collect` as the full run on main, and a separate build directory for coverage builds.
 
-The overhead of `collect` and `collect --diff` is not measured yet ([[RISK-COVERAGE-COST]]).
+Collection runs `cargo affected collect -- --workspace --no-fail-fast` with the cargo arguments of the test runs, such as `--all-features`, which cargo-affected's fingerprint does not hold; without `--no-fail-fast` it stopped at the first failing test and stored part of the suite. It gets git's `diff.relative` as step 1 of [[DES-TEST-RUN]] does. The database the pipeline restores and saves is `target/affected/coverage.db` in the workspace root, whatever `CARGO_TARGET_DIR` or `build.target-dir` say ([[EVD-CARGO-AFFECTED-REPORT]]).
+
+Beside the database, the collection target writes `target/affected/nx-rust-context.json` in the workspace root, the record of the context it collected in ([[ADR-AFFECTED-BASELINE-CONTEXT]]): the cargo options of the collection that change what is compiled or run, namely `--features`, `--all-features`, `--no-default-features`, the profile and `--target`; the target triple that cargo built for; and for every environment input of the workspace's `test` tasks ([[DES-INPUTS]]), those the plugin infers, every variable of the prefixes its list names and those that `envInputs` declares, the SHA-256 of the value or a mark that it was unset, so that no value is written. The pipeline saves and restores the file with the database, and a baseline without it runs the full suite (step 1 of [[DES-TEST-RUN]]).
+
+A full `collect` from scratch took 15.7 s on ripgrep and 80 s on tokio at `-j 4` with 4 test threads, and peaked at 1.5 and 4.75 GiB ([[EVD-CARGO-AFFECTED-COST]]). The overhead of `collect --diff` is not measured yet ([[RISK-COVERAGE-COST]]).
 :::
