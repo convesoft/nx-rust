@@ -5,6 +5,7 @@ import {
   binaryRecordName,
   type BuildRecordSource,
   libraryRecordName,
+  unprefixedLibraryRecordName,
 } from "../graph/build-records";
 
 /** What a `build` task's options say about the cargo call, as far as the records depend on it. */
@@ -137,7 +138,8 @@ export function callTriples(
 /**
  * The records that `cargo build -p <crate>` exports for a call with this
  * selection, named from what graph creation reported, without asking cargo
- * (`DES-BUILD-INPUT-CHECK`, point 1): `lib<name>.d` for the library and
+ * (`DES-BUILD-INPUT-CHECK`, point 1): those of {@link libraryRecordNames}
+ * for the library and
  * `<name>.d` for each binary whose required features are all features of the
  * crate that the selection turns on ({@link enabledFeatures}), in `<artifact directory>/<profile folder>`,
  * or in `<artifact directory>/<triple>/<profile folder>` for each triple that
@@ -171,30 +173,40 @@ export function nameRecords(
     return [];
   }
   const hostFolder = join(artifactDirectory, profile);
-  const tripleFolders =
+  const tripleFolders: { folder: string; triple?: string }[] =
     picked.kind === "triples"
-      ? picked.triples.map((triple) => join(artifactDirectory, tripleFolderName(triple), profile))
-      : [hostFolder];
+      ? picked.triples.map((triple) => ({
+          folder: join(artifactDirectory, tripleFolderName(triple), profile),
+          triple,
+        }))
+      : [{ folder: hostFolder }];
   const shared = new Set(source.shared);
   const records: NamedRecord[] = [];
-  const add = (kind: NamedRecord["kind"], target: string, name: string, followsTriple: boolean) => {
-    if (shared.has(name)) {
-      return;
-    }
-    if (
-      followsTriple &&
-      picked.kind === "unnamed" &&
-      inAnyTripleFolder(artifactDirectory, profile, name)
-    ) {
-      return;
-    }
-    for (const folder of followsTriple ? tripleFolders : [hostFolder]) {
-      records.push({ path: join(folder, name), kind, target });
+  const add = (
+    kind: NamedRecord["kind"],
+    target: string,
+    names: (triple: string | undefined) => string[],
+    followsTriple: boolean,
+  ) => {
+    for (const { folder, triple } of followsTriple ? tripleFolders : [{ folder: hostFolder }]) {
+      for (const name of names(followsTriple ? triple : undefined)) {
+        if (shared.has(name)) {
+          continue;
+        }
+        if (
+          followsTriple &&
+          picked.kind === "unnamed" &&
+          inAnyTripleFolder(artifactDirectory, profile, name)
+        ) {
+          continue;
+        }
+        records.push({ path: join(folder, name), kind, target });
+      }
     }
   };
   if (source.library !== undefined) {
-    const { name, procMacro } = source.library;
-    add("library", name, libraryRecordName(name), !procMacro);
+    const { name, procMacro, crateTypes } = source.library;
+    add("library", name, (triple) => libraryRecordNames(name, crateTypes, triple), !procMacro);
   }
   const enabled = enabledFeatures(
     packageName,
@@ -204,7 +216,7 @@ export function nameRecords(
   );
   for (const binary of source.binaries) {
     if (binary.requiredFeatures.every((feature) => enabled.has(feature))) {
-      add("binary", binary.name, binaryRecordName(binary.name), true);
+      add("binary", binary.name, () => [binaryRecordName(binary.name)], true);
     }
   }
   return records;
@@ -268,6 +280,34 @@ function splitMakeWords(line: string): string[] {
     words.push(word);
   }
   return words;
+}
+
+/**
+ * The records that cargo exports for a library with these crate types built
+ * for `triple`, `undefined` for the host (`DES-BUILD-INPUT-CHECK`, point 1):
+ * `lib<name>.d`, and for a `cdylib` built for a wasm triple, whose file is
+ * `<name>.wasm` without the `lib` prefix, `<name>.d` in its place, beside
+ * `lib<name>.d` where the library has another crate type as well, as cargo
+ * 1.100.0 writes them for `wasm32-unknown-unknown` (`EVD-WASM-POSTPROCESS`).
+ * A graph that recorded no crate types names `lib<name>.d`.
+ */
+export function libraryRecordNames(
+  name: string,
+  crateTypes: readonly string[] | undefined,
+  triple: string | undefined,
+): string[] {
+  const unprefixed =
+    crateTypes !== undefined &&
+    crateTypes.includes("cdylib") &&
+    triple !== undefined &&
+    /^wasm(32|64)-/.test(triple);
+  if (!unprefixed) {
+    return [libraryRecordName(name)];
+  }
+  return [
+    unprefixedLibraryRecordName(name),
+    ...(crateTypes.some((type) => type !== "cdylib") ? [libraryRecordName(name)] : []),
+  ];
 }
 
 // The folder cargo names after a triple: the triple, or the file stem of a

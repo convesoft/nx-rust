@@ -18,7 +18,8 @@ export interface SharedArtifactNames {
    * For each crate whose library has the file name of another crate's
    * `cdylib`, `dylib`, proc-macro or `staticlib` file, by the crate's manifest
    * path: the shared name and the other crates, for the message with which
-   * its `napi-build` fails before cargo runs (`DES-NAPI`, "Library names").
+   * its `napi-build` or `wasm-build` fails before cargo runs (`DES-NAPI`,
+   * "Library names"; `DES-WASM`).
    */
   libraries: ReadonlyMap<string, string>;
   /**

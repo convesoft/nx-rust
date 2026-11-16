@@ -42,6 +42,7 @@ each fixture still has the workspaces and members listed there, and with
 | `shared-executables`   | Two crates of the `rust/` workspace whose binaries are both called `cli`: `alpha` with a `[[bin]]` table, whose integration test runs `CARGO_BIN_EXE_cli` and passes with either crate's executable, and `beta` with `src/bin/cli.rs`; `gamma` has a binary of its own name. The standalone crate `tools` has a binary called `cli` too, in an artifact directory of its own until a test gives both workspaces one.                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `workspace-tests`      | Crates in the `rust/` workspace for `test` under `workspace-build`: `a` depends on `shared` without its feature `x`, which `b` turns on; `a` has unit, integration and doc tests and an example without `test = true`; `c` has a unit test, an integration test and a doctest that fail where `NX_RUST_FIXTURE_FAIL` is set, its integration test then sleeping for ten minutes first, and its unit and integration tests write a file beside the workspace's `Cargo.toml` when they run; `d` has doctests in edition 2021, `tool` is a binary only, and `h` has an integration test with `harness = false`.                                                                                                                                                                                                           |
 | `napi-addons`          | Node addons in the `rust/` workspace: `addon-a` and `addon-b` are `cdylib` crates that depend on `napi` and `napi-derive`, with a build script that calls `napi_build::setup()`, a feature `extra` that adds an exported function, and a `package.json` whose `napi.binaryName` names the addon; `addon-a` re-exports `core-napi`, a library with a `#[napi]` function on which the ordinary library `consumer` depends too, and `plain-cdylib` is a `cdylib` without napi. The crates.io packages, `napi` 3, `napi-derive` 3, `napi-build` 2 and what they depend on, come from a Cargo local registry in `registry/`, which `rust/.cargo/config.toml` puts in place of crates.io, so that cargo needs no network. The tests link this repository's `@napi-rs/cli`, a dev dependency, into the copy's `node_modules`. |
+| `wasm-packages`        | wasm packages in the `rust/` workspace: `codec` is a `cdylib` and `codec-b` a `cdylib` and `rlib`, both depending on `wasm-bindgen` and `shared`, `codec` with a feature `extra` that adds an export; `plain-cdylib` is a `cdylib` without `wasm-bindgen`. The crates.io packages, `wasm-bindgen` 0.2.130 and what it depends on, come from a Cargo local registry in `registry/`, which `rust/.cargo/config.toml` puts in place of crates.io.                                                                                                                                                                                                                                                                                                                                                                         |
 
 A fixture has no `nx.json` unless it needs plugin options. The harness writes
 one that registers the plugin, and in a fixture's own `nx.json` it points
@@ -536,6 +537,18 @@ CI, while Jest still runs that test. Code that compiles only with type
 information from other files, such as a reference to an ambient `const enum`
 or a type re-exported without `export type`, fails `typecheck` too. The end-to-end tests have a
 `typecheck` target of their own on `nx-rust-e2e/tsconfig.spec.json`.
+
+The cases that need a real optional tool skip with a warning where the
+machine lacks it, and the cases about a missing tool hide the machine's own.
+cargo-hakari is taken from the folder that `NX_RUST_TEST_CARGO_HAKARI` names,
+else from `PATH` or the Cargo home's `bin`; the `wasm-bindgen` CLI likewise
+from `NX_RUST_TEST_WASM_BINDGEN`, and only in the version that
+`wasm-packages` locks, which `cargo install --locked --root <folder>
+wasm-bindgen-cli --version 0.2.130` puts into `<folder>/bin`. The cases that
+build a wasm package also need the `wasm32-unknown-unknown` target in rustup's
+default toolchain; a private `RUSTUP_HOME` whose `settings.toml` names a
+toolchain that has it, with links to the folders `toolchains` and
+`update-hashes` of the real one, gives them that without changing it.
 
 A test must not end a real process with a signal whose default action dumps
 core (SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGQUIT, SIGTRAP, SIGXFSZ or

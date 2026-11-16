@@ -1,7 +1,6 @@
 # napi and wasm artifacts
 
-> **Status:** `napi-build` works. `wasm-build` is specified, not implemented
-> yet, and planned for milestone 0.4.
+> **Status:** `napi-build` and `wasm-build` work.
 
 A Rust crate can be built into something a JS project consumes: a Node addon
 through [napi-rs](https://napi.rs), or a wasm package through `wasm-bindgen`.
@@ -154,13 +153,35 @@ use wasm-pack, whose home organisation was sunset in 2025. Nor does it run
 dependencies a second time. `napi-build` writes the files that
 `napi build --platform` writes, into the crate's folder: the addon, such as
 `my-addon.linux-x64-gnu.node` on Linux x86-64, its loader `index.js` and its type
-definitions `index.d.ts`.
+definitions `index.d.ts`. `wasm-build` writes what
+`wasm-bindgen --target <flavour> --out-dir pkg` writes for the `.wasm` file
+that cargo built, such as `image_codec.js`, `image_codec.d.ts` and
+`image_codec_bg.wasm`.
 
 ## Things to know
 
 - **Tool versions matter.** The `wasm-bindgen` CLI must match the version of
-  the `wasm-bindgen` crate in your lockfile. Tool versions are part of the
-  cache key.
+  the `wasm-bindgen` crate in your lockfile; `wasm-build` checks
+  `wasm-bindgen --version` before cargo runs and says which version to
+  install with `cargo install --locked wasm-bindgen-cli --version <version>`.
+  Tool versions are part of the cache key.
+- **wasm needs its target and the CLI.** `wasm-build` compiles for
+  `wasm32-unknown-unknown`, so the toolchain of the Cargo workspace needs
+  that target (`rustup target add wasm32-unknown-unknown`), and the
+  `wasm-bindgen` CLI has to be on `PATH`. The plugin installs neither; a task
+  without them fails with a message that says what to install.
+- **The wasm package goes to `pkg`.** `wasm-build` writes the `.wasm` file,
+  its JS glue and type definitions into the folder `pkg` of the crate's folder,
+  as wasm-pack does, and empties that folder first, so keep nothing else
+  there. It compiles the crate's library alone, so a binary of the crate,
+  such as a command-line tool in `src/main.rs`, is not built for wasm. Point the `main` or `exports` of the crate's `package.json` at it,
+  such as `pkg/image_codec.js`.
+- **The JS flavour is an option.** `jsFlavour` is `bundler` by default, the
+  CLI's own default, for bundlers such as webpack; set `web` for a browser
+  without a bundler, or `nodejs`, for example
+  `nx wasm-build image-codec --jsFlavour=web` or in the options of the
+  crate's target table. `wasm-build` takes `features`, `allFeatures`,
+  `noDefaultFeatures` and `profile` as `build` does, and no `targetTriple`.
 - **`@napi-rs/cli` comes from your packages.** `napi-build` uses the
   `@napi-rs/cli` that Node finds from the crate's folder, so list it in the
   `devDependencies` of the crate's `package.json` or of the repository's.
@@ -171,7 +192,7 @@ definitions `index.d.ts`.
   `napi build --platform`. The files get the names that command gives them;
   its flags for other names, other folders or ES modules, and a separate napi
   configuration file, have no counterpart.
-- **Options.** `napi-build` takes `features`, `allFeatures`,
+- **napi options.** `napi-build` takes `features`, `allFeatures`,
   `noDefaultFeatures` and `profile`, and the configuration `all-features`, as
   `build` does, for example `"profile": "release"` in the options of the
   crate's `project.json` target. It has no `targetTriple`: it builds for the
@@ -194,10 +215,11 @@ definitions `index.d.ts`.
 - **Artifacts are platform-specific.** The target triple is part of the key, so
   a `.node` file built on Linux is never restored on macOS.
 - **Generated files in the source tree**, the addon, `index.js` and
-  `index.d.ts`, are outputs of `napi-build` and are left out of the inputs
-  of nx-rust's targets and of the crates and JS projects that depend on the
-  crate through `^default`; scripts of the crate's own `package.json` still
-  read them (see above).
+  `index.d.ts` of `napi-build` and the `pkg` folder of `wasm-build`, are
+  outputs of those targets and are left out of the inputs of nx-rust's
+  targets and of the crates and JS projects that depend on the crate through
+  `^default`; scripts of the crate's own `package.json` still read them (see
+  above).
 
 Not in v1: cross-compiling Node addons to other platforms, wasm tests, and
 publishing the resulting packages to npm.
@@ -256,7 +278,7 @@ Each artifact target is built in two steps:
 1. A plain cargo compile inside the batch ([[DES-BATCH]]). A non-host triple is its own group and builds only the selected crates ([[DES-FEATURE-SETS]]).
 2. A post-processing task that Nx caches, with outputs outside Cargo's directories.
 
-JS consumers depend on the artifact target, not on `^build`, and hash its outputs ([[DES-MIXED-PROJECTS]]). Generated type definitions and JS glue are declared as outputs and left out of the crate's named input `default`, which the plugin's targets of the crate and every dependent's `^default` read; the targets that Nx or other plugins give the crate's folder keep their own inputs ([[DES-NAPI]]). The target triple is a target option and therefore in the key; the versions of the post-processing tools are runtime inputs.
+JS consumers depend on the artifact target, not on `^build`, and hash its outputs ([[DES-MIXED-PROJECTS]]). Generated type definitions and JS glue are declared as outputs and left out of the crate's named input `default`, which the plugin's targets of the crate and every dependent's `^default` read; the targets that Nx or other plugins give the crate's folder keep their own inputs ([[DES-NAPI]], [[DES-WASM]]). The target triple is in the key, as the host triple of the toolchain input for `napi-build` and as a constant of `wasm-build`, whose target Nx hashes; the versions of the post-processing tools are runtime inputs.
 :::
 
 :::mara design DES-WASM
@@ -265,7 +287,23 @@ JS consumers depend on the artifact target, not on `^build`, and hash its output
 :status: accepted
 :satisfies: REQ-ARTIFACT-TARGETS
 
-`wasm-build` compiles the crate with `cargo build` for the wasm triple and then runs the `wasm-bindgen` CLI on the result. The JS flavour (`web`, `bundler` or `nodejs`) is a flag of the target. The CLI must match the version of the `wasm-bindgen` crate in the lockfile; a mismatch is reported before the step runs ([[REQ-DIAGNOSTICS]]). The plugin does not use wasm-pack ([[ADR-NO-WASM-PACK]]). v1 targets the browser and runs no wasm tests.
+`wasm-build` compiles the crate with `cargo build` for the wasm triple, `wasm32-unknown-unknown`, and then runs the `wasm-bindgen` CLI on the result, in the two steps of [[DES-ARTIFACT-STEPS]]. The plugin does not use wasm-pack ([[ADR-NO-WASM-PACK]]). v1 targets the browser and runs no wasm tests ([[ADR-V1-SCOPE]]).
+
+**Target.** `wasm-build` runs `@convesoft/nx-rust:cargo-outputs`, the executor of the targets whose files Nx stores ([[DES-BATCH]], "Two batch executors"). It takes `features`, `allFeatures`, `noDefaultFeatures` and `profile` and has the configuration `all-features`, as `build` does, and takes no `targetTriple`: it always builds for the wasm triple ([[DES-PLUGIN-OPTIONS]]). The JS flavour is its option `jsFlavour`, one of `bundler`, `web` and `nodejs`, which it passes to the CLI as `--target`; the inferred target sets `bundler`, the CLI's own default. Its output is the folder `pkg` in the crate's folder, outside Cargo's directories, as wasm-pack names it ([[DES-OUTPUTS]]), which is left out of the crate's named input `default`, so that writing it changes the key of no target of the plugin, neither `wasm-build`'s own nor any other target of the crate, and no dependent's key that reads the crate through `^default`. Provisional: the worker of nxr-0ap8n4 chose on 16 November 2026, for the maintainer's review, the feature and profile options, as `napi-build` has them ([[DES-NAPI]]), because a package that a web app ships is usually built with `--release`; the name `jsFlavour` and its default `bundler`; and the folder `pkg`, which the plugin owns and empties on each run. To undo one, change `inferTargets` and `optionTargets` and the constants of `nx-rust/src/graph/wasm.ts`, and this paragraph.
+
+**Compile.** The compile step is a group of its own kind in the batch ([[DES-BATCH]]), a plain `cargo build` with `--lib`, `--target wasm32-unknown-unknown`, the feature and profile flags of the task and `--locked` in locked mode. `--lib` builds the library targets alone, in every strategy and for a group of one crate as for a shared `-p` command: the package is the crate's library, and a binary of the crate that is built for the wasm triple writes `<name>.wasm` too, over the library's where it has the library's name, so that the CLI would read the binary ([[EVD-WASM-POSTPROCESS]]). The worker of nxr-0ap8n4 added it on 16 November 2026, after the review of 02ed6a2 found that a crate with a wasm library and a `src/main.rs` failed in the CLI; to undo it, drop `--lib` from the command of `nx-rust/src/executors/command.ts`, which brings that failure back. Because of it, the reading of cargo's messages expects the library's unit alone, and the build input check names no record of a binary. Its command always passes `--keep-going` and `--message-format=json`, also for a group of one crate, since `wasm-build` has no plain cargo command that a user would compare it with, and cargo's JSON messages report the `.wasm` file that the post-processing reads. The wasm triple is a triple other than the host's, so the compile selects crates and resolves features as a `build` group for such a triple does under the workspace's strategy ([[DES-UNIFICATION]], [[DES-FEATURE-SETS]]), so that its result rests only on what its key holds and not on which other tasks share the command ([[ADR-WORKSPACE-FEATURES]]):
+
+- **`workspace-build`**: one crate per command, with `-p`, because the whole workspace may not build for the triple ([[DES-BATCH]], "Groups of one crate"). The command resolves features for the crate and what it depends on, which the key of `workspace-build` covers with every member's manifest and digest, a superset.
+- **`hakari`**: `-p` for each crate of the group where the `platforms` that graph creation recorded list both the host and `wasm32-unknown-unknown`, since the hack crate unifies the third-party features on each listed platform; otherwise, and for feature flags, one crate per command ([[DES-UNIFICATION]], "Triples that `platforms` does not list"). The target depends on `hakari-check` as every cached crate target does, and its key follows the `hakari` rule.
+- **`cargo`**: `-p` for each crate with `--config 'resolver.feature-unification="workspace"'` and `-Zfeature-unification`, which resolve features for the whole workspace on the triple, and a group of one crate for `--features`; on a stable cargo the task fails with cargo's error, as every compiling target does under `cargo`.
+
+For the files that a batch stores, the compile counts as a `build` group of the crates it selects, so that a `build` and a `wasm-build` of one crate never run in one batch ([[DES-BATCH]], "Files that a batch stores"). After the compile, each task whose crate passed runs the checks that follow cargo for `build`: the lockfile post-check and the check of [[DES-BUILD-INPUT-CHECK]] on the crate's records for the wasm triple, where the record of a `cdylib` is `<name>.d` beside `<name>.wasm` ([[EVD-WASM-POSTPROCESS]]). Unlike the compile of `napi-build`, it sets no variable of its own.
+
+**Post-processing.** After the compile, for each task whose crate passed, the plugin removes the `pkg` folder of an earlier run and runs the CLI with `--target <jsFlavour> --out-dir <crate folder>/pkg` on the `.wasm` file among the files of the `compiler-artifact` message that cargo printed for the crate's `cdylib` in this compile, which cargo prints also for a fresh unit; where cargo reports no such file for the crate, or more than one, the task fails and says so. The plugin derives no file's place from the layout of Cargo's folders. The CLI runs in the workspace root, with the environment that cargo had. A task fails where the CLI fails, and where it ends without error but wrote no `<name>_bg.wasm`, and then leaves no `pkg` folder. The CLI writes `<name>.js`, `<name>.d.ts`, `<name>_bg.wasm` and `<name>_bg.wasm.d.ts`, with `<name>_bg.js` for `bundler`, and `snippets` and a `package.json` where the crate's code imports JS modules or npm packages ([[EVD-WASM-POSTPROCESS]]).
+
+**What the step needs.** A task fails before cargo runs, with a message that names the tool or the crate and says what the user can do ([[DES-DIAGNOSTICS]]), where the crate's library shares its file name with another crate's (**Library names** of [[DES-NAPI]]), where `jsFlavour` is none of the three flavours, where the toolchain that the workspace root selects has no standard library for the wasm triple, where the CLI is not on the task's `PATH` in the workspace root, and where the CLI that `wasm-bindgen --version` names differs from the version of the `wasm-bindgen` crate that the crate's entry in `Cargo.lock` reaches, or where that entry reaches none or several. The lockfile task has brought `Cargo.lock` up to date before the task starts ([[DES-LOCKFILE-HASHING]]). The plugin installs nothing ([[ADR-V1-SCOPE]]).
+
+**Key.** The cache key holds `build`'s inputs ([[DES-INPUTS]]), the options, `jsFlavour` among them, and the target, whose triple is a constant; the CLI's version, through a `runtime` input that prints what `wasm-bindgen --version` writes in the workspace root, as the task finds the CLI, or a random value where that fails; and the variables that the CLI reads, `WASM_BINDGEN_ANYREF`, `WASM_BINDGEN_EXTERNREF` and `WASM_BINDGEN_MULTI_VALUE`, each with its value and with whether it is set. The CLI turns each on by its presence, an empty value included, while Nx 24 hashes an unset and an empty `env` input alike ([[EVD-WASM-POSTPROCESS]]), so the values are `env` inputs and the same `runtime` input prints, after the version, one line per variable that says whether it is set; the CLI gets the task's environment unchanged. Nx runs that command with the task's environment, its dotenv files included, which is the environment the batch gives the CLI ([[DES-BATCH]], [[EVD-NX-24-INPUT-SEMANTICS]]); an Nx 24 target has no `env` of its own that the two could see differently. The control plane decided this on 16 November 2026 after the review of 02ed6a2 found that a package of an unset `WASM_BINDGEN_MULTI_VALUE` was restored for an empty one; there is no safe undo. The CLI reads no configuration file. It reads the `package.json` of a crate whose code imports a local JS module, which is a crate file of a project or a file of a crate behind it, and nothing else besides the `.wasm` file ([[EVD-WASM-POSTPROCESS]]).
 :::
 
 :::mara design DES-NAPI

@@ -1,5 +1,6 @@
 import type { TestRunner } from "../graph/settings";
 import { compilingTargets, type InferredTargetName, inferredTargetNames } from "../graph/targets";
+import { wasmTriple } from "../graph/wasm";
 
 /**
  * The options of the plugin's targets that its executors declare
@@ -28,6 +29,8 @@ export interface CargoTargetOptions {
   args?: string;
   /** Selection of affected tests on `test`; no flag (nxr-tabkjx). */
   affectedTests?: boolean;
+  /** The JS flavour of `wasm-build`, the `--target` of the `wasm-bindgen` CLI; no flag of cargo. */
+  jsFlavour?: string;
   /** The plugin's version, which the plugin sets for the cache key; no flag. */
   pluginVersion?: string;
 }
@@ -37,9 +40,10 @@ export type TargetOptionName = keyof CargoTargetOptions;
 
 // The targets that take the feature and profile options, and those that
 // also take `targetTriple`: not `test`, and not `napi-build`, which build
-// for the host only in v1 (`ADR-V1-SCOPE`).
+// for the host only in v1 (`ADR-V1-SCOPE`), nor `wasm-build`, which always
+// builds for the wasm triple (`DES-WASM`).
 const tripleTargets = compilingTargets.filter(
-  (target) => target !== "test" && target !== "napi-build",
+  (target) => target !== "test" && target !== "napi-build" && target !== "wasm-build",
 );
 
 /**
@@ -62,6 +66,7 @@ export const optionTargets: Readonly<Record<TargetOptionName, ReadonlySet<Inferr
   bin: new Set(["run"]),
   args: new Set(["run"]),
   affectedTests: new Set(["test"]),
+  jsFlavour: new Set(["wasm-build"]),
   pluginVersion: new Set(inferredTargetNames),
 };
 
@@ -138,6 +143,7 @@ const compilingCrateTargets: ReadonlySet<InferredTargetName> = new Set([
   "lint",
   "test",
   "napi-build",
+  "wasm-build",
 ]);
 
 /**
@@ -156,8 +162,12 @@ export function selectsWorkspace(target: InferredTargetName): boolean {
 // package selection (`DES-TARGET-COMMANDS`).
 const crateCommands: Partial<Record<InferredTargetName, readonly string[]>> = {
   build: ["build"],
-  // The compile step of `napi-build`, a plain `cargo build` (`DES-NAPI`).
+  // The compile steps of `napi-build` and `wasm-build`, plain `cargo build`
+  // commands (`DES-NAPI`, `DES-WASM`).
   "napi-build": ["build"],
+  // `--lib`: a binary of the crate built for the wasm triple writes
+  // `<name>.wasm` too, over the library's (`EVD-WASM-POSTPROCESS`).
+  "wasm-build": ["build", "--lib"],
   check: ["check"],
   lint: ["clippy"],
   test: ["test"],
@@ -209,13 +219,15 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
     return [
       ...crateCommand,
       ...flag(taken.allTargets, "--all-targets"),
-      // The compile of `napi-build` always prints cargo's JSON messages, from
-      // which the plugin takes the library it copies (`DES-NAPI`).
-      ...(crates.length > 1 || workspace || target === "napi-build"
+      // The compiles of the artifact targets always print cargo's JSON
+      // messages, from which the plugin takes the library that it
+      // post-processes (`DES-NAPI`, `DES-WASM`).
+      ...(crates.length > 1 || workspace || reportsLibrary(target)
         ? sharedCommandFlags(target)
         : []),
       ...(workspace ? ["--workspace"] : crateSelection(target, crates)),
       ...compilingFlags(taken),
+      ...(target === "wasm-build" ? ["--target", wasmTriple] : []),
       ...(formatting ? [] : unificationFlags(subject)),
       ...(taken.bin !== undefined ? ["--bin", taken.bin] : []),
       ...flag(locked && !formatting, "--locked"),
@@ -282,15 +294,17 @@ function unificationFlags(subject: CommandSubject): string[] {
  * crate's result (`DES-BATCH`): `--keep-going` and JSON messages for
  * `build`, `check` and `lint`, and `--no-fail-fast` for `test`. A command
  * of a group of one crate adds none, so that it is the command that a plain
- * `cargo` of that one crate runs, apart from the compile of `napi-build`,
- * which has no plain cargo counterpart and always adds them, so that cargo
- * reports the library that it copies (`DES-NAPI`).
+ * `cargo` of that one crate runs, apart from the compiles of `napi-build`
+ * and `wasm-build`, which have no plain cargo counterpart and always add
+ * them, so that cargo reports the library that they post-process
+ * (`DES-NAPI`, `DES-WASM`).
  */
 // @mara implements DES-BATCH
 export function sharedCommandFlags(target: InferredTargetName): string[] {
   switch (target) {
     case "build":
     case "napi-build":
+    case "wasm-build":
     case "check":
     case "lint":
       return ["--keep-going", "--message-format=json"];
@@ -299,6 +313,15 @@ export function sharedCommandFlags(target: InferredTargetName): string[] {
     default:
       return [];
   }
+}
+
+/**
+ * Whether the compile of the target with this default name always prints
+ * cargo's JSON messages, also for one crate: the artifact targets, which
+ * take the library that cargo reports in them (`DES-NAPI`, `DES-WASM`).
+ */
+export function reportsLibrary(target: InferredTargetName): boolean {
+  return target === "napi-build" || target === "wasm-build";
 }
 
 /**

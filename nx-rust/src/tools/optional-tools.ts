@@ -3,14 +3,16 @@ import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, relative, resolve } from "node:path";
 import type { CargoPackage } from "../cargo/metadata";
-import { producesNodeAddon } from "../graph/napi";
+import { producesArtifact, reportedArtifacts } from "../graph/artifact-kinds";
+import type { ArtifactKind } from "../graph/settings";
+import { wasmTriple } from "../graph/wasm";
 import { installedNapiCli } from "./napi-cli";
 
 /** A Cargo workspace as far as the table of tools needs it. */
 export interface ToolWorkspace {
   /** The folder of the root manifest, relative to the repository root: `.` for the root itself. */
   root: string;
-  /** The workspace's members, where the table needs to know which crates produce a Node addon. */
+  /** The workspace's members, where the table needs to know which crates produce an artifact. */
   members?: readonly CargoPackage[];
   /** The workspace's test runner (`testRunner`), where its settings choose nextest. */
   testRunner?: "nextest";
@@ -72,7 +74,7 @@ export interface OptionalTool {
 export const cargoDenyConfigurationFiles = ["deny.toml", ".deny.toml", ".cargo/deny.toml"];
 
 /** The triple that `wasm-build` compiles for. */
-export const wasmTriple = "wasm32-unknown-unknown";
+export { wasmTriple };
 
 /**
  * The tools of the table in `DES-GENERATORS`, in its order. `init` reports
@@ -81,11 +83,12 @@ export const wasmTriple = "wasm32-unknown-unknown";
  *
  * Which tool the configuration needs follows the features that exist:
  * cargo-nextest where a workspace's settings choose the nextest runner,
- * cargo-hakari for every workspace that uses the `hakari` strategy, and the
- * napi CLI where a crate has a `napi-build` target. The settings that ask
- * for cargo-affected, and the artifact target that runs the wasm tools, are
- * not implemented yet, so nothing needs those tools until their issues add
- * the condition: nxr-tabkjx (`affectedTests`) and nxr-0ap8n4 (`wasm-build`).
+ * cargo-hakari for every workspace that uses the `hakari` strategy, the
+ * napi CLI where a crate has a `napi-build` target, and the `wasm-bindgen`
+ * CLI and the wasm target where a crate has a `wasm-build` target. The
+ * settings that ask for cargo-affected are not implemented yet, so nothing
+ * needs that tool until its issue adds the condition: nxr-tabkjx
+ * (`affectedTests`).
  */
 // @mara implements DES-GENERATORS
 export const optionalTools: readonly OptionalTool[] = [
@@ -130,14 +133,14 @@ export const optionalTools: readonly OptionalTool[] = [
       "Install the version of the wasm-bindgen crate in your Cargo.lock with `cargo install --locked wasm-bindgen-cli --version <version>`.",
     installed: (context) =>
       findExecutable("wasm-bindgen", searchPath(context.env, toolFolder(context))) !== undefined,
-    neededBy: () => [],
+    neededBy: (context) => wasmBuildTargets(context),
   },
   {
     id: "wasm-target",
     name: `the ${wasmTriple} target`,
     install: `Install it with \`rustup target add ${wasmTriple}\`.`,
     installed: (context) => wasmTargetInstalled(context),
-    neededBy: () => [],
+    neededBy: (context) => wasmBuildTargets(context),
   },
   {
     id: "napi",
@@ -147,7 +150,9 @@ export const optionalTools: readonly OptionalTool[] = [
     // `napi-build` uses the package that Node resolves from the crate's
     // folder, so each crate with the target has to reach one.
     installed: (context) => {
-      const folders = napiCrates(context).map(({ folder }) => join(context.workspaceRoot, folder));
+      const folders = artifactCrates(context, "napi").map(({ folder }) =>
+        join(context.workspaceRoot, folder),
+      );
       return folders.length > 0
         ? folders.every((folder) => installedNapiCli(folder) !== undefined)
         : installedNapiCli(context.workspaceRoot) !== undefined ||
@@ -157,7 +162,7 @@ export const optionalTools: readonly OptionalTool[] = [
             ]) !== undefined;
     },
     neededBy: (context) =>
-      napiCrates(context).map(
+      artifactCrates(context, "napi").map(
         ({ name, folder }) =>
           `the napi-build target of the crate ${name} in ${describeFolder(folder)}`,
       ),
@@ -246,31 +251,37 @@ export function requireTool(
 }
 
 /**
- * The crates of the context's workspaces that have a `napi-build` target
- * (`producesNodeAddon` in `napi.ts`), by package name and folder relative to
- * the repository root, the `artifacts` of their `[package.metadata.nx]`
- * included.
+ * The crates of the context's workspaces that have the artifact target of
+ * the kind, `napi-build` or `wasm-build` (`producesArtifact` in
+ * `artifact-kinds.ts`), by package name and folder relative to the
+ * repository root, the `artifacts` of their `[package.metadata.nx]`
+ * included, in the order of their folders.
  */
-function napiCrates(context: ToolContext): { name: string; folder: string }[] {
+function artifactCrates(
+  context: ToolContext,
+  kind: ArtifactKind,
+): { name: string; folder: string }[] {
   return context.workspaces.flatMap((workspace) =>
     (workspace.members ?? [])
       .filter((pkg) => {
-        const artifacts = (pkg.metadata as { nx?: { artifacts?: unknown } } | null)?.nx?.artifacts;
-        return producesNodeAddon({
-          pkg,
-          settings: Array.isArray(artifacts)
-            ? {
-                artifacts: artifacts.filter(
-                  (kind): kind is "napi" | "wasm" => typeof kind === "string",
-                ),
-              }
-            : {},
-        });
+        const artifacts = reportedArtifacts(pkg);
+        return producesArtifact(
+          { pkg, settings: artifacts === undefined ? {} : { artifacts } },
+          kind,
+        );
       })
       .map((pkg) => ({
         name: pkg.name,
         folder: relative(context.workspaceRoot, dirname(pkg.manifest_path)) || ".",
-      })),
+      }))
+      .sort((a, b) => (a.folder < b.folder ? -1 : a.folder > b.folder ? 1 : 0)),
+  );
+}
+
+// What needs the wasm tools: the `wasm-build` target of each crate that has one.
+function wasmBuildTargets(context: ToolContext): string[] {
+  return artifactCrates(context, "wasm").map(
+    ({ name, folder }) => `the wasm-build target of the crate ${name} in ${describeFolder(folder)}`,
   );
 }
 
@@ -320,10 +331,12 @@ export function findExecutable(name: string, folders: readonly string[]): string
   return undefined;
 }
 
-// The folders of `PATH` for a command started in `cwd`, where the operating
-// system and cargo look for an executable: a relative entry counts from
-// `cwd`, and an empty one stands for `cwd` itself. Without `PATH`, none.
-function searchPath(env: NodeJS.ProcessEnv, cwd: string): string[] {
+/**
+ * The folders of `PATH` for a command started in `cwd`, where the operating
+ * system and cargo look for an executable: a relative entry counts from
+ * `cwd`, and an empty one stands for `cwd` itself. Without `PATH`, none.
+ */
+export function searchPath(env: NodeJS.ProcessEnv, cwd: string): string[] {
   return env.PATH === undefined
     ? []
     : env.PATH.split(delimiter).map((entry) => resolve(cwd, entry));

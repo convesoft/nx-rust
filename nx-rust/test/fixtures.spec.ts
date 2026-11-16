@@ -201,6 +201,16 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       ],
     },
   },
+  "wasm-packages": {
+    workspaces: {
+      rust: [
+        "rust/crates/codec",
+        "rust/crates/codec-b",
+        "rust/crates/plain-cdylib",
+        "rust/crates/shared",
+      ],
+    },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.

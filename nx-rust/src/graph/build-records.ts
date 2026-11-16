@@ -18,6 +18,12 @@ export interface BuildRecordSource {
     name: string;
     /** Whether it is a proc macro, which cargo builds for the host whatever the triple. */
     procMacro: boolean;
+    /**
+     * The library's crate types, its `kind` in the report, such as `cdylib`
+     * and `rlib`; absent in a graph made before they were recorded, which
+     * names `lib<name>.d` for every triple.
+     */
+    crateTypes?: string[];
   };
   /** The crate's binaries, with the features that each requires. */
   binaries: { name: string; requiredFeatures: string[] }[];
@@ -44,6 +50,16 @@ const libraryKinds = new Set(["lib", "rlib", "dylib", "cdylib", "staticlib", "pr
 /** The name of the record that cargo exports for a library: `lib<name>.d`, with `-` as `_`. */
 export function libraryRecordName(name: string): string {
   return `lib${name.replace(/-/g, "_")}.d`;
+}
+
+/**
+ * The name of the record that cargo exports for a library's `cdylib` built
+ * for a triple whose dynamic libraries have no `lib` prefix, such as
+ * `wasm32-unknown-unknown`, where the library is `<name>.wasm`:
+ * `<name>.d`, with `-` as `_` (`EVD-WASM-POSTPROCESS`).
+ */
+export function unprefixedLibraryRecordName(name: string): string {
+  return `${name.replace(/-/g, "_")}.d`;
 }
 
 /** The name of the record that cargo exports for a binary: `<name>.d`. */
@@ -99,7 +115,13 @@ export function buildRecordSource(pkg: CargoPackage, shared: readonly string[]):
   return {
     ...(library === undefined
       ? {}
-      : { library: { name: library.name, procMacro: library.kind.includes("proc-macro") } }),
+      : {
+          library: {
+            name: library.name,
+            procMacro: library.kind.includes("proc-macro"),
+            crateTypes: [...library.kind],
+          },
+        }),
     binaries: pkg.targets
       .filter((target) => target.kind.includes("bin"))
       .map((target) => ({

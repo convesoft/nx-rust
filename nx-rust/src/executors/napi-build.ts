@@ -14,7 +14,7 @@ import {
 } from "../tools/napi-cli";
 import { missingToolMessage, optionalTools } from "../tools/optional-tools";
 import { cargoEnvironment } from "./cargo-invocation";
-import { describeList } from "./cargo-output";
+import { describeList, reportedCdylibFiles } from "./cargo-output";
 import { type GroupMember, type LiveOutput, type MemberResult, runGroup } from "./group-run";
 
 /** What a `napi-build` task needs beyond a `build` task, from its checks before cargo. */
@@ -400,44 +400,13 @@ function closure(nodes: ReadonlyMap<string, CrateNode>, root: string): string[] 
 
 /**
  * The dynamic libraries that cargo's JSON messages report for each package's
- * `cdylib` target, by the package's ID, as cargo names it in the messages and
- * in `cargo metadata`: the files of the `compiler-artifact` messages, fresh
- * units included, with the extension of a dynamic library, `.so`, `.dylib`
- * or `.dll`. Cargo reports the file where it puts it, in the folder of a
- * triple where one is selected, also the host's (`DES-NAPI`).
+ * `cdylib` target, by the package's ID ({@link reportedCdylibFiles}): the
+ * files with the extension of a dynamic library, `.so`, `.dylib` or `.dll`.
+ * Cargo reports the file where it puts it, in the folder of a triple where
+ * one is selected, also the host's (`DES-NAPI`).
  */
 export function reportedLibraries(output: string): Map<string, string[]> {
-  const libraries = new Map<string, string[]>();
-  for (const line of output.split("\n")) {
-    if (!line.startsWith("{")) {
-      continue;
-    }
-    let message: {
-      reason?: unknown;
-      package_id?: unknown;
-      target?: { kind?: unknown };
-      filenames?: unknown;
-    };
-    try {
-      message = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (
-      message.reason !== "compiler-artifact" ||
-      typeof message.package_id !== "string" ||
-      !Array.isArray(message.target?.kind) ||
-      !message.target.kind.includes("cdylib") ||
-      !Array.isArray(message.filenames)
-    ) {
-      continue;
-    }
-    const files = message.filenames.filter(
-      (file): file is string => typeof file === "string" && /\.(so|dylib|dll)$/.test(file),
-    );
-    libraries.set(message.package_id, [...(libraries.get(message.package_id) ?? []), ...files]);
-  }
-  return libraries;
+  return reportedCdylibFiles(output, /\.(so|dylib|dll)$/);
 }
 
 /**

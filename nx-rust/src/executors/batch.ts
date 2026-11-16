@@ -4,6 +4,7 @@ import type { CargoTargetOptions } from "./command";
 import { formGroups, type GroupSelection, planGroups } from "./groups";
 import { batchLiveOutput, type GroupMember, type LiveOutput, runGroup } from "./group-run";
 import { runNapiGroup } from "./napi-build";
+import { runWasmGroup } from "./wasm-build";
 import {
   groupInvocations,
   type PluginExecutor,
@@ -331,8 +332,12 @@ async function runReadyGroup(
       }
     });
     // `napi-build` runs its compile with variables of its own and its
-    // post-processing after it (`DES-NAPI`).
-    const results = await (group[0]?.target === "napi-build" ? runNapiGroup : runGroup)(
+    // post-processing after it, and `wasm-build` the wasm-bindgen CLI after
+    // its compile (`DES-NAPI`, `DES-WASM`).
+    const target = group[0]?.target;
+    const results = await (
+      target === "napi-build" ? runNapiGroup : target === "wasm-build" ? runWasmGroup : runGroup
+    )(
       members.map(({ member }) => member),
       verbose,
       live,
@@ -450,7 +455,10 @@ function writesStoredFiles(group: {
   selection: GroupSelection;
 }): { root: string; crates: string[] | "all" } | undefined {
   const [first] = group.tasks;
-  if (first === undefined || (first.target !== "build" && first.target !== "napi-build")) {
+  if (
+    first === undefined ||
+    (first.target !== "build" && first.target !== "napi-build" && first.target !== "wasm-build")
+  ) {
     return undefined;
   }
   return {

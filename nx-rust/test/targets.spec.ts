@@ -796,11 +796,11 @@ describe("targetNames", () => {
     "fails graph creation naming every such key",
     async () => {
       const message = await graphError("crate-shapes", {
-        "nx.json": pluginOptions({ targetNames: { clippy: "lint", "wasm-build": "wasm" } }),
+        "nx.json": pluginOptions({ targetNames: { clippy: "lint", "js-build": "wasm" } }),
       });
 
       expect(message).toContain(
-        'names "clippy" and "wasm-build", which are not default names of inferred targets.',
+        'names "clippy" and "js-build", which are not default names of inferred targets.',
       );
     },
     HARNESS_TIMEOUT,

@@ -48,7 +48,7 @@ export function initReport(
       const featureUnification = check.strategies?.get(workspace.root);
       return {
         root: workspace.root,
-        // Which crates have a `napi-build` target, for the napi CLI's row.
+        // Which crates have an artifact target, for the rows of their tools.
         members: workspace.members,
         ...(featureUnification === undefined ? {} : { featureUnification }),
         ...(nextest.has(workspace.root) ? { testRunner: "nextest" as const } : {}),

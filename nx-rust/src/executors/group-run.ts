@@ -25,7 +25,7 @@ import {
   readJsonStep,
   readTestStep,
 } from "./cargo-output";
-import { type CargoStep, withToolConfiguration } from "./command";
+import { type CargoStep, reportsLibrary, withToolConfiguration } from "./command";
 import {
   type ListedTests,
   type NextestToolConfiguration,
@@ -131,7 +131,8 @@ export function batchLiveOutput(batchEnv: NodeJS.ProcessEnv): LiveOutput {
  *   decides once for the batch, or `taskRunsVerbosely` for a task on its own.
  * @param live What the batch shows of cargo's output while it runs.
  * @param observe Receives each step's whole output once cargo has ended, as
- *   `napi-build` needs it for the library that cargo reports (`DES-NAPI`).
+ *   `napi-build` and `wasm-build` need it for the library that cargo
+ *   reports (`DES-NAPI`, `DES-WASM`).
  * @returns One result per member, in order.
  */
 // @mara implements DES-BATCH
@@ -323,9 +324,9 @@ function readStep(
 ): CrateOutcome[] {
   // A group of one crate that selects it runs the command that its task runs
   // on its own, and passes each step where cargo exits with status 0. The
-  // compile of `napi-build` prints JSON messages also for one crate
-  // (`DES-NAPI`), which its output is read from.
-  if (members.length === 1 && scope === undefined && members[0].prepared.target !== "napi-build") {
+  // compiles of the artifact targets print JSON messages also for one crate
+  // (`DES-NAPI`, `DES-WASM`), which their output is read from.
+  if (members.length === 1 && scope === undefined && !reportsLibrary(members[0].prepared.target)) {
     return [{ passed: end.kind === "succeeded", output }];
   }
   switch (step.kind) {
@@ -366,6 +367,9 @@ function sharedOutcomes(
     case "build":
     case "napi-build":
       return readJsonStep(output, end, crates, false, scope);
+    case "wasm-build":
+      // Its compile builds the libraries alone, with `--lib` (`DES-WASM`).
+      return readJsonStep(output, end, crates, false, scope, true);
     case "check":
     case "lint":
       return readJsonStep(

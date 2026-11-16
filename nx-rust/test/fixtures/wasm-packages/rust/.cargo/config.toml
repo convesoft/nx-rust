@@ -1,0 +1,7 @@
+# The crates.io packages of the wasm crates, from a local registry in the
+# fixture, so that cargo needs no network.
+[source.crates-io]
+replace-with = "wasm-crates"
+
+[source.wasm-crates]
+local-registry = "../registry"

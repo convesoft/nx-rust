@@ -100,6 +100,33 @@ export function parseLockfile(text: string): Lockfile {
  */
 // @mara implements DES-LOCKFILE-HASHING
 export function memberDigest(lockfile: Lockfile, member: PackageVersion): string {
+  const reached = reachedEntries(lockfile, member);
+  const lines = [...reached].map((entry) =>
+    [
+      entry.name,
+      entry.version,
+      entry.source ?? "",
+      entry.checksum ?? "",
+      entry.replace ?? "",
+      ...sortedBytewise(entry.dependencies),
+    ].join("\t"),
+  );
+  const hash = createHash("sha256");
+  for (const line of sortedBytewise(lines)) {
+    hash.update(`${line}\n`, "utf8");
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * The entries that a member's entry reaches in the lockfile's graph, its own
+ * first: the walk of {@link memberDigest}, which takes every dependency that
+ * an entry lists, whatever its platform or the features that bring it,
+ * passes through path packages and follows `replace = …`.
+ *
+ * @throws {LockfileError} As {@link memberDigest} does.
+ */
+export function reachedEntries(lockfile: Lockfile, member: PackageVersion): LockfileEntry[] {
   const byName = new Map<string, LockfileEntry[]>();
   for (const entry of lockfile.entries) {
     byName.set(entry.name, [...(byName.get(entry.name) ?? []), entry]);
@@ -126,21 +153,7 @@ export function memberDigest(lockfile: Lockfile, member: PackageVersion): string
       }
     }
   }
-  const lines = [...reached].map((entry) =>
-    [
-      entry.name,
-      entry.version,
-      entry.source ?? "",
-      entry.checksum ?? "",
-      entry.replace ?? "",
-      ...sortedBytewise(entry.dependencies),
-    ].join("\t"),
-  );
-  const hash = createHash("sha256");
-  for (const line of sortedBytewise(lines)) {
-    hash.update(`${line}\n`, "utf8");
-  }
-  return hash.digest("hex");
+  return [...reached];
 }
 
 // The entry that a dependency string or `replace` value of `from` names. A

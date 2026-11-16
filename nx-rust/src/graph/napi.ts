@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { hostTriple } from "../cargo/host-triple";
-import type { CargoPackage } from "../cargo/metadata";
+import { type ArtifactSubject, producesArtifact, shellQuote } from "./artifact-kinds";
 import type { CargoWorkspace } from "./discovery";
-import type { ArtifactKind } from "./settings";
 
 /** The npm package of the napi CLI, whose exported functions post-process an addon (`DES-NAPI`). */
 export const napiCliPackage = "@napi-rs/cli";
@@ -27,12 +26,7 @@ export interface NapiAddon {
 }
 
 /** What the inference reads of a project to tell whether it produces a Node addon. */
-export interface NapiSubject {
-  /** The crate; absent for a workspace project without a crate. */
-  pkg?: CargoPackage;
-  /** The project's settings, of which the crate's `artifacts` replace the inference. */
-  settings?: { artifacts?: readonly ArtifactKind[] };
-}
+export type NapiSubject = ArtifactSubject;
 
 /**
  * Whether a crate produces a Node addon (`DES-ARTIFACT-STEPS`): its library
@@ -41,20 +35,8 @@ export interface NapiSubject {
  * platform only. An `artifacts` list in the crate's `[package.metadata.nx]`
  * replaces the inference.
  */
-// @mara implements DES-ARTIFACT-STEPS
 export function producesNodeAddon(subject: NapiSubject): boolean {
-  const { pkg } = subject;
-  if (pkg === undefined) {
-    return false;
-  }
-  const artifacts = subject.settings?.artifacts;
-  if (artifacts !== undefined) {
-    return artifacts.includes("napi");
-  }
-  return (
-    pkg.targets.some((target) => target.kind.includes("cdylib")) &&
-    pkg.dependencies.some((dependency) => dependency.name === "napi" && dependency.kind === null)
-  );
+  return producesArtifact(subject, "napi");
 }
 
 /**
@@ -250,8 +232,4 @@ export function napiInputs(
       ? []
       : [{ fileset: `{workspaceRoot}/${header}`, includeIgnored: true as const }]),
   ];
-}
-
-function shellQuote(value: string): string {
-  return `'${value.split("'").join(`'"'"'`)}'`;
 }

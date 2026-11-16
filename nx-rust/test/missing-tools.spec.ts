@@ -22,8 +22,8 @@ import {
 // (DES-DIAGNOSTICS), over the same table of tools that init reports, and the
 // tasks that run such a tool today, audit and deny, through the real Nx and
 // cargo (the fifth paragraph of VER-SETUP, and the missing tools of
-// VER-TARGETS). The targets that run the other tools of the table do not
-// exist yet; the issues that add them add their tasks here.
+// VER-TARGETS). The tasks of the artifact targets that miss their tools are
+// in napi-build.spec.ts and wasm-build.spec.ts.
 
 /** For each tool, what a test installs to make it present. */
 const installs: Record<OptionalToolId, (tools: ToolFolders, root: string) => void> = {

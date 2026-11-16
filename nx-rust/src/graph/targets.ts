@@ -14,6 +14,7 @@ import { producesNodeAddon } from "./napi";
 import type { TargetNames } from "./options";
 import type { ArtifactKind, FeatureUnification } from "./settings";
 import { hackCrateName, memberNames } from "./unification";
+import { defaultJsFlavour, producesWasmPackage, wasmPackageFolder, wasmTriple } from "./wasm";
 
 /**
  * The plugin's cargo executor, which runs every inferred target but `build`
@@ -37,6 +38,7 @@ export const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
 export const outputsTargets: ReadonlySet<InferredTargetName> = new Set([
   "build",
   "napi-build",
+  "wasm-build",
   "doc",
 ]);
 
@@ -72,7 +74,7 @@ export const releasePublishTarget = "nx-release-publish";
  * `DES-TARGETS`: first those of a crate, then those of the workspace project.
  * They are also the keys that `targetNames` accepts (`readTargetNames` in
  * `options.ts`), apart from {@link releasePublishTarget}, which keeps its
- * name. `wasm-build` is not inferred yet; it joins the list when it is.
+ * name.
  */
 export const inferredTargetNames = [
   "build",
@@ -84,6 +86,7 @@ export const inferredTargetNames = [
   "bench",
   "run",
   "napi-build",
+  "wasm-build",
   releasePublishTarget,
   "doc",
   "lockfile",
@@ -109,6 +112,7 @@ export const compilingTargets: readonly InferredTargetName[] = [
   "bench",
   "run",
   "napi-build",
+  "wasm-build",
   "doc",
 ];
 
@@ -257,9 +261,10 @@ export interface TargetCargoMetadata {
    */
   napiHeaderFile?: string;
   /**
-   * On `napi-build`: why the crate's library has the file name of another
-   * crate's file, so that cargo builds one file for both; the executor
-   * fails the task before cargo runs (`DES-NAPI`, "Library names").
+   * On `napi-build` and `wasm-build`: why the crate's library has the file
+   * name of another crate's file, so that cargo builds one file for both;
+   * the executor fails the task before cargo runs (`DES-NAPI`, "Library
+   * names"; `DES-WASM`).
    */
   sharedLibrary?: string;
   /**
@@ -330,6 +335,7 @@ export const cachedTargets: ReadonlySet<InferredTargetName> = new Set<InferredTa
   "test",
   "fmt-check",
   "napi-build",
+  "wasm-build",
   "doc",
 ]);
 
@@ -356,8 +362,10 @@ export interface TargetSubject {
  * `nx-release-publish` unless its manifest sets `publish = false`, which the
  * report gives as an empty `publish` list, or it is the hack crate that the
  * workspace's cargo-hakari configuration names (`DES-RELEASE`, "Publish
- * target", "Hack crate"), and `napi-build` where it produces a Node addon
- * (`DES-ARTIFACT-STEPS`). The
+ * target", "Hack crate"), `napi-build` where it produces a Node addon and
+ * `wasm-build` where it produces a wasm package, with the JS flavour of
+ * `wasm-bindgen`'s own default in its options (`DES-ARTIFACT-STEPS`,
+ * `DES-WASM`). The
  * workspace project gets `doc`, `lockfile`, `audit` and `update`, `deny`
  * where a cargo-deny configuration file is in the workspace root, and
  * `hakari-check` where the workspace uses the `hakari` strategy
@@ -431,6 +439,16 @@ export function inferTargets(
         target(
           "napi-build",
           "Builds the crate's Node addon for the host with cargo build, and writes the .node file, its JS loader and its type definitions into the crate's folder.",
+        ),
+      );
+    }
+    if (producesWasmPackage(subject)) {
+      targets.set(
+        "wasm-build",
+        target(
+          "wasm-build",
+          `Builds the crate for ${wasmTriple} with cargo build, and writes the wasm package, the .wasm file with its JS glue and type definitions, into the crate's ${wasmPackageFolder} folder with the wasm-bindgen CLI.`,
+          { jsFlavour: defaultJsFlavour },
         ),
       );
     }

@@ -1,0 +1,1 @@
+{"name":"wasm-bindgen-shared","vers":"0.2.130","deps":[{"name":"unicode-ident","req":"^1.0.5","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"3b1f9c3798725016c6ee5f2f57869ec0831e8bbc0ab0310a86e787e97f41389e","features":{},"yanked":false,"links":"wasm_bindgen","rust_version":"1.81","pubtime":"2026-10-30T06:14:57Z"}

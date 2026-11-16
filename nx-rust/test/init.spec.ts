@@ -239,6 +239,49 @@ describe("init", () => {
   );
 
   it(
+    "warns about the wasm-bindgen CLI and the wasm target where a crate has a wasm-build target",
+    () =>
+      runInit("wasm-packages", {}, (_workspace, { status, output }) => {
+        const needs =
+          "the wasm-build target of the crate codec in rust/crates/codec and the wasm-build target of the crate codec-b in rust/crates/codec-b need it.";
+        expect(status).toBe(0);
+        expect(output).toContain(`The wasm-bindgen CLI is not installed, but ${needs}`);
+        expect(output).toContain(
+          `The ${wasmTriple} target is not installed, but ${needs} Install it with \`rustup target add ${wasmTriple}\`.`,
+        );
+        expect(notNeededLine(output)).not.toContain("wasm");
+      }),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "counts the wasm tools as installed where PATH has the CLI and rustc's sysroot the wasm target",
+    async () => {
+      const tools = new ToolFolders();
+      try {
+        const sysroot = join(tools.base, "sysroot");
+        mkdirSync(join(sysroot, "lib", "rustlib", wasmTriple), { recursive: true });
+        tools.install(tools.path, "rustc", sysroot);
+        tools.install(tools.path, "wasm-bindgen");
+        await runInit(
+          "wasm-packages",
+          {},
+          (_workspace, { status, output }) => {
+            expect(status).toBe(0);
+            expect(output).not.toMatch(/wasm-bindgen CLI is not installed|target is not installed/);
+            expect(notNeededLine(output)).not.toContain("wasm");
+          },
+          [],
+          { env: { PATH: tools.path } },
+        );
+      } finally {
+        tools.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "warns about cargo-nextest where a workspace's settings choose the nextest runner",
     () =>
       runInit(

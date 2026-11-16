@@ -7,6 +7,7 @@ import { digestFile, digestFolder, runIdVariable } from "./lockfile-task";
 import { napiAddon, napiOutputFiles, producesNodeAddon } from "./napi";
 import type { ArtifactKind } from "./settings";
 import type { InferredTargetName } from "./targets";
+import { producesWasmPackage, wasmPackageFolder } from "./wasm";
 
 /**
  * The name of the crate's own named input: the files that decide what the
@@ -203,6 +204,7 @@ const compilingTargets: ReadonlySet<InferredTargetName> = new Set([
   "bench",
   "run",
   "napi-build",
+  "wasm-build",
   "doc",
 ]);
 
@@ -221,6 +223,7 @@ export const crateInputTargets: ReadonlySet<InferredTargetName> = new Set([
   "bench",
   "run",
   "napi-build",
+  "wasm-build",
   "doc",
 ]);
 
@@ -249,7 +252,8 @@ const toolFileNames: Partial<Record<InferredTargetName, readonly string[]>> = {
  *
  * It holds every file of the project's folder that belongs to no nested
  * project, except the files that `napi-build` writes there
- * ({@link napiOutputFiles}) and the workspace's `Cargo.lock` where the
+ * ({@link napiOutputFiles}), the package folder that `wasm-build` writes
+ * there ({@link wasmPackageFolder}) and the workspace's `Cargo.lock` where the
  * folder is the workspace root, which reaches the keys of the crate and of those that
  * depend on it only through the digests of the lockfile task
  * ({@link externalDependencyInputs}); the root manifest of the crate's
@@ -275,12 +279,15 @@ export function namedInputs(
   if (subject.isWorkspaceProject) {
     crateFiles.push("!{projectRoot}/Cargo.lock");
   }
-  // The files that `napi-build` writes into the crate's folder are its
-  // outputs and no input (`DES-ARTIFACT-STEPS`).
+  // The files that `napi-build` and `wasm-build` write into the crate's
+  // folder are their outputs and no input (`DES-ARTIFACT-STEPS`).
   if (producesNodeAddon(subject)) {
     crateFiles.push(
       ...napiOutputFiles(napiAddon(subject, context)).map((file) => `!{projectRoot}/${file}`),
     );
+  }
+  if (producesWasmPackage(subject)) {
+    crateFiles.push(`!{projectRoot}/${wasmPackageFolder}/**/*`);
   }
   const workspaceRoot = workspaceFolder(subject, context);
   if (workspaceRoot !== subject.root) {

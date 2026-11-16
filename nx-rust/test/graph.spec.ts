@@ -499,6 +499,25 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["rust", "shared"],
     ],
   },
+  "wasm-packages": {
+    cargoFolders: ["rust"],
+    projects: {
+      codec: "rust/crates/codec",
+      "codec-b": "rust/crates/codec-b",
+      "plain-cdylib": "rust/crates/plain-cdylib",
+      shared: "rust/crates/shared",
+      rust: "rust",
+    },
+    edges: [
+      ["codec", "shared"],
+      ["codec-b", "shared"],
+      ["plain-cdylib", "shared"],
+      ["rust", "codec"],
+      ["rust", "codec-b"],
+      ["rust", "plain-cdylib"],
+      ["rust", "shared"],
+    ],
+  },
 };
 
 // Without the toolchain that it pins, cargo fails in different-toolchains/pinned.

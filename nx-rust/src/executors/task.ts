@@ -44,6 +44,7 @@ import {
   type TargetCargoMetadata,
   targetCargoMetadataKey,
 } from "../graph/targets";
+import { wasmTriple } from "../graph/wasm";
 import {
   describeFolder,
   MissingToolError,
@@ -61,6 +62,7 @@ import {
 } from "./command";
 import { hasLibrary, runGroup } from "./group-run";
 import { type NapiTask, NapiTaskError, prepareNapiTask, runNapiGroup } from "./napi-build";
+import { prepareWasmTask, runWasmGroup, type WasmTask, WasmTaskError } from "./wasm-build";
 import { type GroupSelection, type PlannedGroup, planGroups } from "./groups";
 import { runnerCommand } from "./runner-script";
 import {
@@ -263,12 +265,20 @@ export async function runTask(
   const task = `${context.projectName ?? ""}:${context.targetName ?? ""}`;
   const verbose = taskRunsVerbosely(context);
   // `napi-build` runs its compile with variables of its own and its
-  // post-processing after it, whichever way its group selects (`DES-NAPI`).
-  if (planned.selection.kind === "workspace" || prepared.napi !== undefined) {
-    const [result] = await (prepared.napi === undefined ? runGroup : runNapiGroup)(
-      [{ prepared, invocation, context }],
-      verbose,
-    );
+  // post-processing after it, and `wasm-build` the wasm-bindgen CLI after its
+  // compile, whichever way their groups select (`DES-NAPI`, `DES-WASM`).
+  if (
+    planned.selection.kind === "workspace" ||
+    prepared.napi !== undefined ||
+    prepared.wasm !== undefined
+  ) {
+    const [result] = await (
+      prepared.napi !== undefined
+        ? runNapiGroup
+        : prepared.wasm !== undefined
+          ? runWasmGroup
+          : runGroup
+    )([{ prepared, invocation, context }], verbose);
     if (result.output !== "") {
       await new Promise<void>((resolve) =>
         process.stdout.write(`${result.output}\n`, () => resolve()),
@@ -397,12 +407,14 @@ export interface PreparedTask {
    */
   artifactCheck?: TargetCargoMetadata;
   /**
-   * On a crate's `build` and `napi-build`: what graph creation reported for
-   * the records (`DES-BUILD-INPUT-CHECK`).
+   * On a crate's `build`, `napi-build` and `wasm-build`: what graph creation
+   * reported for the records (`DES-BUILD-INPUT-CHECK`).
    */
   records?: BuildRecordSource;
   /** On `napi-build`: what its compile and post-processing need (`DES-NAPI`). */
   napi?: NapiTask;
+  /** On `wasm-build`: what its post-processing needs (`DES-WASM`). */
+  wasm?: WasmTask;
   /**
    * Whether the target's own options, which the crate's table, a
    * `project.json` or a `targetDefaults` entry give it, set a feature set:
@@ -725,6 +737,26 @@ export function prepareTask(
       throw error instanceof NapiTaskError ? new TaskError(error.message) : error;
     }
   }
+  // The checks of `wasm-build` before cargo (`DES-WASM`), after those of
+  // what reaches the task's key.
+  let wasm: WasmTask | undefined;
+  if (metadata.target === "wasm-build" && cargo.packageName !== undefined) {
+    try {
+      wasm = prepareWasmTask(
+        task,
+        cargo.packageName,
+        metadata,
+        join(context.root, project?.root ?? ""),
+        cwd,
+        env,
+        examined.options,
+        context.root,
+        metadata.digests?.find((member) => member.name === cargo.packageName)?.version,
+      );
+    } catch (error) {
+      throw error instanceof WasmTaskError ? new TaskError(error.message) : error;
+    }
+  }
   const nextest = metadata.target === "test" && metadata.testRunner === "nextest";
   const tool = nextest ? "cargo-nextest" : targetTools[metadata.target];
   if (tool !== undefined) {
@@ -760,11 +792,14 @@ export function prepareTask(
     metadata.artifactDirectory !== undefined
       ? { artifactCheck: metadata }
       : {}),
-    ...((metadata.target === "build" || metadata.target === "napi-build") &&
+    ...((metadata.target === "build" ||
+      metadata.target === "napi-build" ||
+      metadata.target === "wasm-build") &&
     metadata.records !== undefined
       ? { records: metadata.records }
       : {}),
     ...(napi === undefined ? {} : { napi }),
+    ...(wasm === undefined ? {} : { wasm }),
     ...(setsFeatureSet(context.target?.options) ? { ownFeatureSet: true } : {}),
     ...(nextest ? { testRunner: "nextest" as const } : {}),
     ...(testModeDecision === undefined ? {} : { testMode: testModeDecision }),
@@ -960,9 +995,16 @@ export function groupInvocations(
             task: task.task,
             crate: task.crate,
             manifest: task.manifest,
-            records: task.records,
+            // The compile of `wasm-build` builds the library alone, with
+            // `--lib`, and exports no record of a binary (`DES-WASM`).
+            records:
+              task.target === "wasm-build" ? { ...task.records, binaries: [] } : task.records,
             directories: entry.directories,
-            selection: task.options,
+            // `wasm-build` passes the wasm triple with `--target` (`DES-WASM`).
+            selection:
+              task.target === "wasm-build"
+                ? { ...task.options, targetTriple: wasmTriple }
+                : task.options,
             env,
             cwd,
           }
@@ -1677,7 +1719,9 @@ function isRecordSource(value: unknown): value is BuildRecordSource {
       (typeof library === "object" &&
         library !== null &&
         typeof (library as { name?: unknown }).name === "string" &&
-        typeof (library as { procMacro?: unknown }).procMacro === "boolean")) &&
+        typeof (library as { procMacro?: unknown }).procMacro === "boolean" &&
+        ((library as { crateTypes?: unknown }).crateTypes === undefined ||
+          isStrings((library as { crateTypes?: unknown }).crateTypes)))) &&
     Array.isArray(binaries) &&
     binaries.every(
       (binary) =>

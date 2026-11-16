@@ -15,4 +15,5 @@ export * from "./test-run";
 export * from "./tool-folders";
 export * from "./workspace";
 export * from "./hakari";
+export * from "./wasm";
 export * from "./baseline";

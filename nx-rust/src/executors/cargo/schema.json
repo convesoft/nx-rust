@@ -11,23 +11,23 @@
       "items": {
         "type": "string"
       },
-      "description": "Features to activate, passed as --features. Taken by build, check, lint, test, bench, run, napi-build and doc."
+      "description": "Features to activate, passed as --features. Taken by build, check, lint, test, bench, run, napi-build, wasm-build and doc."
     },
     "allFeatures": {
       "type": "boolean",
-      "description": "Activate all features, passed as --all-features. Taken by build, check, lint, test, bench, run, napi-build and doc."
+      "description": "Activate all features, passed as --all-features. Taken by build, check, lint, test, bench, run, napi-build, wasm-build and doc."
     },
     "noDefaultFeatures": {
       "type": "boolean",
-      "description": "Do not activate the default features, passed as --no-default-features. Taken by build, check, lint, test, bench, run, napi-build and doc."
+      "description": "Do not activate the default features, passed as --no-default-features. Taken by build, check, lint, test, bench, run, napi-build, wasm-build and doc."
     },
     "profile": {
       "type": "string",
-      "description": "The Cargo profile to build with, passed as --profile. Taken by build, check, lint, test, bench, run, napi-build and doc."
+      "description": "The Cargo profile to build with, passed as --profile. Taken by build, check, lint, test, bench, run, napi-build, wasm-build and doc."
     },
     "targetTriple": {
       "type": "string",
-      "description": "The platform triple to build for, passed as --target. Taken by build, check, lint, bench, run and doc; test and napi-build run and build for the host triple only."
+      "description": "The platform triple to build for, passed as --target. Taken by build, check, lint, bench, run and doc; test and napi-build run and build for the host triple only, and wasm-build for wasm32-unknown-unknown."
     },
     "allTargets": {
       "type": "boolean",
@@ -36,6 +36,11 @@
     "noDeps": {
       "type": "boolean",
       "description": "Document the workspace's members only, passed as --no-deps. Taken by doc, where the inferred target sets it."
+    },
+    "jsFlavour": {
+      "type": "string",
+      "enum": ["bundler", "web", "nodejs"],
+      "description": "The JS flavour of the wasm package, passed to the wasm-bindgen CLI as --target. Taken by wasm-build, where the inferred target sets bundler."
     },
     "affectedTests": {
       "type": "boolean",

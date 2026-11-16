@@ -869,7 +869,7 @@ describe("options in the target tables", () => {
   const testOptions =
     'The options that "test" takes are "features", "allFeatures", "noDefaultFeatures", "profile" and "affectedTests".';
   const cargoOptions =
-    'The options that @convesoft/nx-rust:cargo knows are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple", "allTargets", "noDeps" and "affectedTests".';
+    'The options that @convesoft/nx-rust:cargo knows are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple", "allTargets", "noDeps", "jsFlavour" and "affectedTests".';
 
   it.each<[string, FixtureName, FileChanges, string[]]>([
     [

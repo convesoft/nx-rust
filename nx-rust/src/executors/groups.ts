@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { type ConfiguredRunner, configuredRunner } from "../cargo/configured-runner";
 import { hostTriple } from "../cargo/host-triple";
 import { pickedTriples } from "../cargo/target-triples";
+import { wasmTriple } from "../graph/wasm";
 import { cargoArguments, selectsWorkspace } from "./command";
 import type { PreparedTask } from "./task";
 
@@ -72,8 +73,8 @@ interface GroupKey {
   shares: boolean;
   /**
    * The task's target, by its default name: `build` and `napi-build` run one
-   * command, and a group of `napi-build` runs it with variables and steps of
-   * its own (`DES-NAPI`).
+   * command, and a group of `napi-build` or `wasm-build` runs it with
+   * variables and steps of its own (`DES-NAPI`, `DES-WASM`).
    */
   target?: string;
   /** The workspace root, where the command starts. */
@@ -166,7 +167,7 @@ export interface PlannedGroup<T extends PreparedTask> {
  * {@link hakariSelection} and {@link cargoSelection}. Under
  * `workspace-build`, those are:
  *
- * - a group of `build`, `check`, `lint` or `test` that builds for a
+ * - a group of `build`, `check`, `lint`, `test` or an artifact target that builds for a
  *   triple other than the host's, from its `targetTriple` option or from
  *   `build.target` in Cargo's configuration and `CARGO_BUILD_TARGET`, or
  *   for a triple whose folder the plugin cannot name, because the whole
@@ -304,7 +305,9 @@ export function groupSelection(task: PreparedTask, host: () => string | undefine
   if (task.ownFeatureSet === true) {
     return { kind: "alone" };
   }
-  const option = task.options.targetTriple;
+  // `wasm-build` always builds for the wasm triple, a triple other than the
+  // host's, which it passes with `--target` (`DES-WASM`).
+  const option = task.target === "wasm-build" ? wasmTriple : task.options.targetTriple;
   const picked =
     typeof option === "string" && option !== ""
       ? { kind: "triples" as const, triples: [option] }

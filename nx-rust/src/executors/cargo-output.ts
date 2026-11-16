@@ -337,6 +337,8 @@ function outputLines(output: string): OutputLine[] {
  * that the output does not attribute to another crate of the command.
  *
  * @param allTargets Whether the command passed `--all-targets`.
+ * @param libraryOnly Whether the command passed `--lib`, as the compile of
+ *   `wasm-build` does, so that it builds no binary (`DES-WASM`).
  */
 // @mara implements DES-BATCH
 export function readJsonStep(
@@ -345,6 +347,7 @@ export function readJsonStep(
   crates: readonly OutputCrate[],
   allTargets: boolean,
   scope?: OutputScope,
+  libraryOnly = false,
 ): CrateOutcome[] {
   const lines = outputLines(output);
   // The members outside the group, whose own lines no task shows.
@@ -448,7 +451,9 @@ export function readJsonStep(
     const missing = (
       crate.package === undefined
         ? undefined
-        : expectedUnits(crate.package, allTargets, crate.selection)
+        : expectedUnits(crate.package, allTargets, crate.selection).filter(
+            (unit) => !libraryOnly || unit.kind === "lib",
+          )
     )?.filter(
       (unit) =>
         !built.some(
@@ -780,4 +785,48 @@ export function describeList(items: readonly string[]): string {
 
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The files that cargo's JSON messages report for each package's `cdylib`
+ * target, by the package's ID, as cargo names it in the messages and in
+ * `cargo metadata`: the files of the `compiler-artifact` messages whose name
+ * matches `file`, fresh units included, which cargo reports as well. Cargo
+ * reports each file where it puts it, in the folder of a triple where one is
+ * selected, also the host's, so the artifact targets post-process the file
+ * of this command, never one at a path that the plugin derives
+ * (`DES-NAPI`, `DES-WASM`).
+ */
+export function reportedCdylibFiles(output: string, file: RegExp): Map<string, string[]> {
+  const libraries = new Map<string, string[]>();
+  for (const line of output.split("\n")) {
+    if (!line.startsWith("{")) {
+      continue;
+    }
+    let message: {
+      reason?: unknown;
+      package_id?: unknown;
+      target?: { kind?: unknown };
+      filenames?: unknown;
+    };
+    try {
+      message = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (
+      message.reason !== "compiler-artifact" ||
+      typeof message.package_id !== "string" ||
+      !Array.isArray(message.target?.kind) ||
+      !message.target.kind.includes("cdylib") ||
+      !Array.isArray(message.filenames)
+    ) {
+      continue;
+    }
+    const files = message.filenames.filter(
+      (name): name is string => typeof name === "string" && file.test(name),
+    );
+    libraries.set(message.package_id, [...(libraries.get(message.package_id) ?? []), ...files]);
+  }
+  return libraries;
 }

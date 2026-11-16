@@ -39,6 +39,7 @@ export const fixtureNames = [
   "publish-crates",
   "workspace-tests",
   "napi-addons",
+  "wasm-packages",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];
