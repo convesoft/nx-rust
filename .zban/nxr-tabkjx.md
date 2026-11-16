@@ -20,7 +20,9 @@ Implements `REQ-AFFECTED-TESTS`, `REQ-SELECTION-SAFETY` and steps 1 and 2 of `DE
 - [ ] Take the changed files of the whole repository from git against every usable collection and the working tree, with renames, deletions, untracked files, submodules and ignored declared inputs as step 1 says, and check them against the report's changed files
 - [ ] Widen as step 2 of `DES-TEST-RUN` and `ADR-AFFECTED-TESTS-WIDENING` say: narrow only Rust files with rows outside proc macros, build scripts and declared files; give every other changed file to the crates whose `test` inputs hold it, through `^`; full suite for a file the plugin cannot place; integration tests of a binary's crate and all tests of the crates that depend on it
 - [ ] Pass the selection to nextest in `-E` arguments as step 3 of `DES-TEST-RUN` says (escaping, 64 KiB per argument, whole binaries above 512 KiB, no nextest run for an empty selection), and map JUnit suites to crates by the binary ID (step 4)
-- [ ] Report a fallback to the full suite with its reason
+- [ ] Report a fallback to the full suite with its reason, replacing the placeholder note that nxr-539qtw wrote for affected mode
+- [ ] Guard the mode between hashing and the run (`DES-TEST-MODE`, known limit; `RISK-SUBSET-AS-FULL`): a task whose key was hashed as `full`, or with other baseline commits than the executor then reads, must never run a subset; test it with a baseline that appears or changes after hashing
+- [ ] Check the mode command of nxr-539qtw (`print-test-mode.js`, `EVD-TEST-MODE-READING`) against a database that a real cargo-affected wrote, in a case that is skipped with a warning where the tool is missing
 - [ ] Warn when cargo-affected is missing in a run in mode `full`
 - [ ] `--affectedTests=false` and the per-crate opt-out (`DES-TEST-RUN`, `DES-PLUGIN-OPTIONS`); the graph-time error for `affectedTests = true` belongs to nxr-xyq7c8
 - [ ] The task-time error for `--affectedTests=true` that `DES-DIAGNOSTICS` lists, for a single task and in a batch
