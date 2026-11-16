@@ -104,6 +104,46 @@ function main(): void {
   delete env[packagesVariable];
   delete env[recordVariable];
   const child = spawn(resolve(program as string), args, { env, stdio: "inherit" });
+  superviseChild(child, fd, program as string);
+}
+
+/** What {@link superviseChild} needs from a started program. */
+export interface SupervisedChild {
+  kill(signal: NodeJS.Signals): unknown;
+  on(event: "error", listener: (error: Error) => void): unknown;
+  on(
+    event: "exit",
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): unknown;
+}
+
+/** How the runner ends: by a signal it raises on itself, or with a status. */
+export interface RunnerEnding {
+  raise(signal: NodeJS.Signals): void;
+  exit(status: number): void;
+}
+
+/** The runner's own ending: the child's signal raised on the runner's own process. */
+export const processEnding: RunnerEnding = {
+  raise: (signal) => {
+    process.kill(process.pid, signal);
+  },
+  exit: (status) => process.exit(status),
+};
+
+/**
+ * Forwards the signals that end a run to the started program and, once it
+ * has ended, adds the end entry to the record file `fd` and ends the runner
+ * the same way, through `ending`. Tests pass an ending of their own, so
+ * that a program ended by a signal that dumps core does not make the test
+ * process raise it on itself.
+ */
+export function superviseChild(
+  child: SupervisedChild,
+  fd: number,
+  program: string,
+  ending: RunnerEnding = processEnding,
+): void {
   const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"];
   const forward = (signal: NodeJS.Signals) => child.kill(signal);
   for (const signal of signals) {
@@ -116,7 +156,7 @@ function main(): void {
     // The program did not run: the record ends with the status that a
     // shell gives a command it cannot start, so that its task fails.
     finish(fd, { end: { status: 127 } });
-    process.exit(127);
+    ending.exit(127);
   });
   child.on("exit", (code, signal) => {
     for (const name of signals) {
@@ -124,15 +164,15 @@ function main(): void {
     }
     if (signal !== null) {
       finish(fd, { end: { signal } });
-      process.kill(process.pid, signal);
+      ending.raise(signal);
       // A signal that Node ignores, such as SIGPIPE, does not end the
       // runner: it then fails, so that cargo does not see a success.
-      setTimeout(() => process.exit(runnerFailureStatus), 1000);
+      setTimeout(() => ending.exit(runnerFailureStatus), 1000);
       return;
     }
     const status = code ?? runnerFailureStatus;
     finish(fd, { end: { status } });
-    process.exit(status);
+    ending.exit(status);
   });
 }
 

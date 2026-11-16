@@ -531,3 +531,11 @@ CI, while Jest still runs that test. Code that compiles only with type
 information from other files, such as a reference to an ambient `const enum`
 or a type re-exported without `export type`, fails `typecheck` too. The end-to-end tests have a
 `typecheck` target of their own on `nx-rust-e2e/tsconfig.spec.json`.
+
+A test must not end a real process with a signal whose default action dumps
+core (SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGQUIT, SIGTRAP, SIGXFSZ or
+SIGSYS), whether it sends the signal or a fixture raises it: where the core
+pattern pipes to `systemd-coredump`, every such death leaves a crash record on
+the host and a desktop's crash watcher reports it, `ulimit -c 0` or not
+(nxr-hr9pe2). Use SIGTERM, SIGKILL or SIGUSR1 for a real process, and a fake
+one, as for the selecting runner's `superviseChild`, for the others.

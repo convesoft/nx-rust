@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import {
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CargoPackage } from "../src/cargo/metadata";
@@ -19,6 +28,7 @@ import {
   readTestsBuildStep,
   type RunnerRecords,
 } from "../src/executors/test-steps";
+import { superviseChild } from "../src/executors/test-runner";
 import { pluginPackage, testEnvironment } from "./harness";
 
 // The parts of VER-BATCHING ("The runner and the check") and VER-TESTING
@@ -100,11 +110,49 @@ describe("the selecting runner, started directly", () => {
     ]);
     expect(failing.run.status).toBe(101);
     expect(failing.record).toMatchObject({ records: [{ after: [{ end: { status: 101 } }] }] });
+    // A real program and the real runner end by a signal that does not dump
+    // core, so that the test leaves no crash record on the host
+    // (`test/README.md`); the case below covers the signals that do.
     const killer = join(folder, "killer.sh");
-    writeFileSync(killer, "#!/bin/sh\nkill -SEGV $$\n", { mode: 0o755 });
+    writeFileSync(killer, "#!/bin/sh\nkill -TERM $$\n", { mode: 0o755 });
     const killed = startRunner({ CARGO_PKG_NAME: "a", NX_RUST_TEST_PACKAGES: ":a:" }, [killer]);
-    expect(killed.run.signal).toBe("SIGSEGV");
-    expect(killed.record).toMatchObject({ records: [{ after: [{ end: { signal: "SIGSEGV" } }] }] });
+    expect(killed.run.signal).toBe("SIGTERM");
+    expect(killed.record).toMatchObject({ records: [{ after: [{ end: { signal: "SIGTERM" } }] }] });
+  });
+
+  it("records a signal that dumps core, raises it on itself, and fails with 125 where it survives it, with a fake program and a fake ending", () => {
+    jest.useFakeTimers();
+    try {
+      for (const signal of [
+        "SIGSEGV",
+        "SIGABRT",
+        "SIGBUS",
+        "SIGFPE",
+        "SIGILL",
+        "SIGQUIT",
+        "SIGTRAP",
+        "SIGXFSZ",
+        "SIGSYS",
+      ] as const) {
+        const record = mkdtempSync(join(folder, "record-"));
+        const fd = openSync(join(record, "start.jsonl"), "wx");
+        writeSync(fd, `${JSON.stringify({ start: { package: "a", program: "/t/a" } })}\n`);
+        const child = Object.assign(new EventEmitter(), { kill: jest.fn() });
+        const ending = { raise: jest.fn(), exit: jest.fn() };
+        superviseChild(child, fd, "/t/a", ending);
+        child.emit("exit", null, signal);
+        expect({ signal, raised: ending.raise.mock.calls }).toEqual({ signal, raised: [[signal]] });
+        expect(ending.exit).not.toHaveBeenCalled();
+        expect(readRecords(record)).toMatchObject({
+          records: [{ start: { package: "a" }, after: [{ end: { signal } }] }],
+        });
+        // A runner that the signal did not end fails rather than succeed.
+        jest.advanceTimersByTime(1000);
+        expect(ending.exit.mock.calls).toEqual([[125]]);
+      }
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("skips a package that is not in the list, and fails closed with 125 on a missing or malformed list, a missing or empty package name and where it cannot record", () => {
