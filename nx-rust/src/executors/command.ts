@@ -36,8 +36,11 @@ export interface CargoTargetOptions {
 export type TargetOptionName = keyof CargoTargetOptions;
 
 // The targets that take the feature and profile options, and those that
-// also take `targetTriple`.
-const tripleTargets = compilingTargets.filter((target) => target !== "test");
+// also take `targetTriple`: not `test`, and not `napi-build`, which build
+// for the host only in v1 (`ADR-V1-SCOPE`).
+const tripleTargets = compilingTargets.filter(
+  (target) => target !== "test" && target !== "napi-build",
+);
 
 /**
  * The targets that take each option, by their default names, as the option
@@ -134,6 +137,7 @@ const compilingCrateTargets: ReadonlySet<InferredTargetName> = new Set([
   "check",
   "lint",
   "test",
+  "napi-build",
 ]);
 
 /**
@@ -152,6 +156,8 @@ export function selectsWorkspace(target: InferredTargetName): boolean {
 // package selection (`DES-TARGET-COMMANDS`).
 const crateCommands: Partial<Record<InferredTargetName, readonly string[]>> = {
   build: ["build"],
+  // The compile step of `napi-build`, a plain `cargo build` (`DES-NAPI`).
+  "napi-build": ["build"],
   check: ["check"],
   lint: ["clippy"],
   test: ["test"],
@@ -203,7 +209,11 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
     return [
       ...crateCommand,
       ...flag(taken.allTargets, "--all-targets"),
-      ...(crates.length > 1 || workspace ? sharedCommandFlags(target) : []),
+      // The compile of `napi-build` always prints cargo's JSON messages, from
+      // which the plugin takes the library it copies (`DES-NAPI`).
+      ...(crates.length > 1 || workspace || target === "napi-build"
+        ? sharedCommandFlags(target)
+        : []),
       ...(workspace ? ["--workspace"] : crateSelection(target, crates)),
       ...compilingFlags(taken),
       ...(formatting ? [] : unificationFlags(subject)),
@@ -272,12 +282,15 @@ function unificationFlags(subject: CommandSubject): string[] {
  * crate's result (`DES-BATCH`): `--keep-going` and JSON messages for
  * `build`, `check` and `lint`, and `--no-fail-fast` for `test`. A command
  * of a group of one crate adds none, so that it is the command that a plain
- * `cargo` of that one crate runs.
+ * `cargo` of that one crate runs, apart from the compile of `napi-build`,
+ * which has no plain cargo counterpart and always adds them, so that cargo
+ * reports the library that it copies (`DES-NAPI`).
  */
 // @mara implements DES-BATCH
 export function sharedCommandFlags(target: InferredTargetName): string[] {
   switch (target) {
     case "build":
+    case "napi-build":
     case "check":
     case "lint":
       return ["--keep-going", "--message-format=json"];

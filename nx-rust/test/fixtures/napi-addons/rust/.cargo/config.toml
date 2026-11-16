@@ -1,0 +1,7 @@
+# The crates.io packages of the napi crates, from a local registry in the
+# fixture, so that cargo needs no network.
+[source.crates-io]
+replace-with = "napi-crates"
+
+[source.napi-crates]
+local-registry = "../registry"

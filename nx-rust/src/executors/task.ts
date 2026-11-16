@@ -60,6 +60,7 @@ import {
   selectsBySpecification,
 } from "./command";
 import { hasLibrary, runGroup } from "./group-run";
+import { type NapiTask, NapiTaskError, prepareNapiTask, runNapiGroup } from "./napi-build";
 import { type GroupSelection, type PlannedGroup, planGroups } from "./groups";
 import { runnerCommand } from "./runner-script";
 import {
@@ -257,8 +258,13 @@ export async function runTask(
   }
   const task = `${context.projectName ?? ""}:${context.targetName ?? ""}`;
   const verbose = taskRunsVerbosely(context);
-  if (planned.selection.kind === "workspace") {
-    const [result] = await runGroup([{ prepared, invocation, context }], verbose);
+  // `napi-build` runs its compile with variables of its own and its
+  // post-processing after it, whichever way its group selects (`DES-NAPI`).
+  if (planned.selection.kind === "workspace" || prepared.napi !== undefined) {
+    const [result] = await (prepared.napi === undefined ? runGroup : runNapiGroup)(
+      [{ prepared, invocation, context }],
+      verbose,
+    );
     if (result.output !== "") {
       await new Promise<void>((resolve) =>
         process.stdout.write(`${result.output}\n`, () => resolve()),
@@ -386,8 +392,13 @@ export interface PreparedTask {
    * checked before cargo builds (`DES-OUTPUTS`).
    */
   artifactCheck?: TargetCargoMetadata;
-  /** On a crate's `build`: what graph creation reported for the records (`DES-BUILD-INPUT-CHECK`). */
+  /**
+   * On a crate's `build` and `napi-build`: what graph creation reported for
+   * the records (`DES-BUILD-INPUT-CHECK`).
+   */
   records?: BuildRecordSource;
+  /** On `napi-build`: what its compile and post-processing need (`DES-NAPI`). */
+  napi?: NapiTask;
   /**
    * Whether the target's own options, which the crate's table, a
    * `project.json` or a `targetDefaults` entry give it, set a feature set:
@@ -414,6 +425,8 @@ export interface PreparedTask {
    * group of one crate ("Triples that `platforms` does not list").
    */
   hakariPlatforms?: string[];
+  /** Under `hakari`, the hack crate's package name (`DES-NAPI`). */
+  hakariPackage?: string;
   /** The task's environment, with which its checks ran and its cargo runs. */
   env: NodeJS.ProcessEnv;
 }
@@ -667,6 +680,25 @@ export function prepareTask(
       };
     }
   }
+  // The checks of `napi-build` before cargo (`DES-NAPI`), after those of
+  // what reaches the task's key.
+  let napi: NapiTask | undefined;
+  if (metadata.target === "napi-build" && cargo.packageName !== undefined) {
+    try {
+      napi = prepareNapiTask(
+        task,
+        cargo.packageName,
+        metadata,
+        join(context.root, project?.root ?? ""),
+        cwd,
+        env,
+        context.target?.cache === true,
+        context.root,
+      );
+    } catch (error) {
+      throw error instanceof NapiTaskError ? new TaskError(error.message) : error;
+    }
+  }
   const nextest = metadata.target === "test" && metadata.testRunner === "nextest";
   const tool = nextest ? "cargo-nextest" : targetTools[metadata.target];
   if (tool !== undefined) {
@@ -702,13 +734,16 @@ export function prepareTask(
     metadata.artifactDirectory !== undefined
       ? { artifactCheck: metadata }
       : {}),
-    ...(metadata.target === "build" && metadata.records !== undefined
+    ...((metadata.target === "build" || metadata.target === "napi-build") &&
+    metadata.records !== undefined
       ? { records: metadata.records }
       : {}),
+    ...(napi === undefined ? {} : { napi }),
     ...(setsFeatureSet(context.target?.options) ? { ownFeatureSet: true } : {}),
     ...(nextest ? { testRunner: "nextest" as const } : {}),
     featureUnification: strategy,
     ...(cargo.hakariPlatforms === undefined ? {} : { hakariPlatforms: cargo.hakariPlatforms }),
+    ...(typeof cargo.hakariPackage === "string" ? { hakariPackage: cargo.hakariPackage } : {}),
     env,
   };
 }
@@ -761,6 +796,11 @@ export interface GroupInvocation extends CargoInvocation {
   digests?: DigestStep;
   /** On a crate's `build`: the check of the files that cargo recorded (`DES-BUILD-INPUT-CHECK`). */
   inputCheck?: BuildInputCheck;
+  /**
+   * On `napi-build`: Cargo's directories, where its compile keeps the type
+   * information and writes the library (`DES-NAPI`).
+   */
+  directories?: CargoDirectories;
 }
 
 /**
@@ -803,7 +843,8 @@ export function groupInvocations(
   // members, where its command selects crates by their specifications: the
   // order in which a task run on its own has always asked.
   const directories: CargoDirectories | DirectoryReportError | undefined = tasks.some(
-    (task) => task.artifactCheck !== undefined || task.records !== undefined,
+    (task) =>
+      task.artifactCheck !== undefined || task.records !== undefined || task.napi !== undefined,
   )
     ? directoryReport(cwd, env)
     : undefined;
@@ -822,6 +863,9 @@ export function groupInvocations(
           directories instanceof DirectoryReportError
             ? directoryFailure(task.task, directories)
             : directories;
+        if (task.napi !== undefined && reached === undefined) {
+          throw new TaskError(`${task.task}: cargo reported no directories for this napi-build.`);
+        }
         if (task.artifactCheck !== undefined && reached !== undefined) {
           checkArtifactDirectory(task.task, task.artifactCheck, cwd, root, env, reached);
         }
@@ -906,6 +950,9 @@ export function groupInvocations(
       ...(entry.package === undefined ? {} : { package: entry.package }),
       ...(task.digests === undefined ? {} : { digests: task.digests }),
       ...(inputCheck === undefined ? {} : { inputCheck }),
+      ...(task.napi !== undefined && entry.directories !== undefined
+        ? { directories: entry.directories }
+        : {}),
     };
   });
 }
@@ -1545,6 +1592,10 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
     records,
     waitsForBuild,
     waitsForBuilds,
+    napiAddon,
+    napiHost,
+    napiHeaderFile,
+    sharedLibrary,
     testRunner,
   } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
   return (inferredTargetNames as readonly unknown[]).includes(target)
@@ -1572,6 +1623,10 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
         waitsForBuilds.every((root) => typeof root === "string")
           ? { waitsForBuilds: waitsForBuilds as string[] }
           : {}),
+        ...(typeof napiAddon === "string" ? { napiAddon } : {}),
+        ...(typeof napiHost === "string" ? { napiHost } : {}),
+        ...(typeof napiHeaderFile === "string" ? { napiHeaderFile } : {}),
+        ...(typeof sharedLibrary === "string" ? { sharedLibrary } : {}),
         ...(testRunner === "nextest" ? { testRunner } : {}),
       }
     : undefined;

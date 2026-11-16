@@ -1,0 +1,1 @@
+{"name":"napi-build","vers":"2.6.0","deps":[],"cksum":"b899b545d3aa6dca985939059f258c5488d34e4ecf39c274e20009748f4b846d","features":{"wasi-heap-sync":[]},"yanked":false,"rust_version":"1.88","pubtime":"2026-10-01T04:53:16Z"}

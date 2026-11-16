@@ -11,6 +11,7 @@
     "smol-toml": "1.9.0"
   },
   "devDependencies": {
+    "@napi-rs/cli": "^3.10.12",
     "@nx/jest": "24.0.6",
     "@nx/js": "24.0.6",
     "@nx/oxlint": "24.0.6",

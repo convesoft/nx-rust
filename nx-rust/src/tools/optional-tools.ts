@@ -1,12 +1,17 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
+import type { CargoPackage } from "../cargo/metadata";
+import { producesNodeAddon } from "../graph/napi";
+import { installedNapiCli } from "./napi-cli";
 
 /** A Cargo workspace as far as the table of tools needs it. */
 export interface ToolWorkspace {
   /** The folder of the root manifest, relative to the repository root: `.` for the root itself. */
   root: string;
+  /** The workspace's members, where the table needs to know which crates produce a Node addon. */
+  members?: readonly CargoPackage[];
   /** The workspace's test runner (`testRunner`), where its settings choose nextest. */
   testRunner?: "nextest";
   /**
@@ -75,12 +80,12 @@ export const wasmTriple = "wasm32-unknown-unknown";
  * ({@link requireTool}); the rows of the wasm tools are one row there.
  *
  * Which tool the configuration needs follows the features that exist:
- * cargo-nextest where a workspace's settings choose the nextest runner, and
- * cargo-hakari for every workspace that uses the `hakari` strategy. The
- * settings that ask for cargo-affected, and the artifact targets that run
- * the wasm and napi tools, are not implemented yet, so nothing needs those
- * tools until their issues add the condition: nxr-tabkjx (`affectedTests`),
- * nxr-0ap8n4 (`wasm-build`) and nxr-tv3r95 (`napi-build`).
+ * cargo-nextest where a workspace's settings choose the nextest runner,
+ * cargo-hakari for every workspace that uses the `hakari` strategy, and the
+ * napi CLI where a crate has a `napi-build` target. The settings that ask
+ * for cargo-affected, and the artifact target that runs the wasm tools, are
+ * not implemented yet, so nothing needs those tools until their issues add
+ * the condition: nxr-tabkjx (`affectedTests`) and nxr-0ap8n4 (`wasm-build`).
  */
 // @mara implements DES-GENERATORS
 export const optionalTools: readonly OptionalTool[] = [
@@ -137,13 +142,25 @@ export const optionalTools: readonly OptionalTool[] = [
   {
     id: "napi",
     name: "the napi CLI",
-    install: "Add @napi-rs/cli to the devDependencies of your package.json (https://napi.rs).",
-    installed: (context) =>
-      findExecutable("napi", [
-        join(context.workspaceRoot, "node_modules", ".bin"),
-        ...searchPath(context.env, toolFolder(context)),
-      ]) !== undefined,
-    neededBy: () => [],
+    install:
+      "Add @napi-rs/cli 3.4.0 or a later 3.x release to the devDependencies of the crate's package.json or of the repository's (https://napi.rs).",
+    // `napi-build` uses the package that Node resolves from the crate's
+    // folder, so each crate with the target has to reach one.
+    installed: (context) => {
+      const folders = napiCrates(context).map(({ folder }) => join(context.workspaceRoot, folder));
+      return folders.length > 0
+        ? folders.every((folder) => installedNapiCli(folder) !== undefined)
+        : installedNapiCli(context.workspaceRoot) !== undefined ||
+            findExecutable("napi", [
+              join(context.workspaceRoot, "node_modules", ".bin"),
+              ...searchPath(context.env, toolFolder(context)),
+            ]) !== undefined;
+    },
+    neededBy: (context) =>
+      napiCrates(context).map(
+        ({ name, folder }) =>
+          `the napi-build target of the crate ${name} in ${describeFolder(folder)}`,
+      ),
   },
   {
     id: "cargo-deny",
@@ -226,6 +243,35 @@ export function requireTool(
   if (!tool.installed(context)) {
     throw new MissingToolError(tool, neededBy);
   }
+}
+
+/**
+ * The crates of the context's workspaces that have a `napi-build` target
+ * (`producesNodeAddon` in `napi.ts`), by package name and folder relative to
+ * the repository root, the `artifacts` of their `[package.metadata.nx]`
+ * included.
+ */
+function napiCrates(context: ToolContext): { name: string; folder: string }[] {
+  return context.workspaces.flatMap((workspace) =>
+    (workspace.members ?? [])
+      .filter((pkg) => {
+        const artifacts = (pkg.metadata as { nx?: { artifacts?: unknown } } | null)?.nx?.artifacts;
+        return producesNodeAddon({
+          pkg,
+          settings: Array.isArray(artifacts)
+            ? {
+                artifacts: artifacts.filter(
+                  (kind): kind is "napi" | "wasm" => typeof kind === "string",
+                ),
+              }
+            : {},
+        });
+      })
+      .map((pkg) => ({
+        name: pkg.name,
+        folder: relative(context.workspaceRoot, dirname(pkg.manifest_path)) || ".",
+      })),
+  );
 }
 
 /** "the repository root" for `.`, the folder otherwise. */

@@ -189,6 +189,18 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       ],
     },
   },
+  "napi-addons": {
+    workspaces: {
+      rust: [
+        "rust/crates/addon-a",
+        "rust/crates/addon-b",
+        "rust/crates/consumer",
+        "rust/crates/core-napi",
+        "rust/crates/plain-cdylib",
+        "rust/crates/shared",
+      ],
+    },
+  },
 };
 
 // Without the pinned toolchain, different-toolchains is not checked.

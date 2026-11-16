@@ -130,6 +130,8 @@ export function batchLiveOutput(batchEnv: NodeJS.ProcessEnv): LiveOutput {
  * @param verbose Whether the run is verbose: as `batchRunsVerbosely`
  *   decides once for the batch, or `taskRunsVerbosely` for a task on its own.
  * @param live What the batch shows of cargo's output while it runs.
+ * @param observe Receives each step's whole output once cargo has ended, as
+ *   `napi-build` needs it for the library that cargo reports (`DES-NAPI`).
  * @returns One result per member, in order.
  */
 // @mara implements DES-BATCH
@@ -139,6 +141,7 @@ export async function runGroup(
   members: readonly GroupMember[],
   verbose = false,
   live: LiveOutput = "none",
+  observe?: (step: CargoStep, output: string) => void,
 ): Promise<MemberResult[]> {
   const [first] = members;
   if (first === undefined) {
@@ -203,6 +206,7 @@ export async function runGroup(
         await printCommand(label, invocation);
       }
       const run = await runCaptured(invocation, first.prepared.env, live === "lines");
+      observe?.(step, run.output);
       let unexplained: string | undefined;
       let outcomes: CrateOutcome[];
       if (toolConfiguration !== undefined) {
@@ -318,8 +322,10 @@ function readStep(
   runner: readonly string[] | undefined,
 ): CrateOutcome[] {
   // A group of one crate that selects it runs the command that its task runs
-  // on its own, and passes each step where cargo exits with status 0.
-  if (members.length === 1 && scope === undefined) {
+  // on its own, and passes each step where cargo exits with status 0. The
+  // compile of `napi-build` prints JSON messages also for one crate
+  // (`DES-NAPI`), which its output is read from.
+  if (members.length === 1 && scope === undefined && members[0].prepared.target !== "napi-build") {
     return [{ passed: end.kind === "succeeded", output }];
   }
   switch (step.kind) {
@@ -358,6 +364,7 @@ function sharedOutcomes(
 ): CrateOutcome[] {
   switch (members[0].prepared.target) {
     case "build":
+    case "napi-build":
       return readJsonStep(output, end, crates, false, scope);
     case "check":
     case "lint":

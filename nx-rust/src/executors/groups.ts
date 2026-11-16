@@ -70,6 +70,12 @@ export function formGroups<T extends PreparedTask>(
 interface GroupKey {
   /** Whether the task can share a command at all: it selects a crate. */
   shares: boolean;
+  /**
+   * The task's target, by its default name: `build` and `napi-build` run one
+   * command, and a group of `napi-build` runs it with variables and steps of
+   * its own (`DES-NAPI`).
+   */
+  target?: string;
   /** The workspace root, where the command starts. */
   cwd: string;
   /** The command with every crate selection replaced by the same placeholder. */
@@ -89,6 +95,7 @@ function groupKey(task: PreparedTask): GroupKey {
   }
   return {
     shares: true,
+    target: task.target,
     cwd: task.cwd,
     command: cargoArguments(
       {
@@ -107,6 +114,7 @@ function groupKey(task: PreparedTask): GroupKey {
 function sameKey(a: GroupKey, b: GroupKey): boolean {
   return (
     a.cwd === b.cwd &&
+    a.target === b.target &&
     isDeepStrictEqual(a.command, b.command) &&
     isDeepStrictEqual(definedEntries(a.env), definedEntries(b.env))
   );

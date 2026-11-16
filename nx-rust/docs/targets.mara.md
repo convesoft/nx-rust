@@ -1,11 +1,11 @@
 # Targets
 
 > **Status:** the plugin infers the targets of this page apart from
-> `napi-build` and `wasm-build`, which arrive with milestone 0.4, and the
+> `wasm-build`, which arrives with milestone 0.4, and the
 > coverage baseline of milestone 0.3; a cargo-hakari hack crate still gets
 > `nx-release-publish`, until its guard arrives with milestone 0.5. `test`
 > runs `cargo test`, or nextest where the workspace's `testRunner` says so.
-> `build` and `doc` run
+> `build`, `napi-build` and `doc` run
 > the executor `@convesoft/nx-rust:cargo-outputs`, the other cargo targets
 > `@convesoft/nx-rust:cargo`, and the tasks of one group share their cargo
 > calls ([Batching and features](execution.mara.md)).
@@ -471,7 +471,7 @@ tag `lang:rust`, for example through `[workspace.metadata.nx]`:
 
 Or add an empty entry keyed by the target's executor, the `executor` that
 `nx show project <crate> --json` shows for it: `@convesoft/nx-rust:cargo`,
-`@convesoft/nx-rust:cargo-outputs` for `build` and `doc`,
+`@convesoft/nx-rust:cargo-outputs` for `build`, `napi-build` and `doc`,
 `@convesoft/nx-rust:run` for `run`, `@convesoft/nx-rust:lockfile` for
 `lockfile`, or `@convesoft/nx-rust:release-publish` for `nx-release-publish`.
 `nx add` adds all five where they are missing.
@@ -581,7 +581,7 @@ Only `clippy` is renamed, to `lint`: `lint`, `test` and `build` are the target n
 
 Targets come from the `cargo metadata` report ([[DES-METADATA-REPORT]]): `run` exists when the crate has a binary target, `bench` when it has a bench target, an [[TERM-ARTIFACT-TARGET]] when the crate produces that artifact ([[DES-ARTIFACT-STEPS]]), and `nx-release-publish` unless the manifest sets `publish = false` or the crate is the hack crate of a cargo-hakari configuration ([[DES-RELEASE]]). The last six rows are targets of the [[TERM-WORKSPACE-PROJECT]]; `deny` exists only where a cargo-deny configuration file is in the workspace root, and `hakari-check` only where the workspace uses the `hakari` strategy, which its files decide ([[DES-UNIFICATION]]). Whether a tool is installed never decides whether a target exists.
 
-**Executors.** Every inferred target runs the plugin's cargo executor, `@convesoft/nx-rust:cargo`, which has the batch implementation of [[DES-BATCH]], apart from `build` and `doc`, the targets whose files Nx stores ([[DES-OUTPUTS]]), which run `@convesoft/nx-rust:cargo-outputs`, the same executor with the same batch implementation under a name of its own, so that Nx batches and stores them apart from the tasks that wait for them ([[DES-BATCH]]); `run`, which runs `@convesoft/nx-rust:run`, and `lockfile` and `hakari-check`, which run `@convesoft/nx-rust:lockfile`, two executors without a batch implementation ([[DES-TARGET-COMMANDS]], [[DES-LOCKFILE-HASHING]], [[DES-UNIFICATION]]); and `nx-release-publish`, which runs `@convesoft/nx-rust:release-publish`, an executor with a batch implementation of its own ([[DES-RELEASE]]). The lockfile executor runs the command of the target's default name, so that the empty entry that `init` adds for it in `targetDefaults` covers `hakari-check` as well ([[DES-TARGET-DEFAULT-GUARD]]). Each target carries its default name from the table in its metadata, as `metadata.cargo.target`, so that the executor runs the same command whatever name `targetNames` gives the target. It also carries the `locked` option of the plugin entry that created its project, as `metadata.cargo.locked`, from which the executor decides locked mode ([[DES-INVOCATION]]). A target that names one of these executors but that the plugin did not infer has no such name, and its task fails before cargo runs ([[DES-DIAGNOSTICS]]).
+**Executors.** Every inferred target runs the plugin's cargo executor, `@convesoft/nx-rust:cargo`, which has the batch implementation of [[DES-BATCH]], apart from `build`, `napi-build` and `doc`, the targets whose files Nx stores ([[DES-OUTPUTS]]), which run `@convesoft/nx-rust:cargo-outputs`, the same executor with the same batch implementation under a name of its own, so that Nx batches and stores them apart from the tasks that wait for them ([[DES-BATCH]]); `run`, which runs `@convesoft/nx-rust:run`, and `lockfile` and `hakari-check`, which run `@convesoft/nx-rust:lockfile`, two executors without a batch implementation ([[DES-TARGET-COMMANDS]], [[DES-LOCKFILE-HASHING]], [[DES-UNIFICATION]]); and `nx-release-publish`, which runs `@convesoft/nx-rust:release-publish`, an executor with a batch implementation of its own ([[DES-RELEASE]]). The lockfile executor runs the command of the target's default name, so that the empty entry that `init` adds for it in `targetDefaults` covers `hakari-check` as well ([[DES-TARGET-DEFAULT-GUARD]]). Each target carries its default name from the table in its metadata, as `metadata.cargo.target`, so that the executor runs the same command whatever name `targetNames` gives the target. It also carries the `locked` option of the plugin entry that created its project, as `metadata.cargo.locked`, from which the executor decides locked mode ([[DES-INVOCATION]]). A target that names one of these executors but that the plugin did not infer has no such name, and its task fails before cargo runs ([[DES-DIAGNOSTICS]]).
 
 No inferred target has a `dependsOn` entry that names another Rust crate's target, except that every cached crate target other than `fmt-check` depends on the lockfile task of its workspace and, under `hakari`, on its `hakari-check`, and that `test` depends on the `build` of the crates that the rule below names ([[REQ-NO-RUST-TASK-DEPS]]); none uses `^build` ([[ADR-NO-RUST-BUILD-DEPS]]). Dependencies reach a target through `^` inputs ([[DES-INPUTS]]). The plugin adds no `dependsOn` entry to a JS project. A JS target's own `^build` reaches the `build` of the crates its project depends on directly, which is how Nx defines `^build`, and ends there where those are the plugin's targets. A `build` that replaced the plugin's in a crate whose folder also is a JS project brings its own `dependsOn`, which may hold `^build` in turn ([[DES-MIXED-PROJECTS]]).
 

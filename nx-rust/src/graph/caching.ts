@@ -30,6 +30,7 @@ import {
 } from "./inputs";
 import { digestFolder, lockfileDependency } from "./lockfile-task";
 import { ArtifactDirectory, targetOutputs, uncachedByDesign, uncachedReason } from "./outputs";
+import { napiAddon, napiHeaderFile, napiInputs, napiOutputFiles } from "./napi";
 import { crateInputs, findCrateFolders, unseenPathDependencyWarning } from "./path-dependencies";
 import { pluginInput } from "./plugin-package";
 import { physicalPath, realPath, repositoryFolder } from "./real-path";
@@ -404,6 +405,13 @@ export function configureCaching(
   const place = { artifacts, tripleProblem };
   const workspaceRoot = workspaceFolder(subject, context);
   const members = workspaceMembers(subject);
+  // The addon's file, which the outputs of `napi-build` name (`DES-NAPI`).
+  const napi = targets.has("napi-build") ? napiAddon(subject, context) : undefined;
+  // The header file of the addon's type definitions (`DES-NAPI`).
+  const header =
+    targets.has("napi-build") && subject.pkg !== undefined
+      ? napiHeaderFile(dirname(subject.pkg.manifest_path), context.repositoryRoot)
+      : undefined;
   for (const [name, target] of targets) {
     const reason =
       target.cache === true
@@ -413,7 +421,10 @@ export function configureCaching(
             alwaysNamesTriple([target, ...(options.targetTables?.(name) ?? [])]),
           ) ??
           noLockfileTaskReason(name, subject, context) ??
-          sharedArtifactNameReason(name, subject, context))
+          sharedArtifactNameReason(name, subject, context) ??
+          (name === "napi-build" && napi?.addon === undefined
+            ? "rustc -vV names no host triple in the workspace root, so the plugin cannot name the addon's file among the outputs"
+            : undefined))
         : (uncachedByDesign[name] ?? "the plugin does not cache this target");
     target.cache = reason === undefined;
     const metadata = target.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
@@ -445,6 +456,23 @@ export function configureCaching(
         subject.pkg,
         context.sharedRecordNames?.get(subject.workspace.root) ?? [],
       );
+    }
+    if (metadata !== undefined && name === "napi-build" && subject.pkg !== undefined) {
+      metadata.records = buildRecordSource(
+        subject.pkg,
+        context.sharedRecordNames?.get(subject.workspace.root) ?? [],
+      );
+      if (napi?.addon !== undefined) {
+        metadata.napiAddon = napi.addon;
+        metadata.napiHost = napi.host;
+      }
+      if (header !== undefined) {
+        metadata.napiHeaderFile = header;
+      }
+      const shared = context.sharedArtifactNames?.libraries.get(subject.pkg.manifest_path);
+      if (shared !== undefined) {
+        metadata.sharedLibrary = shared;
+      }
     }
     const readsDigest = target.cache && cachedTargets.has(name) && name !== "fmt-check";
     const lockfile = lockfileDependency(workspaceRoot, options.lockfileTarget ?? "lockfile");
@@ -479,11 +507,20 @@ export function configureCaching(
     if (target.cache && (name === "build" || name === "doc")) {
       target.inputs = [...target.inputs, { runtime: artifactFoldersCommand(workspaceRoot) }];
     }
+    if (name === "napi-build") {
+      target.inputs = [...target.inputs, ...napiInputs(subject.root, header)];
+    }
     if (name === "lockfile") {
       target.outputs = [`{workspaceRoot}/${digestFolder(workspaceRoot)}`];
       if (metadata !== undefined) {
         metadata.members = members;
       }
+    } else if (name === "napi-build") {
+      // The files in the crate's folder, wherever the artifact directory lies.
+      target.outputs =
+        target.cache && napi !== undefined
+          ? napiOutputFiles(napi).map((file) => `{projectRoot}/${file}`)
+          : [];
     } else {
       target.outputs = targetOutputs(name, subject.pkg, artifacts, target.cache, triples);
     }

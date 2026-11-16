@@ -474,6 +474,31 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["rust", "tool"],
     ],
   },
+  "napi-addons": {
+    cargoFolders: ["rust"],
+    projects: {
+      "addon-a": "rust/crates/addon-a",
+      "addon-b": "rust/crates/addon-b",
+      consumer: "rust/crates/consumer",
+      "core-napi": "rust/crates/core-napi",
+      "plain-cdylib": "rust/crates/plain-cdylib",
+      shared: "rust/crates/shared",
+      rust: "rust",
+    },
+    edges: [
+      ["addon-a", "core-napi"],
+      ["addon-a", "shared"],
+      ["addon-b", "shared"],
+      ["consumer", "core-napi"],
+      ["plain-cdylib", "shared"],
+      ["rust", "addon-a"],
+      ["rust", "addon-b"],
+      ["rust", "consumer"],
+      ["rust", "core-napi"],
+      ["rust", "plain-cdylib"],
+      ["rust", "shared"],
+    ],
+  },
 };
 
 // Without the toolchain that it pins, cargo fails in different-toolchains/pinned.

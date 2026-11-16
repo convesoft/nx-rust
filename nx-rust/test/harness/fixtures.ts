@@ -38,6 +38,7 @@ export const fixtureNames = [
   "shared-executables",
   "publish-crates",
   "workspace-tests",
+  "napi-addons",
 ] as const;
 
 export type FixtureName = (typeof fixtureNames)[number];

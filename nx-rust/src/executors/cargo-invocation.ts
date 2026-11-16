@@ -9,7 +9,7 @@ export interface CargoInvocation {
   /**
    * The environment variables that the plugin sets for this command over
    * the task's environment, which it otherwise passes on unchanged
-   * (`DES-INVOCATION`). No command of this version sets one.
+   * (`DES-INVOCATION`): only the compile of `napi-build` sets some (`DES-NAPI`).
    */
   env?: Readonly<Record<string, string>>;
 }

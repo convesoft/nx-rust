@@ -86,6 +86,10 @@ export interface CargoDependency {
   path?: string;
   /** Whether the dependency is optional, so that a feature turns it on. */
   optional?: boolean;
+  /** Whether the entry keeps the dependency's default features. */
+  uses_default_features?: boolean;
+  /** The features that the entry turns on in the dependency. */
+  features?: string[];
   /** The name under which the manifest lists the dependency, where it renames it. */
   rename?: string | null;
   /** The platform that the dependency is limited to, such as `cfg(windows)`; `null` for none. */

@@ -199,6 +199,46 @@ describe("init", () => {
   );
 
   it(
+    "warns about the napi CLI where a crate has a napi-build target and Node resolves no @napi-rs/cli from its folder",
+    () =>
+      runInit("napi-addons", {}, (_workspace, { status, output }) => {
+        expect(status).toBe(0);
+        expect(output).toContain(
+          "The napi CLI is not installed, but the napi-build target of the crate addon-a in rust/crates/addon-a and the napi-build target of the crate addon-b in rust/crates/addon-b need it. Add @napi-rs/cli 3.4.0 or a later 3.x release",
+        );
+        expect(notNeededLine(output)).not.toContain("napi");
+      }),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "counts the napi CLI as installed where Node resolves @napi-rs/cli from each such crate's folder",
+    () =>
+      runInit(
+        "napi-addons",
+        {},
+        (_workspace, { status, output }) => {
+          expect(status).toBe(0);
+          expect(output).not.toContain("The napi CLI is not installed");
+          expect(notNeededLine(output)).not.toContain("napi");
+        },
+        [],
+        {
+          prepare: (workspace) => {
+            const folder = join(workspace.root, "node_modules", "@napi-rs");
+            mkdirSync(folder, { recursive: true });
+            symlinkSync(
+              realpathSync(dirname(require.resolve("@napi-rs/cli/package.json"))),
+              join(folder, "cli"),
+              "dir",
+            );
+          },
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "warns about cargo-nextest where a workspace's settings choose the nextest runner",
     () =>
       runInit(

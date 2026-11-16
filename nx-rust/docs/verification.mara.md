@@ -31,8 +31,11 @@ its `cargo metadata` report, as every stable Cargo before 1.91 does
 ([[EVD-CARGO-DIRECTORIES]]). No test installs a toolchain.
 
 Checks that need an optional tool (nextest, cargo-affected, cargo-hakari,
-`wasm-bindgen`, the napi CLI) run only where that tool is installed, and CI
-installs all of them.
+`wasm-bindgen`) run only where that tool is installed, and CI installs all of
+them. The napi CLI is a dev dependency of this repository, which the tests
+link into a fixture's `node_modules`, and the napi crates of the fixtures come
+from a local Cargo registry in the fixture, so those checks need no network
+and always run.
 
 CI runs on Linux only for the moment. The macOS runs are deferred until
 GitHub's macOS runners are usable again ([[ADR-CI-LINUX-ONLY]]), so no check on

@@ -210,18 +210,18 @@ The plugin's targets take these options, each the cargo flag of the same
 meaning. Set them under `targets.<name>.options` in either table, or on the
 command line:
 
-| Option              | Cargo flag                                 | Targets                                                    | Default         |
-| ------------------- | ------------------------------------------ | ---------------------------------------------------------- | --------------- |
-| `features`          | `--features`                               | `build`, `check`, `lint`, `test`, `bench`, `run` and `doc` | none            |
-| `allFeatures`       | `--all-features`                           | the same                                                   | `false`         |
-| `noDefaultFeatures` | `--no-default-features`                    | the same                                                   | `false`         |
-| `profile`           | `--profile`; `--cargo-profile` for nextest | the same                                                   | Cargo's default |
-| `targetTriple`      | `--target`                                 | the same, apart from `test`                                | Cargo's default |
-| `allTargets`        | `--all-targets`                            | `check`, `lint`                                            | `true`          |
-| `noDeps`            | `--no-deps`                                | `doc`, on the workspace project                            | `true`          |
-| `bin`               | `--bin`                                    | `run`                                                      | Cargo's choice  |
-| `args`              | the binary's arguments, after `--`         | `run`                                                      | none            |
-| `affectedTests`     | none                                       | `test`                                                     | the workspace's |
+| Option              | Cargo flag                                 | Targets                                                                  | Default         |
+| ------------------- | ------------------------------------------ | ------------------------------------------------------------------------ | --------------- |
+| `features`          | `--features`                               | `build`, `check`, `lint`, `test`, `bench`, `run`, `napi-build` and `doc` | none            |
+| `allFeatures`       | `--all-features`                           | the same                                                                 | `false`         |
+| `noDefaultFeatures` | `--no-default-features`                    | the same                                                                 | `false`         |
+| `profile`           | `--profile`; `--cargo-profile` for nextest | the same                                                                 | Cargo's default |
+| `targetTriple`      | `--target`                                 | the same, apart from `test` and `napi-build`                             | Cargo's default |
+| `allTargets`        | `--all-targets`                            | `check`, `lint`                                                          | `true`          |
+| `noDeps`            | `--no-deps`                                | `doc`, on the workspace project                                          | `true`          |
+| `bin`               | `--bin`                                    | `run`                                                                    | Cargo's choice  |
+| `args`              | the binary's arguments, after `--`         | `run`                                                                    | none            |
+| `affectedTests`     | none                                       | `test`                                                                   | the workspace's |
 
 ```toml
 # rust/crates/bench-heavy/Cargo.toml: benches that need nightly
@@ -418,19 +418,19 @@ The workspace table also holds the `project` sub-table for the [[TERM-WORKSPACE-
 
 Options of inferred targets are set under `targets.<name>.options`, in a configuration of the target, or on the command line. Each comes from a flag of the cargo command, so the command passes only what the options ask for ([[DES-INVOCATION]]). On a target that the table does not list for it, an option is left out of the command with a warning line ([[DES-UNKNOWN-OPTIONS]]):
 
-| Option              | Flag                                                                                          | Targets                                                                                  | Default                                                  |
-| ------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `features`          | `--features`                                                                                  | `build`, `check`, `lint`, `test`, `bench`, `run` and `doc`                               | none                                                     |
-| `allFeatures`       | `--all-features`                                                                              | the same; the configuration for all features sets it ([[DES-FEATURE-SETS]])              | `false`                                                  |
-| `noDefaultFeatures` | `--no-default-features`                                                                       | the same                                                                                 | `false`                                                  |
-| `profile`           | `--profile`, or `--cargo-profile` for `cargo nextest run`                                     | the same                                                                                 | none: Cargo's default profile for the command            |
-| `targetTriple`      | `--target`                                                                                    | the same, apart from `test`, which runs on the host triple only in v1 ([[ADR-V1-SCOPE]]) | none: the triple Cargo builds for without it             |
-| `allTargets`        | `--all-targets`                                                                               | `check`, `lint` ([[DES-TARGET-COMMANDS]])                                                | `true`                                                   |
-| `noDeps`            | `--no-deps`                                                                                   | `doc` of the workspace project ([[DES-WORKSPACE-TARGETS]])                               | `true`                                                   |
-| `bin`               | `--bin`                                                                                       | `run` ([[DES-TARGET-COMMANDS]])                                                          | none: `default-run` or the only binary, as Cargo chooses |
-| `args`              | the binary's arguments, after `--`: a string split into words as [[DES-TARGET-COMMANDS]] says | `run` ([[DES-TARGET-COMMANDS]])                                                          | none                                                     |
-| `affectedTests`     | none                                                                                          | `test`                                                                                   | the workspace's `affectedTests`                          |
-| `pluginVersion`     | none                                                                                          | every target the plugin infers, where Nx has no node for the plugin's package            | the plugin's version                                     |
+| Option              | Flag                                                                                          | Targets                                                                                                             | Default                                                  |
+| ------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `features`          | `--features`                                                                                  | `build`, `check`, `lint`, `test`, `bench`, `run`, `napi-build` and `doc`                                            | none                                                     |
+| `allFeatures`       | `--all-features`                                                                              | the same; the configuration for all features sets it ([[DES-FEATURE-SETS]])                                         | `false`                                                  |
+| `noDefaultFeatures` | `--no-default-features`                                                                       | the same                                                                                                            | `false`                                                  |
+| `profile`           | `--profile`, or `--cargo-profile` for `cargo nextest run`                                     | the same                                                                                                            | none: Cargo's default profile for the command            |
+| `targetTriple`      | `--target`                                                                                    | the same, apart from `test` and `napi-build`, which run and build for the host triple only in v1 ([[ADR-V1-SCOPE]]) | none: the triple Cargo builds for without it             |
+| `allTargets`        | `--all-targets`                                                                               | `check`, `lint` ([[DES-TARGET-COMMANDS]])                                                                           | `true`                                                   |
+| `noDeps`            | `--no-deps`                                                                                   | `doc` of the workspace project ([[DES-WORKSPACE-TARGETS]])                                                          | `true`                                                   |
+| `bin`               | `--bin`                                                                                       | `run` ([[DES-TARGET-COMMANDS]])                                                                                     | none: `default-run` or the only binary, as Cargo chooses |
+| `args`              | the binary's arguments, after `--`: a string split into words as [[DES-TARGET-COMMANDS]] says | `run` ([[DES-TARGET-COMMANDS]])                                                                                     | none                                                     |
+| `affectedTests`     | none                                                                                          | `test`                                                                                                              | the workspace's `affectedTests`                          |
+| `pluginVersion`     | none                                                                                          | every target the plugin infers, where Nx has no node for the plugin's package                                       | the plugin's version                                     |
 
 `pluginVersion` is set by the plugin and not meant to be set by hand. It is the one target option that the plugin sets itself and that comes from no cargo flag: it carries the plugin's version into each task's key where Nx has no npm node for the plugin ([[DES-INPUTS]]), and each executor's schema declares it ([[DES-UNKNOWN-OPTIONS]]). A `targets.<name>` table in Cargo metadata that sets it fails graph creation, because a value set by hand would replace the plugin's version in the key ([[REQ-UNKNOWN-METADATA-OPTIONS]], [[GOAL-TRUSTED-CACHE]]).
 

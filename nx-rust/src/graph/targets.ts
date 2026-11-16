@@ -10,8 +10,9 @@ import { CacheContext, CacheOptions, configureCaching } from "./caching";
 import type { CargoWorkspace } from "./discovery";
 import { memberManifests } from "./inputs";
 import { directoryPattern } from "./lockfile-task";
+import { producesNodeAddon } from "./napi";
 import type { TargetNames } from "./options";
-import type { FeatureUnification } from "./settings";
+import type { ArtifactKind, FeatureUnification } from "./settings";
 import { hackCrateName, memberNames } from "./unification";
 
 /**
@@ -33,7 +34,11 @@ export const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
  * The inferred targets, by their default names, that run
  * {@link cargoOutputsExecutor} in place of {@link cargoExecutor}.
  */
-export const outputsTargets: ReadonlySet<InferredTargetName> = new Set(["build", "doc"]);
+export const outputsTargets: ReadonlySet<InferredTargetName> = new Set([
+  "build",
+  "napi-build",
+  "doc",
+]);
 
 /**
  * The executor of the lockfile task and of `hakari-check`, which has no
@@ -67,8 +72,7 @@ export const releasePublishTarget = "nx-release-publish";
  * `DES-TARGETS`: first those of a crate, then those of the workspace project.
  * They are also the keys that `targetNames` accepts (`readTargetNames` in
  * `options.ts`), apart from {@link releasePublishTarget}, which keeps its
- * name. The artifact targets are not inferred yet; each joins the list when
- * it is.
+ * name. `wasm-build` is not inferred yet; it joins the list when it is.
  */
 export const inferredTargetNames = [
   "build",
@@ -79,6 +83,7 @@ export const inferredTargetNames = [
   "fmt",
   "bench",
   "run",
+  "napi-build",
   releasePublishTarget,
   "doc",
   "lockfile",
@@ -103,6 +108,7 @@ export const compilingTargets: readonly InferredTargetName[] = [
   "test",
   "bench",
   "run",
+  "napi-build",
   "doc",
 ];
 
@@ -235,6 +241,28 @@ export interface TargetCargoMetadata {
    */
   artifactFiles?: NamedArtifact[];
   /**
+   * On `napi-build`: the addon's file in the crate's folder, which the
+   * outputs name, and the host triple whose name it holds; absent where
+   * graph creation could not name it. The executor fails a cached task
+   * whose installed napi CLI names the addon otherwise (`DES-NAPI`).
+   */
+  napiAddon?: string;
+  /** On `napi-build`: the host triple that {@link TargetCargoMetadata.napiAddon} comes from. */
+  napiHost?: string;
+  /**
+   * On `napi-build`: the `dtsHeaderFile` of the crate's napi settings,
+   * relative to the repository root, where the target's inputs hold it, or
+   * absolute outside the repository, where the executor fails the cached
+   * task before cargo (`DES-NAPI`).
+   */
+  napiHeaderFile?: string;
+  /**
+   * On `napi-build`: why the crate's library has the file name of another
+   * crate's file, so that cargo builds one file for both; the executor
+   * fails the task before cargo runs (`DES-NAPI`, "Library names").
+   */
+  sharedLibrary?: string;
+  /**
    * On a crate's `test`: `nextest` where the workspace's settings choose the
    * nextest runner (`REQ-TEST-RUNNER`); absent for the `cargo` runner. Like
    * `locked`, it is no input of a key: the setting lies in `nx.json` or in
@@ -292,6 +320,7 @@ export const cachedTargets: ReadonlySet<InferredTargetName> = new Set<InferredTa
   "lint",
   "test",
   "fmt-check",
+  "napi-build",
   "doc",
 ]);
 
@@ -305,6 +334,8 @@ export interface TargetSubject {
   pkg?: CargoPackage;
   /** Whether the project hosts the workspace's own targets. */
   isWorkspaceProject: boolean;
+  /** The project's settings, of which the crate's `artifacts` replace the inference of artifact targets. */
+  settings?: { artifacts?: readonly ArtifactKind[] };
 }
 
 /**
@@ -316,7 +347,8 @@ export interface TargetSubject {
  * `nx-release-publish` unless its manifest sets `publish = false`, which the
  * report gives as an empty `publish` list, or it is the hack crate that the
  * workspace's cargo-hakari configuration names (`DES-RELEASE`, "Publish
- * target", "Hack crate"). The
+ * target", "Hack crate"), and `napi-build` where it produces a Node addon
+ * (`DES-ARTIFACT-STEPS`). The
  * workspace project gets `doc`, `lockfile`, `audit` and `update`, `deny`
  * where a cargo-deny configuration file is in the workspace root, and
  * `hakari-check` where the workspace uses the `hakari` strategy
@@ -383,6 +415,15 @@ export function inferTargets(
         executor: runExecutor,
         continuous: false,
       });
+    }
+    if (producesNodeAddon(subject)) {
+      targets.set(
+        "napi-build",
+        target(
+          "napi-build",
+          "Builds the crate's Node addon for the host with cargo build, and writes the .node file, its JS loader and its type definitions into the crate's folder.",
+        ),
+      );
     }
     if (
       !(Array.isArray(pkg.publish) && pkg.publish.length === 0) &&

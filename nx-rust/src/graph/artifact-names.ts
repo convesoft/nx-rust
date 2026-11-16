@@ -15,6 +15,13 @@ export interface SharedArtifactNames {
   /** Why the plugin leaves a crate's `test` uncached, by the crate's manifest path. */
   test: ReadonlyMap<string, string>;
   /**
+   * For each crate whose library has the file name of another crate's
+   * `cdylib`, `dylib`, proc-macro or `staticlib` file, by the crate's manifest
+   * path: the shared name and the other crates, for the message with which
+   * its `napi-build` fails before cargo runs (`DES-NAPI`, "Library names").
+   */
+  libraries: ReadonlyMap<string, string>;
+  /**
    * One warning for each file name that crates of one artifact directory
    * share, with the manifest paths of the crates that it names, in whose
    * projects' warnings it belongs (`DES-DIAGNOSTICS`).
@@ -122,6 +129,7 @@ export function sharedArtifactNames(
 ): SharedArtifactNames {
   const build = new Map<string, string[]>();
   const test = new Map<string, string[]>();
+  const libraries = new Map<string, string[]>();
   const warnings: { message: string; manifests: string[] }[] = [];
   const folderOf = (pkg: CargoPackage) =>
     repositoryFolder(dirname(pkg.manifest_path), repositoryRoot);
@@ -146,6 +154,11 @@ export function sharedArtifactNames(
       );
       const binary = writers[0].kind === "binary";
       const tests = binary ? builds.filter(testReplacesExecutables) : [];
+      if (!binary) {
+        for (const pkg of crates) {
+          add(libraries, pkg.manifest_path, sharedClause(pkg, writers, crates, folderOf));
+        }
+      }
       for (const pkg of builds) {
         const clause = sharedClause(pkg, writers, crates, folderOf);
         add(build, pkg.manifest_path, clause);
@@ -190,6 +203,7 @@ export function sharedArtifactNames(
         `its integration tests or benches run its executables as CARGO_BIN_EXE_<name>, which can lie at the paths of files that other crates write, in the same artifact directory or in one inside the other, so that the tests could run another crate's executable: ${clauses.join("; ")}`,
       ]),
     ),
+    libraries: new Map([...libraries].map(([manifest, clauses]) => [manifest, clauses.join("; ")])),
     warnings,
   };
 }

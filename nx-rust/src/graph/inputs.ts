@@ -4,6 +4,8 @@ import { ConfiguredTools, noConfiguredTools } from "../cargo/configured-tools";
 import type { CargoPackage } from "../cargo/metadata";
 import type { CargoWorkspace } from "./discovery";
 import { digestFile, digestFolder, runIdVariable } from "./lockfile-task";
+import { napiAddon, napiOutputFiles, producesNodeAddon } from "./napi";
+import type { ArtifactKind } from "./settings";
 import type { InferredTargetName } from "./targets";
 
 /**
@@ -98,6 +100,8 @@ export interface InputSubject {
   pkg?: CargoPackage;
   /** Whether the project hosts the workspace's own targets. */
   isWorkspaceProject: boolean;
+  /** The project's settings, of which the crate's `artifacts` replace the inference of artifact targets. */
+  settings?: { artifacts?: readonly ArtifactKind[] };
 }
 
 /** What the inputs of every project share. */
@@ -192,6 +196,7 @@ const compilingTargets: ReadonlySet<InferredTargetName> = new Set([
   "test",
   "bench",
   "run",
+  "napi-build",
   "doc",
 ]);
 
@@ -209,6 +214,7 @@ export const crateInputTargets: ReadonlySet<InferredTargetName> = new Set([
   "fmt",
   "bench",
   "run",
+  "napi-build",
   "doc",
 ]);
 
@@ -236,8 +242,9 @@ const toolFileNames: Partial<Record<InferredTargetName, readonly string[]>> = {
  * those of its dependents hash.
  *
  * It holds every file of the project's folder that belongs to no nested
- * project, except the workspace's `Cargo.lock` where the folder is the
- * workspace root, which reaches the keys of the crate and of those that
+ * project, except the files that `napi-build` writes there
+ * ({@link napiOutputFiles}) and the workspace's `Cargo.lock` where the
+ * folder is the workspace root, which reaches the keys of the crate and of those that
  * depend on it only through the digests of the lockfile task
  * ({@link externalDependencyInputs}); the root manifest of the crate's
  * workspace, whose fields the crate can inherit, also when another
@@ -261,6 +268,13 @@ export function namedInputs(
   const crateFiles: Input[] = ["{projectRoot}/**/*"];
   if (subject.isWorkspaceProject) {
     crateFiles.push("!{projectRoot}/Cargo.lock");
+  }
+  // The files that `napi-build` writes into the crate's folder are its
+  // outputs and no input (`DES-ARTIFACT-STEPS`).
+  if (producesNodeAddon(subject)) {
+    crateFiles.push(
+      ...napiOutputFiles(napiAddon(subject, context)).map((file) => `!{projectRoot}/${file}`),
+    );
   }
   const workspaceRoot = workspaceFolder(subject, context);
   if (workspaceRoot !== subject.root) {

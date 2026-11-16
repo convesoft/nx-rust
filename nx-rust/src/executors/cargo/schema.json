@@ -11,23 +11,23 @@
       "items": {
         "type": "string"
       },
-      "description": "Features to activate, passed as --features. Taken by build, check, lint, test, bench, run and doc."
+      "description": "Features to activate, passed as --features. Taken by build, check, lint, test, bench, run, napi-build and doc."
     },
     "allFeatures": {
       "type": "boolean",
-      "description": "Activate all features, passed as --all-features. Taken by build, check, lint, test, bench, run and doc."
+      "description": "Activate all features, passed as --all-features. Taken by build, check, lint, test, bench, run, napi-build and doc."
     },
     "noDefaultFeatures": {
       "type": "boolean",
-      "description": "Do not activate the default features, passed as --no-default-features. Taken by build, check, lint, test, bench, run and doc."
+      "description": "Do not activate the default features, passed as --no-default-features. Taken by build, check, lint, test, bench, run, napi-build and doc."
     },
     "profile": {
       "type": "string",
-      "description": "The Cargo profile to build with, passed as --profile. Taken by build, check, lint, test, bench, run and doc."
+      "description": "The Cargo profile to build with, passed as --profile. Taken by build, check, lint, test, bench, run, napi-build and doc."
     },
     "targetTriple": {
       "type": "string",
-      "description": "The platform triple to build for, passed as --target. Taken by build, check, lint, bench, run and doc; test runs on the host triple only."
+      "description": "The platform triple to build for, passed as --target. Taken by build, check, lint, bench, run and doc; test and napi-build run and build for the host triple only."
     },
     "allTargets": {
       "type": "boolean",

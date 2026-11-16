@@ -63,6 +63,12 @@ export interface ProjectCargoMetadata {
    * that `platforms` does not list").
    */
   hakariPlatforms?: string[];
+  /**
+   * Under `hakari`, the package name of the hack crate, which `napi-build`
+   * never counts among the crates that write type information, since it
+   * only unifies features (`DES-NAPI`).
+   */
+  hakariPackage?: string;
 }
 
 /** A warning about one target of a project, with the text graph creation prints. */
@@ -87,7 +93,10 @@ export function cargoMetadata(project: CargoProject): ProjectCargoMetadata {
       : { featureUnification: project.strategy.featureUnification }),
     ...(project.strategy?.hakari === undefined
       ? {}
-      : { hakariPlatforms: [...project.strategy.hakari.platforms] }),
+      : {
+          hakariPlatforms: [...project.strategy.hakari.platforms],
+          hakariPackage: project.strategy.hakari.hackPackage,
+        }),
   };
 }
 
