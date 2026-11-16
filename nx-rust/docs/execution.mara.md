@@ -5,8 +5,8 @@
 > yet (nxr-ys8rx5). Nx hands the plugin's tasks to its batch executors
 > without a flag, tasks of one group share their cargo commands, and each
 > task gets its own result, terminal output and cache entry, under each of
-> the three strategies. With the nextest runner, which comes with milestone
-> 0.3, `test` runs `cargo test` as with the default runner.
+> the three strategies. With the nextest runner, the call for the selection
+> of affected tests comes with milestone 0.3.
 
 Nx schedules one task per crate. Running each as its own cargo process would
 queue them behind Cargo's build lock and repeat work. The plugin instead runs
@@ -51,7 +51,8 @@ names its crate.
 
 Tasks in one group share their cargo calls: one for most targets, and with
 nextest one for the tests, one for the doctests and, in affected mode, one for
-the selection before them. Every call of a group selects its crates the same
+the selection before them, with one more after the tests where a test failed,
+which lists the tests that the run was to run. Every call of a group selects its crates the same
 way, so they all compile with the same features
 ([Feature unification](#feature-unification)).
 

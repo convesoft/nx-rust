@@ -331,6 +331,43 @@ describeCacheKeyMatrix("keys must differ after", [
     keys: { "api:test": "must differ", "api:build": "must not differ" },
   },
   {
+    change: "a variable that starts with NEXTEST_, for a test that nextest runs",
+    fixture: "subfolder-workspace",
+    base: {
+      files: { "rust/Cargo.toml": appended('\n[workspace.metadata.nx]\ntestRunner = "nextest"\n') },
+    },
+    after: { env: { NEXTEST_PROFILE: "ci" } },
+    keys: { "api:test": "must differ", "api:build": "must not differ" },
+  },
+  {
+    change: "a variable that starts with NEXTEST_, for a test that cargo runs",
+    fixture: "subfolder-workspace",
+    after: { env: { NEXTEST_PROFILE: "ci" } },
+    keys: { "api:test": "must not differ" },
+  },
+  {
+    change:
+      "a variable that starts with NEXTEST_ in a crate's .env, for that crate's test that nextest runs only",
+    fixture: "subfolder-workspace",
+    base: {
+      files: {
+        "rust/Cargo.toml": appended('\n[workspace.metadata.nx]\ntestRunner = "nextest"\n'),
+        // Git ignores the .env, so that only the environment changes for Nx.
+        ".gitignore": appended(".env\n"),
+      },
+    },
+    after: { files: { "rust/crates/api/.env": "NEXTEST_RETRIES=2\n" } },
+    keys: { "api:test": "must differ", "model:test": "must not differ" },
+  },
+  {
+    change: "the workspace's test runner, from cargo to nextest",
+    fixture: "subfolder-workspace",
+    after: {
+      files: { "rust/Cargo.toml": appended('\n[workspace.metadata.nx]\ntestRunner = "nextest"\n') },
+    },
+    keys: { "api:test": "must differ" },
+  },
+  {
     change: "a change in a rustfmt.toml, for fmt-check",
     fixture: "subfolder-workspace",
     after: { files: { "rust/rustfmt.toml": "# changed\n" } },
@@ -1631,6 +1668,65 @@ const installed = (
   }),
   "pnpm-lock.yaml": pnpmLockfile(version, integrity),
   "node_modules/.modules.yaml": "{}\n",
+});
+
+describe("keys with nextest", () => {
+  // The machine's PATH less the folders that hold cargo-nextest, after a
+  // folder for a stand-in, and an empty Cargo home, so that cargo finds only
+  // the stand-in.
+  const machinePath = (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter((folder) => folder !== "" && findExecutable("cargo-nextest", folder) === undefined);
+
+  it(
+    "differ with nextest's version and where nextest is missing, for a test that nextest runs, and not for one that cargo runs",
+    async () => {
+      const workspace = FixtureWorkspace.create("subfolder-workspace");
+      const tools = mkdtempSync(join(tmpdir(), "nx-rust-nextest-stand-in-"));
+      try {
+        const bin = join(tools, "bin");
+        mkdirSync(bin);
+        mkdirSync(join(tools, "cargo-home"));
+        const env = {
+          PATH: [bin, ...machinePath].join(delimiter),
+          CARGO_HOME: join(tools, "cargo-home"),
+        };
+        const nextest = (version: string | undefined) => {
+          const file = join(bin, "cargo-nextest");
+          if (version === undefined) {
+            rmSync(file, { force: true });
+          } else {
+            writeFileSync(file, `#!/bin/sh\nprintf 'cargo-nextest ${version}\\n'\n`);
+            chmodSync(file, 0o755);
+          }
+        };
+        const key = async (version: string | undefined) => {
+          nextest(version);
+          return (await workspace.hashTasks(["api:test"], { env }))["api:test"].value;
+        };
+
+        // The cargo runner's key does not ask for nextest.
+        const cargoKeys = [await key("0.9.152"), await key("0.9.100"), await key(undefined)];
+        expect(new Set(cargoKeys).size).toBe(1);
+
+        const manifest = join(workspace.root, "rust", "Cargo.toml");
+        writeFileSync(
+          manifest,
+          `${readFileSync(manifest, "utf8")}\n[workspace.metadata.nx]\ntestRunner = "nextest"\n`,
+        );
+        const installed = await key("0.9.152");
+        expect(await key("0.9.152")).toBe(installed);
+        expect(await key("0.9.100")).not.toBe(installed);
+        const missing = await key(undefined);
+        expect(missing).not.toBe(installed);
+        expect(await key(undefined)).toBe(missing);
+      } finally {
+        rmSync(tools, { recursive: true, force: true });
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
 });
 
 describe("keys with the plugin's version", () => {

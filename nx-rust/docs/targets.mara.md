@@ -4,7 +4,8 @@
 > `napi-build` and `wasm-build`, which arrive with milestone 0.4, and the
 > coverage baseline of milestone 0.3; a cargo-hakari hack crate still gets
 > `nx-release-publish`, until its guard arrives with milestone 0.5. `test`
-> runs `cargo test`; nextest arrives with milestone 0.3. `build` and `doc` run
+> runs `cargo test`, or nextest where the workspace's `testRunner` says so.
+> `build` and `doc` run
 > the executor `@convesoft/nx-rust:cargo-outputs`, the other cargo targets
 > `@convesoft/nx-rust:cargo`, and the tasks of one group share their cargo
 > calls ([Batching and features](execution.mara.md)).

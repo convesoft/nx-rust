@@ -1929,6 +1929,31 @@ An experiment on 13 November 2026 with cargo-nextest 0.9.151, the prebuilt binar
 - `cargo nextest run` accepted `--features`, `--all-features`, `--no-default-features` and `--target` as cargo does; its help lists them beside `--cargo-profile`.
 :::
 
+:::mara evidence EVD-NEXTEST-RUNNER-STEPS
+:mid: 01M7JJZMG61K9MHV5XRK94E3Y1
+:title: What the nextest runner's steps rest on: exit statuses, the JUnit report and plain commands
+:status: accepted
+:supports: DES-TEST-RUN
+:supports: DES-TEST-PHASES
+
+Experiments on 16 November 2026 on Linux x86-64 with cargo-nextest 0.9.152 (26ebeda79 2026-11-13), installed with `cargo install --locked` into a folder of its own, and cargo and rustc 1.100.0, in a throwaway workspace with the members `a`, a library with a passing and a failing unit test and a doctest, `b`, with a passing unit test, and `e`, a library without tests; then the tests of nxr-jb6g5y in `nx-rust/test/nextest-runs.spec.ts` on the `workspace-tests` fixture with cargo 1.100.0 and 1.91.0.
+
+- **The report.** With a tool configuration that set only `path` under `[profile.default.junit]` to an absolute path, `cargo nextest run --workspace --no-fail-fast --no-tests=pass --tool-config-file nx-rust:<file> -E 'package(=a) | package(=e)'` exited with 100 and wrote one `testsuite` per binary that ran, named by its binary ID, with a `testcase` per test, `failure` in the failed one, and the test's output in `system-out` and `system-err` with `<`, `>` and `'` escaped, so that output that holds `</testcase><failure>` stays text. Where `.config/nextest.toml` set `path = "repo.xml"` under `[profile.default.junit]`, nextest wrote `target/nextest/default/repo.xml` and nothing to the tool configuration's path.
+- **The statuses.** A member that did not compile made nextest exit with 101, after cargo's `error: could not compile` lines for it, which name the crate as under `cargo test`. `cargo nextest run -p e` on a member without tests exited with 4 and "no tests to run"; with `--no-tests=pass` it exited with 0. `cargo nextest run --help` lists `--no-run`, `--locked`, `--cargo-profile`, `--no-tests` and `--archive-file`.
+- **Its lines.** Without a terminal, nextest wrote no progress bar. Each test's line named its binary ID after the status, the time and a counter, such as `FAIL [   0.002s] (1/2) a t::bad`, with the test's output indented under it; with `CARGO_TERM_COLOR=always` the same lines held colour sequences around the status and around each part of the name. The `Starting` line of a run whose default filter left out a test read `Starting 4 tests across 4 binaries (1 test and 7 binaries skipped, including 1 test via profile.default.default-filter)`.
+- **Doctests of one crate.** `cargo test -p e --doc` passed for a library with `doctest = false`, as for one without doctests.
+
+Further experiments and reading of nextest's source the same day (cargo-nextest 0.9.152, nextest-runner 0.130.0, nextest-metadata 0.15.0), after a review of nxr-jb6g5y:
+
+- **Runs that end early.** In a workspace with one test thread, `a`'s tests first through `priority`, `a`'s test sleeping three seconds and `b` with one failing and one passing test, `global-timeout = "1s"` made nextest kill `a`'s test, print `1/2 tests were not run due to global timeout` and exit with 100; the report held `a`'s killed test as failed and nothing of `b`. A SIGTERM and a SIGINT sent to nextest during `a`'s test did the same, with `2/3 tests were not run due to signal` and `due to interrupt`. In the source, nextest's final state is a success only where every test that the run was to run finished and none failed (`RunStats::summarize_final`), and a run cancelled during the tests ends with 100 like one in which a test failed (`final_result`), so that exit status 0 shows a complete run and 100 does not tell the two apart. The report only holds tests that ran, and a test that a filter left out appears, as a `testcase` with a `skipped` element, only where `junit.report-skipped` asks for it.
+- **fail-fast.** `--no-fail-fast` on the command line sets the run's `max-fail`, and the profile's `fail-fast` or `max-fail` applies only where the command line sets none; no variable sets it (`dispatch/core/run.rs`, `TestRunnerBuilder::build`). The tests of nxr-jb6g5y showed `b`'s tests running after `a`'s failure with `fail-fast = true` and with `max-fail = 1`.
+- **The list.** `cargo nextest list --message-format json -E 'package(=a) | package(=b)'` printed `rust-suites` by binary ID, each with `package-name`, `package-id` and `testcases`, each test with `filter-match` `{"status":"matches"}` or `{"status":"mismatch","reason":…}`, such as `ignored` for an ignored test and `default-filter` for one that the repository's default filter left out. nextest documents this output as stable.
+- **Setup scripts.** With `experimental = ["setup-scripts"]` and a script for `all()`, the report held a suite `@setup-script:prepare` with one passing `testcase` beside the test binaries' suites, and nextest exited with 0. A script that failed made nextest cancel the run with `Cancelling due to setup script failure`, run no test and exit with 105, the report holding the script's suite with a `failure` element. The report names suites by binary ID or as `@setup-script:<id>`, either with `@stress-<n>` after it in a stress run (`SuiteKey` in `reporter/aggregator/junit.rs`).
+- **Its version.** `cargo nextest --version` in the workspace root printed nextest's version, commit and host, and found a stand-in for `cargo-nextest` on `PATH` as cargo finds the subcommand for a run.
+
+So the plugin can decide each task from the status and the report alone, a failed build reads as for `cargo test`, and a group of one crate needs `--no-tests=pass` for a crate without tests to pass as it does under `cargo test`. After 100, only nextest's list shows which tests of a crate were to run, and a crate passes only where all of them ran and passed.
+:::
+
 :::mara evidence EVD-NX-24-ENTRY-CONTEXT
 :mid: 01M7AH88BCK4ZK4JY2X0N7C9C0
 :title: What each entry of a plugin sees of the others in Nx 24.0.6

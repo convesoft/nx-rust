@@ -145,8 +145,8 @@ function blockOwner(
   return nested ? undefined : best;
 }
 
-// The crates that cargo's text says did not compile, each once, in order.
-function notCompiled(lines: readonly string[]): string[] {
+/** The crates that cargo's text says did not compile, each once, in order. */
+export function notCompiled(lines: readonly string[]): string[] {
   return [
     ...new Set(
       lines.flatMap((line) => {
@@ -171,8 +171,13 @@ function describeNotCompiled(names: readonly string[], outsideNames: ReadonlySet
   );
 }
 
-// Fails every crate because a test step stopped before any test ran.
-function failStopped(
+/**
+ * Fails every crate because a test step stopped before any test ran, with a
+ * message that names the crates that did not compile, `what` being the
+ * command, and says which of them are outside the group (`DES-BATCH`, "Test
+ * runs").
+ */
+export function failStopped(
   crates: readonly OutputCrate[],
   parts: readonly string[],
   names: readonly string[],
@@ -725,7 +730,8 @@ function closingList(lines: readonly string[]): {
     : { body: lines.slice(0, listStart), list: lines.slice(listStart), listStart };
 }
 
-function splitLines(output: string): string[] {
+/** The lines of a step's output, without the empty one after a last newline. */
+export function splitLines(output: string): string[] {
   const lines = output.split("\n");
   if (lines.at(-1) === "") {
     lines.pop();

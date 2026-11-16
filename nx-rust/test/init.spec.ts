@@ -199,6 +199,28 @@ describe("init", () => {
   );
 
   it(
+    "warns about cargo-nextest where a workspace's settings choose the nextest runner",
+    () =>
+      runInit(
+        "two-workspaces",
+        {
+          "tools/Cargo.toml": (manifest) =>
+            `${manifest}\n[workspace.metadata.nx]\ntestRunner = "nextest"\n`,
+        },
+        (_workspace, { status, output }) => {
+          expect(status).toBe(0);
+          expect(output).toContain(
+            "cargo-nextest is not installed, but the nextest runner that the Cargo workspace in tools chooses for its test targets (testRunner) needs it. Install it as https://nexte.st/docs/installation/ describes.",
+          );
+          // The workspace at the repository root keeps the cargo runner.
+          expect(output).not.toContain("the Cargo workspace in the repository root chooses");
+          expect(notNeededLine(output)).not.toContain("cargo-nextest");
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "warns about cargo-deny where a workspace root has a cargo-deny configuration file",
     () =>
       runInit("subfolder-workspace", { "rust/deny.toml": "" }, (_workspace, { status, output }) => {
@@ -824,6 +846,27 @@ describe("init's report of tools", () => {
       expect(info[0]).not.toContain("cargo-deny");
     },
   );
+
+  it("warns that cargo-nextest is missing for each workspace whose settings choose the nextest runner", () => {
+    const workspaces = ["rust", "tools"].map(
+      (root) => ({ root, report: {}, members: [] }) as unknown as CargoWorkspace,
+    );
+    const { warnings, info } = initReport(
+      { manifests: [], workspaces, nextestWorkspaces: ["rust", "tools"] },
+      root,
+      tools.env(),
+    );
+
+    expect(warnings).toEqual([
+      "cargo-nextest is not installed, but the nextest runner that the Cargo workspace in rust chooses for its test targets (testRunner) and the nextest runner that the Cargo workspace in tools chooses for its test targets (testRunner) need it. Install it as https://nexte.st/docs/installation/ describes.",
+    ]);
+    expect(info[0]).not.toContain("cargo-nextest");
+    tools.install(tools.path, "cargo-nextest");
+    expect(
+      initReport({ manifests: [], workspaces, nextestWorkspaces: ["rust"] }, root, tools.env())
+        .warnings,
+    ).toEqual([]);
+  });
 
   it("warns that cargo-hakari is missing where a workspace uses the hakari strategy", () => {
     const workspace = { root: "rust", report: {}, members: [] } as unknown as CargoWorkspace;

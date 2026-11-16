@@ -24,6 +24,11 @@ export interface GraphCheck {
   /** The Cargo workspaces the entries found, each once, in the order they were found. */
   workspaces: CargoWorkspace[];
   /**
+   * The roots of the workspaces whose settings choose the nextest runner
+   * (`testRunner`), relative to the repository root.
+   */
+  nextestWorkspaces?: string[];
+  /**
    * The feature-unification strategy that graph creation chose for each of
    * them, by the workspace's root folder (`DES-UNIFICATION`).
    */
@@ -157,6 +162,7 @@ export async function checkGraphCreation(
   }
 
   const workspaces = new Map<string, CargoWorkspace>();
+  const nextestWorkspaces = new Set<string>();
   const strategies = new Map<string, FeatureUnification>();
   for (const { copy } of entries) {
     const graph = registrationOf(copy).graphForDependencies(workspaceRoot);
@@ -169,6 +175,11 @@ export async function checkGraphCreation(
         }
       }
     }
+    for (const project of graph?.projects ?? []) {
+      if (project.settings.workspace.testRunner === "nextest") {
+        nextestWorkspaces.add(project.workspace.root);
+      }
+    }
   }
   return {
     manifests: [
@@ -177,6 +188,7 @@ export async function checkGraphCreation(
       ),
     ].sort(),
     workspaces: [...workspaces.values()],
+    nextestWorkspaces: [...nextestWorkspaces].sort(),
     strategies,
   };
 }

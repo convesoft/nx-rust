@@ -96,6 +96,7 @@ function groupKey(task: PreparedTask): GroupKey {
         crates: [{ name: "\0", spec: "\0" }],
         locked: task.locked,
         binaryArguments: task.binaryArguments,
+        ...(task.testRunner === undefined ? {} : { testRunner: task.testRunner }),
       },
       task.options,
     ),
@@ -162,9 +163,11 @@ export interface PlannedGroup<T extends PreparedTask> {
  *   `build.target` in Cargo's configuration and `CARGO_BUILD_TARGET`, or
  *   for a triple whose folder the plugin cannot name, because the whole
  *   workspace may not build for it (`DES-FEATURE-SETS`);
- * - a group of `test` on the host where a runner for the host is or may be
- *   configured ({@link configuredRunner}), whose tasks say so at the top of
- *   their output (`DES-TEST-RUN`, "A runner the user configured");
+ * - a group of `test` with the `cargo` runner on the host where a runner
+ *   for the host is or may be configured ({@link configuredRunner}), whose
+ *   tasks say so at the top of their output (`DES-TEST-RUN`, "A runner the
+ *   user configured"); with nextest, which starts no runner of the
+ *   plugin's, such a runner applies as to a plain `cargo nextest run`;
  * - a task whose own options give it a feature set, which {@link formGroups}
  *   puts in a group of its own, so that its command writes only its crate's
  *   files and its result does not depend on what else the batch holds
@@ -315,7 +318,10 @@ export function groupSelection(task: PreparedTask, host: () => string | undefine
       return { kind: "alone" };
     }
   }
-  if (task.target !== "test") {
+  // nextest needs neither the host's triple nor the plugin's runner, and a
+  // runner that the user configured applies to it as to a plain `cargo
+  // nextest run` (`DES-TEST-RUN`).
+  if (task.target !== "test" || task.testRunner === "nextest") {
     return { kind: "workspace" };
   }
   const triple = host();

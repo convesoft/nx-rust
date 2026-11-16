@@ -1,4 +1,5 @@
 import type { ExecutorContext } from "@nx/devkit";
+import type { CargoPackage } from "../cargo/metadata";
 import { spawn } from "node:child_process";
 import {
   chmodSync,
@@ -24,7 +25,17 @@ import {
   readJsonStep,
   readTestStep,
 } from "./cargo-output";
-import type { CargoStep } from "./command";
+import { type CargoStep, withToolConfiguration } from "./command";
+import {
+  type ListedTests,
+  type NextestToolConfiguration,
+  nextestEnd,
+  parseNextestList,
+  readJunitReport,
+  readNextestStep,
+  removeToolConfiguration,
+  writeToolConfiguration,
+} from "./nextest";
 import { checksAfterCargo, type GroupInvocation, type PreparedTask } from "./task";
 import { packagesVariable, type RecordEntry, recordVariable } from "./test-runner";
 import {
@@ -136,7 +147,10 @@ export async function runGroup(
   const { cwd } = first.invocation;
   const steps: CargoStep[] = (
     first.invocation.steps ?? [{ kind: "command", args: first.invocation.args }]
-  ).filter((step) => step.kind !== "doctests" || members.some(hasLibrary));
+  ).filter(
+    (step) =>
+      step.kind !== "doctests" || members.some((member) => hasLibrary(member.invocation.package)),
+  );
   const crates: OutputCrate[] = members.map(({ prepared, invocation }) => ({
     task: prepared.task,
     name: prepared.crate ?? "",
@@ -156,9 +170,14 @@ export async function runGroup(
     }
     const record =
       step.kind === "test-binaries" ? mkdtempSync(join(tmpdir(), "nx-rust-record-")) : undefined;
+    const toolConfiguration: NextestToolConfiguration | undefined =
+      step.kind === "nextest" ? writeToolConfiguration() : undefined;
     const packages = `:${crates.map((crate) => crate.name).join(":")}:`;
     const invocation: CargoInvocation = {
-      args: step.args,
+      args:
+        toolConfiguration === undefined
+          ? step.args
+          : withToolConfiguration(step.args, toolConfiguration.file),
       cwd,
       ...(record === undefined
         ? first.invocation.env === undefined
@@ -184,25 +203,45 @@ export async function runGroup(
         await printCommand(label, invocation);
       }
       const run = await runCaptured(invocation, first.prepared.env, live === "lines");
-      const end = commandEnd(run.code, run.signal, run.failure);
-      const outcomes = readStep(
-        step,
-        run.output,
-        end,
-        crates,
-        members,
-        scope,
-        record,
-        packages,
-        first.invocation.runner,
-      );
+      let unexplained: string | undefined;
+      let outcomes: CrateOutcome[];
+      if (toolConfiguration !== undefined) {
+        const end = nextestEnd(run.code, run.signal, run.failure);
+        unexplained = end.kind === "unexplained" ? end.reason : undefined;
+        const report = readJunitReport(toolConfiguration.report);
+        // Where nextest exits with 100, a test failed or the run ended early:
+        // its list says which tests the run was to run (`DES-TEST-RUN`).
+        let listed: ListedTests | undefined;
+        if (end.kind === "tests-failed" && "cases" in report && step.listArgs !== undefined) {
+          const list: CargoInvocation = { ...invocation, args: step.listArgs };
+          if (verbose) {
+            await printCommand(label, list);
+          }
+          listed = await listNextestTests(list, first.prepared.env);
+        }
+        outcomes = readNextestStep(run.output, end, crates, scope, report, listed);
+      } else {
+        const end = commandEnd(run.code, run.signal, run.failure);
+        unexplained = end.kind === "unexplained" ? end.reason : undefined;
+        outcomes = readStep(
+          step,
+          run.output,
+          end,
+          crates,
+          members,
+          scope,
+          record,
+          packages,
+          first.invocation.runner,
+        );
+      }
       outcomes.forEach((outcome, at) => {
         const entry = state[at];
         if (outcome.output !== "") {
           entry.lines.push(outcome.output);
         }
-        if (end.kind === "unexplained") {
-          entry.lines.push(`${members[at].prepared.task}: ${end.reason}.`);
+        if (unexplained !== undefined) {
+          entry.lines.push(`${members[at].prepared.task}: ${unexplained}.`);
         }
         if (outcome.message !== undefined) {
           entry.lines.push(outcome.message);
@@ -214,6 +253,9 @@ export async function runGroup(
     } finally {
       if (record !== undefined) {
         removeRecord(record);
+      }
+      if (toolConfiguration !== undefined) {
+        removeToolConfiguration(toolConfiguration);
       }
     }
   }
@@ -250,9 +292,12 @@ export function sharedCommandChecks(invocation: GroupInvocation): GroupInvocatio
     : invocation;
 }
 
-// Whether a member's crate has a library, whose doctests the doctest step runs.
-function hasLibrary(member: GroupMember): boolean {
-  return (member.invocation.package?.targets ?? []).some(
+/**
+ * Whether a crate has a library, whose doctests the doctest step runs; cargo
+ * fails `cargo test --doc` for a crate without one.
+ */
+export function hasLibrary(pkg: CargoPackage | undefined): boolean {
+  return (pkg?.targets ?? []).some(
     (target) =>
       !target.kind.some((kind) =>
         ["bin", "test", "example", "bench", "custom-build"].includes(kind),
@@ -272,6 +317,11 @@ function readStep(
   packages: string,
   runner: readonly string[] | undefined,
 ): CrateOutcome[] {
+  // A group of one crate that selects it runs the command that its task runs
+  // on its own, and passes each step where cargo exits with status 0.
+  if (members.length === 1 && scope === undefined) {
+    return [{ passed: end.kind === "succeeded", output }];
+  }
   switch (step.kind) {
     case "tests-build":
       return readTestsBuildStep(output, end, crates, scope as OutputScope);
@@ -285,11 +335,14 @@ function readStep(
         { command: runner ?? [], packages },
       );
     case "doctests":
-      return readDoctestStep(output, end, crates, scope as OutputScope);
+      // Crates selected with `-p` show their failed doctest targets in
+      // cargo's list as a `cargo test` of those crates does.
+      return scope === undefined
+        ? readTestStep(output, end, crates)
+        : readDoctestStep(output, end, crates, scope);
+    case "nextest":
+      throw new Error("A nextest step is read from its JUnit report (readNextestStep).");
     case "command":
-      if (members.length === 1 && scope === undefined) {
-        return [{ passed: end.kind === "succeeded", output }];
-      }
       return sharedOutcomes(members, crates, output, end, scope);
   }
 }
@@ -328,6 +381,45 @@ function sharedOutcomes(
             },
       );
   }
+}
+
+/**
+ * Runs `cargo nextest list --message-format json` with the group's
+ * environment, as its nextest step ran, and reads the tests that it lists
+ * as matching the run's filters from its standard output
+ * ({@link parseNextestList}); cargo's own lines on its standard error are
+ * left out of every task's output, since the step's output already holds
+ * the build.
+ */
+// @mara implements DES-TEST-RUN
+async function listNextestTests(
+  invocation: CargoInvocation,
+  taskEnv: NodeJS.ProcessEnv,
+): Promise<ListedTests> {
+  return new Promise((resolve) => {
+    const child = spawn("cargo", invocation.args, {
+      cwd: invocation.cwd,
+      env: cargoEnvironment(invocation, taskEnv),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", (error) =>
+      resolve({ unreadable: `cargo nextest list could not be started: ${error.message}` }),
+    );
+    child.on("close", (code, signal) => {
+      if (code !== 0) {
+        const tail = Buffer.concat(stderr).toString("utf8").trim().split("\n").slice(-3).join(" ");
+        resolve({
+          unreadable: `cargo nextest list ${signal === null ? `exited with status ${code}` : `was stopped by ${signal}`}${tail === "" ? "" : `: ${tail}`}`,
+        });
+        return;
+      }
+      resolve(parseNextestList(Buffer.concat(stdout).toString("utf8")));
+    });
+  });
 }
 
 /**

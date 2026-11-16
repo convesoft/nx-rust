@@ -25,13 +25,19 @@ export async function runNx(
 
 /**
  * The cargo calls of tasks other than the lockfile task: every logged call
- * but graph creation's `cargo metadata` and the lockfile task's `cargo update
- * --workspace`, which {@link lockfileCalls} returns.
+ * but graph creation's `cargo metadata`, the `cargo nextest --version` that
+ * the key of a `test` under the nextest runner asks, and the lockfile task's
+ * `cargo update --workspace`, which {@link lockfileCalls} returns.
  */
 export function taskCalls(workspace: FixtureWorkspace): CargoCall[] {
   return workspace
     .cargoCalls()
-    .filter((call) => call.args[0] !== "metadata" && !isLockfileCall(call));
+    .filter(
+      (call) =>
+        call.args[0] !== "metadata" &&
+        !(call.args[0] === "nextest" && call.args[1] === "--version") &&
+        !isLockfileCall(call),
+    );
 }
 
 /** The cargo calls of lockfile tasks, `cargo update --workspace`, in the order they ran. */

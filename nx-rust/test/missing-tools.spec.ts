@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import {
+  findExecutable,
   MissingToolError,
   missingToolMessage,
   OptionalToolId,
@@ -203,6 +204,70 @@ describe("a task whose tool is missing", () => {
     },
     HARNESS_TIMEOUT,
   );
+
+  // The test's runtime inputs need a shell and rustc, so PATH keeps the
+  // machine's folders, less those that hold cargo-nextest; where that leaves
+  // no shell, cargo or rustc, the check cannot hide nextest and is skipped.
+  const machinePath = (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter((folder) => folder !== "" && findExecutable("cargo-nextest", [folder]) === undefined);
+  const hidesNextest = ["sh", "cargo", "rustc"].every(
+    (name) => findExecutable(name, machinePath) !== undefined,
+  );
+  (hidesNextest ? describe : describe.skip)("with nextest hidden", () => {
+    it(
+      "fails a test that nextest runs before cargo runs, alone and in a batch, naming nextest, the target and how to get it",
+      async () => {
+        const env = {
+          CARGO_HOME: tools.cargoHome,
+          PATH: [tools.path, ...machinePath].join(delimiter),
+        };
+        workspace.reset(
+          { "rust/deny.toml": "" },
+          {
+            "rust/Cargo.toml": (manifest) =>
+              `${manifest}\n[workspace.metadata.nx]\ntestRunner = "nextest"\n`,
+          },
+        );
+        const tool = optionalTools.find((candidate) => candidate.id === "cargo-nextest")!;
+        const runTest = async (flags: string[]) => {
+          const { status, output } = await workspace.nx(
+            ["run", "core-lib:test", "--output-style=static", "--skip-nx-cache", ...flags],
+            env,
+          );
+          return { status, output: withoutColours(output) };
+        };
+
+        for (const flags of [[], ["--batch"]]) {
+          const missing = await runTest(flags);
+
+          expect({ flags, status: missing.status }).toEqual({ flags, status: 1 });
+          expect(missing.output).toContain(
+            `core-lib:test: ${missingToolMessage(tool, ["the test target of core-lib, whose Cargo workspace in rust uses the nextest runner (testRunner)"])}`,
+          );
+        }
+        expect(taskCalls(workspace).filter((call) => call.args[0] !== "build")).toEqual([]);
+        expect(readdirSync(tools.path)).toEqual([]);
+
+        // With a stand-in for nextest, the task runs it through cargo and then
+        // the doctests.
+        tools.install(tools.path, "cargo-nextest", "the stand-in ran");
+        const present = await runTest([]);
+
+        expect(present.status).toBe(0);
+        expect(present.output).toContain("the stand-in ran");
+        expect(
+          taskCalls(workspace)
+            .filter((call) => call.args[0] !== "build")
+            .map((call) => call.args.slice(0, 2)),
+        ).toEqual([
+          ["nextest", "run"],
+          ["test", "--workspace"],
+        ]);
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
 
   it(
     "counts a relative PATH entry from the workspace root, where plain cargo looks too",

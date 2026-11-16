@@ -26,6 +26,7 @@ import {
   unnamedTripleProblem,
 } from "../cargo/target-triples";
 import type { BuildRecordSource } from "../graph/build-records";
+import type { TestRunner } from "../graph/settings";
 import { cargoMetadataOf } from "../graph/collisions";
 import {
   commandDigestFolder,
@@ -58,7 +59,7 @@ import {
   type SelectingRunner,
   selectsBySpecification,
 } from "./command";
-import { runGroup } from "./group-run";
+import { hasLibrary, runGroup } from "./group-run";
 import { type GroupSelection, type PlannedGroup, planGroups } from "./groups";
 import { runnerCommand } from "./runner-script";
 import {
@@ -266,8 +267,11 @@ export async function runTask(
     return { success: result.success };
   }
   // Every step of the group, one after another, each only after the one
-  // before it succeeded: one for most targets, two for `hakari-check`.
-  for (const step of invocation.steps) {
+  // before it succeeded: one for most targets, two for `hakari-check`, and
+  // for `test` with nextest the doctests only where the crate has a library.
+  for (const step of invocation.steps.filter(
+    (entry) => entry.kind !== "doctests" || hasLibrary(invocation.package),
+  )) {
     if (!(await runCargo({ ...invocation, args: step.args }, env, verbose ? task : undefined))) {
       if (prepared.target === "hakari-check") {
         console.error(hakariCheckFailure(task, step.args));
@@ -393,6 +397,11 @@ export interface PreparedTask {
    * gives every task of a run does not count.
    */
   ownFeatureSet?: boolean;
+  /**
+   * On `test`: the workspace's test runner, from the target's metadata
+   * (`REQ-TEST-RUNNER`); absent means `cargo`.
+   */
+  testRunner?: TestRunner;
   /**
    * The feature-unification strategy of the task's workspace, as graph
    * creation recorded it in the project's metadata (`DES-UNIFICATION`);
@@ -658,9 +667,12 @@ export function prepareTask(
       };
     }
   }
-  const tool = targetTools[metadata.target];
+  const nextest = metadata.target === "test" && metadata.testRunner === "nextest";
+  const tool = nextest ? "cargo-nextest" : targetTools[metadata.target];
   if (tool !== undefined) {
-    const neededBy = `the ${targetName} target of the Cargo workspace in ${describeFolder(workspaceRoot)}`;
+    const neededBy = nextest
+      ? `the ${targetName} target of ${cargo.packageName ?? projectName}, whose Cargo workspace in ${describeFolder(workspaceRoot)} uses the nextest runner (testRunner)`
+      : `the ${targetName} target of the Cargo workspace in ${describeFolder(workspaceRoot)}`;
     try {
       requireTool(tool, neededBy, {
         workspaceRoot: context.root,
@@ -694,6 +706,7 @@ export function prepareTask(
       ? { records: metadata.records }
       : {}),
     ...(setsFeatureSet(context.target?.options) ? { ownFeatureSet: true } : {}),
+    ...(nextest ? { testRunner: "nextest" as const } : {}),
     featureUnification: strategy,
     ...(cargo.hakariPlatforms === undefined ? {} : { hakariPlatforms: cargo.hakariPlatforms }),
     env,
@@ -839,8 +852,9 @@ export function groupInvocations(
     typeof entry === "string" || entry.crate === undefined ? [] : [entry.crate],
   );
   const workspace = selection.kind === "workspace";
+  // nextest runs no runner of the plugin's (`DES-TEST-RUN`).
   const runner: SelectingRunner | undefined =
-    workspace && target === "test"
+    workspace && target === "test" && first.testRunner !== "nextest"
       ? { host: selection.host ?? "", command: runnerCommand() }
       : undefined;
   if (runner !== undefined && runner.host === "") {
@@ -859,6 +873,7 @@ export function groupInvocations(
         locked: task.locked,
         binaryArguments: task.binaryArguments,
         workspace,
+        ...(task.testRunner === undefined ? {} : { testRunner: task.testRunner }),
         workspaceUnification: task.featureUnification === "cargo",
       },
       task.options,
@@ -1530,6 +1545,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
     records,
     waitsForBuild,
     waitsForBuilds,
+    testRunner,
   } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
   return (inferredTargetNames as readonly unknown[]).includes(target)
     ? {
@@ -1556,6 +1572,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
         waitsForBuilds.every((root) => typeof root === "string")
           ? { waitsForBuilds: waitsForBuilds as string[] }
           : {}),
+        ...(testRunner === "nextest" ? { testRunner } : {}),
       }
     : undefined;
 }

@@ -7,6 +7,8 @@ import { delimiter, join, resolve } from "node:path";
 export interface ToolWorkspace {
   /** The folder of the root manifest, relative to the repository root: `.` for the root itself. */
   root: string;
+  /** The workspace's test runner (`testRunner`), where its settings choose nextest. */
+  testRunner?: "nextest";
   /**
    * The feature-unification strategy that graph creation chose for the
    * workspace (`DES-UNIFICATION`); `workspace-build` where absent.
@@ -72,13 +74,13 @@ export const wasmTriple = "wasm32-unknown-unknown";
  * the missing ones, and a task that runs a missing one fails
  * ({@link requireTool}); the rows of the wasm tools are one row there.
  *
- * Which tool the configuration needs follows the features that exist.
- * cargo-hakari is needed by every workspace that uses the `hakari` strategy.
- * The settings that ask for cargo-nextest and cargo-affected, and the
- * artifact targets that run the wasm and napi tools, are not implemented
- * yet, so nothing needs those tools until their issues add the condition:
- * nxr-jb6g5y (`testRunner`), nxr-tabkjx (`affectedTests`), nxr-0ap8n4
- * (`wasm-build`) and nxr-tv3r95 (`napi-build`).
+ * Which tool the configuration needs follows the features that exist:
+ * cargo-nextest where a workspace's settings choose the nextest runner, and
+ * cargo-hakari for every workspace that uses the `hakari` strategy. The
+ * settings that ask for cargo-affected, and the artifact targets that run
+ * the wasm and napi tools, are not implemented yet, so nothing needs those
+ * tools until their issues add the condition: nxr-tabkjx (`affectedTests`),
+ * nxr-0ap8n4 (`wasm-build`) and nxr-tv3r95 (`napi-build`).
  */
 // @mara implements DES-GENERATORS
 export const optionalTools: readonly OptionalTool[] = [
@@ -87,7 +89,13 @@ export const optionalTools: readonly OptionalTool[] = [
     name: "cargo-nextest",
     install: "Install it as https://nexte.st/docs/installation/ describes.",
     installed: (context) => cargoSubcommandInstalled("nextest", context.env, toolFolder(context)),
-    neededBy: () => [],
+    neededBy: (context) =>
+      context.workspaces
+        .filter((workspace) => workspace.testRunner === "nextest")
+        .map(
+          (workspace) =>
+            `the nextest runner that the Cargo workspace in ${describeFolder(workspace.root)} chooses for its test targets (testRunner)`,
+        ),
   },
   {
     id: "cargo-affected",

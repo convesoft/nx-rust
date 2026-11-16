@@ -1,9 +1,9 @@
 # Configuration
 
 > **Status:** the plugin reads and checks every setting of this page, but
-> three have no effect yet: `testRunner`, apart from nextest's configuration
-> as a cache input, and `affectedTests` until milestone 0.3, and `artifacts`
-> until milestone 0.4. `NX_RUST_TEST_MODE` is not read until milestone 0.3.
+> two have no effect yet: `affectedTests` until milestone 0.3, and
+> `artifacts` until milestone 0.4. `NX_RUST_TEST_MODE` is not read until
+> milestone 0.3.
 
 Most repositories need no configuration. When a crate or workspace needs
 something other than the default, you say so in the `Cargo.toml` that already

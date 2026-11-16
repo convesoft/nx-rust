@@ -233,6 +233,16 @@ export interface TargetCargoMetadata {
    * projects when a cached task starts (`DES-OUTPUTS`, "Files of one name").
    */
   artifactFiles?: NamedArtifact[];
+  /**
+   * On a crate's `test`: `nextest` where the workspace's settings choose the
+   * nextest runner (`REQ-TEST-RUNNER`); absent for the `cargo` runner. Like
+   * `locked`, it is no input of a key: the setting lies in `nx.json` or in
+   * the workspace's root `Cargo.toml`, both of which every key of the
+   * crate's `test` holds, and the nextest runner gives the target inputs of
+   * its own, the variables that start with `NEXTEST_` and the workspace's
+   * `.config/nextest.toml` (`DES-INPUTS`).
+   */
+  testRunner?: "nextest";
 }
 
 /**
@@ -428,6 +438,10 @@ export function inferTargets(
   }
   configureCaching(targets, subject, context, caching);
   const test = targets.get("test");
+  const testMetadata = test?.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
+  if (testMetadata !== undefined && caching?.settings.testRunner === "nextest") {
+    testMetadata.testRunner = "nextest";
+  }
   const builds =
     pkg === undefined
       ? []

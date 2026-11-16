@@ -1,3 +1,4 @@
+import type { TestRunner } from "../graph/settings";
 import { compilingTargets, type InferredTargetName, inferredTargetNames } from "../graph/targets";
 
 /**
@@ -117,6 +118,12 @@ export interface CommandSubject {
    * {@link selectsWorkspace}.
    */
   workspace?: boolean;
+  /**
+   * The workspace's test runner (`REQ-TEST-RUNNER`), which decides the
+   * command of `test`: `cargo test`, or `cargo nextest run` and `cargo test
+   * --doc` with `nextest` ({@link cargoSteps}). Absent means `cargo`.
+   */
+  testRunner?: TestRunner;
 }
 
 // The per-crate targets whose commands compile the crate, and which select
@@ -182,6 +189,9 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
   const taken: CargoTargetOptions = Object.fromEntries(
     Object.entries(options).filter(([name]) => targetTakes(target, name)),
   );
+  if (target === "test" && subject.testRunner === "nextest") {
+    return nextestArguments(subject, taken);
+  }
   const crateCommand = crateCommands[target];
   if (crateCommand !== undefined) {
     if (crates === undefined || crates.length === 0) {
@@ -319,14 +329,119 @@ export function crateSelection(
   });
 }
 
-// The feature, profile and triple flags, from the options that the target takes.
-function compilingFlags(taken: CargoTargetOptions): string[] {
+/**
+ * The arguments of `cargo nextest run` for the tests of a group's crates
+ * (`DES-TEST-RUN`, step 3), before the plugin's tool configuration file,
+ * which the group adds when it runs the step ({@link withToolConfiguration}):
+ *
+ * - where the command selects the whole workspace, `--workspace` and the
+ *   filterset of the group's packages ({@link nextestFiltersets});
+ *   otherwise each crate with `-p` and its package ID specification, as
+ *   `cargo test` takes them;
+ * - for several crates or the whole workspace, `--no-fail-fast`, so that a
+ *   failing test does not keep the tests of another crate from running;
+ *   a command of one crate is the one that a developer types;
+ * - `--no-tests=pass`, because a crate without tests, or whose tests the
+ *   repository's default filter leaves out, passes as it does under `cargo
+ *   test`, where nextest would fail with exit code 4;
+ * - the feature flags, `--cargo-profile` for the `profile` option, because
+ *   nextest's own `--profile` names a profile of its configuration
+ *   (`EVD-NEXTEST-CARGO-FLAGS`), the flags of the `cargo` strategy
+ *   ({@link workspaceUnificationFlags}), which nextest passes on to cargo,
+ *   and `--locked`.
+ *
+ * No `--profile` and no `--ignore-default-filter`: the repository's nextest
+ * configuration applies as for a plain `cargo nextest run` ("nextest's
+ * configuration" in `DES-TEST-RUN`).
+ */
+// @mara implements DES-TEST-RUN
+// @mara implements DES-PLUGIN-OPTIONS
+function nextestArguments(subject: CommandSubject, taken: CargoTargetOptions): string[] {
+  const crates = subject.crates ?? [];
+  if (crates.length === 0) {
+    throw new Error('The target "test" runs for a crate, and the project has none.');
+  }
+  const workspace = subject.workspace === true;
+  return [
+    "nextest",
+    "run",
+    ...(workspace ? ["--workspace"] : []),
+    ...(crates.length > 1 || workspace ? ["--no-fail-fast"] : []),
+    "--no-tests=pass",
+    ...(workspace
+      ? nextestFiltersets(crates.map((crate) => crate.name))
+      : crateSelection("test", crates)),
+    ...compilingFlags(taken, "--cargo-profile"),
+    ...unificationFlags(subject),
+    ...flag(subject.locked, "--locked"),
+  ];
+}
+
+/** The longest filterset argument that the plugin passes to nextest, in bytes. */
+export const maxFiltersetBytes = 64 * 1024;
+
+/**
+ * The `-E` arguments that select a group's packages for nextest
+ * (`DES-TEST-RUN`, "Under `workspace-build`"): `package(=a) | package(=b)`,
+ * where `=` matches each name exactly, split into several arguments, which
+ * nextest unites, so that none exceeds {@link maxFiltersetBytes}: Linux
+ * refuses one argument of more than 128 KiB (`EVD-CARGO-AFFECTED-REPORT`).
+ * A package name holds no character that a filterset escapes.
+ *
+ * In affected mode (nxr-tabkjx), each argument is intersected with a part of
+ * the selection, `(<group's filterset>) & (<part>)`; that is the one place
+ * where the selection joins the command.
+ */
+// @mara implements DES-TEST-RUN
+export function nextestFiltersets(packages: readonly string[]): string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (const name of packages) {
+    const term = `package(=${name})`;
+    const joined = current === "" ? term : `${current} | ${term}`;
+    if (current !== "" && Buffer.byteLength(joined) > maxFiltersetBytes) {
+      parts.push(current);
+      current = term;
+    } else {
+      current = joined;
+    }
+  }
+  if (current !== "") {
+    parts.push(current);
+  }
+  return parts.flatMap((part) => ["-E", part]);
+}
+
+/** The name under which nextest takes the plugin's tool configuration file. */
+export const nextestToolName = "nx-rust";
+
+/**
+ * The arguments of a nextest step with the plugin's tool configuration file
+ * (`DES-TEST-RUN`, "nextest's configuration"): `--tool-config-file
+ * nx-rust:<file>` after `nextest run`. The file is written for each run, so
+ * the step's arguments name it only once it exists.
+ *
+ * @param file The absolute path of the file.
+ */
+export function withToolConfiguration(args: readonly string[], file: string): string[] {
+  return [
+    ...args.slice(0, 2),
+    "--tool-config-file",
+    `${nextestToolName}:${file}`,
+    ...args.slice(2),
+  ];
+}
+
+// The feature, profile and triple flags, from the options that the target
+// takes; the profile goes with `profileFlag`, which nextest calls
+// `--cargo-profile`.
+function compilingFlags(taken: CargoTargetOptions, profileFlag = "--profile"): string[] {
   const features = taken.features ?? [];
   return [
     ...(features.length > 0 ? ["--features", features.join(",")] : []),
     ...flag(taken.allFeatures, "--all-features"),
     ...flag(taken.noDefaultFeatures, "--no-default-features"),
-    ...(taken.profile !== undefined ? ["--profile", taken.profile] : []),
+    ...(taken.profile !== undefined ? [profileFlag, taken.profile] : []),
     ...(taken.targetTriple !== undefined ? ["--target", taken.targetTriple] : []),
   ];
 }
@@ -341,9 +456,11 @@ function flag(on: boolean | undefined, name: string): string[] {
  * with the `cargo` runner under `workspace-build` (`DES-TEST-RUN`, "Under
  * `workspace-build`"): the build of every test executable (`tests-build`),
  * the test binaries through the selecting runner (`test-binaries`) and the
- * doctests (`doctests`).
+ * doctests (`doctests`); or, with the nextest runner, `cargo nextest run`
+ * for several crates or the whole workspace (`nextest`), whose results come
+ * from its JUnit report, and the doctests.
  */
-export type StepKind = "command" | "tests-build" | "test-binaries" | "doctests";
+export type StepKind = "command" | "tests-build" | "test-binaries" | "doctests" | "nextest";
 
 /** One cargo command of a group, in the order in which the group runs them. */
 export interface CargoStep {
@@ -351,6 +468,33 @@ export interface CargoStep {
   kind: StepKind;
   /** The arguments after `cargo`. */
   args: string[];
+  /**
+   * On a `nextest` step: the arguments of `cargo nextest list
+   * --message-format json` with the step's selection and flags
+   * ({@link nextestListArguments}), which the group runs where nextest
+   * exits with 100 to learn which tests the run was to run.
+   */
+  listArgs?: string[];
+}
+
+/**
+ * The arguments of `cargo nextest list --message-format json` for the tests
+ * that a `cargo nextest run` with `runArgs` is to run (`DES-TEST-RUN`, step
+ * 4): the same selection, filtersets, feature and profile flags and
+ * `--locked`, without the flags that only a run takes, `--no-fail-fast` and
+ * `--no-tests`. nextest gives each test of the list a `filter-match` after
+ * the same filters, the repository's default filter among them, and with the
+ * same environment the same profile applies (`EVD-NEXTEST-RUNNER-STEPS`).
+ */
+// @mara implements DES-TEST-RUN
+export function nextestListArguments(runArgs: readonly string[]): string[] {
+  return [
+    "nextest",
+    "list",
+    "--message-format",
+    "json",
+    ...runArgs.slice(2).filter((arg) => arg !== "--no-fail-fast" && !arg.startsWith("--no-tests")),
+  ];
 }
 
 /** The selecting runner of the test binaries' step (`DES-TEST-RUN`, "The runner program"). */
@@ -364,9 +508,12 @@ export interface SelectingRunner {
 /**
  * The steps of a group's cargo commands (`DES-BATCH`): one command, as
  * {@link cargoArguments} builds it, for every target but `hakari-check`,
- * which runs the two commands of {@link hakariCheckSteps}, and `test` with the
- * `cargo` runner on a group that selects the whole workspace, which has three
- * (`DES-TEST-RUN`, "Under `workspace-build`"):
+ * which runs the two commands of {@link hakariCheckSteps}, `test` with the
+ * nextest runner, and `test` with the `cargo` runner on a group that selects
+ * the whole workspace.
+ *
+ * With the `cargo` runner, such a group has three steps (`DES-TEST-RUN`,
+ * "Under `workspace-build`"):
  *
  * 1. `cargo test --workspace --no-run`, which compiles every test executable,
  *    the binaries that integration tests use and every example;
@@ -375,17 +522,31 @@ export interface SelectingRunner {
  *    through `--config 'target.<host>.runner=[…]'`, in TOML strings;
  * 3. `cargo test --workspace --doc --no-fail-fast`, without the runner.
  *
+ * With the nextest runner, every group has two (`DES-TEST-RUN`, steps 3 and
+ * 5): `cargo nextest run` ({@link cargoArguments}), which builds every test
+ * binary before it runs one, and `cargo test --doc` for the doctests, which
+ * nextest does not run (`REQ-DOCTESTS`), selecting the crates as the first
+ * step does: `--workspace`, or each crate with `-p`. The first step is a
+ * `nextest` step where it selects several crates or the whole workspace,
+ * whose results the group reads from nextest's JUnit report, and otherwise
+ * the plain command of one crate. Both pass `--no-fail-fast` where they
+ * select more than one crate.
+ *
  * Each step passes the same feature and profile flags and `--locked` as
  * the others, so that every step resolves the same features
- * (`REQ-STABLE-FEATURES`) and reuses what the steps before it compiled.
+ * (`REQ-STABLE-FEATURES`) and reuses what the steps before it compiled; the
+ * profile is `--cargo-profile` for nextest and `--profile` for cargo
+ * (`EVD-NEXTEST-CARGO-FLAGS`).
  *
- * @param runner The selecting runner, which a `test` group that selects the
- *   whole workspace needs.
+ * @param runner The selecting runner, which a `test` group of the `cargo`
+ *   runner that selects the whole workspace needs.
  * @throws {Error} As {@link cargoArguments} does, and for such a group
  *   without a runner.
  */
 // @mara implements DES-TEST-RUN
 // @mara implements DES-UNIFICATION
+// @mara implements REQ-DOCTESTS
+// @mara implements DES-TEST-PHASES
 export function cargoSteps(
   subject: CommandSubject,
   options: CargoTargetOptions,
@@ -393,6 +554,34 @@ export function cargoSteps(
 ): CargoStep[] {
   if (subject.target === "hakari-check") {
     return hakariCheckSteps.map((args) => ({ kind: "command", args: [...args] }));
+  }
+  if (subject.target === "test" && subject.testRunner === "nextest") {
+    const taken: CargoTargetOptions = Object.fromEntries(
+      Object.entries(options).filter(([name]) => targetTakes("test", name)),
+    );
+    const crates = subject.crates ?? [];
+    const shared = subject.workspace === true || crates.length > 1;
+    return [
+      shared
+        ? {
+            kind: "nextest",
+            args: cargoArguments(subject, options),
+            listArgs: nextestListArguments(cargoArguments(subject, options)),
+          }
+        : { kind: "command", args: cargoArguments(subject, options) },
+      {
+        kind: "doctests",
+        args: [
+          "test",
+          ...(subject.workspace === true ? ["--workspace"] : crateSelection("test", crates)),
+          "--doc",
+          ...(shared ? ["--no-fail-fast"] : []),
+          ...compilingFlags(taken),
+          ...unificationFlags(subject),
+          ...flag(subject.locked, "--locked"),
+        ],
+      },
+    ];
   }
   if (!(subject.target === "test" && subject.workspace === true)) {
     return [{ kind: "command", args: cargoArguments(subject, options) }];

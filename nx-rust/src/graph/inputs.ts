@@ -405,6 +405,7 @@ export function targetInputs(
         workspaceRoot,
         subject.workspace.configuredTools ?? noConfiguredTools,
         rustdocTargets.has(target),
+        target === "test" && settings.testRunner === "nextest",
       ),
     },
     pluginVersionInput(context.plugin),
@@ -666,7 +667,14 @@ export function environmentInputs(target: InferredTargetName): InputDefinition[]
  *   `CARGO_TARGET_DIR`, which says where the artifacts go and not what they
  *   are (`REQ-ENV-ALLOWLIST`). Those two families are open ended, with a
  *   profile's or a triple's name in each variable, so no list of `env`
- *   inputs can name them.
+ *   inputs can name them;
+ * - on a `test` that nextest runs, what `cargo nextest --version` writes in
+ *   the workspace root, as cargo finds nextest there with the task's
+ *   environment, or `cargo-nextest: not found` where it fails, so that
+ *   another version of nextest, or none, changes the key, and every
+ *   variable whose name starts with `NEXTEST_`, with its value, sorted in
+ *   with the others: they choose nextest's profile or change what its run
+ *   does, and no list names them all either.
  *
  * A named program runs as cargo runs it: a path with a `/` from the
  * workspace root, which is also cargo's folder, and a bare name through
@@ -690,6 +698,8 @@ export function environmentInputs(target: InferredTargetName): InputDefinition[]
  * @param workspaceRoot The workspace's root folder, relative to the repository root.
  * @param tools What `build.rustc` and `build.rustdoc` name in the workspace root.
  * @param rustdoc Whether the target's cargo command runs rustdoc.
+ * @param nextest Whether nextest runs the target's tests; without it the
+ *   command is the one it has always been, so that no other key changes.
  */
 // @mara implements REQ-TOOLCHAIN-KEY
 // @mara implements REQ-ENV-ALLOWLIST
@@ -697,6 +707,7 @@ export function toolchainCommand(
   workspaceRoot: string,
   tools: ConfiguredTools = noConfiguredTools,
   rustdoc = false,
+  nextest = false,
 ): string {
   const folder = workspaceRoot === "." ? "." : `./${workspaceRoot}`;
   const versions = [
@@ -705,8 +716,17 @@ export function toolchainCommand(
     ...(rustdoc ? [namedToolVersion("RUSTDOC", tools.rustdoc)] : []),
   ];
   return [
+    // In a subshell before the toolchain's versions, whose `cd` stays in
+    // effect for the rest of the command.
+    ...(nextest
+      ? [
+          `( cd ${shellQuote(folder)} && ${versionCommand("cargo nextest", "--version")} ) || echo 'cargo-nextest: not found'`,
+        ]
+      : []),
     `{ cd ${shellQuote(folder)} && ${versions.join(" && ")} || od -An -N16 -tx1 /dev/urandom; }`,
-    `env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort`,
+    nextest
+      ? `env | grep -E '^(CARGO_(PROFILE|TARGET)_|NEXTEST_)' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort`
+      : `env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort`,
     "true",
   ].join("; ");
 }
@@ -730,9 +750,12 @@ function namedToolVersion(variable: "RUSTC" | "RUSTDOC", configured: readonly st
   ].join(" ");
 }
 
-/** `-Vv` of a program, given as shell text, without rustup installing a toolchain for it. */
-function versionCommand(program: string): string {
-  return `RUSTUP_AUTO_INSTALL=0 ${program} -Vv 2>/dev/null`;
+/**
+ * The version of a program, given as shell text, `-Vv` unless `flag` names
+ * another, without rustup installing a toolchain for it.
+ */
+function versionCommand(program: string, flag = "-Vv"): string {
+  return `RUSTUP_AUTO_INSTALL=0 ${program} ${flag} 2>/dev/null`;
 }
 
 /**

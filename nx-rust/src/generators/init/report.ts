@@ -41,11 +41,16 @@ export function initReport(
   tools: readonly OptionalTool[] = optionalTools,
 ): InitReport {
   const report: InitReport = { warnings: [], info: [] };
+  const nextest = new Set(check.nextestWorkspaces ?? []);
   const context: ToolContext = {
     workspaceRoot,
     workspaces: check.workspaces.map((workspace) => {
       const featureUnification = check.strategies?.get(workspace.root);
-      return featureUnification === undefined ? workspace : { ...workspace, featureUnification };
+      return {
+        root: workspace.root,
+        ...(featureUnification === undefined ? {} : { featureUnification }),
+        ...(nextest.has(workspace.root) ? { testRunner: "nextest" as const } : {}),
+      };
     }),
     env,
   };
