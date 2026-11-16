@@ -40,6 +40,7 @@ import {
   TargetCargoMetadata,
   targetCargoMetadataKey,
 } from "./targets";
+import type { WorkspaceStrategy } from "./unification";
 import { unignoredDirectoryWarnings } from "./unignored-directories";
 
 /** What the caching of every project of one graph computation shares. */
@@ -79,6 +80,12 @@ export interface CacheContext extends InputContext {
    * directory, with the reasons (`sharedArtifactNames` in `artifact-names.ts`).
    */
   sharedArtifactNames?: SharedArtifactNames;
+  /**
+   * The feature-unification strategy of each workspace, by its root folder
+   * (`workspaceStrategies` in `unification.ts`); a workspace without one
+   * uses `workspace-build`.
+   */
+  strategies?: ReadonlyMap<string, WorkspaceStrategy>;
 }
 
 /**
@@ -114,6 +121,9 @@ export interface CacheContext extends InputContext {
  * @param view Where this entry stands among the entries of the plugin: a
  *   warning that names crates of several entries is printed by the first
  *   of them ({@link warnsHere}), so that it is printed once.
+ * @param strategies The feature-unification strategy of each workspace
+ *   (`workspaceStrategies` in `unification.ts`), whose warnings go to every
+ *   project of the workspace.
  */
 export async function cacheContext(
   discovery: CargoDiscovery,
@@ -121,6 +131,7 @@ export async function cacheContext(
   everyProject: readonly string[] = [],
   reports?: ComputationReports,
   view?: EntryView,
+  strategies: ReadonlyMap<string, WorkspaceStrategy> = new Map(),
 ): Promise<CacheContext> {
   const { workspaceRoot } = discovery;
   const uses = redirectedUses({ discovery, projects: [] }, projectRoots(discovery));
@@ -205,6 +216,7 @@ export async function cacheContext(
       tripleWarning(workspace, workspaceRoot),
       ...(directoryWarnings.get(workspace) ?? []),
       withoutLockfileTask.has(workspace.root) ? noLockfileTaskWarning(workspace) : undefined,
+      ...(strategies.get(workspace.root)?.warnings ?? []),
     ];
     for (const message of messages.filter((message) => message !== undefined)) {
       for (const manifest of workspaceManifests(workspace)) {
@@ -249,6 +261,7 @@ export async function cacheContext(
     withoutLockfileTask,
     sharedRecordNames: sharedRecordNames(compared, sharers),
     sharedArtifactNames: sharedNames,
+    strategies,
   };
 }
 
@@ -334,6 +347,11 @@ export interface CacheOptions {
   targetTables?: (target: InferredTargetName) => readonly TargetConfiguration[];
   /** The name that `targetNames` gives the lockfile task, on which cached targets depend. */
   lockfileTarget?: string;
+  /**
+   * The name that `targetNames` gives `hakari-check`, on which cached targets
+   * depend under `hakari` (`DES-UNIFICATION`, "Drift").
+   */
+  hakariCheckTarget?: string;
 }
 
 /**
@@ -354,7 +372,10 @@ export interface CacheOptions {
  *
  * A target that stays cached, other than `fmt-check`, depends on the
  * lockfile task of its workspace, the project at the workspace's root
- * folder, and hashes the digests it writes; where the workspace has no
+ * folder, and under `hakari` on its `hakari-check` as well, which depends
+ * on the lockfile task and has the lockfile task's inputs with cargo-hakari's
+ * configuration file (`DES-UNIFICATION`, "Drift"), and hashes the digests it
+ * writes; where the workspace has no
  * lockfile task, such a target is left uncached instead. Its metadata names
  * the crate's own member and, with `everyDigest`, says that its key holds
  * every member's digest, as `holdsEveryDigest` decides, for the executor's
@@ -426,8 +447,16 @@ export function configureCaching(
       );
     }
     const readsDigest = target.cache && cachedTargets.has(name) && name !== "fmt-check";
+    const lockfile = lockfileDependency(workspaceRoot, options.lockfileTarget ?? "lockfile");
+    const hakariCheck =
+      settings.featureUnification === "hakari"
+        ? lockfileDependency(workspaceRoot, options.hakariCheckTarget ?? "hakari-check")
+        : undefined;
+    if (name === "hakari-check") {
+      target.dependsOn = [lockfile];
+    }
     if (readsDigest) {
-      target.dependsOn = [lockfileDependency(workspaceRoot, options.lockfileTarget ?? "lockfile")];
+      target.dependsOn = [lockfile, ...(hakariCheck === undefined ? [] : [hakariCheck])];
       if (metadata !== undefined) {
         metadata.digests = subject.pkg === undefined ? [] : [packageVersion(subject.pkg)];
         if (subject.pkg === undefined || holdsEveryDigest(name, subject, settings)) {
@@ -438,7 +467,14 @@ export function configureCaching(
     const inputs =
       name === "lockfile"
         ? lockfileInputs(subject, context)
-        : targetInputs(name, subject, context, settings, readsDigest);
+        : name === "hakari-check"
+          ? [
+              ...lockfileInputs(subject, context),
+              ...(settings.hakari === undefined
+                ? []
+                : [`{workspaceRoot}/${settings.hakari.configFile}`]),
+            ]
+          : targetInputs(name, subject, context, settings, readsDigest);
     target.inputs = inputs ?? [...(target.inputs ?? []), pluginVersionInput(context.plugin)];
     if (target.cache && (name === "build" || name === "doc")) {
       target.inputs = [...target.inputs, { runtime: artifactFoldersCommand(workspaceRoot) }];

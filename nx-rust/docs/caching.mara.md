@@ -1,12 +1,11 @@
 # Caching
 
-> **Status:** the `hakari` and `cargo` feature-unification strategies arrive
-> with milestone 0.2. Until then every workspace counts as using
-> `workspace-build`, so a crate's key holds what a build of the whole
-> workspace reads: the manifests and locked packages of every member of its
-> workspace and the path crates outside it that any member uses. A change to
-> `Cargo.lock` that moves any member's packages therefore runs every crate of
-> the workspace again ([Lockfile changes](#lockfile-changes)).
+> **Status:** implemented as this page describes. A crate's key follows the
+> feature strategy of its workspace: under `hakari` it holds the crate's own
+> locked packages and the hack crate, under `workspace-build` and `cargo` what
+> a build of the whole workspace reads, so that there a change to
+> `Cargo.lock` that moves any member's packages runs every crate of the
+> workspace again ([Lockfile changes](#lockfile-changes)).
 
 Nx caches the **result** of a Rust task and, for a few targets, its **final
 artifacts**. It never stores or restores Cargo's intermediate files: Cargo owns

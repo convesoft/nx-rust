@@ -34,17 +34,19 @@ export type FeatureUnification = "hakari" | "cargo" | "workspace-build";
 export type TestRunner = "cargo" | "nextest";
 
 /**
- * The settings of `DES-PLUGIN-OPTIONS` that change a crate's inputs. Reading
- * them from the plugin options and the metadata tables is nxr-xyq7c8, and the
- * `hakari` default where a workspace has a cargo-hakari configuration is
- * nxr-k64tm5.
+ * The settings of `DES-PLUGIN-OPTIONS` that change a crate's inputs, from the
+ * plugin options and the metadata tables, with the strategy that the
+ * workspace uses (`workspaceStrategy` in `unification.ts`).
  */
 export interface InputSettings {
-  /**
-   * The workspace's strategy. Until the settings are read, every workspace
-   * counts as `workspace-build`, whose inputs include those of `hakari`.
-   */
+  /** The strategy that the workspace uses, after the checks of `DES-UNIFICATION`. */
   featureUnification: FeatureUnification;
+  /**
+   * Under `hakari`, the files that stand in for the other members' manifests
+   * (`DES-INPUTS`, "Hack crate"), relative to the repository root: the
+   * configuration file of cargo-hakari and the hack crate's manifest.
+   */
+  hakari?: { configFile: string; hackManifest: string };
   /** The workspace's test runner. */
   testRunner: TestRunner;
   /**
@@ -389,7 +391,9 @@ export function targetInputs(
         ])
       : [];
   const after: Input[] = [
-    ...(settings.featureUnification === "hakari" ? [] : memberManifestInputs(subject, context)),
+    ...(settings.featureUnification === "hakari"
+      ? hackCrateInputs(settings, readsDigest)
+      : memberManifestInputs(subject, context)),
     ...outside,
     ...toolConfigurationInputs(target, subject, workspaceRoot, settings),
     ...(target === "fmt" || target === "fmt-check"
@@ -411,6 +415,26 @@ export function targetInputs(
     ...workspaceFiles(subject, context.repositoryRoot),
     ...withoutRepeatedAdditions(redirected, [...named, ...after]),
     ...after,
+  ];
+}
+
+/**
+ * The inputs that stand in for the other members' manifests under `hakari`
+ * (`DES-INPUTS`, "Hack crate"), on every target that reads a digest: the
+ * hack crate's manifest and the configuration file of cargo-hakari, as file
+ * inputs from the repository root. A member reaches the hack crate's folder
+ * through its edge already; the manifest is named directly as well, so that
+ * it is in the key of a member whose dependency on the hack crate is
+ * missing, until the drift check reports that.
+ */
+// @mara implements DES-INPUTS
+function hackCrateInputs(settings: InputSettings, readsDigest: boolean): Input[] {
+  if (!readsDigest || settings.hakari === undefined) {
+    return [];
+  }
+  return [
+    `{workspaceRoot}/${settings.hakari.hackManifest}`,
+    `{workspaceRoot}/${settings.hakari.configFile}`,
   ];
 }
 

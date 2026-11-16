@@ -48,6 +48,21 @@ export interface ProjectCargoMetadata {
    * without any.
    */
   targetWarnings?: TargetWarning[];
+  /**
+   * The feature-unification strategy that the project's workspace uses
+   * (`DES-UNIFICATION`), which decides how the executor selects the crates
+   * of a group; absent for `workspace-build` without a check, which the
+   * executor takes for an absent value, as for a graph from before the
+   * strategies.
+   */
+  featureUnification?: "hakari" | "cargo" | "workspace-build";
+  /**
+   * Under `hakari`, the triples of `platforms` in cargo-hakari's
+   * configuration: a task that builds for a triple, or on a host, that it
+   * does not list forms a group of one crate (`DES-UNIFICATION`, "Triples
+   * that `platforms` does not list").
+   */
+  hakariPlatforms?: string[];
 }
 
 /** A warning about one target of a project, with the text graph creation prints. */
@@ -67,6 +82,12 @@ export function cargoMetadata(project: CargoProject): ProjectCargoMetadata {
     ...(project.pkg !== undefined && project.settings.name !== undefined
       ? { nameOverride: true }
       : {}),
+    ...(project.strategy === undefined
+      ? {}
+      : { featureUnification: project.strategy.featureUnification }),
+    ...(project.strategy?.hakari === undefined
+      ? {}
+      : { hakariPlatforms: [...project.strategy.hakari.platforms] }),
   };
 }
 

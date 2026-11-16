@@ -41,7 +41,14 @@ export function initReport(
   tools: readonly OptionalTool[] = optionalTools,
 ): InitReport {
   const report: InitReport = { warnings: [], info: [] };
-  const context: ToolContext = { workspaceRoot, workspaces: check.workspaces, env };
+  const context: ToolContext = {
+    workspaceRoot,
+    workspaces: check.workspaces.map((workspace) => {
+      const featureUnification = check.strategies?.get(workspace.root);
+      return featureUnification === undefined ? workspace : { ...workspace, featureUnification };
+    }),
+    env,
+  };
   const notNeeded: string[] = [];
   for (const tool of tools) {
     if (tool.installed(context)) {

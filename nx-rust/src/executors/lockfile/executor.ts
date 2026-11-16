@@ -10,16 +10,20 @@ const executor: PluginExecutor = {
   name: lockfileExecutor,
   shortName: "lockfile",
   declared: declaredOptionsOf(lockfileExecutor),
-  serves: (target) => target === "lockfile",
+  serves: (target) => target === "lockfile" || target === "hakari-check",
 };
 
 /**
- * The executor of the lockfile task, `@convesoft/nx-rust:lockfile`, which
- * has no batch implementation, so that the task never joins a batch
- * (`DES-LOCKFILE-HASHING`). It runs `cargo update --workspace` in the
- * workspace root, with `--locked` in locked mode, and then writes the
- * members' digests from the `Cargo.lock` that cargo leaves.
+ * The executor of the lockfile task and of `hakari-check`,
+ * `@convesoft/nx-rust:lockfile`, which has no batch implementation, so that
+ * neither task ever joins a batch (`DES-LOCKFILE-HASHING`,
+ * `DES-UNIFICATION`). The lockfile task runs `cargo update --workspace` in
+ * the workspace root, with `--locked` in locked mode, and then writes the
+ * members' digests from the `Cargo.lock` that cargo leaves; `hakari-check`
+ * runs `cargo hakari generate --diff` and then `cargo hakari manage-deps
+ * --dry-run` there, and fails where either fails.
  */
+// @mara implements DES-UNIFICATION
 // @mara implements DES-TARGETS
 // @mara implements DES-LOCKFILE-HASHING
 export default function lockfile(

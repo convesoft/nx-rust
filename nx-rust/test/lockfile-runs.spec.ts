@@ -18,6 +18,10 @@ import {
   FixtureName,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  packageSpec,
+  hakariSetup,
+  pathWith,
+  StubHakari,
   holdCargo,
   LocalRegistry,
   lockfileCalls,
@@ -404,6 +408,51 @@ describe("nx affected after a change to Cargo.lock", () => {
           await workspace.nx(["daemon", "--stop"], { ...env, ...daemon });
         }
         workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+describe("nx affected after a change to Cargo.lock under the hakari strategy", () => {
+  it(
+    "runs the crates whose digest changed and restores the others from the cache",
+    async () => {
+      // The workspace at the root uses hakari, with a hack crate in
+      // crates/hack; hakari-check runs a stub cargo-hakari that passes.
+      const stub = new StubHakari();
+      const workspace = await locked(
+        "two-workspaces",
+        {
+          "crates/app/Cargo.toml": dependencies('zzlib = "1"'),
+          ".gitignore": "node_modules/\n.nx/\ntarget/\n",
+          ...hakariSetup("."),
+        },
+        ["."],
+      );
+      const withStub = { PATH: pathWith(stub.folder) };
+      try {
+        commitAll(workspace, "The fixture");
+        expect((await nx(workspace, ["run-many", "-t", "test"], withStub)).status).toBe(0);
+        cargo(workspace, ".", "update", "-p", "zzlib", "--precise", "1.0.1");
+        commitAll(workspace, "Bump zzlib");
+
+        const run = await nx(
+          workspace,
+          ["affected", "-t", "test", "--base=HEAD~1", "--head=HEAD"],
+          withStub,
+        );
+
+        expect(run.status).toBe(0);
+        expect(run.output).toContain("nx run cargo-workspace:hakari-check");
+        expect(restored(run.output, "util:test")).toBe(true);
+        expect(restored(run.output, "app:test")).toBe(false);
+        expect(ran(workspace).filter((call) => !call.includes(": hakari "))).toEqual([
+          `.: test -p ${packageSpec(workspace.root, ".", "app")}`,
+        ]);
+      } finally {
+        workspace.remove();
+        stub.remove();
       }
     },
     HARNESS_TIMEOUT,

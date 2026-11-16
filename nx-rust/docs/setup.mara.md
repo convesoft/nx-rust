@@ -2,9 +2,10 @@
 
 > **Status:** milestone 0.1 is implemented on `main` but not published to npm
 > yet, so `nx add @convesoft/nx-rust` cannot install it until the package is
-> published. Of the tools below, tasks run only cargo-audit and cargo-deny so
-> far. The features that need the others arrive with milestones 0.2 to 0.4,
-> and until then `init` reports those tools as not needed by your settings.
+> published. Of the tools below, tasks run only cargo-hakari, cargo-audit and
+> cargo-deny so far. The features that need the others arrive with milestones
+> 0.3 and 0.4, and until then `init` reports those tools as not needed by your
+> settings.
 
 ## What you need
 

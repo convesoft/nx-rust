@@ -223,13 +223,31 @@ export async function runGroup(
       if (failed) {
         return { success: false, output: lines.join("\n") };
       }
-      const { failures, warnings } = await checksAfterCargo(member.invocation, member.context);
+      const { failures, warnings } = await checksAfterCargo(
+        members.length > 1 ? sharedCommandChecks(member.invocation) : member.invocation,
+        member.context,
+      );
       return {
         success: failures.length === 0,
         output: [...lines, ...warnings, ...failures].join("\n"),
       };
     }),
   );
+}
+
+/**
+ * The checks after cargo of a task that shared its group's command with
+ * other tasks: under `hakari`, the post-check compares the digests of every
+ * member, although the task's key holds its own, because its result rests
+ * on the drift check, which judged the whole lockfile (`DES-LOCKFILE-HASHING`,
+ * "Post-check"). Under the other strategies the key holds them already.
+ */
+// @mara implements DES-LOCKFILE-HASHING
+export function sharedCommandChecks(invocation: GroupInvocation): GroupInvocation {
+  const digests = invocation.digests;
+  return digests?.kind === "check" && digests.sharedMembers !== undefined
+    ? { ...invocation, digests: { ...digests, members: digests.sharedMembers } }
+    : invocation;
 }
 
 // Whether a member's crate has a library, whose doctests the doctest step runs.

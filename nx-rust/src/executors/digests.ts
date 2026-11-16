@@ -33,6 +33,14 @@ export interface DigestCheck {
   commandFolder: string | undefined;
   /** The members whose digests the task's key holds. */
   members: PackageVersion[];
+  /**
+   * Under `hakari`, every member of the workspace, the crate's own first:
+   * the digests that the task compares where it shared its cargo command
+   * with other crates, although its key holds its own
+   * (`DES-LOCKFILE-HASHING`, "Post-check"); absent under the other
+   * strategies, whose keys hold them already.
+   */
+  sharedMembers?: PackageVersion[];
   /** The workspace's root folder, relative to the repository root. */
   workspace: string;
 }

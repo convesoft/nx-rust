@@ -18,6 +18,7 @@ import {
   FileChanges,
   findExecutable,
   FixtureWorkspace,
+  hakariSetup,
   HARNESS_TIMEOUT,
   includedAncestorFiles,
   pinnedToolchain,
@@ -437,6 +438,81 @@ describeCacheKeyMatrix("keys must differ after", [
     after: { files: { [file]: changed } },
     keys: { "plain:test": "must differ", "plain:build": "must differ" },
   })),
+]);
+
+// Under hakari, a crate's key holds the hack crate's manifest and the
+// configuration of cargo-hakari in place of the other members' manifests,
+// and its own digest (DES-INPUTS, "Member manifests", "Hack crate").
+// subfolder-workspace's rust/ gets a hack crate in crates/hack.
+const hakariBase = { files: hakariSetup("rust") };
+
+describeCacheKeyMatrix("keys under the hakari strategy", [
+  {
+    change: "a change to another member's manifest, which leaves a crate's keys alone",
+    fixture: "subfolder-workspace",
+    base: hakariBase,
+    after: {
+      files: { "rust/crates/testkit/Cargo.toml": appended("\n[features]\nextra = []\n") },
+    },
+    keys: {
+      ...all(["model:build", "model:check", "model:lint", "model:test"], "must not differ"),
+      "codegen:test": "must not differ",
+      // api dev-depends on testkit, whose files it hashes through ^default.
+      "api:test": "must differ",
+    },
+  },
+  {
+    change:
+      "a change of the hack crate's manifest, as after cargo hakari generate, for every member",
+    fixture: "subfolder-workspace",
+    base: hakariBase,
+    after: {
+      files: {
+        "rust/crates/hack/Cargo.toml": (manifest) =>
+          (manifest ?? "").replace(
+            "### END HAKARI SECTION",
+            "# generated again\n### END HAKARI SECTION",
+          ),
+      },
+    },
+    keys: {
+      ...all(["model:build", "model:check", "model:lint", "model:test"], "must differ"),
+      "codegen:test": "must differ",
+      "rust:doc": "must differ",
+      "model:fmt-check": "must not differ",
+    },
+  },
+  {
+    change: "a change of .config/hakari.toml, for every member",
+    fixture: "subfolder-workspace",
+    base: hakariBase,
+    after: { files: { "rust/.config/hakari.toml": appended("exact-versions = false\n") } },
+    keys: {
+      ...all(["model:build", "model:test", "codegen:check"], "must differ"),
+      "model:fmt-check": "must not differ",
+    },
+  },
+  {
+    change:
+      "a change in a redirected crate that other members may use, for a member without registry or git dependencies",
+    // Without the patch of the member model, which would make rust/ fall
+    // back, api and viaw use fork through registry dependencies that rust's
+    // [patch] redirects; plain has no dependency.
+    fixture: "patched-workspaces",
+    base: {
+      files: {
+        ...hakariSetup("rust"),
+        "rust/Cargo.toml": (manifest) =>
+          (manifest ?? "").replace('model = { path = "crates/model" }\n', ""),
+      },
+    },
+    after: { files: { "third_party/fork/src/lib.rs": changed } },
+    keys: {
+      "plain:test": "must not differ",
+      "plain:build": "must not differ",
+      "viaw:build": "must differ",
+    },
+  },
 ]);
 
 describeCacheKeyMatrix("keys must not differ after", [

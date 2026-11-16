@@ -7,6 +7,11 @@ import { delimiter, join, resolve } from "node:path";
 export interface ToolWorkspace {
   /** The folder of the root manifest, relative to the repository root: `.` for the root itself. */
   root: string;
+  /**
+   * The feature-unification strategy that graph creation chose for the
+   * workspace (`DES-UNIFICATION`); `workspace-build` where absent.
+   */
+  featureUnification?: "hakari" | "cargo" | "workspace-build";
 }
 
 /** What the table of tools looks at. */
@@ -67,12 +72,13 @@ export const wasmTriple = "wasm32-unknown-unknown";
  * the missing ones, and a task that runs a missing one fails
  * ({@link requireTool}); the rows of the wasm tools are one row there.
  *
- * Which tool the configuration needs follows the features that exist. The
- * settings that ask for cargo-nextest, cargo-affected and cargo-hakari, and
- * the artifact targets that run the wasm and napi tools, are not implemented
+ * Which tool the configuration needs follows the features that exist.
+ * cargo-hakari is needed by every workspace that uses the `hakari` strategy.
+ * The settings that ask for cargo-nextest and cargo-affected, and the
+ * artifact targets that run the wasm and napi tools, are not implemented
  * yet, so nothing needs those tools until their issues add the condition:
- * nxr-jb6g5y (`testRunner`), nxr-tabkjx (`affectedTests`), nxr-k64tm5 (the
- * `hakari` strategy), nxr-0ap8n4 (`wasm-build`) and nxr-tv3r95 (`napi-build`).
+ * nxr-jb6g5y (`testRunner`), nxr-tabkjx (`affectedTests`), nxr-0ap8n4
+ * (`wasm-build`) and nxr-tv3r95 (`napi-build`).
  */
 // @mara implements DES-GENERATORS
 export const optionalTools: readonly OptionalTool[] = [
@@ -96,7 +102,13 @@ export const optionalTools: readonly OptionalTool[] = [
     install:
       "Install it with `cargo install --locked cargo-hakari` (https://docs.rs/cargo-hakari).",
     installed: (context) => cargoSubcommandInstalled("hakari", context.env, toolFolder(context)),
-    neededBy: () => [],
+    neededBy: (context) =>
+      context.workspaces
+        .filter((workspace) => workspace.featureUnification === "hakari")
+        .map(
+          (workspace) =>
+            `the hakari-check target of the Cargo workspace in ${describeFolder(workspace.root)}`,
+        ),
   },
   {
     id: "wasm-bindgen",

@@ -188,7 +188,9 @@ export async function* runBatch(
     // following batch once it has stored this one's (writesStoredFiles), and
     // the folders that the build groups of this batch have written.
     const deferred = new Set<string>();
-    const written = new Set<string>();
+    // The crates whose stored files a build group of this batch has
+    // written, by workspace root.
+    const written = new Map<string, Set<string>>();
     const dependencies = (id: string): string[] =>
       (taskGraph.dependencies?.[id] ?? []).flatMap((edge: unknown) => {
         const dependency = typeof edge === "string" ? edge : (edge as { id?: string } | null)?.id;
@@ -240,15 +242,23 @@ export async function* runBatch(
         break;
       }
       for (const group of wholeWorkspaceFirst(planGroups(formGroups(wave)))) {
-        const folder = writesStoredFiles(group);
-        if (folder !== undefined) {
-          if (group.selection.kind === "workspace" && written.has(folder)) {
+        const writes = writesStoredFiles(group);
+        if (writes !== undefined) {
+          const before = written.get(writes.root) ?? new Set<string>();
+          if (
+            writes.crates === "all"
+              ? before.size > 0
+              : writes.crates.some((crate) => before.has(crate))
+          ) {
             for (const task of group.tasks) {
               deferred.add(task.id);
             }
             continue;
           }
-          written.add(folder);
+          for (const task of group.tasks) {
+            before.add(task.crate ?? "");
+          }
+          written.set(writes.root, before);
         }
         for (const entry of await runReadyGroup(
           group.tasks,
@@ -400,16 +410,18 @@ function wholeWorkspaceFirst<T extends { selection: GroupSelection }>(groups: re
 }
 
 /**
- * The workspace root of a group whose cargo command writes files that the
- * `build` tasks of a batch store, or `undefined` for a group that writes none
- * (`DES-BATCH`, "Files that a batch stores"). A group of `build` writes the
- * executables, `cdylib` and `staticlib` files of `build`'s outputs in the
- * folder of its profile and triple: every member's where it selects the whole
- * workspace, and only its own crate's where it selects one crate, also where
- * its feature set changes that of crates it depends on, as Cargo 1.91.0 and
- * 1.100.0 do (`EVD-CARGO-ARTIFACT-WRITERS`). The key is the workspace root
- * alone, so that two groups whose profiles or triples share a folder under
- * other names, such as `dev` and `test`, count as writing the same files.
+ * Where a group's cargo command writes files that the `build` tasks of a
+ * batch store, or `undefined` for a group that writes none (`DES-BATCH`,
+ * "Files that a batch stores"): the workspace root, and the crates whose
+ * files it writes. A group of `build` writes the executables, `cdylib` and
+ * `staticlib` files of `build`'s outputs in the folder of its profile and
+ * triple: every member's where it selects the whole workspace, and only
+ * those of the crates it selects with `-p` otherwise, as a group of one
+ * crate and a group under `hakari` or `cargo` do, also where its feature set
+ * changes that of crates they depend on, as Cargo 1.91.0 and 1.100.0 do
+ * (`EVD-CARGO-ARTIFACT-WRITERS`). The crates count by workspace root alone,
+ * so that two groups whose profiles or triples share a folder under other
+ * names, such as `dev` and `test`, count as writing the same files.
  *
  * `doc` is not concerned: it belongs to the workspace project, one task per
  * Cargo workspace, and writes only its workspace's `doc` folder, which no
@@ -418,15 +430,27 @@ function wholeWorkspaceFirst<T extends { selection: GroupSelection }>(groups: re
  * commands replace (`ADR-WORKSPACE-TEST-EXECUTABLES`).
  *
  * Nx stores a batch's outputs once the whole batch has ended
- * (`EVD-NX-24-BATCHES`). So a group that selects the whole workspace runs
- * only where no `build` group of this batch has run in the same workspace
- * root before it; otherwise its tasks are left unreported, and Nx runs them in
- * a following batch once it has stored this one's ("Tasks left unreported").
+ * (`EVD-NX-24-BATCHES`). So a group runs only where no `build` group of this
+ * batch has run before it in the same workspace root for a crate whose files
+ * it writes: a group that selects the whole workspace only where none has
+ * run there at all. Otherwise its tasks are left unreported, and Nx runs them
+ * in a following batch once it has stored this one's ("Tasks left
+ * unreported").
  */
 // @mara implements DES-BATCH
-function writesStoredFiles(group: { tasks: readonly PreparedTask[] }): string | undefined {
+function writesStoredFiles(group: {
+  tasks: readonly PreparedTask[];
+  selection: GroupSelection;
+}): { root: string; crates: string[] | "all" } | undefined {
   const [first] = group.tasks;
-  return first === undefined || first.target !== "build" ? undefined : first.cwd;
+  if (first === undefined || first.target !== "build") {
+    return undefined;
+  }
+  return {
+    root: first.cwd,
+    crates:
+      group.selection.kind === "workspace" ? "all" : group.tasks.map((task) => task.crate ?? ""),
+  };
 }
 
 /**

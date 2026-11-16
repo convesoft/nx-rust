@@ -23,6 +23,7 @@ import {
   withoutRunner,
   workspaceArgs,
   workspaceTestSteps,
+  hakariSetup,
 } from "./harness";
 
 // Checks the parts of VER-CONFIGURATION about the metadata tables and the
@@ -1219,9 +1220,41 @@ describe("per-workspace settings", () => {
     [manifest]: appendTo("[package.metadata.nx.targets.test.options]\naffectedTests = true"),
   });
 
-  // featureUnification has no effect yet: until nxr-k64tm5 passes each
-  // workspace's strategy to the inputs, every workspace counts as
-  // workspace-build, whatever the setting says.
+  it(
+    "take featureUnification from the workspace table over the plugin options, as its effect on the targets shows",
+    async () => {
+      // tools/ has a cargo-hakari configuration that passes every check, so
+      // that the plugin options' hakari gives it hakari-check; its table's
+      // workspace-build takes it away. The root workspace, without a
+      // configuration, falls back from the options' hakari.
+      const hakari: FileChanges = {
+        "nx.json": pluginOptions({ featureUnification: "hakari" }),
+        "tools/Cargo.toml": (manifest) =>
+          (manifest ?? "").replace('members = ["scaffold"]', 'members = ["scaffold", "hack"]'),
+        ...hakariSetup("tools", "hack"),
+      };
+      const fromOptions = await loadFixtureGraph("two-workspaces", { files: hakari });
+      expect(fromOptions.projects.tools.targets["hakari-check"]).toBeDefined();
+      expect(fromOptions.projects.scaffold.targets.test.inputs).toContain(
+        "{workspaceRoot}/tools/.config/hakari.toml",
+      );
+      expect(fromOptions.projects.app.targets.test.dependsOn).toHaveLength(1);
+
+      const fromTable = await loadFixtureGraph("two-workspaces", {
+        files: {
+          ...hakari,
+          "tools/Cargo.toml": (manifest) =>
+            `${(manifest ?? "").replace('members = ["scaffold"]', 'members = ["scaffold", "hack"]')}\n[workspace.metadata.nx]\nfeatureUnification = "workspace-build"\n`,
+        },
+      });
+      expect(fromTable.projects.tools.targets["hakari-check"]).toBeUndefined();
+      expect(JSON.stringify(fromTable.projects.scaffold.targets.test.inputs)).not.toContain(
+        "hakari.toml",
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+
   it(
     "take a workspace's per-workspace settings from its table, and elsewhere from the plugin options",
     async () => {

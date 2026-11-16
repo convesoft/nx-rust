@@ -16,6 +16,7 @@ import { pluginPackageName } from "./plugin-package";
 import type { GraphSettings, ProjectSettings } from "./settings";
 import { applyTargetTables } from "./target-tables";
 import { inferTargets, nameTargets } from "./targets";
+import type { WorkspaceStrategy } from "./unification";
 import { warningsInput } from "./warnings";
 
 /**
@@ -74,6 +75,12 @@ export interface CargoProject {
   warnings: string[];
   /** Its own `fileInputs` patterns, as resolved (`declaredFiles` in `declared-files.ts`). */
   declaredPatterns: DeclaredPattern[];
+  /**
+   * The feature-unification strategy of its workspace, which the executor
+   * reads from the project's metadata (`cargoMetadata` in `collisions.ts`);
+   * absent where it is `workspace-build` without being checked.
+   */
+  strategy?: WorkspaceStrategy;
 }
 
 /** What one `createNodes` call of a plugin entry found, kept for its `createDependencies`. */
@@ -88,6 +95,12 @@ export interface CargoGraph {
    * graph of discovery alone.
    */
   declaredPatterns?: DeclaredPattern[];
+  /**
+   * The feature-unification strategy of each workspace, by its root folder
+   * (`workspaceStrategies` in `unification.ts`); absent in a graph of
+   * discovery alone.
+   */
+  strategies?: ReadonlyMap<string, WorkspaceStrategy>;
 }
 
 /**
@@ -122,6 +135,7 @@ export function inferProjects(
     CargoProject,
     "targets" | "namedInputs" | "warnings" | "declaredPatterns"
   >[] = [];
+  const strategyOf = (workspace: CargoWorkspace) => context.strategies?.get(workspace.root);
   for (const workspace of discovery.workspaces) {
     const rootManifest = join(workspace.report.workspace_root, "Cargo.toml");
     for (const pkg of workspace.members) {
@@ -140,6 +154,7 @@ export function inferProjects(
         pkg,
         isWorkspaceProject: pkg.manifest_path === rootManifest,
         settings: own,
+        ...withStrategy(strategyOf(workspace)),
       });
     }
     const rootIsCrate = workspace.report.packages.some((pkg) => pkg.manifest_path === rootManifest);
@@ -152,6 +167,7 @@ export function inferProjects(
         workspace,
         isWorkspaceProject: true,
         settings: own,
+        ...withStrategy(strategyOf(workspace)),
       });
     }
   }
@@ -183,10 +199,11 @@ export function inferProjects(
         context,
         settings.options.locked,
         {
-          settings: inputSettings(project.settings, fileInputs(project)),
+          settings: inputSettings(project.settings, fileInputs(project), project.strategy),
           targetTables: (target) =>
             targetTables(project.settings, settings.options.targetNames[target] ?? target),
           lockfileTarget: settings.options.targetNames.lockfile ?? "lockfile",
+          hakariCheckTarget: settings.options.targetNames["hakari-check"] ?? "hakari-check",
         },
         settings.options.targetNames,
       ),
@@ -204,7 +221,7 @@ export function inferProjects(
     namedInputs: namedInputs(
       project,
       context,
-      inputSettings(project.settings, fileInputs(project)),
+      inputSettings(project.settings, fileInputs(project), project.strategy),
     ),
     warnings: projectWarnings(project, context),
     declaredPatterns: declared.get(project)?.patterns ?? [],
@@ -238,21 +255,36 @@ export function withWarningsInputs(
  * The settings that change a project's inputs: the variables and commands
  * that the plugin options and the metadata tables add, the filesets for the
  * patterns of `fileInputs` in both tables (`DES-PLUGIN-OPTIONS`, "Added
- * inputs") and the workspace's test runner. Every workspace counts as
- * `workspace-build`, whose inputs include those of the other strategies,
- * until the strategies exist (nxr-k64tm5).
+ * inputs"), the workspace's test runner, and the feature-unification
+ * strategy that its workspace uses, with the files of cargo-hakari under
+ * `hakari` (`DES-INPUTS`, "Hack crate").
  *
  * @param fileInputs The filesets of `declaredFiles` in `declared-files.ts`.
+ * @param strategy The workspace's strategy; `workspace-build` where absent.
  */
 function inputSettings(
   settings: ProjectSettings,
   fileInputs: readonly InputDefinition[],
+  strategy: WorkspaceStrategy | undefined,
 ): InputSettings {
   return {
-    featureUnification: "workspace-build",
+    featureUnification: strategy?.featureUnification ?? "workspace-build",
+    ...(strategy?.hakari === undefined
+      ? {}
+      : {
+          hakari: {
+            configFile: strategy.hakari.configFile,
+            hackManifest: strategy.hakari.hackManifest,
+          },
+        }),
     testRunner: settings.workspace.testRunner,
     added: { envInputs: settings.envInputs, runtimeInputs: settings.runtimeInputs, fileInputs },
   };
+}
+
+// The strategy of a project's workspace, where it is one that was checked or set.
+function withStrategy(strategy: WorkspaceStrategy | undefined): { strategy?: WorkspaceStrategy } {
+  return strategy === undefined ? {} : { strategy };
 }
 
 // The target tables of the project for the target of this final name, in

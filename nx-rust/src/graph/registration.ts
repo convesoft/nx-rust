@@ -8,6 +8,7 @@ import type { TargetWarning } from "./collisions";
 import { CargoGraph, inferProjects, projectNodes, withWarningsInputs } from "./projects";
 import { readPluginOptions, readSettings } from "./settings";
 import { type PlacedWarning, targetDefaultCauses } from "./target-defaults";
+import { workspaceStrategies } from "./unification";
 
 /** What the `createNodes` call that started last found. */
 interface Outcome {
@@ -119,17 +120,20 @@ export class Registration {
       const discovery = await discoverWorkspaces(manifests, workspaceRoot, reports);
       const settings = readSettings(discovery, pluginOptions);
       const view = await checkEntries(discovery, manifests, nxJson);
+      const strategies = workspaceStrategies(discovery, settings);
       const context = await cacheContext(
         discovery,
         nxJson,
         nxWarning === undefined ? [] : [nxWarning],
         reports,
         view,
+        strategies,
       );
       const projects = inferProjects(discovery, settings, context);
       const causes = await targetDefaultCauses(projects, nxJson, workspaceRoot);
       graph = {
         discovery,
+        strategies,
         projects: withWarningsInputs(projects, workspaceRoot, causes),
         declaredPatterns: [
           ...projects.flatMap((project) => project.declaredPatterns),

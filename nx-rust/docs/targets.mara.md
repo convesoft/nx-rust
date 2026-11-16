@@ -6,9 +6,8 @@
 > `nx-release-publish`, until its guard arrives with milestone 0.5. `test`
 > runs `cargo test`; nextest arrives with milestone 0.3. `build` and `doc` run
 > the executor `@convesoft/nx-rust:cargo-outputs`, the other cargo targets
-> `@convesoft/nx-rust:cargo`. Each task still runs a cargo call of its own,
-> until the strategies of milestone 0.2 let crates share one
-> ([Batching and features](execution.mara.md)).
+> `@convesoft/nx-rust:cargo`, and the tasks of one group share their cargo
+> calls ([Batching and features](execution.mara.md)).
 
 The plugin infers targets from the shape of each crate and of each Cargo
 workspace. Nothing is declared per crate.

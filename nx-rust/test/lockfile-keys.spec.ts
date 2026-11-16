@@ -8,6 +8,7 @@ import {
   applyFileChanges,
   FixtureWorkspace,
   HARNESS_TIMEOUT,
+  hakariSetup,
   LocalRegistry,
   testEnvironment,
   WorkspaceState,
@@ -432,6 +433,58 @@ describeCacheKeyMatrix(
     },
   ],
 );
+
+// Under hakari, a crate's key holds its own digest, which the hack crate
+// complements while the drift check passes (DES-INPUTS, "External
+// dependencies"): the rows above that differ under workspace-build stay the
+// same.
+describeCacheKeyMatrix("keys with the lockfile task under the hakari strategy", [
+  {
+    change:
+      "a locked version bump of an external crate outside the crate's resolved dependencies, which only other members reach",
+    fixture: "subfolder-workspace",
+    lockfileTask: true,
+    base: { ...subfolderBase, files: { ...subfolderBase.files, ...hakariSetup("rust") } },
+    before: { prepare: lockedAt("rust", "yylib", "1.0.0") },
+    after: { prepare: lockedAt("rust", "yylib", "1.0.1") },
+    // testkit uses yylib, and api dev-depends on testkit.
+    keys: {
+      ...all(
+        compiling.map((target) => `model:${target}`),
+        "must not differ",
+      ),
+      "codegen:test": "must not differ",
+      "testkit:test": "must differ",
+      "api:test": "must differ",
+      "rust:doc": "must differ",
+    },
+  },
+  {
+    change: "such a bump for the crate at the root of its workspace, which another member reaches",
+    fixture: "two-workspaces",
+    lockfileTask: true,
+    base: {
+      files: {
+        "tools/Cargo.toml": (manifest) =>
+          (manifest ?? "").replace(
+            'members = ["scaffold"]',
+            'members = ["scaffold", "extra", "hack"]',
+          ),
+        ...crate("tools/extra", "extra", 'zzlib = "1"'),
+        ...hakariSetup("tools", "hack"),
+      },
+      env,
+    },
+    before: { prepare: lockedAt("tools", "zzlib", "1.0.0") },
+    after: { prepare: lockedAt("tools", "zzlib", "1.0.1") },
+    keys: {
+      "tools:test": "must not differ",
+      "tools:build": "must not differ",
+      "scaffold:test": "must not differ",
+      "extra:test": "must differ",
+    },
+  },
+]);
 
 describeCacheKeyMatrix("keys with the lockfile task: must not differ after", [
   {

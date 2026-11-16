@@ -7,6 +7,7 @@ import type {
 import { basename } from "node:path";
 import { describeNxMajors, nxVerdictFor, supportedNxMajors } from "../../compatibility/nx-version";
 import type { CargoWorkspace } from "../../graph/discovery";
+import type { FeatureUnification } from "../../graph/settings";
 import { registrationOf } from "../../graph/registration";
 import plugin = require("../../index");
 
@@ -22,6 +23,11 @@ export interface GraphCheck {
   manifests: string[];
   /** The Cargo workspaces the entries found, each once, in the order they were found. */
   workspaces: CargoWorkspace[];
+  /**
+   * The feature-unification strategy that graph creation chose for each of
+   * them, by the workspace's root folder (`DES-UNIFICATION`).
+   */
+  strategies?: ReadonlyMap<string, FeatureUnification>;
 }
 
 /** Graph creation would fail with the plugin's entries in `nx.json`. */
@@ -151,11 +157,16 @@ export async function checkGraphCreation(
   }
 
   const workspaces = new Map<string, CargoWorkspace>();
+  const strategies = new Map<string, FeatureUnification>();
   for (const { copy } of entries) {
-    const discovery = registrationOf(copy).graphForDependencies(workspaceRoot)?.discovery;
-    for (const workspace of discovery?.workspaces ?? []) {
+    const graph = registrationOf(copy).graphForDependencies(workspaceRoot);
+    for (const workspace of graph?.discovery.workspaces ?? []) {
       if (!workspaces.has(workspace.root)) {
         workspaces.set(workspace.root, workspace);
+        const strategy = graph?.strategies?.get(workspace.root);
+        if (strategy !== undefined) {
+          strategies.set(workspace.root, strategy.featureUnification);
+        }
       }
     }
   }
@@ -166,6 +177,7 @@ export async function checkGraphCreation(
       ),
     ].sort(),
     workspaces: [...workspaces.values()],
+    strategies,
   };
 }
 

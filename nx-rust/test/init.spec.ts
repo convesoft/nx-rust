@@ -825,6 +825,29 @@ describe("init's report of tools", () => {
     },
   );
 
+  it("warns that cargo-hakari is missing where a workspace uses the hakari strategy", () => {
+    const workspace = { root: "rust", report: {}, members: [] } as unknown as CargoWorkspace;
+    const check: GraphCheck = {
+      manifests: ["rust/Cargo.toml"],
+      workspaces: [workspace],
+      strategies: new Map([["rust", "hakari"]]),
+    };
+    const { warnings, info } = initReport(check, root, tools.env());
+
+    expect(warnings).toEqual([
+      "cargo-hakari is not installed, but the hakari-check target of the Cargo workspace in rust needs it. Install it with `cargo install --locked cargo-hakari` (https://docs.rs/cargo-hakari).",
+    ]);
+    expect(info[0]).not.toContain("cargo-hakari");
+    // Under the fallback, nothing needs it.
+    const fallback = initReport(
+      { ...check, strategies: new Map([["rust", "workspace-build"]]) },
+      root,
+      tools.env(),
+    );
+    expect(fallback.warnings).toEqual([]);
+    expect(fallback.info[0]).toContain("cargo-hakari");
+  });
+
   it("counts a cargo-deny configuration file only in a workspace root", () => {
     const { warnings, info } = report(["deny.toml", "rust/crates/api/deny.toml"]);
 

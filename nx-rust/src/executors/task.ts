@@ -105,6 +105,7 @@ const renamedProfiles: Readonly<Record<string, string>> = {
 const targetTools: Partial<Record<InferredTargetName, OptionalToolId>> = {
   audit: "cargo-audit",
   deny: "cargo-deny",
+  "hakari-check": "cargo-hakari",
 };
 
 /** A problem that stops a task before cargo runs; its message is what the task prints. */
@@ -264,8 +265,15 @@ export async function runTask(
     }
     return { success: result.success };
   }
-  if (!(await runCargo(invocation, env, verbose ? task : undefined))) {
-    return { success: false };
+  // Every step of the group, one after another, each only after the one
+  // before it succeeded: one for most targets, two for `hakari-check`.
+  for (const step of invocation.steps) {
+    if (!(await runCargo({ ...invocation, args: step.args }, env, verbose ? task : undefined))) {
+      if (prepared.target === "hakari-check") {
+        console.error(hakariCheckFailure(task, step.args));
+      }
+      return { success: false };
+    }
   }
   const { failures, warnings } = await checksAfterCargo(invocation, context);
   for (const warning of warnings) {
@@ -275,6 +283,17 @@ export async function runTask(
     console.error(failure);
   }
   return { success: failures.length === 0 };
+}
+
+/**
+ * The message of a failed `hakari-check`, after cargo-hakari's own output
+ * (`DES-UNIFICATION`, "Drift"; `DES-DIAGNOSTICS`): which command failed, and
+ * that running `cargo hakari generate` and `cargo hakari manage-deps` and
+ * committing the result brings the hack crate up to date.
+ */
+// @mara implements DES-DIAGNOSTICS
+export function hakariCheckFailure(task: string, args: readonly string[]): string {
+  return `${task}: \`cargo ${args.join(" ")}\` failed, so the hack crate of cargo-hakari is not current, or cargo-hakari could not read the package graph, as its output above says. No task of the workspace's crates that depends on this check runs, so that Nx stores no result for them. Run \`cargo hakari generate\` and \`cargo hakari manage-deps\` in the workspace root and commit the result.`;
 }
 
 /**
@@ -374,6 +393,18 @@ export interface PreparedTask {
    * gives every task of a run does not count.
    */
   ownFeatureSet?: boolean;
+  /**
+   * The feature-unification strategy of the task's workspace, as graph
+   * creation recorded it in the project's metadata (`DES-UNIFICATION`);
+   * `workspace-build` where it recorded none, and where absent.
+   */
+  featureUnification?: "hakari" | "cargo" | "workspace-build";
+  /**
+   * Under `hakari`, the triples of `platforms` that graph creation recorded:
+   * a task that builds for another triple, or on another host, forms a
+   * group of one crate ("Triples that `platforms` does not list").
+   */
+  hakariPlatforms?: string[];
   /** The task's environment, with which its checks ran and its cargo runs. */
   env: NodeJS.ProcessEnv;
 }
@@ -528,6 +559,7 @@ export function prepareTask(
     );
   }
   const locked = lockedMode(metadata.locked, env.NX_RUST_LOCKED);
+  const strategy = cargo.featureUnification ?? "workspace-build";
   const configured = configuredOptions(context);
   let examined: TaskOptions;
   try {
@@ -598,6 +630,22 @@ export function prepareTask(
           `${task}: the cache key of this task holds the digests of every member of its Cargo workspace, ${workspaceRoot === "." ? "at the repository root" : `in ${workspaceRoot}`}, but the metadata of the lockfile task ${lockfileTask.id} names no member, so nx-rust cannot check them after cargo's call. The task does not run, so that Nx stores no result for it. Run \`nx reset\` so that Nx creates the project graph again.`,
         );
       }
+      // Under `hakari`, a task that shares its command compares every
+      // member's digest, although its key holds its own: its result rests
+      // on the drift check, which judged the whole lockfile
+      // (`DES-LOCKFILE-HASHING`, "Post-check").
+      const shared =
+        strategy === "hakari"
+          ? heldMembers(metadata.digests, true, lockfileTask.members)
+          : undefined;
+      if (strategy === "hakari" && shared === undefined) {
+        throw new TaskError(
+          `${task}: this task compares the digests of every member of its Cargo workspace, ${workspaceRoot === "." ? "at the repository root" : `in ${workspaceRoot}`}, after a cargo command that it shares with other crates, but the metadata of the lockfile task ${lockfileTask.id} names no member, so nx-rust cannot check them after cargo's call. The task does not run, so that Nx stores no result for it. Run \`nx reset\` so that Nx creates the project graph again.`,
+        );
+      }
+      if (strategy === "hakari" && metadata.target !== "doc") {
+        checkHakariDependency(context, cargo.workspaceManifest);
+      }
       digests = {
         kind: "check",
         task,
@@ -605,6 +653,7 @@ export function prepareTask(
         folder,
         commandFolder,
         members,
+        ...(shared === undefined ? {} : { sharedMembers: shared }),
         workspace: workspaceRoot,
       };
     }
@@ -645,6 +694,8 @@ export function prepareTask(
       ? { records: metadata.records }
       : {}),
     ...(setsFeatureSet(context.target?.options) ? { ownFeatureSet: true } : {}),
+    featureUnification: strategy,
+    ...(cargo.hakariPlatforms === undefined ? {} : { hakariPlatforms: cargo.hakariPlatforms }),
     env,
   };
 }
@@ -808,6 +859,7 @@ export function groupInvocations(
         locked: task.locked,
         binaryArguments: task.binaryArguments,
         workspace,
+        workspaceUnification: task.featureUnification === "cargo",
       },
       task.options,
       runner,
@@ -933,6 +985,51 @@ function keyHoldsDigests(
     [
       `${task}: this task does not depend on the lockfile task of its Cargo workspace, ${folder === "." ? "at the repository root" : `in ${folder}`}, so its cache key holds no digest of the crate's locked dependencies, and Nx could restore its result after Cargo.lock has changed. The task does not run, so that Nx stores no result for it.`,
       `Make sure that the workspace's folder is an Nx project with the plugin's lockfile target, and that no configuration replaces the dependsOn of ${task}: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry. A run with --exclude-task-dependencies runs the task without the lockfile task, and Nx never restores what it stores then.`,
+    ].join("\n"),
+  );
+}
+
+/**
+ * Fails a cached crate task of a workspace that uses `hakari` before cargo
+ * runs where its task graph holds no dependency on the workspace's
+ * `hakari-check`, in a run that does not exclude task dependencies
+ * (`DES-UNIFICATION`, "Drift"): its key holds the hack crate's manifest in
+ * place of the other members', which stands for them only while the drift
+ * check passes, so that nothing would have checked the hack crate. The
+ * caller runs it only where {@link keyHoldsDigests} found the lockfile task
+ * in such a run.
+ *
+ * @throws {TaskError} Naming the workspace and how to find what replaced the
+ *   task's `dependsOn` (`DES-DIAGNOSTICS`).
+ */
+// @mara implements DES-UNIFICATION
+// @mara implements DES-DIAGNOSTICS
+function checkHakariDependency(context: ExecutorContext, workspaceManifest: string): void {
+  const graphTask = graphTaskOf(context);
+  if (graphTask === undefined) {
+    return;
+  }
+  const projects = context.projectsConfigurations?.projects ?? {};
+  const edges: unknown[] = context.taskGraph?.dependencies?.[graphTask.id] ?? [];
+  for (const edge of edges) {
+    const id = typeof edge === "string" ? edge : (edge as { id?: string } | null)?.id;
+    const dependency = id === undefined ? undefined : context.taskGraph?.tasks?.[id]?.target;
+    const project = dependency === undefined ? undefined : projects[dependency.project];
+    const target = project?.targets?.[dependency?.target ?? ""];
+    if (
+      targetMetadata(target?.metadata?.[targetCargoMetadataKey])?.target === "hakari-check" &&
+      project !== undefined &&
+      cargoMetadataOf(project)?.workspaceManifest === workspaceManifest
+    ) {
+      return;
+    }
+  }
+  const task = `${context.projectName ?? ""}:${context.targetName ?? ""}`;
+  const folder = dirname(workspaceManifest);
+  throw new TaskError(
+    [
+      `${task}: this task does not depend on the hakari-check task of its Cargo workspace, ${folder === "." ? "at the repository root" : `in ${folder}`}, which uses the feature strategy hakari. Its cache key holds the hack crate's manifest in place of the other members' manifests, which stands for them only while the hack crate is current, so without the check Nx could restore or store a result that depends on what else runs. The task does not run, so that Nx stores no result for it.`,
+      `Make sure that no configuration replaces the dependsOn of ${task}: run \`nx show target ${task} --json\` and look under \`sourceMap\` for the file and entry, and keep the plugin's entries with "...". A run with --exclude-task-dependencies runs the task without hakari-check, and Nx never restores what it stores then.`,
     ].join("\n"),
   );
 }

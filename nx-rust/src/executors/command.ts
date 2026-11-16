@@ -103,6 +103,13 @@ export interface CommandSubject {
   /** The binary's arguments, which `run` passes after `--`; none for other targets. */
   binaryArguments?: readonly string[];
   /**
+   * Whether the workspace uses the `cargo` strategy, under which every
+   * command that compiles passes `--config
+   * 'resolver.feature-unification="workspace"'` and `-Zfeature-unification`
+   * (`DES-UNIFICATION`, "How each strategy selects").
+   */
+  workspaceUnification?: boolean;
+  /**
    * Whether the command selects the whole workspace with `--workspace` in
    * place of its crates, as a group under `workspace-build` does on the
    * host, however many tasks it holds (`DES-UNIFICATION`, "How each
@@ -189,6 +196,7 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
       ...(crates.length > 1 || workspace ? sharedCommandFlags(target) : []),
       ...(workspace ? ["--workspace"] : crateSelection(target, crates)),
       ...compilingFlags(taken),
+      ...(formatting ? [] : unificationFlags(subject)),
       ...(taken.bin !== undefined ? ["--bin", taken.bin] : []),
       ...flag(locked && !formatting, "--locked"),
       ...(binaryArguments.length > 0 ? ["--", ...binaryArguments] : []),
@@ -201,8 +209,11 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
         ...flag(taken.noDeps, "--no-deps"),
         "--workspace",
         ...compilingFlags(taken),
+        ...unificationFlags(subject),
         ...flag(locked, "--locked"),
       ];
+    case "hakari-check":
+      return [...hakariCheckSteps[0]];
     case "audit":
       return ["audit"];
     case "deny":
@@ -213,6 +224,36 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
       return ["update", "--workspace", ...flag(locked, "--locked")];
   }
   throw new Error(`nx-rust has no command for the target "${target}".`);
+}
+
+/**
+ * The commands of `hakari-check`, after `cargo`, in the order in which it
+ * runs them (`DES-UNIFICATION`, "Drift"): neither writes a file, and
+ * cargo-hakari takes no `--locked`.
+ */
+export const hakariCheckSteps: readonly (readonly string[])[] = [
+  ["hakari", "generate", "--diff"],
+  ["hakari", "manage-deps", "--dry-run"],
+];
+
+/**
+ * The flags with which every command that compiles resolves features for
+ * the whole workspace under the `cargo` strategy (`DES-UNIFICATION`, "How
+ * each strategy selects"): the setting on the command line, which stable
+ * cargo ignores with a warning, and the unstable flag, which stable cargo
+ * rejects, so that a task on a stable toolchain fails with cargo's error
+ * instead of compiling with narrowed features.
+ */
+// @mara implements DES-UNIFICATION
+export const workspaceUnificationFlags: readonly string[] = [
+  "--config",
+  'resolver.feature-unification="workspace"',
+  "-Zfeature-unification",
+];
+
+// The flags of the `cargo` strategy, where the subject uses it.
+function unificationFlags(subject: CommandSubject): string[] {
+  return subject.workspaceUnification === true ? [...workspaceUnificationFlags] : [];
 }
 
 /**
@@ -322,7 +363,8 @@ export interface SelectingRunner {
 
 /**
  * The steps of a group's cargo commands (`DES-BATCH`): one command, as
- * {@link cargoArguments} builds it, for every target but `test` with the
+ * {@link cargoArguments} builds it, for every target but `hakari-check`,
+ * which runs the two commands of {@link hakariCheckSteps}, and `test` with the
  * `cargo` runner on a group that selects the whole workspace, which has three
  * (`DES-TEST-RUN`, "Under `workspace-build`"):
  *
@@ -349,6 +391,9 @@ export function cargoSteps(
   options: CargoTargetOptions,
   runner?: SelectingRunner,
 ): CargoStep[] {
+  if (subject.target === "hakari-check") {
+    return hakariCheckSteps.map((args) => ({ kind: "command", args: [...args] }));
+  }
   if (!(subject.target === "test" && subject.workspace === true)) {
     return [{ kind: "command", args: cargoArguments(subject, options) }];
   }

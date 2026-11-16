@@ -10,11 +10,11 @@ import type { PreparedTask } from "./task";
  * select share one command per step (`DES-BATCH`): the one switch of the
  * batch executor that the strategies of `DES-UNIFICATION` turn on.
  *
- * On since `workspace-build` (nxr-8f9dz2), under which every workspace runs
- * until the other strategies exist (nxr-k64tm5): {@link planGroups} makes a
- * group of `build`, `check`, `lint` or `test` select the whole workspace,
- * however many tasks it holds, and run `test` in the three steps of
- * `DES-TEST-RUN` with the selecting runner, and the tasks that cannot do so
+ * On since `workspace-build` (nxr-8f9dz2): {@link planGroups} makes a group
+ * of `build`, `check`, `lint` or `test` select the whole workspace under
+ * `workspace-build`, however many tasks it holds, and run `test` in the
+ * three steps of `DES-TEST-RUN` with the selecting runner, select its crates
+ * with `-p` under `hakari` and `cargo`, and the tasks that cannot do either
  * form groups of one crate ("Groups of one crate" in `DES-BATCH`). The
  * tasks of one target share an environment because cargo never gets the
  * variables by which Nx names a task's project (`ADR-TASK-NAME-VARIABLES`),
@@ -130,9 +130,10 @@ function definedEntries(env: NodeJS.ProcessEnv): [string, string][] {
  *   runs the command that a plain cargo of that crate runs ("Groups of one
  *   crate" in `DES-BATCH`), with the line that says why where the task's
  *   output names it;
- * - `crates`: each crate with `-p`, as `cargo fmt` takes them, which
- *   resolves no features, and the workspace project's targets, which select
- *   no crate.
+ * - `crates`: each crate with `-p`, as a group of `build`, `check`, `lint`
+ *   or `test` does under `hakari` and `cargo`, as `cargo fmt` takes them,
+ *   which resolves no features, and the workspace project's targets, which
+ *   select no crate.
  */
 export type GroupSelection =
   | { kind: "workspace"; host?: string }
@@ -150,8 +151,11 @@ export interface PlannedGroup<T extends PreparedTask> {
  * splits a group whose command would pass a flag whose effect on a crate
  * depends on the selection, or set a runner where the user may have
  * configured one, into groups of one crate, one per task ("Groups of one
- * crate" in `DES-BATCH`). Under `workspace-build`, the strategy of every
- * workspace until the others exist (nxr-k64tm5), those are:
+ * crate" in `DES-BATCH`). Each task's workspace decides by its strategy
+ * (`DES-UNIFICATION`): under `hakari` and `cargo`, a group selects its
+ * crates with `-p`, apart from the groups of one crate of
+ * {@link hakariSelection} and {@link cargoSelection}. Under
+ * `workspace-build`, those are:
  *
  * - a group of `build`, `check`, `lint` or `test` that builds for a
  *   triple other than the host's, from its `targetTriple` option or from
@@ -220,6 +224,61 @@ function noteFor(task: PreparedTask, note: string): string {
 }
 
 /**
+ * How a group selects its crates under `cargo` (`DES-UNIFICATION`, "How
+ * each strategy selects"; "Groups of one crate" in `DES-BATCH`): each crate
+ * with `-p`, cargo resolving features for the whole workspace, apart from a
+ * task with `--features`, which cargo still checks against the selected
+ * crates, and which forms a group of one crate. `--all-features` and
+ * `--no-default-features` act on every member under workspace unification
+ * and share a command.
+ */
+// @mara implements DES-UNIFICATION
+// @mara implements DES-BATCH
+function cargoSelection(task: PreparedTask): GroupSelection {
+  return (task.options.features ?? []).length > 0 ? { kind: "alone" } : { kind: "crates" };
+}
+
+/**
+ * How a group selects its crates under `hakari` (`DES-UNIFICATION`, "How
+ * each strategy selects", "Triples that `platforms` does not list",
+ * "Feature flags"): each crate with `-p`, the hack crate keeping the
+ * features of third-party crates the same in every selection, apart from
+ * the tasks that form groups of one crate:
+ *
+ * - a feature set given by flags, `--all-features`, `--no-default-features`
+ *   or any `--features`, which cargo applies to the selected crates only;
+ * - a triple that cargo builds for, from the `targetTriple` option or from
+ *   Cargo's configuration and `CARGO_BUILD_TARGET`, or the host's triple,
+ *   that the `platforms` which graph creation recorded does not list,
+ *   because the hack crate does not unify the dependencies under that
+ *   platform's tables; the host counts for every task, because build
+ *   scripts and proc macros are compiled for it;
+ * - a triple whose folder the plugin cannot name, and a host that `rustc
+ *   -vV` names no triple for, which cost speed and never a result.
+ */
+// @mara implements DES-UNIFICATION
+// @mara implements DES-BATCH
+function hakariSelection(
+  task: PreparedTask,
+  picked: { kind: "none" } | { kind: "triples"; triples: readonly string[] } | { kind: "unnamed" },
+  host: () => string | undefined,
+): GroupSelection {
+  const { features, allFeatures, noDefaultFeatures } = task.options;
+  if ((features ?? []).length > 0 || allFeatures === true || noDefaultFeatures === true) {
+    return { kind: "alone" };
+  }
+  if (picked.kind === "unnamed") {
+    return { kind: "alone" };
+  }
+  const triple = host();
+  const platforms = new Set(task.hakariPlatforms ?? []);
+  const triples = [...(picked.kind === "triples" ? picked.triples : []), triple];
+  return triples.every((entry) => entry !== undefined && platforms.has(entry))
+    ? { kind: "crates" }
+    : { kind: "alone" };
+}
+
+/**
  * How a group whose first task is `task` selects its crates
  * ({@link planGroups}): the note of a group of one crate holds `{crate}`
  * where it names the crate.
@@ -239,6 +298,14 @@ export function groupSelection(task: PreparedTask, host: () => string | undefine
     typeof option === "string" && option !== ""
       ? { kind: "triples" as const, triples: [option] }
       : pickedTriples(task.cwd, task.env);
+  switch (task.featureUnification ?? "workspace-build") {
+    case "cargo":
+      return cargoSelection(task);
+    case "hakari":
+      return hakariSelection(task, picked, host);
+    case "workspace-build":
+      break;
+  }
   if (picked.kind === "unnamed") {
     return { kind: "alone" };
   }

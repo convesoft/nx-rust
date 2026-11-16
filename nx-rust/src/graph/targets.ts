@@ -11,6 +11,7 @@ import type { CargoWorkspace } from "./discovery";
 import { memberManifests } from "./inputs";
 import { directoryPattern } from "./lockfile-task";
 import type { TargetNames } from "./options";
+import type { FeatureUnification } from "./settings";
 
 /**
  * The plugin's cargo executor, which runs every inferred target but `build`
@@ -34,8 +35,9 @@ export const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
 export const outputsTargets: ReadonlySet<InferredTargetName> = new Set(["build", "doc"]);
 
 /**
- * The executor of the lockfile task, which has no batch implementation, so
- * that the task never joins a batch (`DES-LOCKFILE-HASHING`).
+ * The executor of the lockfile task and of `hakari-check`, which has no
+ * batch implementation, so that neither task ever joins a batch
+ * (`DES-LOCKFILE-HASHING`, `DES-UNIFICATION`, "Drift").
  */
 export const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 
@@ -79,6 +81,7 @@ export const inferredTargetNames = [
   releasePublishTarget,
   "doc",
   "lockfile",
+  "hakari-check",
   "audit",
   "deny",
   "update",
@@ -301,8 +304,10 @@ export interface TargetSubject {
  * when it has a binary target, `bench` when it has a bench target, and
  * `nx-release-publish` unless its manifest sets `publish = false`, which the
  * report gives as an empty `publish` list (`DES-RELEASE`). The
- * workspace project gets `doc`, `lockfile`, `audit` and `update`, and `deny`
- * where a cargo-deny configuration file is in the workspace root; a root
+ * workspace project gets `doc`, `lockfile`, `audit` and `update`, `deny`
+ * where a cargo-deny configuration file is in the workspace root, and
+ * `hakari-check` where the workspace uses the `hakari` strategy
+ * (`DES-UNIFICATION`, "Drift"); a root
  * manifest's crate gets both sets. Whether a tool is installed decides
  * nothing.
  *
@@ -392,6 +397,15 @@ export function inferTargets(
       ),
       executor: lockfileExecutor,
     });
+    if (caching?.settings.featureUnification === "hakari") {
+      targets.set("hakari-check", {
+        ...target(
+          "hakari-check",
+          "Checks that the hack crate of cargo-hakari is current, with cargo hakari generate --diff and cargo hakari manage-deps --dry-run.",
+        ),
+        executor: lockfileExecutor,
+      });
+    }
     targets.set("audit", {
       ...target("audit", "Checks Cargo.lock for security advisories with cargo audit."),
       inputs: [lockfile, manifest, "{projectRoot}/.cargo/audit.toml"],
@@ -414,7 +428,14 @@ export function inferTargets(
   }
   configureCaching(targets, subject, context, caching);
   const test = targets.get("test");
-  const builds = pkg === undefined ? [] : testBuilds(subject, context.repositoryRoot);
+  const builds =
+    pkg === undefined
+      ? []
+      : testBuilds(
+          subject,
+          context.repositoryRoot,
+          caching?.settings.featureUnification ?? "workspace-build",
+        );
   if (pkg !== undefined && test !== undefined && builds.length > 0) {
     const build = targetNames.build ?? "build";
     const own = builds.includes(subject.root);
@@ -447,13 +468,25 @@ export function inferTargets(
  * Cargo 1.91.0 and 1.100.0 (`EVD-CARGO-ARTIFACT-WRITERS`, "Commands that
  * select the whole workspace"); the rule counts a crate whatever the
  * `required-features` of its targets, so that the set is a superset of the
- * crates whose files cargo replaces. Every workspace uses `workspace-build`
- * until the other strategies exist (nxr-k64tm5), under which a crate's
- * `test` selects its crate alone and waits for its own `build` only.
+ * crates whose files cargo replaces. Under `hakari` and `cargo`, whose
+ * commands select their crates with `-p`, a `cargo test` replaces the
+ * executables of the crates it selects only, and a group selects those of
+ * its own tasks, each of which waits for its own crate's `build`: the crate
+ * itself, where it is one.
  */
 // @mara implements DES-TARGETS
-export function testBuilds(subject: TargetSubject, repositoryRoot: string): string[] {
-  return subject.workspace.members
+export function testBuilds(
+  subject: TargetSubject,
+  repositoryRoot: string,
+  strategy: FeatureUnification = "workspace-build",
+): string[] {
+  const crates =
+    strategy === "workspace-build"
+      ? subject.workspace.members
+      : subject.pkg === undefined
+        ? []
+        : [subject.pkg];
+  return crates
     .filter(testReplacesExecutables)
     .map((member) => relative(repositoryRoot, dirname(member.manifest_path)) || ".")
     .map((root) => root.split(sep).join("/"))
