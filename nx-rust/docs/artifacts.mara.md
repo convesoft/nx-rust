@@ -34,22 +34,86 @@ artifacts = ["wasm"] # or [] for none
 
 ## Depending on an artifact from JS
 
-A JS project depends on the artifact target of the crate, not on `^build`:
+A JS project depends on the artifact target of the crate, not on `^build`, and
+hashes the files it gets from it:
 
 ```json
 {
   "name": "web",
   "targets": {
     "build": {
-      "dependsOn": [{ "projects": ["image-codec"], "target": "wasm-build" }]
+      "dependsOn": [{ "projects": ["image-codec"], "target": "wasm-build" }],
+      "inputs": ["default", "^default", { "dependentTasksOutputFiles": "**/*" }]
     }
   }
 }
 ```
 
-If the JS target also declares `^build` and its project depends on the crate in
-the project graph, Nx runs the crate's native `build` as well. The plugin cannot
-prevent that ([Targets](targets.mara.md#no-build-between-crates)).
+The dependency builds the artifact first. The input puts the artifact's files
+into `web`'s cache key. Without it, the key holds the crate's source files and
+those of the crates it depends on, but not what only the artifact's own key
+holds: `Cargo.lock`, the toolchain, `RUSTFLAGS` and the tool versions. A change
+there would build a new artifact and still restore `web`'s old build.
+
+Nx also needs to know that `web` uses the crate, so that `nx affected` reaches
+`web` when the crate changes. It knows when `web` depends on the crate's
+package (next section). A crate without a `package.json` goes into `web`'s
+`implicitDependencies` instead.
+
+If the JS target also declares `^build`, Nx runs the crate's `build` as well:
+the native cargo build, or whatever replaced it (next section). The plugin
+cannot prevent that ([Targets](targets.mara.md#no-build-between-crates)).
+
+## A crate that is also a JS package
+
+A napi or wasm crate usually has a `package.json` beside its `Cargo.toml`,
+listed in the package manager's workspaces, so that JS packages can depend on
+it by name. Nx then merges what nx-rust and its own JS support say about the
+folder into one project:
+
+- **Name.** The project takes the name of the folder's `project.json`, if that
+  sets one, and otherwise of its `package.json` (`nx.name`, else `name`); the
+  crate's own name and a `name` in `[package.metadata.nx]` do not apply
+  ([Project names](workspaces.mara.md#project-names)).
+- **Targets.** The project has nx-rust's targets and those of the JS files. A
+  script in the `package.json`, or a `project.json` target, with the name of
+  an nx-rust target replaces it, so the `build` and `test` scripts of the
+  napi-rs template replace cargo's `build` and `test`. A `project.json` target
+  without an executor of its own, for example one that sets only `inputs`,
+  changes the nx-rust target instead. nx-rust reports none of this, because
+  these files are yours.
+- **Other plugins.** Of two plugins that give the folder a target of one
+  name, the one listed later in `nx.json` wins, and `nx add` appends. A JS
+  plugin added after nx-rust can therefore take a crate's `build`, `test` or
+  `lint`: move nx-rust after it, or `exclude` the crate folders on its entry.
+- **Consumers.** A JS package that depends on the crate's package, as with
+  `"workspace:*"`, gets an edge to it in the project graph, so `nx affected`
+  reaches it when the crate, or a crate the crate depends on, changes.
+- **`^build`.** A consumer's `^build` runs the project's `build` as Nx merged
+  it. Where that is a script or a TypeScript build that itself depends on
+  `^build`, Nx also runs the native `build` of the crates behind it.
+
+To keep cargo's targets in such a folder, list only the scripts you want as
+targets in `nx.includedScripts`:
+
+```json
+{
+  "name": "@acme/native",
+  "scripts": { "build": "napi build --platform", "artifacts": "napi artifacts" },
+  "nx": { "includedScripts": ["artifacts"] }
+}
+```
+
+The same holds for a Cargo workspace whose folder already is an Nx project,
+such as a repository root with a `project.json` or an `nx` key in its
+`package.json`. If a script or target there is called `lockfile`, it replaces
+the task whose digests the crates' cache keys read, and the crates' cached
+tasks fail without storing anything. Rename one of them, for example nx-rust's
+through `targetNames`:
+
+```json
+{ "plugin": "@convesoft/nx-rust", "options": { "targetNames": { "lockfile": "cargo-lockfile" } } }
+```
 
 ## Why separate target names
 
@@ -107,13 +171,6 @@ definitions `index.d.ts`.
   a `.node` file built on Linux is never restored on macOS.
 - **Generated files in the source tree** such as type definitions and JS glue
   are outputs of the target and are left out of its inputs.
-- **One folder, two plugins.** A napi or wasm crate usually has `Cargo.toml`
-  and `package.json` side by side, so this plugin and Nx's JS plugin describe
-  the same project. Nx merges them into one project named by the
-  `package.json` ([Project names](workspaces.mara.md#project-names)), and a
-  script there with the name of an inferred target, such as `build` or `test`,
-  replaces that target. What the plugin does about this is not specified yet
-  ([[REQ-MIXED-PROJECTS]]).
 
 Not in v1: cross-compiling Node addons to other platforms, wasm tests, and
 publishing the resulting packages to npm.
@@ -141,13 +198,11 @@ The cache key of an [[TERM-ARTIFACT-TARGET]] includes the target triple and the 
 :::mara requirement REQ-MIXED-PROJECTS
 :mid: 01M78FHG7FJ88KAM4MK9SZ4FZH
 :title: Describe a folder with Cargo.toml and package.json as one project
-:status: draft
+:status: accepted
 :satisfies: NEED-JS-BRIDGE
 :mitigates: RISK-MIXED-PROJECT-MERGE
 
-A folder that holds both a `Cargo.toml` and a `package.json` is one Nx project that has the targets inferred by this plugin and those inferred by Nx's JS plugin, under a name the user can predict.
-
-Open: what the plugin does about targets that `package.json` or `project.json` replaces, given that Nx names the project from those files and lets a same-named script or target replace an inferred one ([[EVD-NX-PROJECT-MERGE]]): keep the names and document `nx.includedScripts`, rename colliding inferred targets, or report the collision. Also open: how the dependency of a JS consumer on the crate enters the project graph, so that a change in the crate reaches the consumer, and what the consumer's own `^build` then runs on the crate ([[ADR-NO-RUST-BUILD-DEPS]]). The design discussion of 12 November 2026 did not cover this area.
+A crate whose folder also is a JS project, through a `package.json` that Nx reads or a `project.json`, is one Nx project. Its name is the one Nx takes from those files ([[REQ-PROJECT-NAMES]]). It has the targets that the plugin infers for the crate, under their usual names, together with those of the folder's files and of other plugins, as Nx merges them: a script or target of one of the plugin's names in the folder's files, or in a plugin listed after this one in `nx.json`, replaces the plugin's target or merges into it, and the plugin neither renames its target nor reports this ([[ADR-MIXED-PROJECT-TARGETS]]). A JS project that depends on the crate's package has a dependency on the project in the graph, so that a change to the crate, or to a crate it depends on, reaches the JS project through `nx affected` and its `^` inputs. The plugin adds no task dependency to the JS project and removes none, so its `^build` runs the `build` of the merged project, whichever layer gave it. The same holds for a [[TERM-WORKSPACE-PROJECT]] whose folder already is an Nx project.
 :::
 
 ## Design
@@ -174,7 +229,7 @@ Each artifact target is built in two steps:
 1. A plain cargo compile inside the batch ([[DES-BATCH]]). A non-host triple is its own group and builds only the selected crates ([[DES-FEATURE-SETS]]).
 2. A post-processing task that Nx caches, with outputs outside Cargo's directories.
 
-JS consumers depend on the artifact target, not on `^build`. Generated type definitions and JS glue are declared as outputs and excluded from inputs. The target triple is a target option and therefore in the key; the versions of the post-processing tools are runtime inputs.
+JS consumers depend on the artifact target, not on `^build`, and hash its outputs ([[DES-MIXED-PROJECTS]]). Generated type definitions and JS glue are declared as outputs and excluded from inputs. The target triple is a target option and therefore in the key; the versions of the post-processing tools are runtime inputs.
 :::
 
 :::mara design DES-WASM
@@ -211,6 +266,23 @@ Only this step sets these variables. `build`, `test`, `check` and `lint` run wit
 The versions of `@napi-rs/cli` and of any cross toolchain are part of the cache key. v1 builds for the host triple only: cross-compiling takes one target per command and zig or cargo-xwin, and is normally a CI matrix.
 
 Whether napi crates need a special feature to link under `cargo test` is not confirmed ([[RISK-NAPI-TOOLING]]).
+:::
+
+:::mara design DES-MIXED-PROJECTS
+:mid: 01M7J4NJ5WGAAQEBVGQCFFCQ02
+:title: One project from two descriptions
+:status: accepted
+:satisfies: REQ-MIXED-PROJECTS
+
+**Name.** Nx merges every project returned for one root into one, in this order: the plugins in the order of `nx.json`, target defaults, then its own `package.json` and `project.json` plugins, which no position in `nx.json` follows ([[EVD-NX-PROJECT-MERGE]]). The project is therefore named by the folder's `project.json`, where it sets a name, and otherwise by the `package.json` (`nx.name`, else `name`), and the plugin names the ends of its edges by the project at the crate's root ([[DES-PROJECT-GRAPH]]). Nx reads a crate's `package.json` only where the package manager's workspaces list it or a `project.json` sits beside it; otherwise the folder is the crate's project alone.
+
+**Targets.** The plugin infers a mixed crate's targets as any crate's ([[DES-TARGETS]]) and does nothing about the folder's other layers ([[ADR-MIXED-PROJECT-TARGETS]]). Nx merges a later target of the same name into the plugin's where at most one of the two names an executor, or both name the same one; its lists then replace the plugin's unless they hold `"..."`. A target with another executor or a command, such as a `package.json` script, which runs `nx:run-script`, replaces the plugin's whole ([[EVD-NX-24-PLUGIN-NODES]], "Other layers"). A script keeps the plugin's `cargo` record in its metadata beside its own ([[EVD-NX-MIXED-CONSUMER]]), which no executor of the script reads, and the guard leaves every target alone that no longer runs the plugin's executor ([[DES-TARGET-DEFAULT-GUARD]], "Where"). A merged target that still runs it is compared as that item says, and what the folder's own `project.json` and `package.json` do to it counts as the project's own statement ("Other layers"). Of two plugins, the one listed later wins a target; `init` appends nx-rust to the plugins of `nx.json`, and `nx add` appends a plugin added later. `nx.includedScripts` in the `package.json` limits which scripts become targets.
+
+**Consumers.** The plugin adds no edge to or from a JS project. Nx's own analysis of a JS project's `package.json` turns a dependency on the crate's package, such as `workspace:*`, into a static edge to the merged project ([[EVD-NX-MIXED-CONSUMER]]). A crate without a `package.json` that Nx reads has no package name, and a JS project reaches it through its own `implicitDependencies`. Through that edge and the plugin's edges between crates, `nx affected` selects the JS project when the crate or a crate behind it changes, and the JS project's `^default` reads each such crate's named input `default`, its folder and its workspace's root manifest ([[DES-INPUTS]]). It does not read what only the crates' own keys hold, the lockfile digests, the toolchain, the variables and the tool versions. A JS target that consumes an artifact therefore depends on the [[TERM-ARTIFACT-TARGET]] and hashes its outputs through a `dependentTasksOutputFiles` input, which the user writes, since the plugin writes nothing into JS projects ([[ADR-NO-RUST-BUILD-DEPS]]).
+
+**`^build`.** A JS target's `^build` runs the `build` of the merged project. Where that is the plugin's, it is the crate's native build, which depends only on its workspace's lockfile task and, under `hakari`, the drift check ([[REQ-NO-RUST-TASK-DEPS]]). Where a script, a `project.json` target or a later plugin replaced it, it runs that target with that target's own `dependsOn`. A script has none of its own, a TypeScript build of `@nx/js/typescript` has `^build`, and a `targetDefaults` entry keyed `build` gives one to a script, while the entries keyed by the plugin's executors that `init` writes keep it from the crates' own `build`. Such a `^build` runs the native `build` of the crates that the mixed project depends on directly, which stop at their lockfile task ([[EVD-NX-MIXED-CONSUMER]], [[ADR-NO-RUST-BUILD-DEPS]]).
+
+**Workspace project.** A workspace project whose folder already is an Nx project merges in the same way ([[EVD-NX-PROJECT-MERGE]]). A script or target named like the lockfile task replaces it; the crates' cached tasks still depend on the target of that name and then fail without storing a result ([[DES-LOCKFILE-HASHING]], "Merged project").
 :::
 
 ## Scenario

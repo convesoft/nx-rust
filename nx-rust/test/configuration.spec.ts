@@ -370,6 +370,143 @@ describe("names and prefixes", () => {
   );
 });
 
+// The settings of REQ-METADATA-OVERRIDES in a folder that also is a JS
+// project, as EVD-NX-PROJECT-MERGE observed Nx merge them: in mixed-folders,
+// the crate napi-addon has a project.json and a package.json beside its
+// manifest, and the workspace in libs/rust, whose root manifest defines no
+// crate, a project.json.
+describe("a folder that also is a JS project", () => {
+  const extraTarget = 'executor = "nx:run-commands"\noptions = { command = "echo table" }\n';
+  const folders = [
+    {
+      kind: "crate",
+      root: "libs/rust/crates/addon",
+      table: "[package.metadata.nx.targets.e2e]",
+      // A cached target that its project.json narrows with inputs alone.
+      narrowed: "check",
+      executor: cargoExecutor,
+    },
+    {
+      kind: "workspace project",
+      root: "libs/rust",
+      table: "[workspace.metadata.nx.project.targets.e2e]",
+      narrowed: "doc",
+      executor: "@convesoft/nx-rust:cargo-outputs",
+    },
+  ];
+
+  /** The project at `root`, whatever name Nx gave it. */
+  function projectAt(graph: FixtureGraph, root: string): FixtureGraph["projects"][string] {
+    const project = Object.values(graph.projects).find((candidate) => candidate.root === root);
+    expect(project).toBeDefined();
+    return project!;
+  }
+
+  function withExtraTarget(folder: (typeof folders)[number]): FileChanges {
+    return {
+      [`${folder.root}/Cargo.toml`]: (manifest) => `${manifest}\n${folder.table}\n${extraTarget}`,
+    };
+  }
+
+  it.each(folders)(
+    "let the $kind's project.json replace an extra target",
+    async (folder) => {
+      const graph = await loadFixtureGraph("mixed-folders", {
+        files: {
+          ...withExtraTarget(folder),
+          [`${folder.root}/project.json`]: JSON.stringify({
+            targets: { e2e: { command: "echo project-json" } },
+          }),
+        },
+      });
+
+      const e2e = projectAt(graph, folder.root).targets!.e2e;
+      expect(e2e.executor).toBe("nx:run-commands");
+      expect(e2e.options).toMatchObject({ command: "echo project-json" });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(folders)(
+    "let a script in the $kind's package.json replace an extra target",
+    async (folder) => {
+      const graph = await loadFixtureGraph("mixed-folders", {
+        files: {
+          ...withExtraTarget(folder),
+          [`${folder.root}/package.json`]: (json) =>
+            JSON.stringify({
+              ...JSON.parse(json ?? '{ "name": "rust-root", "private": true }'),
+              scripts: { e2e: "echo script" },
+            }),
+        },
+      });
+
+      const e2e = projectAt(graph, folder.root).targets!.e2e;
+      expect(e2e.executor).toBe("nx:run-script");
+      expect(e2e.options).toEqual({ script: "e2e" });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each(folders)(
+    "merge a project.json target with only inputs into the $kind's inferred target",
+    async (folder) => {
+      const inferred = projectAt(await loadFixtureGraph("mixed-folders"), folder.root).targets![
+        folder.narrowed
+      ];
+      const graph = await loadFixtureGraph("mixed-folders", {
+        files: {
+          [`${folder.root}/project.json`]: JSON.stringify({
+            targets: { [folder.narrowed]: { inputs: ["default"] } },
+          }),
+        },
+      });
+
+      const merged = projectAt(graph, folder.root).targets![folder.narrowed];
+      // No warning of the guard either, which reaches the project's metadata.
+      expect(JSON.stringify(projectAt(graph, folder.root).metadata ?? {})).not.toContain(
+        "targetWarnings",
+      );
+      expect(merged.executor).toBe(folder.executor);
+      expect(merged.inputs).toEqual(["default"]);
+      expect(merged).toMatchObject({
+        options: inferred.options,
+        dependsOn: inferred.dependsOn,
+        cache: inferred.cache,
+        outputs: inferred.outputs,
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each([
+    [
+      "a project.json target",
+      { "libs/rust/project.json": JSON.stringify({ targets: { lockfile: { command: "echo" } } }) },
+      "nx:run-commands",
+    ],
+    [
+      "a package.json script",
+      {
+        "libs/rust/package.json": JSON.stringify({
+          name: "rust-root",
+          private: true,
+          scripts: { lockfile: "echo" },
+        }),
+      },
+      "nx:run-script",
+    ],
+  ])(
+    "let %s in the workspace's folder replace the lockfile task",
+    async (_, files, executor) => {
+      const graph = await loadFixtureGraph("mixed-folders", { files });
+
+      expect(projectAt(graph, "libs/rust").targets!.lockfile.executor).toBe(executor);
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
 describe("name collisions after names and prefixes", () => {
   it(
     "offer namePrefix only for a crate without a name of its own",
