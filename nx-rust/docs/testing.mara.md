@@ -4,10 +4,12 @@
 > `testRunner = "nextest"` cargo-nextest and then the doctests. The plugin
 > reads and checks `testRunner` and `affectedTests`, and fails graph creation
 > for `affectedTests = true` among the options of `test` in a workspace
-> without the setting. The rest of this page arrives with milestone 0.3:
-> affected tests and `NX_RUST_TEST_MODE`, the error for `affectedTests`
-> without nextest, and the check of `--affectedTests=true` on the command
-> line.
+> without the setting. With `affectedTests`, the test mode and
+> `NX_RUST_TEST_MODE` work and reach the cache key, and each task says its
+> mode, but the full suite still runs. The rest of this page arrives with
+> milestone 0.3: the selection of affected tests, the baseline target, the
+> error for `affectedTests` without nextest, and the check of
+> `--affectedTests=true` on the command line.
 
 Every crate has one `test` target. Which runner it uses, and whether it runs
 the whole suite or only the tests a change can affect, are settings. You never
@@ -120,7 +122,9 @@ pipeline that sets nothing runs everything. The usual arrangement:
   that to the crates that changed, so main gets a full run once per code state.
 
 When selection is not possible, for example because there is no baseline, the
-full suite runs, and the task output says so and gives the reason.
+full suite runs, and the task output says so and gives the reason. A baseline
+whose `-wal` file is still there, from a collection that is running or was
+interrupted, gives the full suite as well.
 
 An affected run never stands in for the full run. One kind of change can pass
 in affected mode and fail in full: code that another crate evaluates while it
@@ -219,7 +223,9 @@ The plugin does not look at branches. A pipeline for main that sets nothing is i
 
 A task in affected mode may run more than its selection, up to the full suite, and still store its result under the affected key. The reverse never happens.
 
-Nx evaluates the command afresh for every task of every run, also under the Nx daemon, in the repository root and with the task's environment: that of the `nx` command and the dotenv files Nx loads for the task ([[EVD-NX-24-INPUT-SEMANTICS]]). The executor decides the mode from the same environment. A batch process lacks the task's own dotenv files, so the batch implementation rebuilds each task's environment before it decides ([[DES-BATCH]]).
+**The command.** The mode command is a Node script in the plugin's package, which Nx runs in the repository root with the workspace root, relative to it, as its argument. As for the artifact folder input of [[DES-INPUTS]], its command names Node, the script and the folder by paths that reach no key, and where the script cannot run, as for a plugin that Nx loads from its TypeScript source, it prints a random value, new at each evaluation, so that no stored result is restored. It reads the database with Node's `node:sqlite` and never opens it in a way that can write: only as immutable and read-only, because an ordinary read-only connection to a database in WAL mode created `-wal` and `-shm` files beside it and left them there ([[EVD-TEST-MODE-READING]]). An immutable read ignores a `-wal` file and takes no lock, so the command prints `full` wherever it cannot be sure that it read the whole, settled database: where a `-wal` file lies beside the database before the read or after it, as while a collection runs, after one was interrupted, or for a baseline restored with its `-wal` file, and where the database file's size, modification time or inode differs between the look before and the look after. Such a baseline gives `full` until a collection has closed the database cleanly, which removes the `-wal` file. It reads `SELECT DISTINCT collect_sha FROM test_regions`, the commits of every fingerprint that the database keeps, because telling the current one would mean hashing what cargo-affected hashes, and a commit too many only splits keys. A Node without `node:sqlite`, a database that cannot be read or is of another schema, one without coverage and a commit that is not lower-case hexadecimal give `full` as well. Where `NX_RUST_TEST_MODE` has another value than `full` or `affected`, the empty value included, the command prints `invalid NX_RUST_TEST_MODE=` and the value as JSON, so that a failure that Nx stores with `NX_CACHE_FAILURES=true` is never restored for a valid mode. CI is what a copy of `isCI` of Nx 24.0.6 detects, which a test compares with the installed Nx's: loading Nx in the command would cost more than the rest of it, a start of Node and one query of about 40 ms on a database of 200 MB. The input lies on the `test` of every crate of a workspace with `affectedTests`, also of one that opts out: such a crate runs its full suite under the affected key, which this design allows, at the cost of a key per mode. Each `test` task of such a workspace says at the top of its output which suite it runs and why, and fails before cargo runs where the variable is invalid. The control plane decided these points on 16 November 2026 in nxr-539qtw, from [[GOAL-TRUSTED-CACHE]] and [[EVD-CARGO-AFFECTED-COST]]. The immutable read alone, with `full` for a `-wal` file, was decided by the control plane on 16 November 2026 in the review of nxr-539qtw, in place of a read-only connection where a `-wal` file lay beside the database, which a collection closing in between left with new `-wal` and `-shm` files; it rests on "without writing to it" above, [[REQ-CARGO-UNCHANGED]] in spirit, since the plugin leaves another tool's files alone when Nx hashes, and [[GOAL-TRUSTED-CACHE]], since `full` is always safe. To undo it, read through an ordinary read-only connection where a `-wal` file exists and accept the files it leaves; to undo the input on a crate that opts out, leave it out where the crate's own table sets `affectedTests = false`; to undo the strict reading of the variable, count the empty value as not set.
+
+Nx evaluates the command afresh for every task of every run, also under the Nx daemon, in the repository root and with the task's environment: that of the `nx` command and the dotenv files Nx loads for the task ([[EVD-NX-24-INPUT-SEMANTICS]]). The executor decides the mode from the same environment. A batch process lacks the task's own dotenv files, so the batch implementation rebuilds each task's environment before it decides ([[DES-BATCH]]). The executor reads the baseline again for itself, so that a baseline that a collection creates or changes between the hashing of a task and its run can give the executor another mode than its key holds ([[RISK-SUBSET-AS-FULL]]). As long as the plugin selects no tests, both modes run the full suite and no result is wrong; nxr-tabkjx must guard this before the executor selects, so that a selection never runs under a key that says `full` or names another baseline.
 :::
 
 :::mara design DES-TEST-RUN

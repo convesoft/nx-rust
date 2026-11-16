@@ -52,6 +52,12 @@ export interface InputSettings {
   /** The workspace's test runner. */
   testRunner: TestRunner;
   /**
+   * Whether the workspace uses the selection of affected tests
+   * (`affectedTests`), which gives its `test` the test mode input
+   * (`DES-TEST-MODE`). Absent means it does not.
+   */
+  affectedTests?: boolean;
+  /**
    * What the repository adds to the crate's key with `envInputs`,
    * `runtimeInputs` and `fileInputs`, at every level that sets them
    * (`DES-PLUGIN-OPTIONS`, "Added inputs"). They go into the crate's own
@@ -422,6 +428,9 @@ export function targetInputs(
         target === "test" && settings.testRunner === "nextest",
       ),
     },
+    ...(target === "test" && settings.affectedTests === true
+      ? [{ runtime: testModeCommand(workspaceRoot) }]
+      : []),
     pluginVersionInput(context.plugin),
   ];
   return [
@@ -811,6 +820,38 @@ export function artifactFoldersCommand(
   workspaceRoot: string,
   script = artifactFoldersScript,
 ): string {
+  return [
+    `{ ${shellQuote(process.execPath)} ${shellQuote(script)} ${shellQuote(workspaceRoot)} 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
+    "true",
+  ].join("; ");
+}
+
+/**
+ * The plugin's script that prints the test mode (`print-test-mode.ts`),
+ * compiled beside the executors.
+ */
+const testModeScript = join(__dirname, "..", "executors", "print-test-mode.js");
+
+/**
+ * The command of the test mode input of a `test` in a workspace that uses
+ * selection (`DES-TEST-MODE`, `REQ-TEST-MODE-KEY`): the plugin's own script
+ * prints `full`, `affected:<baseline commits>`, or a line that names an
+ * invalid `NX_RUST_TEST_MODE`, from the task's environment and
+ * cargo-affected's database in the workspace root, read without writing to
+ * it and without starting cargo-affected. Nx runs it in the repository
+ * root with the task's environment, afresh for every task of every run
+ * (`EVD-NX-24-INPUT-SEMANTICS`), and the test executor decides the mode by
+ * the same rule. Like {@link artifactFoldersCommand}, it names Node, the
+ * script and the workspace root by paths that reach no key, and where the
+ * script cannot run, as for a plugin that Nx loads from its TypeScript
+ * source, it prints a random value instead, new at each evaluation, so that
+ * no stored result is restored. It always ends with status 0.
+ *
+ * @param workspaceRoot The workspace's root folder, relative to the repository root.
+ */
+// @mara implements DES-TEST-MODE
+// @mara implements REQ-TEST-MODE-KEY
+export function testModeCommand(workspaceRoot: string, script = testModeScript): string {
   return [
     `{ ${shellQuote(process.execPath)} ${shellQuote(script)} ${shellQuote(workspaceRoot)} 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
     "true",

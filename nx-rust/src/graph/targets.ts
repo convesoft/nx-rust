@@ -272,6 +272,15 @@ export interface TargetCargoMetadata {
    * `.config/nextest.toml` (`DES-INPUTS`).
    */
   testRunner?: "nextest";
+  /**
+   * On a crate's `test`: `true` where the workspace uses the selection of
+   * affected tests (`affectedTests`), so that the executor decides the test
+   * mode as the target's mode input does (`DES-TEST-MODE`); absent
+   * otherwise. Like `testRunner`, it is no input of a key: the setting lies
+   * in a file that every key of the crate's `test` holds, and it gives the
+   * target the mode input.
+   */
+  affectedTests?: true;
 }
 
 /**
@@ -488,6 +497,9 @@ export function inferTargets(
   const testMetadata = test?.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
   if (testMetadata !== undefined && caching?.settings.testRunner === "nextest") {
     testMetadata.testRunner = "nextest";
+  }
+  if (testMetadata !== undefined && caching?.settings.affectedTests === true) {
+    testMetadata.affectedTests = true;
   }
   const builds =
     pkg === undefined

@@ -87,6 +87,7 @@ import {
 } from "./nx-task-files";
 import { recordedNxCommand } from "./nx-command";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
+import { invalidTestModeMessage, type TestMode, testMode, testModeNote } from "./test-mode";
 
 /**
  * The profiles whose artifacts Cargo puts in another profile's folder, which
@@ -252,6 +253,9 @@ export async function runTask(
   }
   for (const warning of prepared.warnings) {
     console.warn(warning);
+  }
+  if (prepared.testMode?.note !== undefined) {
+    console.warn(prepared.testMode.note);
   }
   if (planned.selection.kind === "alone" && planned.selection.note !== undefined) {
     console.warn(planned.selection.note);
@@ -425,6 +429,13 @@ export interface PreparedTask {
    * group of one crate ("Triples that `platforms` does not list").
    */
   hakariPlatforms?: string[];
+  /**
+   * On `test` in a workspace that uses selection: the test mode, decided
+   * from the task's environment by the rule of the target's mode input
+   * (`DES-TEST-MODE`), and the line that says at the top of the task's
+   * output which suite it runs and why.
+   */
+  testMode?: { mode: TestMode; note?: string };
   /** Under `hakari`, the hack crate's package name (`DES-NAPI`). */
   hakariPackage?: string;
   /** The task's environment, with which its checks ran and its cargo runs. */
@@ -454,13 +465,16 @@ export interface PreparedTask {
  *   `build` of a crate whose `test` replaces its executables without an
  *   order between the two (`DES-TARGETS`), or when the tool that the target
  *   runs besides cargo is not installed where `env` and the workspace root
- *   say (`DES-DIAGNOSTICS`). The checks of what reaches the task's key, the
+ *   say (`DES-DIAGNOSTICS`), or when `NX_RUST_TEST_MODE` has another value
+ *   than `full` or `affected` for a `test` in a workspace that uses
+ *   selection (`DES-TEST-MODE`). The checks of what reaches the task's key, the
  *   cache guard, `pluginVersion` and the lockfile dependency, and the check
  *   of the order of `test` and `build` all run before the check for the tool.
  */
 // @mara implements DES-OUTPUTS
 // @mara implements DES-PLUGIN-OPTIONS
 // @mara implements DES-DIAGNOSTICS
+// @mara implements DES-TEST-MODE
 export function prepareTask(
   executor: PluginExecutor,
   options: CargoTargetOptions,
@@ -680,6 +694,18 @@ export function prepareTask(
       };
     }
   }
+  // The test mode, by the rule of the mode input that the key holds, from
+  // the task's own environment; a task run on its own and one in a batch
+  // get the same (`DES-TEST-MODE`).
+  let testModeDecision: PreparedTask["testMode"];
+  if (metadata.target === "test" && metadata.affectedTests === true) {
+    const mode = testMode(env, cwd);
+    if (mode.kind === "invalid") {
+      throw new TaskError(invalidTestModeMessage(task, mode.value));
+    }
+    const note = testModeNote(task, mode, examined.options.affectedTests === false);
+    testModeDecision = { mode, ...(note === undefined ? {} : { note }) };
+  }
   // The checks of `napi-build` before cargo (`DES-NAPI`), after those of
   // what reaches the task's key.
   let napi: NapiTask | undefined;
@@ -741,6 +767,7 @@ export function prepareTask(
     ...(napi === undefined ? {} : { napi }),
     ...(setsFeatureSet(context.target?.options) ? { ownFeatureSet: true } : {}),
     ...(nextest ? { testRunner: "nextest" as const } : {}),
+    ...(testModeDecision === undefined ? {} : { testMode: testModeDecision }),
     featureUnification: strategy,
     ...(cargo.hakariPlatforms === undefined ? {} : { hakariPlatforms: cargo.hakariPlatforms }),
     ...(typeof cargo.hakariPackage === "string" ? { hakariPackage: cargo.hakariPackage } : {}),
@@ -1597,6 +1624,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
     napiHeaderFile,
     sharedLibrary,
     testRunner,
+    affectedTests,
   } = value as Partial<Record<keyof TargetCargoMetadata, unknown>>;
   return (inferredTargetNames as readonly unknown[]).includes(target)
     ? {
@@ -1628,6 +1656,7 @@ function targetMetadata(value: unknown): TargetCargoMetadata | undefined {
         ...(typeof napiHeaderFile === "string" ? { napiHeaderFile } : {}),
         ...(typeof sharedLibrary === "string" ? { sharedLibrary } : {}),
         ...(testRunner === "nextest" ? { testRunner } : {}),
+        ...(affectedTests === true ? { affectedTests } : {}),
       }
     : undefined;
 }

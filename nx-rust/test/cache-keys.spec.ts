@@ -30,15 +30,16 @@ import {
   TaskHash,
   testEnvironment,
   toolchainProgram,
+  writeBaseline,
 } from "./harness";
 
 // The rows of VER-CACHE-KEYS that the inputs and outputs of nxr-fy4t4k
 // decide, checked with Nx's own task hasher on the plugin's inferred targets.
 // lockfile-keys.spec.ts holds the rows about Cargo.lock, which need the
 // lockfile task and a registry. The rows that need envInputs and
-// runtimeInputs read from Cargo metadata (nxr-xyq7c8), the nextest runner
-// (nxr-jb6g5y), the test modes and the artifact targets are left to those
-// issues. declared-files.spec.ts checks the rows for declared files that are
+// runtimeInputs read from Cargo metadata (nxr-xyq7c8) and the artifact
+// targets are left to those issues; the nextest runner's rows are below
+// (nxr-jb6g5y), and so are those of the test mode (nxr-539qtw). declared-files.spec.ts checks the rows for declared files that are
 // ignored or linked, together with what nx affected selects.
 
 const appended = (text: string) => (current: string | undefined) => `${current ?? ""}${text}`;
@@ -1669,6 +1670,99 @@ const installed = (
   "pnpm-lock.yaml": pnpmLockfile(version, integrity),
   "node_modules/.modules.yaml": "{}\n",
 });
+
+// The test mode of DES-TEST-MODE: a test in a workspace that selects
+// affected tests has a runtime input that prints `full` or
+// `affected:<baseline commits>`, from NX_RUST_TEST_MODE, Nx's CI detection
+// and cargo-affected's database, written here with its schema.
+const selecting = {
+  "rust/Cargo.toml": appended(
+    '\n[workspace.metadata.nx]\ntestRunner = "nextest"\naffectedTests = true\n',
+  ),
+};
+const baseline =
+  (...commits: string[]) =>
+  (workspace: FixtureWorkspace) => {
+    rmSync(join(workspace.root, "rust", "target", "affected"), { recursive: true, force: true });
+    if (commits.length > 0) {
+      writeBaseline(join(workspace.root, "rust"), commits);
+    }
+  };
+const commitA = "a".repeat(40);
+const commitB = "b".repeat(40);
+
+describeCacheKeyMatrix("keys with the test mode", [
+  {
+    change: "a switch of test mode from full to affected, with a baseline",
+    fixture: "subfolder-workspace",
+    base: { files: selecting, prepare: baseline(commitA) },
+    before: { env: { NX_RUST_TEST_MODE: "full" } },
+    after: { env: { NX_RUST_TEST_MODE: "affected" } },
+    keys: {
+      "api:test": "must differ",
+      "model:test": "must differ",
+      "api:build": "must not differ",
+    },
+  },
+  {
+    change: "a switch between two baseline commits, in affected mode",
+    fixture: "subfolder-workspace",
+    base: { files: selecting, env: { NX_RUST_TEST_MODE: "affected" } },
+    before: { prepare: baseline(commitA) },
+    after: { prepare: baseline(commitB) },
+    keys: { "api:test": "must differ", "api:build": "must not differ" },
+  },
+  {
+    change: "a commit added to the baseline, in affected mode",
+    fixture: "subfolder-workspace",
+    base: { files: selecting, env: { NX_RUST_TEST_MODE: "affected" } },
+    before: { prepare: baseline(commitA) },
+    after: { prepare: baseline(commitA, commitB) },
+    keys: { "api:test": "must differ" },
+  },
+  {
+    change: "CI that Nx detects, without NX_RUST_TEST_MODE, with a baseline",
+    fixture: "subfolder-workspace",
+    base: { files: selecting, prepare: baseline(commitA) },
+    before: { env: { CI: "false" } },
+    after: { env: { CI: "true" } },
+    keys: { "api:test": "must differ", "api:build": "must not differ" },
+  },
+  {
+    change: "an invalid NX_RUST_TEST_MODE in place of full",
+    fixture: "subfolder-workspace",
+    base: { files: selecting, prepare: baseline(commitA) },
+    before: { env: { NX_RUST_TEST_MODE: "full" } },
+    after: { env: { NX_RUST_TEST_MODE: "Full" } },
+    keys: { "api:test": "must differ" },
+  },
+  {
+    change: "NX_RUST_TEST_MODE from full to affected without a baseline, which runs the full suite",
+    fixture: "subfolder-workspace",
+    base: { files: selecting, prepare: baseline() },
+    before: { env: { NX_RUST_TEST_MODE: "full" } },
+    after: { env: { NX_RUST_TEST_MODE: "affected" } },
+    keys: { "api:test": "must not differ" },
+  },
+  {
+    change: "a baseline that appears, in full mode",
+    fixture: "subfolder-workspace",
+    base: { files: selecting, env: { NX_RUST_TEST_MODE: "full" } },
+    before: { prepare: baseline() },
+    after: { prepare: baseline(commitA) },
+    keys: { "api:test": "must not differ" },
+  },
+  {
+    change: "NX_RUST_TEST_MODE and a baseline, in a workspace that does not select affected tests",
+    fixture: "subfolder-workspace",
+    base: {
+      files: { "rust/Cargo.toml": appended('\n[workspace.metadata.nx]\ntestRunner = "nextest"\n') },
+    },
+    before: { prepare: baseline() },
+    after: { env: { NX_RUST_TEST_MODE: "sometimes", CI: "true" }, prepare: baseline(commitA) },
+    keys: { "api:test": "must not differ" },
+  },
+]);
 
 describe("keys with nextest", () => {
   // The machine's PATH less the folders that hold cargo-nextest, after a

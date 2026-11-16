@@ -278,6 +278,7 @@ function inputSettings(
           },
         }),
     testRunner: settings.workspace.testRunner,
+    ...(settings.workspace.affectedTests ? { affectedTests: true } : {}),
     added: { envInputs: settings.envInputs, runtimeInputs: settings.runtimeInputs, fileInputs },
   };
 }

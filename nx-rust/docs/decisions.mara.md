@@ -1929,6 +1929,22 @@ An experiment on 13 November 2026 with cargo-nextest 0.9.151, the prebuilt binar
 - `cargo nextest run` accepted `--features`, `--all-features`, `--no-default-features` and `--target` as cargo does; its help lists them beside `--cargo-profile`.
 :::
 
+:::mara evidence EVD-TEST-MODE-READING
+:mid: 01M7JW7PCJ272NSR2P2F6GTVJ4
+:title: How the mode command can read cargo-affected's database without writing beside it
+:status: accepted
+:supports: DES-TEST-MODE
+
+Experiments on 16 November 2026 on Linux x86-64 with Node 26.12.0 and its `node:sqlite`, in throwaway folders, and a reading of cargo-affected 0.4.1's `src/db.rs`, the version of [[EVD-CARGO-AFFECTED-REPORT]].
+
+- **The schema.** cargo-affected opens `target/affected/coverage.db` in WAL mode with `synchronous=NORMAL` and keeps one row per test and covered range in `test_regions`, whose column `collect_sha` names the commit of the collection, beside `env_fingerprint`; it reads a fingerprint's commits with `SELECT DISTINCT collect_sha FROM test_regions WHERE env_fingerprint = ?1` and keeps the rows of up to ten earlier fingerprints. An older schema without these columns is dropped when cargo-affected opens the database.
+- **A read-only connection writes beside the database.** A database in WAL mode that its writer had closed, so that only `coverage.db` was left, opened with `readOnly: true` and read, left `coverage.db-shm` of 32 KiB and an empty `coverage.db-wal` behind after the connection closed. Opened through a `file:` URL with `immutable=1` and `readOnly: true`, the same database was read and no file was created; the database's modification time and bytes stayed the same.
+- **A `-wal` file and the reader.** An immutable connection ignores the `-wal` file and takes no lock, so with a writer's connection open and automatic checkpoints off, the rows that lay only in the `-wal` file are not in what it reads. An ordinary read-only connection reads them, but where the writer closed between a look for the `-wal` file and the open, as a collection ending does, it found the database closed and created new `-wal` and `-shm` files, and a database restored with its `-wal` file but without `-shm` got a `-shm` file the same way (the review of nxr-539qtw). With the plugin's tests, which put a step between the look and the open: a database restored with its `-wal` file, with or without `-shm`, a collection that opens the database in between, one that is open at the first look and closes afterwards, and a database replaced in between each gave no commits and left every file as it was, and a closed database gave its commits and left nothing behind.
+- **Cost.** `SELECT DISTINCT collect_sha FROM test_regions` on a database of cargo-affected's schema and index with 700,000 rows, 203 MB, three commits and two fingerprints took 39 to 46 ms, opening and closing included, with the file in the page cache. A start of Node that loads `node:sqlite` took 15 to 19 ms, as one without it.
+
+So the command reads the commits only through an immutable, read-only connection, which writes nothing, and only where no `-wal` file lies beside the database before and after the read and the database file stayed the same; otherwise the mode is `full`. Not run: a database that cargo-affected itself wrote, a cold page cache, macOS, and Node 22, whose `node:sqlite` needs 22.13 or later without a flag.
+:::
+
 :::mara evidence EVD-NEXTEST-RUNNER-STEPS
 :mid: 01M7JJZMG61K9MHV5XRK94E3Y1
 :title: What the nextest runner's steps rest on: exit statuses, the JUnit report and plain commands

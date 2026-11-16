@@ -162,7 +162,11 @@ export async function* runBatch(
           ...prepared,
           id,
           context: taskContext,
-          head: [...head, ...prepared.warnings],
+          head: [
+            ...head,
+            ...prepared.warnings,
+            ...(prepared.testMode?.note === undefined ? [] : [prepared.testMode.note]),
+          ],
         });
       } catch (error) {
         const message =
