@@ -10,6 +10,7 @@ import { projectWarnings } from "../executors/task";
 import { type ExecutorOptions, ignoredOptionLine } from "../executors/task-options";
 import { cargoMetadataOf } from "../graph/collisions";
 import { realPath } from "../graph/real-path";
+import { hackCrateName } from "../graph/unification";
 import {
   releasePublishExecutor,
   releasePublishTarget,
@@ -103,7 +104,7 @@ const perTaskVariables = [
 ];
 
 /** A crate of the repository, as the report of its Cargo workspace gives it. */
-interface Crate {
+export interface Crate {
   /** The real package name. */
   name: string;
   version: string;
@@ -120,6 +121,8 @@ interface Crate {
   project?: string;
   /** Whether its project has the target `nx-release-publish`. */
   hasPublishTarget: boolean;
+  /** Whether it is the hack crate that the cargo-hakari configuration of its workspace names (`DES-RELEASE`, "Hack crate"). */
+  hack: boolean;
 }
 
 /** A task whose checks before cargo passed so far. */
@@ -142,7 +145,7 @@ interface Prepared {
 type Target = { kind: "registry"; registry: Registry } | { kind: "unknown"; reason: string };
 
 /** A dependency of a crate on another crate of the repository, with what its entry says. */
-interface DependencyLink {
+export interface DependencyLink {
   dependency: Crate;
   /** Where the dependency's entry points: crates.io, or the registry it names with its index URL. */
   points: { kind: "crates-io" } | { kind: "named"; name: string; index: string };
@@ -235,6 +238,8 @@ class Publisher {
   private readonly targets = new Map<string, Promise<Target>>();
   private readonly probes = new Map<string, Promise<Target>>();
   private readonly linksOf = new Map<Prepared, Promise<DependencyLink[]>>();
+  /** The hack crate's name by the real path of its workspace root, `undefined` for none. */
+  private readonly hackCrates = new Map<string, string | undefined>();
   /** Lookups that found their version, which a later call cannot take back. */
   private readonly found = new Set<string>();
 
@@ -332,7 +337,7 @@ class Publisher {
         `${label}: the report of the Cargo workspace in ${this.folderLabel(workspaceRoot)} has no crate with the manifest ${cargo.manifest}, so nothing was published. Run the command again; if the crate moved, Nx's project graph is out of date.`,
       );
     }
-    const crate = this.crateOf(pkg, workspaceRoot);
+    const crate = this.crateOf(pkg, workspaceRoot, report);
     return {
       id: input.id,
       label,
@@ -502,11 +507,11 @@ class Publisher {
 
   /**
    * The checks of one crate before its call (`DES-RELEASE`): whether the
-   * registry has its version already (**Existing versions**), then for each
-   * normal or build dependency with a version requirement on a crate of the
-   * repository, _Dependencies published elsewhere_ and _Dependencies
-   * published first_. The check _Unpublished dependencies_ is not part of
-   * this version: a dependency with `publish = false` is left to cargo.
+   * registry has its version already (**Existing versions**), then for the
+   * normal and build dependencies with a version requirement on crates of
+   * the repository, _Unpublished dependencies_ for each of them, and then
+   * _Dependencies published elsewhere_ and _Dependencies published first_
+   * for each.
    *
    * @returns The task's outcome where a check settles it; `undefined` where
    *   it goes to cargo.
@@ -544,6 +549,16 @@ class Publisher {
         throw error;
       }
       return { kind: "failed", lines: [`${task.label}: ${error.message}`] };
+    }
+    for (const link of links) {
+      const unpublished = unpublishedMessage(
+        task,
+        link,
+        this.relativePath(link.dependency.manifest),
+      );
+      if (unpublished !== undefined) {
+        return { kind: "failed", lines: [unpublished] };
+      }
     }
     let notVerified: Outcome | undefined;
     for (const link of links) {
@@ -776,8 +791,8 @@ class Publisher {
 
   /**
    * The normal and build dependencies of `task`'s crate with a version
-   * requirement on crates of the repository other than those with
-   * `publish = false`, with where each entry points (`DES-RELEASE`, "Where a
+   * requirement on crates of the repository, those with `publish = false`
+   * included, with where each entry points (`DES-RELEASE`, "Where a
    * dependency points").
    *
    * @throws {LinkError} When the crate's manifest or a dependency's report
@@ -822,9 +837,6 @@ class Publisher {
       const target = this.crateAt(folder, crate, task);
       if ("failure" in target) {
         throw new LinkError(target.failure);
-      }
-      if (Array.isArray(target.publish) && target.publish.length === 0) {
-        continue;
       }
       links.push({
         dependency: target,
@@ -904,7 +916,7 @@ class Publisher {
         (candidate) => realPath(dirname(candidate.manifest_path)) === folder,
       );
       if (pkg !== undefined) {
-        return this.crateOf(pkg, realPath(report.workspace_root));
+        return this.crateOf(pkg, realPath(report.workspace_root), report);
       }
     }
     const report = this.reportOf(folder, task.env, task.envKey);
@@ -919,12 +931,23 @@ class Publisher {
         failure: `@convesoft/nx-rust finds no crate in ${this.relativePath(folder)}, on which ${dependent.name} depends, in the report of its Cargo workspace, so it cannot check that crate's version in the registry, and nothing was uploaded for ${dependent.name}.`,
       };
     }
-    return this.crateOf(pkg, realPath(report.workspace_root));
+    return this.crateOf(pkg, realPath(report.workspace_root), report);
   }
 
-  private crateOf(pkg: CargoPackage, workspaceRoot: string): Crate {
+  /** The crate `pkg` of the workspace whose root and report these are. */
+  private crateOf(pkg: CargoPackage, workspaceRoot: string, report: CargoMetadata): Crate {
     const folder = realPath(dirname(pkg.manifest_path));
     const project = this.projects.get(folder);
+    if (!this.hackCrates.has(workspaceRoot)) {
+      const members = new Set(report.workspace_members);
+      this.hackCrates.set(
+        workspaceRoot,
+        hackCrateName(
+          report.workspace_root,
+          report.packages.filter((member) => members.has(member.id)).map((member) => member.name),
+        ),
+      );
+    }
     return {
       name: pkg.name,
       version: pkg.version,
@@ -935,6 +958,7 @@ class Publisher {
       dependencies: pkg.dependencies ?? [],
       ...(project === undefined ? {} : { project: project.project }),
       hasPublishTarget: project?.hasPublishTarget ?? false,
+      hack: this.hackCrates.get(workspaceRoot) === pkg.name,
     };
   }
 
@@ -1168,7 +1192,77 @@ function publishFirstMessage(
   registry: Registry,
   failed: Prepared | undefined,
 ): string {
-  return `${task.label}: ${task.crate.name} needs ${dependency.name} ${dependency.version}, which is not in ${registryLabel(registry)} yet${failed === undefined ? "" : `, because ${failed.label} failed in this run`}, so @convesoft/nx-rust does not publish ${task.crate.name}, and nothing was uploaded for it: cargo would publish it against an older version of ${dependency.name} that its requirement accepts. Publish ${dependency.name} first: in the same nx release publish, which publishes a dependency's Cargo workspace and release group first, or by running ${dependency.project === undefined ? `the publishing of ${dependency.name}` : `${dependency.project}:${releasePublishTarget}`} before this task.`;
+  const head = `${task.label}: ${task.crate.name} needs ${dependency.name} ${dependency.version}, which is not in ${registryLabel(registry)} yet${failed === undefined ? "" : `, because ${failed.label} failed in this run`}, so @convesoft/nx-rust does not publish ${task.crate.name}, and nothing was uploaded for it: cargo would publish it against an older version of ${dependency.name} that its requirement accepts.`;
+  if (dependency.hack) {
+    return `${head} ${dependency.name} is the hack crate of cargo-hakari, which @convesoft/nx-rust never publishes: publish its stub ${dependency.name} ${dependency.version} to ${registryLabel(registry)} once yourself, as ${hakariPublishing} describes, and run nx release publish again.`;
+  }
+  return `${head} Publish ${dependency.name} first: in the same nx release publish, which publishes a dependency's Cargo workspace and release group first, or by running ${dependency.project === undefined ? `the publishing of ${dependency.name}` : `${dependency.project}:${releasePublishTarget}`} before this task.`;
+}
+
+/** cargo-hakari's guide to publishing crates that depend on the hack crate. */
+const hakariPublishing = "https://docs.rs/cargo-hakari/latest/cargo_hakari/publishing";
+
+/**
+ * The check _Unpublished dependencies_ (`DES-RELEASE`): a dependency that is
+ * not published to the registry that its entry points to, through
+ * `publish = false` or a `publish` list that does not hold that registry by
+ * the entry's own name, `crates-io` for crates.io, fails the crate, because
+ * cargo packages the dependency for that registry whatever its `publish`
+ * says (`EVD-CARGO-PUBLISH`). Where the entry points to a registry whose
+ * name the executor did not find, a `publish` list cannot be compared with
+ * it, and the crate fails as well. For a hack crate, the message adds
+ * cargo-hakari's two ways (**Hack crate**).
+ *
+ * @param manifest The dependency's manifest, relative to the repository root.
+ * @returns The failure message, or `undefined` where the check passes.
+ */
+// @mara implements DES-RELEASE
+export function unpublishedMessage(
+  task: { label: string; crate: { name: string } },
+  link: DependencyLink,
+  manifest: string,
+): string | undefined {
+  const { dependency, points } = link;
+  const list = dependency.publish;
+  if (list === null) {
+    return undefined;
+  }
+  const crate = task.crate.name;
+  if (points.kind === "named" && points.name === "") {
+    return [
+      `${task.label}: ${crate} depends on ${dependency.name} through the entry in ${link.entryManifest}, which points to the registry with the index ${points.index}, and @convesoft/nx-rust finds no \`registry\` key in that entry, so it cannot establish whether the publish list of ${dependency.name} in ${manifest}, ${JSON.stringify(list)}, holds that registry. Nothing was uploaded for ${crate}.`,
+      `  To publish it, name the registry in that entry with \`registry = "<name>"\`, by a name that the publish list of ${dependency.name} holds.`,
+    ].join("\n");
+  }
+  const name = points.kind === "crates-io" ? "crates-io" : points.name;
+  if (list.includes(name)) {
+    return undefined;
+  }
+  const pointsLabel = points.kind === "crates-io" ? "crates.io" : `the registry \`${points.name}\``;
+  const why =
+    list.length === 0
+      ? `${manifest} sets \`publish = false\``
+      : `its publish list in ${manifest}, ${JSON.stringify(list)}, does not hold \`${name}\``;
+  const remedies = [
+    list.length === 0
+      ? `publish ${dependency.name} to ${pointsLabel} as well, by removing \`publish = false\` from its manifest`
+      : `publish ${dependency.name} to ${pointsLabel} as well, by adding "${name}" to its publish list`,
+    ...(list.length === 0
+      ? []
+      : [
+          `name in that entry, with its \`registry\` key, a registry that the publish list of ${dependency.name} holds, ${sentenceOr(list.map((entry) => `\`${entry}\``))}`,
+        ]),
+    `make ${dependency.name} no normal or build dependency of ${crate}`,
+  ];
+  return [
+    `${task.label}: ${crate} depends on ${dependency.name} through the entry in ${link.entryManifest}, which points to ${pointsLabel}, and ${dependency.name} is not published there: ${why}. Nothing was uploaded for ${crate}: cargo would package it for ${pointsLabel} with a dependency on ${dependency.name}, which fails to resolve there or resolves to an unrelated crate of that name.`,
+    `  To publish it, ${sentenceWith(remedies, "or")}.`,
+    ...(dependency.hack
+      ? [
+          `  ${dependency.name} is the hack crate of cargo-hakari, which @convesoft/nx-rust never publishes. cargo-hakari offers two ways: publish a stub of the hack crate once under a name of your own and without \`publish = false\`, after which ${crate} publishes normally; or publish ${crate} with \`cargo hakari publish -p ${crate}\` outside Nx, which takes the dependency out for the upload. See ${hakariPublishing}.`,
+        ]
+      : []),
+  ].join("\n");
 }
 
 /** The guidance for a crate that would publish to crates.io where the Cargo configuration replaces crates.io (`ADR-PUBLISH-REPLACED-CRATES-IO`). */
@@ -1203,9 +1297,21 @@ function lookupFailure(
   ].join("\n");
 }
 
-/** "a, b and c" as the end of a sentence. */
+/** "a; b; and c" as the end of a sentence. */
 function sentence(items: readonly string[]): string {
+  return sentenceWith(items, "and");
+}
+
+/** "a; b; <word> c" as the end of a sentence. */
+function sentenceWith(items: readonly string[], word: "and" | "or"): string {
   return items.length <= 1
     ? items.join("")
-    : `${items.slice(0, -1).join("; ")}; and ${items[items.length - 1]}`;
+    : `${items.slice(0, -1).join("; ")}; ${word} ${items[items.length - 1]}`;
+}
+
+/** "a, b or c". */
+function sentenceOr(items: readonly string[]): string {
+  return items.length <= 1
+    ? items.join("")
+    : `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
 }

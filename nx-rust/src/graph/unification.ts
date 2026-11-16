@@ -46,6 +46,47 @@ export const workspaceBuildStrategy: WorkspaceStrategy = {
 /** The configuration files that cargo-hakari reads, in its order (`EVD-HAKARI-UNIFICATION`). */
 export const hakariConfigurationFiles = [".config/hakari.toml", ".guppy/hakari.toml"];
 
+/**
+ * The configuration file that cargo-hakari reads in the workspace root
+ * `root`, relative to it: `.config/hakari.toml`, or else
+ * `.guppy/hakari.toml`; `undefined` where neither exists.
+ */
+export function hakariConfigurationFile(root: string): string | undefined {
+  return hakariConfigurationFiles.find((file) => existsSync(join(root, file)));
+}
+
+/**
+ * The package name of the hack crate of the Cargo workspace in `root`,
+ * whatever its strategy (`DES-RELEASE`, "Hack crate"): the `hakari-package`
+ * of the configuration file that cargo-hakari reads there, where that file
+ * parses and the name is one of `members`, the package names of the
+ * workspace's members; `undefined` otherwise. A configuration that does not
+ * parse names no hack crate here; graph creation warns about it where the
+ * strategy is `hakari` by default or by setting ({@link workspaceStrategy}).
+ */
+// @mara implements DES-RELEASE
+// @mara implements DES-UNIFICATION
+export function hackCrateName(root: string, members: readonly string[]): string | undefined {
+  const found = hakariConfigurationFile(root);
+  if (found === undefined) {
+    return undefined;
+  }
+  let name: unknown;
+  try {
+    name = (parse(readFileSync(join(root, found), "utf8")) as Record<string, unknown>)[
+      "hakari-package"
+    ];
+  } catch {
+    return undefined;
+  }
+  return typeof name === "string" && members.includes(name) ? name : undefined;
+}
+
+/** The package names of the members of `workspace`. */
+export function memberNames(workspace: CargoWorkspace): string[] {
+  return workspaceMembers(workspace).map((member) => member.name);
+}
+
 /** What the detection of a workspace's strategy reads beyond the workspace. */
 export interface StrategyContext {
   /** The discovery of the graph computation, for the crates outside the workspace. */
@@ -106,7 +147,7 @@ export function workspaceStrategy(
     return { featureUnification: setting, warnings: [] };
   }
   const root = workspace.report.workspace_root;
-  const found = hakariConfigurationFiles.find((file) => existsSync(join(root, file)));
+  const found = hakariConfigurationFile(root);
   const describe = describeWorkspaces([workspace.root]);
   if (found === undefined) {
     return setting === "hakari"

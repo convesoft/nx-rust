@@ -12,6 +12,7 @@ import { memberManifests } from "./inputs";
 import { directoryPattern } from "./lockfile-task";
 import type { TargetNames } from "./options";
 import type { FeatureUnification } from "./settings";
+import { hackCrateName, memberNames } from "./unification";
 
 /**
  * The plugin's cargo executor, which runs every inferred target but `build`
@@ -313,7 +314,9 @@ export interface TargetSubject {
  * A crate gets `build`, `check`, `lint`, `test`, `fmt-check` and `fmt`, `run`
  * when it has a binary target, `bench` when it has a bench target, and
  * `nx-release-publish` unless its manifest sets `publish = false`, which the
- * report gives as an empty `publish` list (`DES-RELEASE`). The
+ * report gives as an empty `publish` list, or it is the hack crate that the
+ * workspace's cargo-hakari configuration names (`DES-RELEASE`, "Publish
+ * target", "Hack crate"). The
  * workspace project gets `doc`, `lockfile`, `audit` and `update`, `deny`
  * where a cargo-deny configuration file is in the workspace root, and
  * `hakari-check` where the workspace uses the `hakari` strategy
@@ -381,7 +384,10 @@ export function inferTargets(
         continuous: false,
       });
     }
-    if (!(Array.isArray(pkg.publish) && pkg.publish.length === 0)) {
+    if (
+      !(Array.isArray(pkg.publish) && pkg.publish.length === 0) &&
+      hackCrateName(workspace.report.workspace_root, memberNames(workspace)) !== pkg.name
+    ) {
       targets.set(releasePublishTarget, {
         ...target(
           releasePublishTarget,

@@ -417,6 +417,36 @@ describe("the hakari strategy at graph creation", () => {
   );
 
   it(
+    "gives the hack crate no nx-release-publish whatever the strategy, also without publish = false, and a crate that no configuration names keeps it (VER-RELEASE, group 8)",
+    async () => {
+      const published = (projects: Record<string, ProjectConfiguration>, name: string) =>
+        projects[name]?.targets?.["nx-release-publish"] !== undefined;
+      const stub = { "hakari/workspace-hack/Cargo.toml": edit(/^publish = false\n/m, "") };
+      const workspaceBuild = {
+        "hakari/Cargo.toml": (manifest: string | undefined) =>
+          `${manifest}\n[workspace.metadata.nx]\nfeatureUnification = "workspace-build"\n`,
+      };
+      for (const changes of [
+        {},
+        stub,
+        { ...stub, ...workspaceBuild },
+        {
+          ...stub,
+          "hakari/.config/hakari.toml": null,
+          "hakari/.guppy/hakari.toml": hakariConfiguration("workspace-hack", []),
+        },
+      ] as FileChanges[]) {
+        const { projects } = await outcome(changes);
+        expect(published(projects, "workspace-hack")).toBe(false);
+        expect(published(projects, "a")).toBe(true);
+      }
+      const { projects } = await outcome({ ...stub, "hakari/.config/hakari.toml": null });
+      expect(published(projects, "workspace-hack")).toBe(true);
+    },
+    HARNESS_TIMEOUT * 2,
+  );
+
+  it(
     "keeps hakari for a non-host triple that build.target or a crate's targetTriple sets and platforms does not list, and warns, naming the triple",
     async () => {
       const triple =
