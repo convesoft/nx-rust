@@ -5,6 +5,8 @@
 A Rust crate can be built into something a JS project consumes: a Node addon
 through [napi-rs](https://napi.rs), or a wasm package through `wasm-bindgen`.
 v1 supports both: Node addons for the host platform, and wasm for the browser.
+Node addons need napi-rs 3: `napi-derive` 3, and `@napi-rs/cli` 3.4.0 or later
+installed in the workspace. napi-rs 2 addons are not supported.
 
 | Target       | Produces                                                    | Flags                                                   |
 | ------------ | ----------------------------------------------------------- | ------------------------------------------------------- |
@@ -71,16 +73,36 @@ Each artifact is built in two steps:
    A non-host triple such as `wasm32-unknown-unknown` is a group of its own and
    builds only the selected crates.
 2. A post-processing step that Nx caches, with outputs outside Cargo's
-   directories: the `wasm-bindgen` CLI for wasm, the napi CLI for Node addons.
+   directories: the `wasm-bindgen` CLI for wasm, and for Node addons the
+   functions that `@napi-rs/cli` exports for this.
 
 The plugin calls `cargo build` and the `wasm-bindgen` CLI directly. It does not
-use wasm-pack, whose home organisation was sunset in 2025.
+use wasm-pack, whose home organisation was sunset in 2025. Nor does it run
+`napi build`, which always runs cargo itself and would compile the crate's
+dependencies a second time. `napi-build` writes the files that
+`napi build --platform` writes, into the crate's folder: the addon, such as
+`my-addon.linux-x64-gnu.node` on Linux x86-64, its loader `index.js` and its type
+definitions `index.d.ts`.
 
 ## Things to know
 
 - **Tool versions matter.** The `wasm-bindgen` CLI must match the version of
   the `wasm-bindgen` crate in your lockfile. Tool versions are part of the
   cache key.
+- **Every napi crate needs `napi_build::setup()`.** The addon crate and every
+  crate it depends on that uses `napi-derive` need a build script that calls
+  `napi_build::setup()`, as the napi-rs templates have it, and at least one
+  `#[napi]` item. Otherwise `napi-build` cannot be sure the type definitions
+  are current, and fails and names the crate.
+- **`napi-build` and plain cargo rebuild the napi crates for each other.**
+  After `nx napi-build`, the next plain `cargo build`, `nx build` or
+  rust-analyzer check compiles the napi crates, and every crate that depends
+  on them, again, and the next `napi-build` does the same after them. The rest
+  of the workspace is reused. Addon crates are usually leaves, so this is
+  usually a few crates.
+- **Two addons need different library names.** If two crates have the same
+  `[lib] name`, cargo builds one file for both, and `napi-build` fails for
+  both until you rename one.
 - **Artifacts are platform-specific.** The target triple is part of the key, so
   a `.node` file built on Linux is never restored on macOS.
 - **Generated files in the source tree** such as type definitions and JS glue
@@ -170,9 +192,25 @@ JS consumers depend on the artifact target, not on `^build`. Generated type defi
 :status: accepted
 :satisfies: REQ-ARTIFACT-TARGETS
 
-`napi-build` compiles the crate with `cargo build` for the host triple and then runs the napi CLI to produce the `.node` file with its JS and type definitions. The versions of the napi CLI and of any cross toolchain are part of the cache key. v1 builds for the host triple only: cross-compiling takes one target per command and zig or cargo-xwin, and is normally a CI matrix.
+`napi-build` compiles the crate with `cargo build` for the host triple and then post-processes the library into the `.node` file with its JS and type definitions, in the two steps of [[DES-ARTIFACT-STEPS]]. `napi build` cannot do the second step alone: it always runs cargo itself, for the one package and with `--target`, and would compile the crate's whole dependency tree a second time into the triple's folder, with the features of that package alone ([[EVD-NAPI-POSTPROCESS]]). The plugin therefore does not run `napi build`.
 
-Whether the napi CLI can post-process an existing cargo build, and whether napi crates need a special feature to link under `cargo test`, is not confirmed ([[RISK-NAPI-TOOLING]]).
+**Compile.** The compile step is a group of its own kind in the batch ([[DES-BATCH]]), which selects crates and resolves features as `build` does under the workspace's strategy ([[DES-UNIFICATION]]), without `--target` on the host. While `napi-derive` 3 expands a crate's `#[napi]` items, it writes the crate's type information into a file named after the package in the folder that `NAPI_TYPE_DEF_TMP_FOLDER` names. It writes nothing while that variable is unset or the folder is missing, and only when the crate is actually compiled: it never removes the file of a crate that is fresh or that no longer has any `#[napi]` item ([[EVD-NAPI-POSTPROCESS]]). The compile therefore starts from nothing each time:
+
+- **An empty folder.** Before each compile, the plugin creates the folder empty, in Cargo's build directory, at a path of the group's configuration: everything the tasks of a group share ([[TERM-GROUP]]), and for a group of one crate that crate. Nothing from an earlier run is kept, and no two configurations share a folder. The path stays the same from run to run, because cargo rebuilds every crate whose build script calls `napi_build::setup()` when it changes, also crates that this compile does not need.
+- **Every napi crate forced.** The closure is the group's addon crates and every crate that they depend on through normal dependencies. For each crate of the closure that depends on `napi-derive`, whether or not it has a task in the group, the command sets `NAPI_FORCE_BUILD_` with the package name in capitals and `-` replaced by `_` to a value of this compile's own. `napi_build::setup()` makes cargo rebuild the crate when that variable changes, so every such crate is compiled and writes its file.
+- **Every file written.** After cargo, each crate that the command forced must have a file in the folder. Where one has none, every `napi-build` task whose addon is that crate or depends on it fails, with a message that names the crate and the two causes: its build script does not run `napi_build::setup()`, which alone lets the variable force it, or it no longer has any `#[napi]` item and should drop its dependency on `napi-derive` ([[DES-DIAGNOSTICS]]). Forcing cannot reach a crate whose build script does not call `setup()`: cargo keeps it fresh, and only a change to its own files compiles it again.
+
+Only this step sets these variables. `build`, `test`, `check` and `lint` run without them, as plain cargo does. Every crate that the step forces, and every crate that depends on one of them, is therefore compiled again on each `napi-build` compile and on the next command without the variables, such as plain `cargo build`, `nx build` or rust-analyzer's check. The plugin accepts this in the shared build directory ([[ADR-NAPI-SHARED-BUILD-DIR]]). Two `nx` commands that run the compile of one group configuration at the same time empty the same folder, and one of them can then miss files or read the other's.
+
+**Library names.** The `.node` file is a copy of the library that cargo reports for the crate. Where two crates give their libraries one file name, as [[DES-OUTPUTS]] compares them ("Files of one name"), cargo builds one file for both, and the copy would give both addons one crate's functions. `build` of such crates runs uncached with a warning; a `napi-build` of such a crate fails when the task starts, before cargo runs, with a message that names both crates and says to give them different `[lib] name`s ([[DES-DIAGNOSTICS]]).
+
+**Post-processing.** After the compile, for each task, the plugin copies the library that cargo reported for the crate to `<binaryName>.<platform>-<arch>-<abi>.node` in the crate's folder. It then writes `index.d.ts` and `index.js` there with `generateTypeDef` and `writeJsBinding`, which the workspace's installed `@napi-rs/cli` exports, and with the crate's `napi` settings, which `readNapiConfig` reads. The defaults are those of `napi build --platform`. `generateTypeDef` reads every file in the folder it is given, so the plugin gives it a folder of the task's own. That folder holds only the files of the crate and of the napi crates in its own closure, whose `#[napi]` items become part of the addon. With that folder, both files were byte-identical to those of `napi build --platform` ([[EVD-NAPI-POSTPROCESS]]). These three files are the target's outputs, excluded from its inputs ([[DES-ARTIFACT-STEPS]]).
+
+**What the step needs.** `napi-build` supports crates built with `napi-derive` 3 and post-processed with `@napi-rs/cli` 3, from 3.4.0, the first release that exports all three functions ([[ADR-NAPI-RS-3]]). A task fails before cargo runs, with a message that names the tool or the crate and the version ([[DES-DIAGNOSTICS]]), where the workspace has no `@napi-rs/cli` installed, as for any missing tool, or has another major of it or a release older than 3.4.0, and where a crate of its closure depends on `napi-derive` of another major.
+
+The versions of `@napi-rs/cli` and of any cross toolchain are part of the cache key. v1 builds for the host triple only: cross-compiling takes one target per command and zig or cargo-xwin, and is normally a CI matrix.
+
+Whether napi crates need a special feature to link under `cargo test` is not confirmed ([[RISK-NAPI-TOOLING]]).
 :::
 
 ## Scenario
