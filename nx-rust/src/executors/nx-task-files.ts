@@ -145,7 +145,13 @@ export function skippedCheckWarning(task: string, error: NxTaskFilesError): stri
   return `nx-rust: ${task}: the build input check did not run, because ${error.message}, so Nx caches the result without it. Use an Nx version that @convesoft/nx-rust supports, or a version of @convesoft/nx-rust that supports the installed one.`;
 }
 
-function load(path: string, workspaceRoot: string): Record<string, unknown> {
+/**
+ * A module of the installed Nx, resolved from the repository as Nx resolves
+ * itself, else from the plugin.
+ *
+ * @throws {NxTaskFilesError} When it cannot be loaded.
+ */
+export function load(path: string, workspaceRoot: string): Record<string, unknown> {
   try {
     return require(resolveFromRepository(path, workspaceRoot));
   } catch (error) {

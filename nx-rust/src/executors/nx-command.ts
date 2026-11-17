@@ -1,6 +1,6 @@
 import type { PostTasksExecutionContext, PreTasksExecutionContext } from "@nx/devkit";
 import { randomUUID } from "node:crypto";
-import { readdirSync, rmSync } from "node:fs";
+import { readdirSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
   digestRoot,
   runIdVariable,
 } from "../graph/lockfile-task";
+import { testModeRecordRoot } from "./test-mode";
 
 /**
  * The variable in which the plugin's `preTasksExecution` hook records the
@@ -108,7 +109,10 @@ export function preTasksExecution(_options: unknown, context: PreTasksExecutionC
  * The plugin's `postTasksExecution` hook, which Nx calls once per entry of
  * the plugin after a command has run its tasks, with the `id` that the
  * command's `preTasksExecution` got. It removes the private copies of the
- * digests that the command's lockfile tasks wrote (`DES-LOCKFILE-HASHING`).
+ * digests that the command's lockfile tasks wrote (`DES-LOCKFILE-HASHING`),
+ * and the command's record of test modes with those that stopped commands
+ * left more than a day ago (`DES-TEST-MODE`). It removes what it can and
+ * never fails the command.
  * A command that does not get here, because it was stopped, leaves its
  * copies to the next lockfile task of the workspace, which removes those
  * older than a day.
@@ -119,14 +123,44 @@ export function postTasksExecution(_options: unknown, context: PostTasksExecutio
   if (prefix === "-") {
     return;
   }
+  // The records of the test mode (`DES-TEST-MODE`): this command's, and
+  // those that a stopped command left more than a day ago.
+  const records = join(context.workspaceRoot, testModeRecordRoot);
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  for (const command of entries(records)) {
+    const folder = join(records, command);
+    if (command.startsWith(prefix) || modifiedBefore(folder, dayAgo)) {
+      removeQuietly(folder);
+    }
+  }
   const root = join(context.workspaceRoot, digestRoot);
   for (const workspace of entries(root)) {
     const commands = join(root, workspace, commandsFolderName);
     for (const command of entries(commands)) {
       if (command.startsWith(prefix)) {
-        rmSync(join(commands, command), { recursive: true, force: true });
+        removeQuietly(join(commands, command));
       }
     }
+  }
+}
+
+// Removes a folder where it can: the cleanup never fails the command, and a
+// record left in place makes later tasks in affected mode run their full
+// suite at worst (`DES-TEST-MODE`).
+function removeQuietly(folder: string): void {
+  try {
+    rmSync(folder, { recursive: true, force: true });
+  } catch {
+    // Left for a later command.
+  }
+}
+
+// Whether a file or folder was last modified before `time`; not where it is gone.
+function modifiedBefore(path: string, time: number): boolean {
+  try {
+    return statSync(path).mtimeMs < time;
+  } catch {
+    return false;
   }
 }
 

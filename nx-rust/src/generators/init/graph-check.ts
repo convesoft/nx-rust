@@ -29,6 +29,11 @@ export interface GraphCheck {
    */
   nextestWorkspaces?: string[];
   /**
+   * The roots of the workspaces whose settings turn on the selection of
+   * affected tests (`affectedTests`), relative to the repository root.
+   */
+  affectedTestsWorkspaces?: string[];
+  /**
    * The feature-unification strategy that graph creation chose for each of
    * them, by the workspace's root folder (`DES-UNIFICATION`).
    */
@@ -163,6 +168,7 @@ export async function checkGraphCreation(
 
   const workspaces = new Map<string, CargoWorkspace>();
   const nextestWorkspaces = new Set<string>();
+  const affectedTestsWorkspaces = new Set<string>();
   const strategies = new Map<string, FeatureUnification>();
   for (const { copy } of entries) {
     const graph = registrationOf(copy).graphForDependencies(workspaceRoot);
@@ -179,6 +185,9 @@ export async function checkGraphCreation(
       if (project.settings.workspace.testRunner === "nextest") {
         nextestWorkspaces.add(project.workspace.root);
       }
+      if (project.settings.workspace.affectedTests) {
+        affectedTestsWorkspaces.add(project.workspace.root);
+      }
     }
   }
   return {
@@ -189,6 +198,7 @@ export async function checkGraphCreation(
     ].sort(),
     workspaces: [...workspaces.values()],
     nextestWorkspaces: [...nextestWorkspaces].sort(),
+    affectedTestsWorkspaces: [...affectedTestsWorkspaces].sort(),
     strategies,
   };
 }

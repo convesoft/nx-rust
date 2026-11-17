@@ -474,6 +474,28 @@ const expected: Record<Exclude<FixtureName, "name-collision">, ExpectedGraph> = 
       ["rust", "tool"],
     ],
   },
+  "affected-tests": {
+    cargoFolders: ["rust"],
+    projects: {
+      app: "rust/crates/app",
+      basics: "rust/crates/basics",
+      consumer: "rust/crates/consumer",
+      macros: "rust/crates/macros",
+      runner: "rust/crates/runner",
+      rust: "rust",
+    },
+    edges: [
+      ["app", "basics"],
+      ["app", "macros"],
+      ["consumer", "runner"],
+      ["runner", "basics"],
+      ["rust", "app"],
+      ["rust", "basics"],
+      ["rust", "consumer"],
+      ["rust", "macros"],
+      ["rust", "runner"],
+    ],
+  },
   "napi-addons": {
     cargoFolders: ["rust"],
     projects: {

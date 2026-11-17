@@ -89,7 +89,13 @@ import {
 } from "./nx-task-files";
 import { recordedNxCommand } from "./nx-command";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
-import { invalidTestModeMessage, type TestMode, testMode, testModeNote } from "./test-mode";
+import {
+  invalidTestModeMessage,
+  type TestMode,
+  testMode,
+  testModeNote,
+  testModeText,
+} from "./test-mode";
 
 /**
  * The profiles whose artifacts Cargo puts in another profile's folder, which
@@ -266,11 +272,14 @@ export async function runTask(
   const verbose = taskRunsVerbosely(context);
   // `napi-build` runs its compile with variables of its own and its
   // post-processing after it, and `wasm-build` the wasm-bindgen CLI after its
-  // compile, whichever way their groups select (`DES-NAPI`, `DES-WASM`).
+  // compile, whichever way their groups select (`DES-NAPI`, `DES-WASM`). A
+  // task that selects affected tests runs steps 1 and 2 before its nextest
+  // command (`DES-TEST-RUN`), as in a batch.
   if (
     planned.selection.kind === "workspace" ||
     prepared.napi !== undefined ||
-    prepared.wasm !== undefined
+    prepared.wasm !== undefined ||
+    prepared.testMode?.selects === true
   ) {
     const [result] = await (
       prepared.napi !== undefined
@@ -447,7 +456,15 @@ export interface PreparedTask {
    * (`DES-TEST-MODE`), and the line that says at the top of the task's
    * output which suite it runs and why.
    */
-  testMode?: { mode: TestMode; note?: string };
+  testMode?: {
+    mode: TestMode;
+    /**
+     * Whether the task selects: it is in affected mode with a baseline and
+     * does not opt out with `affectedTests = false`.
+     */
+    selects: boolean;
+    note?: string;
+  };
   /** Under `hakari`, the hack crate's package name (`DES-NAPI`). */
   hakariPackage?: string;
   /** The task's environment, with which its checks ran and its cargo runs. */
@@ -710,13 +727,48 @@ export function prepareTask(
   // the task's own environment; a task run on its own and one in a batch
   // get the same (`DES-TEST-MODE`).
   let testModeDecision: PreparedTask["testMode"];
+  if (metadata.target === "test" && metadata.affectedTests !== true) {
+    // Graph creation refuses the option set to true in stored configuration,
+    // so a value here comes from the command line or a forwarding task
+    // (`DES-PLUGIN-OPTIONS`).
+    if (examined.options.affectedTests === true) {
+      throw new TaskError(
+        `${task}: this run sets "affectedTests" to true, as --affectedTests=true on the command line does, but the Cargo workspace in ${cargo.workspaceManifest} does not use the selection of affected tests, so the option can only turn it off. Remove it, or turn selection on with affectedTests = true under [workspace.metadata.nx] in ${cargo.workspaceManifest}. The task does not run, so that Nx stores no result for it.`,
+      );
+    }
+  }
   if (metadata.target === "test" && metadata.affectedTests === true) {
     const mode = testMode(env, cwd);
     if (mode.kind === "invalid") {
       throw new TaskError(invalidTestModeMessage(task, mode.value));
     }
-    const note = testModeNote(task, mode, examined.options.affectedTests === false);
-    testModeDecision = { mode, ...(note === undefined ? {} : { note }) };
+    const optedOut = examined.options.affectedTests === false;
+    const selects = mode.kind === "affected" && !optedOut;
+    const neededBy = `the selection of affected tests of the ${targetName} target of ${cargo.packageName ?? projectName}, whose Cargo workspace in ${describeFolder(workspaceRoot)} turns it on (affectedTests), in test mode ${testModeText(mode)}`;
+    let missing: string | undefined;
+    try {
+      requireTool("cargo-affected", neededBy, {
+        workspaceRoot: context.root,
+        workspaces: [],
+        env,
+        folder: cwd,
+      });
+    } catch (error) {
+      if (!(error instanceof MissingToolError)) {
+        throw error;
+      }
+      // In affected mode the task cannot select without it; in mode full it
+      // runs the full suite, and the missing tool would show only in a run
+      // that selects (`DES-DIAGNOSTICS`).
+      if (selects) {
+        throw new TaskError(`${task}: ${error.message}`);
+      }
+      missing = `${task}: warning: cargo-affected is not installed, which the selection of affected tests in this workspace needs in test mode affected; this run is in test mode ${testModeText(mode)} and runs the full suite without it. ${error.tool.install}`;
+    }
+    const note = [testModeNote(task, mode, optedOut), missing]
+      .filter((line) => line !== undefined)
+      .join("\n");
+    testModeDecision = { mode, selects, ...(note === "" ? {} : { note }) };
   }
   // The checks of `napi-build` before cargo (`DES-NAPI`), after those of
   // what reaches the task's key.
@@ -840,6 +892,12 @@ export interface GroupInvocation extends CargoInvocation {
    * its output tells crates outside the group by them.
    */
   workspaceMembers?: CargoPackage[];
+  /**
+   * Every member of the workspace, as the group's report of the members
+   * gives them, where a task of the `test` group selects affected tests
+   * (`DES-TEST-RUN`, step 2).
+   */
+  affectedMembers?: CargoPackage[];
   /** The selecting runner's command, for a `test` group that selects the whole workspace. */
   runner?: string[];
   /** The task's crate as the command selects it; absent for a workspace project. */
@@ -967,6 +1025,12 @@ export function groupInvocations(
     throw new Error("A test group that selects the whole workspace needs the host's triple.");
   }
   const workspaceMembers = workspace && specs instanceof Map ? [...specs.values()] : undefined;
+  // A group that selects affected tests places changed files among every
+  // member (`DES-TEST-RUN`, step 2).
+  const affectedMembers =
+    tasks.some((task) => task.testMode?.selects === true) && specs instanceof Map
+      ? [...specs.values()]
+      : undefined;
   return tasks.map((task, index) => {
     const entry = finished[index];
     if (typeof entry === "string") {
@@ -1014,6 +1078,7 @@ export function groupInvocations(
       steps,
       cwd,
       ...(workspaceMembers === undefined ? {} : { workspaceMembers }),
+      ...(affectedMembers === undefined ? {} : { affectedMembers }),
       ...(runner === undefined ? {} : { runner: [...runner.command] }),
       ...(entry.crate === undefined ? {} : { crate: entry.crate }),
       ...(entry.package === undefined ? {} : { package: entry.package }),

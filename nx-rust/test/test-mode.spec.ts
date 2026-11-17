@@ -32,6 +32,7 @@ import {
   openBaseline,
   pluginPackage,
   runNx,
+  StubCargoAffected,
   taskCalls,
   taskOutput,
   testEnvironment,
@@ -513,9 +514,17 @@ describeWithNextest("test modes through Nx", () => {
     "says which suite runs and why, and restores a result only for the same mode and baseline",
     async () => {
       const workspace = FixtureWorkspace.create("workspace-tests", selecting);
+      // A stand-in for cargo-affected, which a run in affected mode needs; its
+      // baseline has no record of its context, so the full suite runs.
+      const stub = new StubCargoAffected();
       try {
-        const env = (mode?: string) =>
-          workspace.cargo.environment(testEnvironment({ NX_RUST_TEST_MODE: mode }));
+        const env = (mode?: string) => {
+          const base = testEnvironment({ NX_RUST_TEST_MODE: mode });
+          return workspace.cargo.environment({
+            ...base,
+            PATH: [stub.folder, base.PATH].filter(Boolean).join(delimiter),
+          });
+        };
         const rust = join(workspace.root, "rust");
         /** Runs `a:test` and says whether cargo ran, with the task's output. */
         const run = async (mode?: string) => {
@@ -539,6 +548,9 @@ describeWithNextest("test modes through Nx", () => {
         expect(affected.ran).toBe(true);
         expect(affected.output).toContain(
           `a:test: test mode affected:${shaA}, because NX_RUST_TEST_MODE is not set and Nx detects no CI.`,
+        );
+        expect(affected.output).toContain(
+          "a:test: runs the full suite, because the baseline has no record of the context it was collected in",
         );
         expect(await run("affected")).toMatchObject({ ran: false });
         rmSync(join(rust, "target/affected/coverage.db"));
@@ -573,6 +585,7 @@ describeWithNextest("test modes through Nx", () => {
           `a:test: runs the full suite, because its option affectedTests is false; the test mode is affected:${shaA}.`,
         );
       } finally {
+        stub.remove();
         workspace.remove();
       }
     },

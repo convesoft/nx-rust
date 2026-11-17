@@ -1,0 +1,7 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.metadata.nx]
+testRunner = "nextest"
+affectedTests = true

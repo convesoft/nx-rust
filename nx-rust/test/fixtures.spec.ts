@@ -176,6 +176,17 @@ const expected: Record<FixtureName, { workspaces: Record<string, string[]>; othe
       tools: ["tools"],
     },
   },
+  "affected-tests": {
+    workspaces: {
+      rust: [
+        "rust/crates/app",
+        "rust/crates/basics",
+        "rust/crates/consumer",
+        "rust/crates/macros",
+        "rust/crates/runner",
+      ],
+    },
+  },
   "workspace-tests": {
     workspaces: {
       rust: [

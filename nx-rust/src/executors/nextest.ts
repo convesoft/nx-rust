@@ -415,6 +415,9 @@ export function parseNextestList(stdout: string): ListedTests {
  * `Starting` line, with the tests that the configuration skipped, and its
  * summary; and the task's message gives the number of its crate's tests in
  * the report, so that a crate whose tests the configuration skips shows 0.
+ *
+ * @param selection Whether the step runs a selection of affected tests
+ *   (`DES-TEST-RUN`, step 3), which the count's wording then names.
  */
 // @mara implements DES-TEST-RUN
 // @mara implements DES-DIAGNOSTICS
@@ -426,6 +429,7 @@ export function readNextestStep(
   scope: OutputScope | undefined,
   report: JunitReport,
   listed?: ListedTests,
+  selection = false,
 ): CrateOutcome[] {
   const lines = splitLines(output);
   const texts = attributeNextest(lines, crates, scope).map((part) => part.join("\n"));
@@ -509,7 +513,7 @@ export function readNextestStep(
     return crates.map((crate, index) => ({
       passed: true,
       output: texts[index],
-      message: countLine(crate, report, tests),
+      message: countLine(crate, report, tests, selection),
     }));
   }
   // nextest exited with 100: a test failed, or the run ended early.
@@ -535,7 +539,7 @@ export function readNextestStep(
         passed: false,
         output: texts[index],
         message: [
-          countLine(crate, report, tests),
+          countLine(crate, report, tests, selection),
           `${crate.task}: ${failed.length === 1 ? "a test" : `${failed.length} tests`} of ${crate.name} failed: ${failed.map((test) => `${test.binary} ${test.name}`).join(", ")}.`,
         ].join("\n"),
       };
@@ -553,13 +557,17 @@ export function readNextestStep(
     const expected = listed.tests.filter((test) => test.package === crate.name);
     const missing = expected.filter((test) => !ran.has(`${test.binary}\0${test.name}`));
     if (missing.length === 0) {
-      return { passed: true, output: texts[index], message: countLine(crate, report, tests) };
+      return {
+        passed: true,
+        output: texts[index],
+        message: countLine(crate, report, tests, selection),
+      };
     }
     return {
       passed: false,
       output: texts[index],
       message: [
-        countLine(crate, report, tests),
+        countLine(crate, report, tests, selection),
         `${crate.task}: the run was not complete: nextest did not run ${missing.length} of the ${expected.length} ${expected.length === 1 ? "test" : "tests"} of ${crate.name} that it was to run, such as ${missing
           .slice(0, 3)
           .map((test) => `${test.binary} ${test.name}`)
@@ -576,13 +584,16 @@ function countLine(
   crate: OutputCrate,
   report: JunitReport,
   tests: readonly (JunitCase & { package: string })[],
+  selection: boolean,
 ): string {
   if (!("cases" in report)) {
     return `${crate.task}: nextest wrote no JUnit report to the file that @convesoft/nx-rust's tool configuration names, as where the repository's nextest profile sets its own junit.path, so the number of tests that ran for ${crate.name} is not shown. nextest exited with status 0: every test that the run was to run passed.`;
   }
   const count = tests.filter((test) => test.package === crate.name && !test.skipped).length;
   return count === 0
-    ? `${crate.task}: nextest ran no test of ${crate.name}: the crate has none, or the repository's nextest configuration skips them.`
+    ? selection
+      ? `${crate.task}: nextest ran no test of ${crate.name}: none of its tests was selected, or the repository's nextest configuration skips those that were.`
+      : `${crate.task}: nextest ran no test of ${crate.name}: the crate has none, or the repository's nextest configuration skips them.`
     : `${crate.task}: nextest ran ${count} ${count === 1 ? "test" : "tests"} of ${crate.name}, as its JUnit report shows.`;
 }
 

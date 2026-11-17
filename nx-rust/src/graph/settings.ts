@@ -287,6 +287,10 @@ export function readSettings(discovery: CargoDiscovery, options: PluginOptions):
       runtimeInputs: union(options.runtimeInputs, table.runtimeInputs),
       fileInputs: table.fileInputs,
     };
+    const runnerProblem = affectedTestsRunnerProblem(workspace.rootManifest, table, options);
+    if (runnerProblem !== undefined) {
+      problems.push(runnerProblem);
+    }
     workspaces.set(workspace, settings);
     for (const pkg of workspace.members) {
       const own = readPackageTable(pkg, discovery.workspaceRoot, problems);
@@ -317,6 +321,33 @@ export function readSettings(discovery: CargoDiscovery, options: PluginOptions):
     throw new Error(problems.join("\n"));
   }
   return new GraphSettings(options, workspaces, crates, workspaceProjects);
+}
+
+/**
+ * The error for a workspace that turns on the selection of affected tests
+ * without the nextest runner (`REQ-AFFECTED-TESTS`, `DES-DIAGNOSTICS`): it
+ * names both options, where each of their values comes from, and what to
+ * change. `undefined` where the workspace does not select or uses nextest.
+ */
+// @mara implements REQ-AFFECTED-TESTS
+// @mara implements DES-DIAGNOSTICS
+export function affectedTestsRunnerProblem(
+  rootManifest: string,
+  table: { testRunner?: TestRunner; affectedTests?: boolean },
+  options: { testRunner?: TestRunner; affectedTests?: boolean },
+): string | undefined {
+  const affectedTests = table.affectedTests ?? options.affectedTests ?? false;
+  const testRunner = table.testRunner ?? options.testRunner ?? "cargo";
+  if (!affectedTests || testRunner === "nextest") {
+    return undefined;
+  }
+  const from = (key: "testRunner" | "affectedTests"): string =>
+    table[key] !== undefined
+      ? `[workspace.metadata.nx] in ${rootManifest}`
+      : options[key] !== undefined
+        ? "the options of the plugin's entry in nx.json"
+        : "the default";
+  return `${rootManifest}: affectedTests is true (from ${from("affectedTests")}), but testRunner is "${testRunner}" (from ${from("testRunner")}): the selection of affected tests runs only with the nextest runner. Set testRunner = "nextest" under [workspace.metadata.nx] in ${rootManifest}, or in the options of the plugin's entry in nx.json, or remove affectedTests.`;
 }
 
 interface SharedTable {

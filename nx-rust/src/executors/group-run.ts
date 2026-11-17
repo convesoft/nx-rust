@@ -25,7 +25,14 @@ import {
   readJsonStep,
   readTestStep,
 } from "./cargo-output";
-import { type CargoStep, reportsLibrary, withToolConfiguration } from "./command";
+import type { CrateSelection } from "./affected";
+import { affectedSelection } from "./affected-run";
+import {
+  type CargoStep,
+  nextestListArguments,
+  reportsLibrary,
+  withToolConfiguration,
+} from "./command";
 import {
   type ListedTests,
   type NextestToolConfiguration,
@@ -168,9 +175,16 @@ export async function runGroup(
       : { members: first.invocation.workspaceMembers, root: cwd };
   const state = members.map(() => ({ failed: false, lines: [] as string[] }));
   const label = members.map((member) => member.prepared.task).join(", ");
+  // Steps 1 and 2 of `DES-TEST-RUN` where the group selects affected tests:
+  // the selection goes into the nextest step's `-E` arguments, and an empty
+  // one leaves the step out.
+  const selected = await selectAffected(members, steps, state, verbose);
   for (const [index, step] of steps.entries()) {
     if (state.every((entry) => entry.failed)) {
       break;
+    }
+    if (selected === "none" && (step.kind === "nextest" || index === 0)) {
+      continue;
     }
     const record =
       step.kind === "test-binaries" ? mkdtempSync(join(tmpdir(), "nx-rust-record-")) : undefined;
@@ -224,7 +238,15 @@ export async function runGroup(
           }
           listed = await listNextestTests(list, first.prepared.env);
         }
-        outcomes = readNextestStep(run.output, end, crates, scope, report, listed);
+        outcomes = readNextestStep(
+          run.output,
+          end,
+          crates,
+          scope,
+          report,
+          listed,
+          selected === "some",
+        );
       } else {
         const end = commandEnd(run.code, run.signal, run.failure);
         unexplained = end.kind === "unexplained" ? end.reason : undefined;
@@ -280,6 +302,122 @@ export async function runGroup(
       };
     }),
   );
+}
+
+/**
+ * Steps 1 and 2 of `DES-TEST-RUN` for a nextest group of the `test` target
+ * whose tasks select affected tests ({@link affectedSelection}): where they
+ * give a selection, the first step, `cargo nextest run`, gets its `-E`
+ * arguments in place of the group's package filterset, and its list command
+ * the same; each task's output says what it runs and why. Where they give
+ * the full suite, each selecting task says why, and the steps stay as they
+ * are.
+ *
+ * @returns `"some"` where the nextest step runs a selection, `"none"` where
+ *   no test is selected, so that the group leaves the nextest step out, and
+ *   `undefined` where the group runs its full suite.
+ */
+// @mara implements DES-TEST-RUN
+async function selectAffected(
+  members: readonly GroupMember[],
+  steps: CargoStep[],
+  state: { failed: boolean; lines: string[] }[],
+  verbose: boolean,
+): Promise<"some" | "none" | undefined> {
+  const [first] = members;
+  const step = steps[0];
+  if (
+    first === undefined ||
+    step === undefined ||
+    first.prepared.target !== "test" ||
+    first.prepared.testRunner !== "nextest" ||
+    !members.some((member) => member.prepared.testMode?.selects === true)
+  ) {
+    return undefined;
+  }
+  const outcome = await affectedSelection(
+    members.map(({ prepared, context }) => ({ prepared, context })),
+    first.invocation.affectedMembers ?? [],
+    step.args,
+    verbose,
+  );
+  const mode = first.prepared.testMode?.mode;
+  const baseline = mode?.kind === "affected" ? mode.commits.join(",") : "";
+  if (outcome.kind === "full") {
+    members.forEach((member, index) => {
+      if (member.prepared.testMode?.selects === true) {
+        state[index].lines.push(
+          `${member.prepared.task}: runs the full suite, because ${outcome.reason}.`,
+        );
+      }
+    });
+    return undefined;
+  }
+  members.forEach((member, index) => {
+    state[index].lines.push(
+      selectionLine(
+        member.prepared.task,
+        member.prepared.crate ?? "",
+        outcome.crates.get(member.prepared.crate ?? ""),
+        baseline,
+      ),
+    );
+  });
+  if (outcome.filtersets.length === 0) {
+    return "none";
+  }
+  const args = [...withoutFiltersets(step.args), ...outcome.filtersets];
+  steps[0] = {
+    ...step,
+    args,
+    ...(step.listArgs === undefined ? {} : { listArgs: nextestListArguments(args) }),
+  };
+  return "some";
+}
+
+// The arguments of a nextest command without its `-E` arguments.
+function withoutFiltersets(args: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "-E") {
+      index += 1;
+      continue;
+    }
+    kept.push(args[index]);
+  }
+  return kept;
+}
+
+/**
+ * The line that says what a task of an affected group runs and why
+ * (`REQ-AFFECTED-TESTS`): all its tests, the tests that cargo-affected
+ * selected, with every integration test where its binary may have changed,
+ * or none, and why that is enough.
+ */
+export function selectionLine(
+  task: string,
+  crate: string,
+  selection: CrateSelection | undefined,
+  baseline: string,
+): string {
+  if (selection?.kind === "all") {
+    return `${task}: runs all tests of ${crate}, because ${selection.reasons.slice(0, 3).join("; ")}${selection.reasons.length > 3 ? `; and ${selection.reasons.length - 3} more` : ""}.`;
+  }
+  const count = [...(selection?.tests.values() ?? [])].reduce((sum, tests) => sum + tests.size, 0);
+  if (count === 0 && selection?.integration === undefined) {
+    return `${task}: no test of ${crate} is selected: the coverage baseline ${baseline} shows no test of ${crate} that runs the changed code, and no change that coverage cannot follow is among the inputs of its tests, so no test of ${crate} can be affected as far as the plugin can see. Its doctests still run. This result stands for affected mode only, never for the full suite.`;
+  }
+  const parts = [
+    ...(count === 0
+      ? []
+      : [
+          `${count} ${count === 1 ? "test" : "tests"} of ${crate} that cargo-affected selected against the coverage baseline ${baseline}`,
+        ]),
+    ...(selection?.integration === undefined
+      ? []
+      : [`every integration test of ${crate}, because ${selection.integration}`]),
+  ];
+  return `${task}: runs a subset of its tests for this change: ${parts.join(", and ")}. This result stands for affected mode only, never for the full suite.`;
 }
 
 /**

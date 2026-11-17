@@ -819,7 +819,9 @@ describe("graph-creation errors", () => {
     async () => {
       const graph = await loadFixtureGraph("subfolder-workspace", {
         files: {
-          "rust/Cargo.toml": appendTo("[workspace.metadata.nx]\naffectedTests = true"),
+          "rust/Cargo.toml": appendTo(
+            '[workspace.metadata.nx]\ntestRunner = "nextest"\naffectedTests = true',
+          ),
           "rust/crates/model/Cargo.toml": appendTo(
             "[package.metadata.nx.targets.test.options]\naffectedTests = true",
           ),
@@ -830,6 +832,34 @@ describe("graph-creation errors", () => {
         affectedTests: true,
         ...pluginVersion,
       });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails for affectedTests without the nextest runner, naming both options and where each comes from",
+    async () => {
+      const fromTable = await graphError("subfolder-workspace", {
+        "rust/Cargo.toml": appendTo("[workspace.metadata.nx]\naffectedTests = true"),
+      });
+      expect(fromTable).toContain(
+        'rust/Cargo.toml: affectedTests is true (from [workspace.metadata.nx] in rust/Cargo.toml), but testRunner is "cargo" (from the default): the selection of affected tests runs only with the nextest runner.',
+      );
+      const fromOptions = await graphError("subfolder-workspace", {
+        "nx.json": pluginOptions({ testRunner: "cargo", affectedTests: true }),
+      });
+      expect(fromOptions).toContain(
+        "rust/Cargo.toml: affectedTests is true (from the options of the plugin's entry in nx.json), but testRunner is \"cargo\" (from the options of the plugin's entry in nx.json)",
+      );
+      // A workspace table that turns selection off, or chooses nextest, settles it.
+      await expect(
+        loadFixtureGraph("subfolder-workspace", {
+          files: {
+            "nx.json": pluginOptions({ affectedTests: true }),
+            "rust/Cargo.toml": appendTo('[workspace.metadata.nx]\ntestRunner = "nextest"'),
+          },
+        }),
+      ).resolves.toBeDefined();
     },
     HARNESS_TIMEOUT,
   );

@@ -42,6 +42,7 @@ export function initReport(
 ): InitReport {
   const report: InitReport = { warnings: [], info: [] };
   const nextest = new Set(check.nextestWorkspaces ?? []);
+  const affectedTests = new Set(check.affectedTestsWorkspaces ?? []);
   const context: ToolContext = {
     workspaceRoot,
     workspaces: check.workspaces.map((workspace) => {
@@ -52,6 +53,7 @@ export function initReport(
         members: workspace.members,
         ...(featureUnification === undefined ? {} : { featureUnification }),
         ...(nextest.has(workspace.root) ? { testRunner: "nextest" as const } : {}),
+        ...(affectedTests.has(workspace.root) ? { affectedTests: true as const } : {}),
       };
     }),
     env,

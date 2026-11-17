@@ -16,6 +16,8 @@ export interface ToolWorkspace {
   members?: readonly CargoPackage[];
   /** The workspace's test runner (`testRunner`), where its settings choose nextest. */
   testRunner?: "nextest";
+  /** Whether the workspace's settings turn on the selection of affected tests (`affectedTests`). */
+  affectedTests?: true;
   /**
    * The feature-unification strategy that graph creation chose for the
    * workspace (`DES-UNIFICATION`); `workspace-build` where absent.
@@ -83,12 +85,10 @@ export { wasmTriple };
  *
  * Which tool the configuration needs follows the features that exist:
  * cargo-nextest where a workspace's settings choose the nextest runner,
- * cargo-hakari for every workspace that uses the `hakari` strategy, the
- * napi CLI where a crate has a `napi-build` target, and the `wasm-bindgen`
- * CLI and the wasm target where a crate has a `wasm-build` target. The
- * settings that ask for cargo-affected are not implemented yet, so nothing
- * needs that tool until its issue adds the condition: nxr-tabkjx
- * (`affectedTests`).
+ * cargo-affected where they turn on `affectedTests`, cargo-hakari for every
+ * workspace that uses the `hakari` strategy, the napi CLI where a crate has
+ * a `napi-build` target, and the `wasm-bindgen` CLI and the wasm target
+ * where a crate has a `wasm-build` target.
  */
 // @mara implements DES-GENERATORS
 export const optionalTools: readonly OptionalTool[] = [
@@ -110,7 +110,13 @@ export const optionalTools: readonly OptionalTool[] = [
     name: "cargo-affected",
     install: "Install it as https://github.com/max-sixty/cargo-affected describes.",
     installed: (context) => cargoSubcommandInstalled("affected", context.env, toolFolder(context)),
-    neededBy: () => [],
+    neededBy: (context) =>
+      context.workspaces
+        .filter((workspace) => workspace.affectedTests === true)
+        .map(
+          (workspace) =>
+            `the selection of affected tests that the Cargo workspace in ${describeFolder(workspace.root)} turns on for its test targets (affectedTests)`,
+        ),
   },
   {
     id: "cargo-hakari",

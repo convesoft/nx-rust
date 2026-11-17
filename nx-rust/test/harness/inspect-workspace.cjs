@@ -6,9 +6,11 @@
 //
 // The request is { "command": "graph" },
 // { "command": "hash", "tasks": ["project:target[:configuration]"], "overrides": {} },
-// { "command": "files", "tasks": [...] } or { "command": "glob", "globs": [...] }.
+// { "command": "files", "tasks": [...] }, { "command": "runtime", "tasks": [...] }
+// or { "command": "glob", "globs": [...] }.
 // The result is { "ok": true, "graph": ... }, { "ok": true, "hashes": { [task]: { value, details } } },
-// { "ok": true, "files": { [task]: [path] } }, { "ok": true, "globbed": [path] }
+// { "ok": true, "files": { [task]: [path] } }, { "ok": true, "runtime": { [task]: [command] } },
+// { "ok": true, "globbed": [path] }
 // or { "ok": false, "error": "...", "errors": ["..."] }. Only "glob" creates
 // no project graph.
 //
@@ -50,7 +52,9 @@ async function main() {
         ? { ok: true, hashes: await hashTasks(graph, request.tasks, request.overrides ?? {}) }
         : request.command === "files"
           ? { ok: true, files: await taskFiles(graph, request.tasks) }
-          : { ok: true, graph };
+          : request.command === "runtime"
+            ? { ok: true, runtime: await taskRuntime(graph, request.tasks) }
+            : { ok: true, graph };
   } catch (error) {
     result = { ok: false, error: describeError(error), errors: ownErrors(error) };
   }
@@ -135,6 +139,22 @@ async function taskFiles(projectGraph, taskIds) {
     files[id] = inputs[id].files;
   }
   return files;
+}
+
+// The commands of each task's runtime inputs, as Nx's HashPlanInspector
+// lists them for the record of a baseline's context (DES-BASELINE).
+async function taskRuntime(projectGraph, taskIds) {
+  const { readNxJson } = require("nx/src/config/nx-json");
+  const { HashPlanInspector } = require("nx/src/hasher/hash-plan-inspector");
+  const inspector = new HashPlanInspector(projectGraph, process.cwd(), readNxJson());
+  await inspector.init();
+  const runtime = {};
+  for (const id of taskIds) {
+    const [project, target, configuration] = id.split(":");
+    const inputs = inspector.inspectTaskInputs({ project, target, configuration }, {}, {}, true);
+    runtime[id] = inputs[id].runtime;
+  }
+  return runtime;
 }
 
 // Nx reports a failed graph as an error that holds the plugins' errors, each

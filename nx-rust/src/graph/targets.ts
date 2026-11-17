@@ -286,6 +286,13 @@ export interface TargetCargoMetadata {
    * target the mode input.
    */
   affectedTests?: true;
+  /**
+   * On a crate's `test` where the workspace uses the selection of affected
+   * tests: the filesets of the crate's `fileInputs` patterns
+   * (`DES-PLUGIN-OPTIONS`), which coverage never narrows (`DES-TEST-RUN`,
+   * step 2); absent where it declares none.
+   */
+  declaredFiles?: string[];
 }
 
 /**
@@ -518,6 +525,17 @@ export function inferTargets(
   }
   if (testMetadata !== undefined && caching?.settings.affectedTests === true) {
     testMetadata.affectedTests = true;
+    const declared = caching.settings.added.fileInputs.flatMap((input) =>
+      typeof input === "object" &&
+      input !== null &&
+      "fileset" in input &&
+      typeof input.fileset === "string"
+        ? [input.fileset]
+        : [],
+    );
+    if (declared.length > 0) {
+      testMetadata.declaredFiles = declared;
+    }
   }
   const builds =
     pkg === undefined

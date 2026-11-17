@@ -1,6 +1,8 @@
-import { existsSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { commandIdVariable, workspaceSegment } from "../graph/lockfile-task";
 
 /** The environment variable that chooses the test mode of a run (`DES-TEST-MODE`). */
 export const testModeVariable = "NX_RUST_TEST_MODE";
@@ -192,11 +194,19 @@ export type TestMode =
  */
 // @mara implements DES-TEST-MODE
 export function testMode(env: NodeJS.ProcessEnv, workspaceRoot: string): TestMode {
+  return testModeAt(env, workspaceRoot);
+}
+
+function testModeAt(
+  env: NodeJS.ProcessEnv,
+  workspaceRoot: string,
+  steps: BaselineReadSteps = {},
+): TestMode {
   const asked = askedTestMode(env);
   if (asked.kind !== "affected") {
     return asked;
   }
-  const baseline = baselineCommits(workspaceRoot);
+  const baseline = baselineCommits(workspaceRoot, steps);
   return "commits" in baseline
     ? { kind: "affected", commits: baseline.commits, reason: asked.reason }
     : { kind: "full", reason: `${asked.reason}, but ${baseline.problem}` };
@@ -248,5 +258,190 @@ export function testModeNote(task: string, mode: TestMode, optedOut: boolean): s
   if (mode.kind === "full") {
     return `${task}: runs the full suite in test mode full, because ${mode.reason}.`;
   }
-  return `${task}: test mode ${text}, because ${mode.reason}. This version of @convesoft/nx-rust does not select affected tests yet, so the full suite runs.`;
+  return `${task}: test mode ${text}, because ${mode.reason}.`;
+}
+
+/**
+ * The folder under the repository root in which the mode command and the
+ * test executor keep their record of one `nx` command (`DES-TEST-MODE`,
+ * "Between hashing and the run"), one folder per command and workspace.
+ * Nx leaves `.nx/workspace-data` out of its file map, and the plugin's
+ * `postTasksExecution` hook removes a command's folders when it ends.
+ */
+export const testModeRecordRoot = ".nx/workspace-data/nx-rust/test-mode";
+
+/** The record's file of the modes that the mode command printed, one line each. */
+const printedFile = "printed";
+
+/** The record's file of the modes in which a task of the command ran a subset, one line each. */
+const subsetFile = "subsets";
+
+/**
+ * The id that the plugin's `preTasksExecution` hook gives the `nx` command
+ * whose task has the environment `env`, with only the characters that a
+ * folder name keeps; `undefined` without one.
+ */
+export function commandIdOf(env: NodeJS.ProcessEnv): string | undefined {
+  const id = (env[commandIdVariable] ?? "").replace(/[^A-Za-z0-9-]/g, "");
+  return id === "" ? undefined : id;
+}
+
+/**
+ * The folder of the record of the command `commandId` for the workspace at
+ * `workspaceRoot` ({@link testModeRecordRoot}).
+ *
+ * @param workspaceRoot The workspace's root folder, relative to the repository root.
+ */
+export function testModeRecordFolder(
+  repositoryRoot: string,
+  workspaceRoot: string,
+  commandId: string,
+): string {
+  return join(
+    repositoryRoot,
+    testModeRecordRoot,
+    commandId,
+    workspaceSegment(workspaceRoot === "" ? "." : workspaceRoot),
+  );
+}
+
+// The lines of a record's file; none where it does not exist.
+function recordLines(file: string): string[] | undefined {
+  try {
+    return readFileSync(file, "utf8")
+      .split("\n")
+      .filter((line) => line !== "");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? [] : undefined;
+  }
+}
+
+/** A value that no other evaluation prints, so that no stored result is ever restored under it. */
+export function neverRestored(): string {
+  return `unrestorable ${randomBytes(16).toString("hex")}`;
+}
+
+/**
+ * What the mode command prints for a task with the environment `env` in
+ * the workspace at `workspaceRoot` (`DES-TEST-MODE`, "Between hashing and the
+ * run"): the text of its test mode ({@link testModeText}), with two
+ * exceptions that keep a subset's result from being stored under a key that
+ * it does not satisfy. Where a task of the same `nx` command has run, or is
+ * about to run, a subset in another mode than this text, it prints a value
+ * that is never restored ({@link neverRestored}): Nx hashes some tasks again
+ * after they ran, and the key of such a task must not say `full` or name
+ * another baseline. And where it cannot add what it prints to the command's
+ * record, it prints such a value as well, since the executor could then not
+ * see it.
+ *
+ * Without a command id from the plugin's hook, as where Nx hashes outside a
+ * run, it prints the text and records nothing.
+ *
+ * @param workspaceRoot The workspace's root folder, relative to `repositoryRoot`.
+ */
+// @mara implements DES-TEST-MODE
+export function printedTestMode(
+  env: NodeJS.ProcessEnv,
+  repositoryRoot: string,
+  workspaceRoot: string,
+  steps: BaselineReadSteps = {},
+): string {
+  const text = testModeText(testModeAt(env, join(repositoryRoot, workspaceRoot), steps));
+  const id = commandIdOf(env);
+  if (id === undefined) {
+    return text;
+  }
+  const folder = testModeRecordFolder(repositoryRoot, workspaceRoot, id);
+  const subsets = recordLines(join(folder, subsetFile));
+  const printed =
+    subsets === undefined || subsets.some((subset) => subset !== text) ? neverRestored() : text;
+  try {
+    mkdirSync(folder, { recursive: true });
+    appendFileSync(join(folder, printedFile), `${askedTestMode(env).kind}\t${printed}\n`);
+  } catch {
+    return neverRestored();
+  }
+  return printed;
+}
+
+/**
+ * Why a task in affected mode must not run a subset, because the test mode
+ * that Nx hashed for it may differ from the one its executor reads
+ * (`DES-TEST-MODE`, "Between hashing and the run"; `RISK-SUBSET-AS-FULL`), or
+ * `undefined` where it may. Nx hands an executor neither the task's hash
+ * details nor the output of its runtime inputs, so the executor reads what
+ * the mode command recorded for the command: every value that it printed in
+ * this command for a task of the workspace, whatever mode the task asked
+ * for, has to be `text`, the executor's own reading, and at least one has
+ * to be there. The task's own evaluation is among them, since Nx hashes a
+ * task after the command's `preTasksExecution` hook and before the task
+ * runs, and nothing in the record tells it from another task's.
+ *
+ * @param workspaceRoot The workspace's root folder, relative to `repositoryRoot`.
+ * @param text The test mode as the executor reads it, `affected:<commits>`.
+ */
+// @mara implements DES-TEST-MODE
+export function hashedModeProblem(
+  env: NodeJS.ProcessEnv,
+  repositoryRoot: string,
+  workspaceRoot: string,
+  text: string,
+): string | undefined {
+  const id = commandIdOf(env);
+  if (id === undefined) {
+    return `this run has no command id from the preTasksExecution hook of @convesoft/nx-rust, so the plugin cannot see which test mode Nx put into the task's cache key`;
+  }
+  const lines = recordLines(
+    join(testModeRecordFolder(repositoryRoot, workspaceRoot, id), printedFile),
+  );
+  if (lines === undefined) {
+    return `the record of the test modes that Nx hashed for this nx command cannot be read`;
+  }
+  // Every evaluation counts, whatever mode its task asked for: Nx runs the
+  // command with an environment that names no task, so the record cannot
+  // tell this task's evaluation from another's (`EVD-TEST-MODE-GUARD`).
+  const hashed = [...new Set(lines.map((line) => line.split("\t")[1] ?? ""))];
+  if (hashed.length === 0) {
+    return `the mode command recorded no test mode for this nx command, so the plugin cannot see which one Nx put into the task's cache key`;
+  }
+  const other = hashed.filter((value) => value !== text);
+  if (other.length > 0) {
+    return `the tasks of this workspace in this nx command were hashed in different test modes: Nx hashed one with ${describeHashed(other)}, while the baseline now gives ${text} to this task, as where the tasks' environments ask for different modes or a collection created or changed the baseline after hashing, and a subset must not be stored under a key that may say otherwise`;
+  }
+  return undefined;
+}
+
+function describeHashed(values: readonly string[]): string {
+  return values
+    .map((value) => (value.startsWith("unrestorable ") ? "that is never restored" : value))
+    .join(" and ");
+}
+
+/**
+ * Adds `text` to the command's record of the modes in which its tasks run a
+ * subset, before the subset runs, so that the mode command prints a value
+ * that is never restored wherever Nx hashes a task of the workspace again
+ * in this command with another mode ({@link printedTestMode}).
+ *
+ * @returns Whether the record holds it; where not, the task must run its full suite.
+ */
+// @mara implements DES-TEST-MODE
+export function recordSubset(
+  env: NodeJS.ProcessEnv,
+  repositoryRoot: string,
+  workspaceRoot: string,
+  text: string,
+): boolean {
+  const id = commandIdOf(env);
+  if (id === undefined) {
+    return false;
+  }
+  const folder = testModeRecordFolder(repositoryRoot, workspaceRoot, id);
+  try {
+    mkdirSync(folder, { recursive: true });
+    appendFileSync(join(folder, subsetFile), `${text}\n`);
+    return true;
+  } catch {
+    return false;
+  }
 }

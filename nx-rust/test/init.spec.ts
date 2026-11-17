@@ -304,6 +304,50 @@ describe("init", () => {
   );
 
   it(
+    "warns about cargo-affected where a workspace's settings turn on affectedTests",
+    () =>
+      runInit(
+        "two-workspaces",
+        {
+          "tools/Cargo.toml": (manifest) =>
+            `${manifest}\n[workspace.metadata.nx]\ntestRunner = "nextest"\naffectedTests = true\n`,
+        },
+        (_workspace, { status, output }) => {
+          expect(status).toBe(0);
+          expect(output).toContain(
+            "cargo-affected is not installed, but the selection of affected tests that the Cargo workspace in tools turns on for its test targets (affectedTests) needs it. Install it as https://github.com/max-sixty/cargo-affected describes.",
+          );
+          expect(output).not.toContain("the Cargo workspace in the repository root turns on");
+          expect(notNeededLine(output)).not.toContain("cargo-affected");
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails, and adds nothing, where a workspace turns on affectedTests without the nextest runner",
+    () =>
+      runInit(
+        "two-workspaces",
+        {
+          "tools/Cargo.toml": (manifest) =>
+            `${manifest}\n[workspace.metadata.nx]\naffectedTests = true\n`,
+        },
+        (_workspace, { status, output, changed }) => {
+          expect(status).toBe(1);
+          expect(output).toContain(
+            "nx-rust was not added to nx.json: Nx could not create the project graph with it.",
+          );
+          expect(output).toContain(
+            'tools/Cargo.toml: affectedTests is true (from [workspace.metadata.nx] in tools/Cargo.toml), but testRunner is "cargo" (from the default): the selection of affected tests runs only with the nextest runner. Set testRunner = "nextest" under [workspace.metadata.nx] in tools/Cargo.toml, or in the options of the plugin\'s entry in nx.json, or remove affectedTests.',
+          );
+          expect(changed).toEqual([]);
+        },
+      ),
+    HARNESS_TIMEOUT,
+  );
+
+  it(
     "warns about cargo-deny where a workspace root has a cargo-deny configuration file",
     () =>
       runInit("subfolder-workspace", { "rust/deny.toml": "" }, (_workspace, { status, output }) => {
@@ -948,6 +992,35 @@ describe("init's report of tools", () => {
     expect(
       initReport({ manifests: [], workspaces, nextestWorkspaces: ["rust"] }, root, tools.env())
         .warnings,
+    ).toEqual([]);
+  });
+
+  it("warns that cargo-affected is missing for each workspace that turns on affectedTests", () => {
+    const workspaces = ["rust", "tools"].map(
+      (root) => ({ root, report: {}, members: [] }) as unknown as CargoWorkspace,
+    );
+    const { warnings, info } = initReport(
+      {
+        manifests: [],
+        workspaces,
+        nextestWorkspaces: ["rust", "tools"],
+        affectedTestsWorkspaces: ["tools"],
+      },
+      root,
+      tools.env(),
+    );
+
+    expect(warnings).toContain(
+      "cargo-affected is not installed, but the selection of affected tests that the Cargo workspace in tools turns on for its test targets (affectedTests) needs it. Install it as https://github.com/max-sixty/cargo-affected describes.",
+    );
+    expect(info[0]).not.toContain("cargo-affected");
+    tools.install(tools.path, "cargo-affected");
+    expect(
+      initReport(
+        { manifests: [], workspaces, affectedTestsWorkspaces: ["tools"] },
+        root,
+        tools.env(),
+      ).warnings,
     ).toEqual([]);
   });
 

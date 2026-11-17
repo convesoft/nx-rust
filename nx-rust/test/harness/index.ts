@@ -17,3 +17,4 @@ export * from "./workspace";
 export * from "./hakari";
 export * from "./wasm";
 export * from "./baseline";
+export * from "./affected";

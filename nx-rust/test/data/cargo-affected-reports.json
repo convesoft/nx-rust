@@ -1,0 +1,311 @@
+{
+  "hit-exact": {
+    "schema_version": 1,
+    "cargo_affected_version": "0.4.1",
+    "command": "status",
+    "cache": {
+      "status": "hit-exact",
+      "current_fingerprint": "2ec683aad1075193f6ea0be3897237e9d3d0442032c14e858165d29f850f61fd",
+      "current_components": [
+        {
+          "label": "cargo_lock",
+          "hash": "e926605d65cf0c061eac724f68d59c4e1d1c6f6ecc20feb8d7cdaaf860431cce"
+        },
+        {
+          "label": "manifest:Cargo.toml",
+          "hash": "b322078540727f05027ba529028931038149dc99543493a5b258288c7acc1838"
+        },
+        {
+          "label": "manifest:app/Cargo.toml",
+          "hash": "e4dfce66097e26a6f9044a460c821d6b2eaf0c9b3fe64b8e22a778051c0d2135"
+        },
+        {
+          "label": "manifest:core/Cargo.toml",
+          "hash": "c9d8a555bc25d2b0bd722e53b122e113cc6a59bb40a2b3e7f703982c0084ba6f"
+        },
+        {
+          "label": "rustc",
+          "hash": "be69adad9137eaa0bdac1dd07e2fe286b1831fc8bad193ea27806ca0c7c8e7c6"
+        },
+        {
+          "label": "RUSTFLAGS",
+          "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "label": "CARGO_BUILD_TARGET",
+          "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "stored_fingerprints": [
+        {
+          "fingerprint": "2ec683aad1075193f6ea0be3897237e9d3d0442032c14e858165d29f850f61fd",
+          "last_seen": "2026-11-16T20:58:35Z",
+          "diff_count": 0,
+          "differing_labels": []
+        }
+      ],
+      "collect_shas": [
+        {
+          "sha": "4d7f4fe350914a22a12c549f135a0742db1885b7",
+          "relation": "equal",
+          "row_count": 16
+        }
+      ]
+    },
+    "selection": {
+      "summary": {
+        "selected": 4,
+        "affected": 4,
+        "config": 0,
+        "new": 0,
+        "stranded": 0,
+        "skipped": 0,
+        "total_reachable_known": 4,
+        "mode": "selection"
+      },
+      "changed_files": [
+        {
+          "path": "core/src/lib.rs",
+          "tracked_by_coverage": true,
+          "hunks_by_sha": [
+            {
+              "sha": "4d7f4fe350914a22a12c549f135a0742db1885b7",
+              "hunks": [
+                {
+                  "start": 2,
+                  "end": 2
+                }
+              ]
+            }
+          ],
+          "tests_pulled_total": 4,
+          "tests_pulled_by_reason": {
+            "line_overlap": 2,
+            "structural_backstop": 0,
+            "crate_root_sentinel": 2,
+            "config_rule": 0
+          }
+        },
+        {
+          "path": "Cargo.lock",
+          "tracked_by_coverage": false,
+          "hunks_by_sha": [],
+          "tests_pulled_total": 0,
+          "tests_pulled_by_reason": {
+            "line_overlap": 0,
+            "structural_backstop": 0,
+            "crate_root_sentinel": 0,
+            "config_rule": 0
+          }
+        }
+      ],
+      "selected_tests": [
+        {
+          "binary_id": "app",
+          "test_name": "tests::q",
+          "kind": "affected",
+          "reasons": [
+            {
+              "collect_sha": "4d7f4fe350914a22a12c549f135a0742db1885b7",
+              "file": "core/src/lib.rs",
+              "kind": "crate_root_sentinel",
+              "stored_range": [1, 9223372036854775807],
+              "matched_hunk": [2, 2]
+            }
+          ]
+        },
+        {
+          "binary_id": "app::it",
+          "test_name": "it_triple",
+          "kind": "affected",
+          "reasons": [
+            {
+              "collect_sha": "4d7f4fe350914a22a12c549f135a0742db1885b7",
+              "file": "core/src/lib.rs",
+              "kind": "line_overlap",
+              "stored_range": [2, 2],
+              "matched_hunk": [2, 2]
+            }
+          ]
+        },
+        {
+          "binary_id": "core-x",
+          "test_name": "tests::d",
+          "kind": "affected",
+          "reasons": [
+            {
+              "collect_sha": "4d7f4fe350914a22a12c549f135a0742db1885b7",
+              "file": "core/src/lib.rs",
+              "kind": "crate_root_sentinel",
+              "stored_range": [1, 9223372036854775807],
+              "matched_hunk": [2, 2]
+            }
+          ]
+        },
+        {
+          "binary_id": "core-x",
+          "test_name": "tests::t",
+          "kind": "affected",
+          "reasons": [
+            {
+              "collect_sha": "4d7f4fe350914a22a12c549f135a0742db1885b7",
+              "file": "core/src/lib.rs",
+              "kind": "line_overlap",
+              "stored_range": [2, 2],
+              "matched_hunk": [2, 2]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "hit-with-divergence": {
+    "schema_version": 1,
+    "cargo_affected_version": "0.4.1",
+    "command": "status",
+    "cache": {
+      "status": "hit-with-divergence",
+      "current_fingerprint": "2ec683aad1075193f6ea0be3897237e9d3d0442032c14e858165d29f850f61fd",
+      "current_components": [
+        {
+          "label": "cargo_lock",
+          "hash": "e926605d65cf0c061eac724f68d59c4e1d1c6f6ecc20feb8d7cdaaf860431cce"
+        },
+        {
+          "label": "manifest:Cargo.toml",
+          "hash": "b322078540727f05027ba529028931038149dc99543493a5b258288c7acc1838"
+        },
+        {
+          "label": "manifest:app/Cargo.toml",
+          "hash": "e4dfce66097e26a6f9044a460c821d6b2eaf0c9b3fe64b8e22a778051c0d2135"
+        },
+        {
+          "label": "manifest:core/Cargo.toml",
+          "hash": "c9d8a555bc25d2b0bd722e53b122e113cc6a59bb40a2b3e7f703982c0084ba6f"
+        },
+        {
+          "label": "rustc",
+          "hash": "be69adad9137eaa0bdac1dd07e2fe286b1831fc8bad193ea27806ca0c7c8e7c6"
+        },
+        {
+          "label": "RUSTFLAGS",
+          "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "label": "CARGO_BUILD_TARGET",
+          "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "stored_fingerprints": [
+        {
+          "fingerprint": "2ec683aad1075193f6ea0be3897237e9d3d0442032c14e858165d29f850f61fd",
+          "last_seen": "2026-11-16T21:21:16Z",
+          "diff_count": 0,
+          "differing_labels": []
+        }
+      ],
+      "collect_shas": [
+        {
+          "sha": "4d7f4fe350914a22a12c549f135a0742db1885b7",
+          "relation": "reachable",
+          "commits_ahead": 1,
+          "row_count": 16
+        }
+      ]
+    },
+    "selection": {
+      "summary": {
+        "selected": 2,
+        "affected": 1,
+        "config": 0,
+        "new": 1,
+        "stranded": 0,
+        "skipped": 3,
+        "total_reachable_known": 4,
+        "mode": "selection"
+      },
+      "changed_files": [
+        {
+          "path": "app/tests/it.rs",
+          "tracked_by_coverage": true,
+          "hunks_by_sha": [
+            {
+              "sha": "4d7f4fe350914a22a12c549f135a0742db1885b7",
+              "hunks": [
+                {
+                  "start": 1,
+                  "end": 1
+                }
+              ]
+            }
+          ],
+          "tests_pulled_total": 1,
+          "tests_pulled_by_reason": {
+            "line_overlap": 1,
+            "structural_backstop": 0,
+            "crate_root_sentinel": 0,
+            "config_rule": 0
+          }
+        },
+        {
+          "path": "Cargo.lock",
+          "tracked_by_coverage": false,
+          "hunks_by_sha": [],
+          "tests_pulled_total": 0,
+          "tests_pulled_by_reason": {
+            "line_overlap": 0,
+            "structural_backstop": 0,
+            "crate_root_sentinel": 0,
+            "config_rule": 0
+          }
+        },
+        {
+          "path": "app/tests/it2.rs",
+          "tracked_by_coverage": false,
+          "hunks_by_sha": [],
+          "tests_pulled_total": 0,
+          "tests_pulled_by_reason": {
+            "line_overlap": 0,
+            "structural_backstop": 0,
+            "crate_root_sentinel": 0,
+            "config_rule": 0
+          }
+        },
+        {
+          "path": "core/src/util.rs",
+          "tracked_by_coverage": false,
+          "hunks_by_sha": [],
+          "tests_pulled_total": 0,
+          "tests_pulled_by_reason": {
+            "line_overlap": 0,
+            "structural_backstop": 0,
+            "crate_root_sentinel": 0,
+            "config_rule": 0
+          }
+        }
+      ],
+      "selected_tests": [
+        {
+          "binary_id": "app::it",
+          "test_name": "it_triple",
+          "kind": "affected",
+          "reasons": [
+            {
+              "collect_sha": "4d7f4fe350914a22a12c549f135a0742db1885b7",
+              "file": "app/tests/it.rs",
+              "kind": "line_overlap",
+              "stored_range": [1, 1],
+              "matched_hunk": [1, 1]
+            }
+          ]
+        },
+        {
+          "binary_id": "app::it2",
+          "test_name": "it_triple",
+          "kind": "new",
+          "reasons": []
+        }
+      ]
+    }
+  }
+}

@@ -82,6 +82,7 @@ interface InspectResult {
   graph?: ProjectGraph;
   hashes?: Record<string, TaskHash>;
   files?: Record<string, string[]>;
+  runtime?: Record<string, string[]>;
   globbed?: string[];
 }
 
@@ -275,6 +276,20 @@ export class FixtureWorkspace {
       );
     }
     return result.files;
+  }
+
+  /**
+   * The commands of the runtime inputs of each of `tasks`, as Nx's
+   * `HashPlanInspector` lists them, without the daemon.
+   */
+  async taskRuntimeInputs(tasks: string[]): Promise<Record<string, string[]>> {
+    const result = await this.inspect({ command: "runtime", tasks }, { NX_DAEMON: "false" });
+    if (!result.ok || result.runtime === undefined) {
+      throw new Error(
+        `Listing the runtime inputs of ${tasks.join(", ")} in ${this.fixture} failed:\n${result.error}`,
+      );
+    }
+    return result.runtime;
   }
 
   /**

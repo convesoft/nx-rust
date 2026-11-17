@@ -37,17 +37,25 @@ export const commandsFolderName = "commands";
  * @param workspaceRoot The workspace's root folder relative to the repository root, `.` for the root itself.
  */
 export function digestFolder(workspaceRoot: string): string {
-  const segment =
-    workspaceRoot === "."
-      ? "%2E"
-      : [...Buffer.from(workspaceRoot, "utf8")]
-          .map((byte) =>
-            /[A-Za-z0-9._-]/.test(String.fromCharCode(byte))
-              ? String.fromCharCode(byte)
-              : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`,
-          )
-          .join("");
-  return posix.join(digestRoot, segment);
+  return posix.join(digestRoot, workspaceSegment(workspaceRoot));
+}
+
+/**
+ * One path segment for a workspace's root folder, relative to the
+ * repository root, as {@link digestFolder} names it: every byte other than
+ * a letter, a digit, `.`, `_` and `-` written as `%` and two hexadecimal
+ * digits, `/` included, and `%2E` for the repository root itself.
+ */
+export function workspaceSegment(workspaceRoot: string): string {
+  return workspaceRoot === "."
+    ? "%2E"
+    : [...Buffer.from(workspaceRoot, "utf8")]
+        .map((byte) =>
+          /[A-Za-z0-9._-]/.test(String.fromCharCode(byte))
+            ? String.fromCharCode(byte)
+            : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`,
+        )
+        .join("");
 }
 
 /**
