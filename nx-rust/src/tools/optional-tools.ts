@@ -45,6 +45,7 @@ export interface ToolContext {
 export type OptionalToolId =
   | "cargo-nextest"
   | "cargo-affected"
+  | "llvm-tools"
   | "cargo-hakari"
   | "wasm-bindgen"
   | "wasm-target"
@@ -116,6 +117,23 @@ export const optionalTools: readonly OptionalTool[] = [
         .map(
           (workspace) =>
             `the selection of affected tests that the Cargo workspace in ${describeFolder(workspace.root)} turns on for its test targets (affectedTests)`,
+        ),
+  },
+  {
+    // cargo-affected runs llvm-profdata and llvm-cov to collect coverage; it
+    // looks for them in the toolchain's sysroot, then through xcrun on macOS,
+    // then on PATH (`DES-BASELINE`).
+    id: "llvm-tools",
+    name: "the llvm-tools component (llvm-cov and llvm-profdata)",
+    install:
+      "Install it with `rustup component add llvm-tools` for the toolchain of the workspace, or put the llvm-cov and llvm-profdata of that toolchain's LLVM version on PATH.",
+    installed: (context) => llvmToolsInstalled(context),
+    neededBy: (context) =>
+      context.workspaces
+        .filter((workspace) => workspace.affectedTests === true)
+        .map(
+          (workspace) =>
+            `the coverage collection that the Cargo workspace in ${describeFolder(workspace.root)} gets with the selection of affected tests (affectedTests)`,
         ),
   },
   {
@@ -367,6 +385,35 @@ function wasmTargetInstalled(context: ToolContext): boolean {
     return false;
   }
   return existsSync(join(result.stdout.trim(), "lib", "rustlib", wasmTriple));
+}
+
+// Whether cargo-affected, started in the context's folder, finds both
+// llvm-cov and llvm-profdata as it looks for them: in the `lib/rustlib/<host>/bin`
+// of the sysroot that rustc names there, through `xcrun --find` on macOS, or
+// on PATH.
+function llvmToolsInstalled(context: ToolContext): boolean {
+  const folder = toolFolder(context);
+  const env = { ...context.env, RUSTUP_AUTO_INSTALL: "0" };
+  const rustc = (args: string[]) =>
+    spawnSync("rustc", args, {
+      cwd: folder,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  const sysroot = rustc(["--print", "sysroot"]);
+  const host = /^host: (\S+)$/m.exec(rustc(["-vV"]).stdout ?? "")?.[1];
+  const sysrootBin =
+    sysroot.status === 0 && host !== undefined
+      ? join(sysroot.stdout.trim(), "lib", "rustlib", host, "bin")
+      : undefined;
+  return ["llvm-cov", "llvm-profdata"].every(
+    (tool) =>
+      (sysrootBin !== undefined && findExecutable(tool, [sysrootBin]) !== undefined) ||
+      (process.platform === "darwin" &&
+        spawnSync("xcrun", ["--find", tool], { env, stdio: "ignore" }).status === 0) ||
+      findExecutable(tool, searchPath(context.env, folder)) !== undefined,
+  );
 }
 
 // "The" at the start of a sentence; a tool's own name keeps its case.

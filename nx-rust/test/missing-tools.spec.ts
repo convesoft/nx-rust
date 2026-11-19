@@ -29,6 +29,10 @@ import {
 const installs: Record<OptionalToolId, (tools: ToolFolders, root: string) => void> = {
   "cargo-nextest": (tools) => tools.install(tools.path, "cargo-nextest"),
   "cargo-affected": (tools) => tools.install(join(tools.cargoHome, "bin"), "cargo-affected"),
+  "llvm-tools": (tools) => {
+    tools.install(tools.path, "llvm-cov");
+    tools.install(tools.path, "llvm-profdata");
+  },
   "cargo-hakari": (tools) => tools.install(tools.path, "cargo-hakari"),
   "wasm-bindgen": (tools) => tools.install(tools.path, "wasm-bindgen"),
   "wasm-target": (tools) => {

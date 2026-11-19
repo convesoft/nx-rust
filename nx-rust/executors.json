@@ -22,7 +22,7 @@
     "lockfile": {
       "implementation": "./src/executors/lockfile/executor",
       "schema": "./src/executors/lockfile/schema.json",
-      "description": "Lets cargo bring a Cargo workspace's Cargo.lock up to date and writes a digest of each member's locked dependencies."
+      "description": "Lets cargo update --workspace bring a Cargo workspace's Cargo.lock up to date and writes a digest of each member's locked dependencies; also runs hakari-check and the coverage baseline target of the workspace."
     },
     "release-publish": {
       "implementation": "./src/executors/release-publish/executor",

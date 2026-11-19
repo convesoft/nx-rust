@@ -65,6 +65,8 @@ export const uncachedByDesign: Partial<Record<InferredTargetName, string>> = {
     "its verdict depends on the whole package graph, which also follows files outside the repository, such as a [patch] in the Cargo home's configuration, which Nx cannot hash",
   "nx-release-publish":
     "it uploads the crate to a registry, which a result restored from the cache would not do",
+  "coverage-baseline":
+    "it changes the coverage database and the record of its context in the workspace's target folder, which a result restored from the cache would not do",
 };
 
 /** What decides, beyond the target, whether the plugin can cache it in a workspace. */

@@ -103,11 +103,22 @@ export function llvmTools(): { folder: string } | { problem: string } {
  * path after `--report-json`, appends its arguments as a JSON line to the
  * file that `NX_RUST_STUB_AFFECTED_LOG` names, and exits with
  * `NX_RUST_STUB_AFFECTED_STATUS`, 0 by default.
+ *
+ * `cargo affected collect` (DES-BASELINE) appends to the file that
+ * `NX_RUST_STUB_COLLECT_LOG` names a JSON line with its arguments, the
+ * variables `GIT_CONFIG_*` and `CARGO_BUILD_BUILD_DIR` it got, and which of
+ * the database's files and the context record existed when it started;
+ * copies the file that `NX_RUST_STUB_COLLECT_DB` names to the database, as
+ * the coverage it collected; writes its process ID to the file that
+ * `NX_RUST_STUB_COLLECT_PID` names and then waits until it is stopped; and
+ * exits with `NX_RUST_STUB_COLLECT_STATUS`, 0 by default, as cargo-affected
+ * 0.4.1 does after it has written the coverage of a failing test.
  */
 export class StubCargoAffected {
   readonly folder = mkdtempSync(join(tmpdir(), "nx-rust-affected-stub-"));
   readonly report = join(this.folder, "report.json");
   readonly log = join(this.folder, "calls.log");
+  readonly collectLog = join(this.folder, "collect.log");
 
   constructor() {
     const script = join(this.folder, "cargo-affected");
@@ -116,25 +127,68 @@ export class StubCargoAffected {
       [
         `#!${process.execPath}`,
         'const fs = require("node:fs");',
+        'const path = require("node:path");',
         "const args = process.argv.slice(2);",
         'if (process.env.NX_RUST_STUB_AFFECTED_LOG) fs.appendFileSync(process.env.NX_RUST_STUB_AFFECTED_LOG, JSON.stringify(args) + "\\n");',
-        'const at = args.indexOf("--report-json");',
-        "if (at !== -1 && process.env.NX_RUST_STUB_AFFECTED_REPORT) fs.copyFileSync(process.env.NX_RUST_STUB_AFFECTED_REPORT, args[at + 1]);",
-        'process.stderr.write("stub cargo-affected\\n");',
-        'process.exit(Number(process.env.NX_RUST_STUB_AFFECTED_STATUS || "0"));',
+        'const affected = path.join(process.cwd(), "target", "affected");',
+        'const record = path.join(affected, "nx-rust-context.json");',
+        'if (args[1] === "collect") {',
+        '  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.startsWith("GIT_CONFIG_") || name === "CARGO_BUILD_BUILD_DIR"));',
+        '  const present = ["coverage.db", "coverage.db-wal", "coverage.db-shm", "nx-rust-context.json"].filter((name) => fs.existsSync(path.join(affected, name)));',
+        '  if (process.env.NX_RUST_STUB_COLLECT_LOG) fs.appendFileSync(process.env.NX_RUST_STUB_COLLECT_LOG, JSON.stringify({ args, env, present }) + "\\n");',
+        "  if (process.env.NX_RUST_STUB_COLLECT_DB) {",
+        "    fs.mkdirSync(affected, { recursive: true });",
+        '    fs.copyFileSync(process.env.NX_RUST_STUB_COLLECT_DB, path.join(affected, "coverage.db"));',
+        "  }",
+        '  process.stderr.write("stub cargo-affected collect\\n");',
+        "  if (process.env.NX_RUST_STUB_COLLECT_PID) {",
+        "    fs.writeFileSync(process.env.NX_RUST_STUB_COLLECT_PID, String(process.pid));",
+        "    setTimeout(() => process.exit(1), 120000);",
+        "  } else {",
+        '    process.exit(Number(process.env.NX_RUST_STUB_COLLECT_STATUS || "0"));',
+        "  }",
+        "} else {",
+        '  const at = args.indexOf("--report-json");',
+        "  if (at !== -1 && process.env.NX_RUST_STUB_AFFECTED_REPORT) fs.copyFileSync(process.env.NX_RUST_STUB_AFFECTED_REPORT, args[at + 1]);",
+        "  if (process.env.NX_RUST_STUB_STATUS_CHANGES_RECORD && fs.existsSync(record)) {",
+        '    const data = JSON.parse(fs.readFileSync(record, "utf8"));',
+        '    data.triple = data.triple + " changed";',
+        "    fs.writeFileSync(record, JSON.stringify(data));",
+        "  }",
+        '  process.stderr.write("stub cargo-affected\\n");',
+        '  process.exit(Number(process.env.NX_RUST_STUB_AFFECTED_STATUS || "0"));',
+        "}",
         "",
       ].join("\n"),
     );
     chmodSync(script, 0o755);
   }
 
-  /** The variables that point the stand-in at its report and log. */
+  /** The variables that point the stand-in at its report and logs. */
   env(status = 0): Record<string, string> {
     return {
       NX_RUST_STUB_AFFECTED_REPORT: this.report,
       NX_RUST_STUB_AFFECTED_LOG: this.log,
       NX_RUST_STUB_AFFECTED_STATUS: String(status),
+      NX_RUST_STUB_COLLECT_LOG: this.collectLog,
     };
+  }
+
+  /** What each collection so far got and found. */
+  collections(): { args: string[]; env: Record<string, string>; present: string[] }[] {
+    return existsSync(this.collectLog)
+      ? readFileSync(this.collectLog, "utf8")
+          .split("\n")
+          .filter((line) => line !== "")
+          .map(
+            (line) =>
+              JSON.parse(line) as {
+                args: string[];
+                env: Record<string, string>;
+                present: string[];
+              },
+          )
+      : [];
   }
 
   /** Writes the report that the next `status` gives. */
@@ -160,7 +214,7 @@ export class StubCargoAffected {
 /** A report of `cargo affected status --report-detail full` with schema 1, as cargo-affected 0.4.1 writes it. */
 export function affectedReport(options: {
   status?: string;
-  collect: { sha: string; relation?: string }[];
+  collect: { sha: string; relation?: string; commitsAhead?: number }[];
   changed: { path: string; tracked: boolean }[];
   selected: { binary: string; test: string }[] | null;
   differingLabels?: string[];
@@ -181,9 +235,10 @@ export function affectedReport(options: {
           differing_labels: options.differingLabels ?? [],
         },
       ],
-      collect_shas: options.collect.map(({ sha, relation }) => ({
+      collect_shas: options.collect.map(({ sha, relation, commitsAhead }) => ({
         sha,
         relation: relation ?? "equal",
+        ...(commitsAhead === undefined ? {} : { commits_ahead: commitsAhead }),
         row_count: 1,
       })),
     },
@@ -301,22 +356,25 @@ export async function writeBaselineContext(
 export class HiddenCargoAffected {
   readonly home = mkdtempSync(join(tmpdir(), "nx-rust-no-affected-"));
 
-  constructor() {
+  /** @param hidden The programs to hide, cargo-affected by default. */
+  constructor(readonly hidden: readonly string[] = ["cargo-affected"]) {
     const bin = join(this.home, "bin");
     mkdirSync(bin);
     const real = join(process.env.CARGO_HOME || join(homedir(), ".cargo"), "bin");
     for (const name of existsSync(real) ? readdirSync(real) : []) {
-      if (name !== "cargo-affected") {
+      if (!hidden.includes(name)) {
         symlinkSync(join(real, name), join(bin, name));
       }
     }
   }
 
-  /** `env` with `PATH` and `CARGO_HOME` that hide cargo-affected. */
+  /** `env` with `PATH` and `CARGO_HOME` that hide the programs. */
   env(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     const path = (env.PATH ?? "")
       .split(delimiter)
-      .filter((folder) => folder !== "" && !existsSync(join(folder, "cargo-affected")));
+      .filter(
+        (folder) => folder !== "" && !this.hidden.some((name) => existsSync(join(folder, name))),
+      );
     return {
       ...env,
       CARGO_HOME: this.home,

@@ -117,6 +117,7 @@ const targetTools: Partial<Record<InferredTargetName, OptionalToolId>> = {
   audit: "cargo-audit",
   deny: "cargo-deny",
   "hakari-check": "cargo-hakari",
+  "coverage-baseline": "cargo-affected",
 };
 
 /** A problem that stops a task before cargo runs; its message is what the task prints. */

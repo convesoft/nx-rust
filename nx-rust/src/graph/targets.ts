@@ -43,9 +43,10 @@ export const outputsTargets: ReadonlySet<InferredTargetName> = new Set([
 ]);
 
 /**
- * The executor of the lockfile task and of `hakari-check`, which has no
- * batch implementation, so that neither task ever joins a batch
- * (`DES-LOCKFILE-HASHING`, `DES-UNIFICATION`, "Drift").
+ * The executor of the lockfile task, of `hakari-check` and of the coverage
+ * baseline target, which has no batch implementation, so that none of these
+ * tasks ever joins a batch (`DES-LOCKFILE-HASHING`, `DES-UNIFICATION`,
+ * "Drift", `DES-BASELINE`).
  */
 export const lockfileExecutor = "@convesoft/nx-rust:lockfile";
 
@@ -61,6 +62,14 @@ export const runExecutor = "@convesoft/nx-rust:run";
  * one `cargo publish` (`DES-RELEASE`, `ADR-BATCHED-PUBLISH`).
  */
 export const releasePublishExecutor = "@convesoft/nx-rust:release-publish";
+
+/**
+ * The commits that the oldest collection of a baseline may lie behind `HEAD`
+ * before the coverage baseline target collects everything in place of
+ * `collect --diff`, where the option `fullCollectThreshold` sets none
+ * (`DES-BASELINE`, provisional).
+ */
+export const defaultFullCollectThreshold = 100;
 
 /**
  * The name of the publish target, which Nx release runs under this name
@@ -94,6 +103,7 @@ export const inferredTargetNames = [
   "audit",
   "deny",
   "update",
+  "coverage-baseline",
 ] as const;
 
 /** The default name of an inferred target, which identifies it whatever `targetNames` calls it. */
@@ -114,6 +124,7 @@ export const compilingTargets: readonly InferredTargetName[] = [
   "napi-build",
   "wasm-build",
   "doc",
+  "coverage-baseline",
 ];
 
 /**
@@ -376,7 +387,8 @@ export interface TargetSubject {
  * workspace project gets `doc`, `lockfile`, `audit` and `update`, `deny`
  * where a cargo-deny configuration file is in the workspace root, and
  * `hakari-check` where the workspace uses the `hakari` strategy
- * (`DES-UNIFICATION`, "Drift"); a root
+ * (`DES-UNIFICATION`, "Drift"), and `coverage-baseline` where it uses the
+ * selection of affected tests (`affectedTests`, `DES-BASELINE`); a root
  * manifest's crate gets both sets. Whether a tool is installed decides
  * nothing.
  *
@@ -399,6 +411,7 @@ export interface TargetSubject {
 // @mara implements DES-TARGETS
 // @mara implements DES-TARGET-COMMANDS
 // @mara implements DES-WORKSPACE-TARGETS
+// @mara implements DES-BASELINE
 export function inferTargets(
   subject: TargetSubject,
   context: CacheContext,
@@ -516,6 +529,16 @@ export function inferTargets(
       ...target("update", "Updates Cargo.lock with cargo update."),
       inputs: [lockfile, manifest],
     });
+    if (caching?.settings.affectedTests === true) {
+      targets.set("coverage-baseline", {
+        ...target(
+          "coverage-baseline",
+          "Brings the coverage baseline of the affected tests up to date with cargo affected collect, and writes the record of the context it collected in.",
+          { fullCollectThreshold: defaultFullCollectThreshold },
+        ),
+        executor: lockfileExecutor,
+      });
+    }
   }
   configureCaching(targets, subject, context, caching);
   const test = targets.get("test");

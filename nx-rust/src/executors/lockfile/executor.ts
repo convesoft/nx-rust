@@ -1,7 +1,8 @@
 import type { ExecutorContext } from "@nx/devkit";
-import { lockfileExecutor } from "../../graph/targets";
+import { lockfileExecutor, targetCargoMetadataKey } from "../../graph/targets";
 import type { CargoTargetOptions } from "../command";
 import { declaredOptionsOf } from "../declared-options";
+import { collectBaseline } from "../coverage-baseline";
 import { type PluginExecutor, runTask } from "../task";
 
 // The executor, with the options of its schema, read where graph creation
@@ -21,7 +22,8 @@ const executor: PluginExecutor = {
  * the workspace root, with `--locked` in locked mode, and then writes the
  * members' digests from the `Cargo.lock` that cargo leaves; `hakari-check`
  * runs `cargo hakari generate --diff` and then `cargo hakari manage-deps
- * --dry-run` there, and fails where either fails.
+ * --dry-run` there, and fails where either fails. It also runs the coverage
+ * baseline target (`DES-BASELINE`, `collectBaseline`).
  */
 // @mara implements DES-UNIFICATION
 // @mara implements DES-TARGETS
@@ -30,5 +32,10 @@ export default function lockfile(
   options: CargoTargetOptions,
   context: ExecutorContext,
 ): Promise<{ success: boolean }> {
-  return runTask(executor, options, context);
+  const metadata = context.target?.metadata?.[targetCargoMetadataKey] as
+    | { target?: unknown }
+    | undefined;
+  return metadata?.target === "coverage-baseline"
+    ? collectBaseline(options, context)
+    : runTask(executor, options, context);
 }

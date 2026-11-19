@@ -3,9 +3,45 @@
   "version": 2,
   "outputCapture": "pipe",
   "title": "lockfile",
-  "description": "Lets cargo update --workspace bring the Cargo workspace's Cargo.lock up to date, in the workspace's root folder, and writes a digest of each member's locked dependencies, which the cached targets of the members read.",
+  "description": "Runs the workspace-level targets of a Cargo workspace that never join a batch, in the workspace's root folder: lockfile lets cargo update --workspace bring Cargo.lock up to date and writes a digest of each member's locked dependencies, which the cached targets of the members read; hakari-check checks the hack crate of cargo-hakari; coverage-baseline brings the coverage baseline of the affected tests up to date with cargo affected collect.",
   "type": "object",
   "properties": {
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Features to activate, passed as --features. Set the same as the test runs of the workspace. Taken by coverage-baseline."
+    },
+    "allFeatures": {
+      "type": "boolean",
+      "description": "Activate all features, passed as --all-features. Set the same as the test runs of the workspace. Taken by coverage-baseline."
+    },
+    "noDefaultFeatures": {
+      "type": "boolean",
+      "description": "Do not activate the default features, passed as --no-default-features. Set the same as the test runs of the workspace. Taken by coverage-baseline."
+    },
+    "profile": {
+      "type": "string",
+      "description": "The Cargo profile to build with, passed as --cargo-profile. Set the same as the test runs of the workspace. Taken by coverage-baseline."
+    },
+    "fullCollect": {
+      "type": "boolean",
+      "description": "Always collect the coverage of every test into an empty database, never cargo affected collect --diff, as for a nightly run. Taken by coverage-baseline."
+    },
+    "diffOnly": {
+      "type": "boolean",
+      "description": "Collect only with cargo affected collect --diff, and collect nothing where it cannot run, leaving a full collection to a run with --fullCollect. Taken by coverage-baseline."
+    },
+    "fullCollectThreshold": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many commits the oldest collection of the baseline may lie behind HEAD before a full collection replaces cargo affected collect --diff. The inferred target sets 100. Taken by coverage-baseline."
+    },
+    "separateBuildDir": {
+      "type": "boolean",
+      "description": "Build the instrumented tests in a build directory of their own, target/affected/build, also where Cargo's configuration sets build.build-dir. Taken by coverage-baseline."
+    },
     "pluginVersion": {
       "type": "string",
       "description": "The plugin's version, which the plugin sets for the cache key. Not meant to be set by hand."

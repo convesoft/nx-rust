@@ -31,6 +31,29 @@ export interface CargoTargetOptions {
   affectedTests?: boolean;
   /** The JS flavour of `wasm-build`, the `--target` of the `wasm-bindgen` CLI; no flag of cargo. */
   jsFlavour?: string;
+  /**
+   * On the coverage baseline target: always collect everything, never
+   * `collect --diff` (`DES-BASELINE`, the switch for nightly and full runs); no flag.
+   */
+  fullCollect?: boolean;
+  /**
+   * On the coverage baseline target: never start a full collection on its
+   * own, and collect nothing where `collect --diff` cannot run
+   * (`DES-BASELINE`, the switch for batched recollection); no flag.
+   */
+  diffOnly?: boolean;
+  /**
+   * On the coverage baseline target: how many commits the oldest collection
+   * may lie behind `HEAD` before a full collection replaces `--diff`
+   * (`DES-BASELINE`, `RISK-BASELINE-DRIFT`); no flag.
+   */
+  fullCollectThreshold?: number;
+  /**
+   * On the coverage baseline target: build the instrumented tests in a build
+   * directory of their own, `target/affected/build` (`DES-BASELINE`,
+   * `DES-BUILD-DIRS`); sets `CARGO_BUILD_BUILD_DIR` for the collection.
+   */
+  separateBuildDir?: boolean;
   /** The plugin's version, which the plugin sets for the cache key; no flag. */
   pluginVersion?: string;
 }
@@ -39,11 +62,16 @@ export interface CargoTargetOptions {
 export type TargetOptionName = keyof CargoTargetOptions;
 
 // The targets that take the feature and profile options, and those that
-// also take `targetTriple`: not `test`, and not `napi-build`, which build
-// for the host only in v1 (`ADR-V1-SCOPE`), nor `wasm-build`, which always
-// builds for the wasm triple (`DES-WASM`).
+// also take `targetTriple`: not `test` and the coverage baseline, which runs
+// the tests, and not `napi-build`, which build for the host only in v1
+// (`ADR-V1-SCOPE`), nor `wasm-build`, which always builds for the wasm
+// triple (`DES-WASM`).
 const tripleTargets = compilingTargets.filter(
-  (target) => target !== "test" && target !== "napi-build" && target !== "wasm-build",
+  (target) =>
+    target !== "test" &&
+    target !== "coverage-baseline" &&
+    target !== "napi-build" &&
+    target !== "wasm-build",
 );
 
 /**
@@ -67,6 +95,10 @@ export const optionTargets: Readonly<Record<TargetOptionName, ReadonlySet<Inferr
   args: new Set(["run"]),
   affectedTests: new Set(["test"]),
   jsFlavour: new Set(["wasm-build"]),
+  fullCollect: new Set(["coverage-baseline"]),
+  diffOnly: new Set(["coverage-baseline"]),
+  fullCollectThreshold: new Set(["coverage-baseline"]),
+  separateBuildDir: new Set(["coverage-baseline"]),
   pluginVersion: new Set(inferredTargetNames),
 };
 
@@ -468,10 +500,12 @@ export function withToolConfiguration(args: readonly string[], file: string): st
   ];
 }
 
-// The feature, profile and triple flags, from the options that the target
-// takes; the profile goes with `profileFlag`, which nextest calls
-// `--cargo-profile`.
-function compilingFlags(taken: CargoTargetOptions, profileFlag = "--profile"): string[] {
+/**
+ * The feature, profile and triple flags, from the options that the target
+ * takes; the profile goes with `profileFlag`, which nextest calls
+ * `--cargo-profile`.
+ */
+export function compilingFlags(taken: CargoTargetOptions, profileFlag = "--profile"): string[] {
   const features = taken.features ?? [];
   return [
     ...(features.length > 0 ? ["--features", features.join(",")] : []),

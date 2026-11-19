@@ -995,7 +995,7 @@ describe("init's report of tools", () => {
     ).toEqual([]);
   });
 
-  it("warns that cargo-affected is missing for each workspace that turns on affectedTests", () => {
+  it("warns that cargo-affected and the llvm-tools component are missing for each workspace that turns on affectedTests", () => {
     const workspaces = ["rust", "tools"].map(
       (root) => ({ root, report: {}, members: [] }) as unknown as CargoWorkspace,
     );
@@ -1013,8 +1013,13 @@ describe("init's report of tools", () => {
     expect(warnings).toContain(
       "cargo-affected is not installed, but the selection of affected tests that the Cargo workspace in tools turns on for its test targets (affectedTests) needs it. Install it as https://github.com/max-sixty/cargo-affected describes.",
     );
+    expect(warnings).toContain(
+      "The llvm-tools component (llvm-cov and llvm-profdata) is not installed, but the coverage collection that the Cargo workspace in tools gets with the selection of affected tests (affectedTests) needs it. Install it with `rustup component add llvm-tools` for the toolchain of the workspace, or put the llvm-cov and llvm-profdata of that toolchain's LLVM version on PATH.",
+    );
     expect(info[0]).not.toContain("cargo-affected");
     tools.install(tools.path, "cargo-affected");
+    tools.install(tools.path, "llvm-cov");
+    tools.install(tools.path, "llvm-profdata");
     expect(
       initReport(
         { manifests: [], workspaces, affectedTestsWorkspaces: ["tools"] },
@@ -1085,6 +1090,8 @@ describe("init's report of tools", () => {
     for (const name of [
       "cargo-nextest",
       "cargo-affected",
+      "llvm-cov",
+      "llvm-profdata",
       "cargo-hakari",
       "cargo-audit",
       "cargo-deny",

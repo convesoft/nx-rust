@@ -489,3 +489,158 @@ describeReal("affected runs and a runtime input that git cannot see", () => {
     HARNESS_TIMEOUT * 3,
   );
 });
+
+describeReal("the coverage baseline target with the real cargo-affected", () => {
+  it(
+    "collects a baseline that an affected run narrows with, and that a run in another context does not stand for",
+    async () => {
+      // The workspace declares an environment input and a runtime input that
+      // reads a file outside the repository.
+      const fixture = new CollectedFixture("subfolder", {
+        "rust/Cargo.toml": (manifest) =>
+          `${manifest}envInputs = ["AFFECTED_FIXTURE_MODE"]\nruntimeInputs = ["cat ../outside-baseline.txt"]\n`,
+      });
+      const outside = join(fixture.workspace.root, "..", "outside-baseline.txt");
+      const env = (extra: Record<string, string | undefined> = {}) =>
+        fixture.workspace.cargo.environment(realEnv({ AFFECTED_FIXTURE_MODE: "a", ...extra }));
+      try {
+        writeFileSync(outside, "one\n");
+        const collected = await runNx(fixture.workspace, ["run", "rust:coverage-baseline"], env());
+        expect(collected.status).toBe(0);
+        expect(collected.output).toContain(
+          "rust:coverage-baseline: collects the coverage of every test into an empty database with cargo affected collect, because the baseline has no record of the context of its last collection, as on the first run or after a collection that failed or was stopped, so the coverage it holds cannot be kept.",
+        );
+        expect(baselineCommits(fixture.rust)).toEqual({ commits: [fixture.head] });
+
+        fixture.edit("rust/crates/basics/src/math.rs", (text) =>
+          text.replace("x * 3", "x + x + x"),
+        );
+        expect((await fixture.run(env())).counts).toEqual({
+          basics: 1,
+          macros: 0,
+          app: 0,
+          runner: 1,
+          consumer: 1,
+        });
+
+        const variable = await fixture.run(env({ AFFECTED_FIXTURE_MODE: "b" }));
+        expect(variable.counts).toEqual(fullSuite);
+        expect(taskOutput(variable.output, "basics:test")).toContain(
+          "was collected in another context: the variable AFFECTED_FIXTURE_MODE differs",
+        );
+
+        writeFileSync(outside, "two\n");
+        const runtime = await fixture.run(env());
+        expect(runtime.counts).toEqual(fullSuite);
+        expect(taskOutput(runtime.output, "basics:test")).toContain(
+          "the output of the runtime input `cat ../outside-baseline.txt` differs",
+        );
+        writeFileSync(outside, "one\n");
+
+        const features = await runNx(
+          fixture.workspace,
+          ["run", "basics:test", "--features=extra", "--skip-nx-cache"],
+          env(),
+        );
+        expect(features.status).toBe(0);
+        expect(features.output).toContain("basics:test: runs the full suite, because the baseline");
+        expect(features.output).toContain("--features (none at the collection, extra now) differs");
+
+        const host = /^host: (\S+)$/m.exec(
+          execFileSync("rustc", ["-vV"], { env: env(), encoding: "utf8" }),
+        )?.[1];
+        const triple = await fixture.run(env({ CARGO_BUILD_TARGET: host }));
+        expect(triple.counts).toEqual(fullSuite);
+        expect(taskOutput(triple.output, "basics:test")).toContain(
+          `the target triple (host ${host} at the collection,`,
+        );
+
+        // Committed, the change is re-collected with --diff, and the record
+        // is written again.
+        commitAll(fixture.top, "change triple");
+        const again = await runNx(fixture.workspace, ["run", "rust:coverage-baseline"], env());
+        expect(again.status).toBe(0);
+        expect(again.output).toContain(
+          "rust:coverage-baseline: re-collects the coverage of the affected and new tests with cargo affected collect --diff",
+        );
+        // The tests that --diff did not re-collect keep their older
+        // collection, against which the committed change still counts
+        // (EVD-COVERAGE-COLLECT-COST); the run selects with the new record.
+        const afterDiff = await fixture.run(env());
+        expect(afterDiff.counts.macros).toBe(0);
+        expect(taskOutput(afterDiff.output, "basics:test")).toContain(
+          "basics:test: runs a subset of its tests for this change",
+        );
+
+        // A collection whose test fails leaves no record, and the next
+        // affected run takes the full suite.
+        fixture.edit("rust/crates/macros/src/lib.rs", (text) =>
+          text.replace("    42\n", "    41\n"),
+        );
+        commitAll(fixture.top, "break a test");
+        const failed = await runNx(fixture.workspace, ["run", "rust:coverage-baseline"], env());
+        expect(failed.status).toBe(1);
+        expect(failed.output).toContain(
+          "rust:coverage-baseline: cargo affected collect failed or was stopped",
+        );
+        fixture.edit("rust/crates/basics/src/math.rs", (text) => text.replace("x * 2", "x + x"));
+        const afterFailure = await runNx(
+          fixture.workspace,
+          ["run", "basics:test", "--skip-nx-cache"],
+          env(),
+        );
+        expect(afterFailure.status).toBe(0);
+        expect(afterFailure.output).toContain(
+          "basics:test: runs the full suite, because the baseline has no record of the context it was collected in",
+        );
+      } finally {
+        rmSync(outside, { force: true });
+        fixture.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 6,
+  );
+
+  it(
+    "collects everything, and does not relabel the old coverage, where an environment input changed since the last collection",
+    async () => {
+      // The review's sequence: double_works checks the value of a declared
+      // environment input; the checkout stays unchanged between the runs.
+      const fixture = new CollectedFixture("subfolder", {
+        "rust/Cargo.toml": (manifest) => `${manifest}envInputs = ["REVIEW_MODE"]\n`,
+        "rust/crates/basics/src/lib.rs": (text) =>
+          text.replace(
+            "assert_eq!(super::double(2), 4);",
+            'assert_eq!(super::double(2), 4);\n        assert_eq!(std::env::var("REVIEW_MODE").as_deref(), Ok("a"));',
+          ),
+      });
+      const env = (mode: string) =>
+        fixture.workspace.cargo.environment(realEnv({ REVIEW_MODE: mode }));
+      try {
+        const first = await runNx(fixture.workspace, ["run", "rust:coverage-baseline"], env("a"));
+        expect(first.status).toBe(0);
+
+        const second = await runNx(fixture.workspace, ["run", "rust:coverage-baseline"], env("b"));
+        expect(second.output).toContain(
+          "rust:coverage-baseline: collects the coverage of every test into an empty database with cargo affected collect, because the last collection ran in another context, so the coverage it holds cannot be kept: the variable REVIEW_MODE differs.",
+        );
+        // The full collection runs double_works, which fails with b.
+        expect(second.status).toBe(1);
+
+        const affected = await runNx(
+          fixture.workspace,
+          ["run", "basics:test", "--skip-nx-cache"],
+          env("b"),
+        );
+        expect(affected.status).toBe(1);
+        expect(affected.output).toContain(
+          "basics:test: runs the full suite, because the baseline has no record of the context it was collected in",
+        );
+        expect(affected.output).toMatch(/FAIL .*basics tests::double_works/);
+      } finally {
+        fixture.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 3,
+  );
+});

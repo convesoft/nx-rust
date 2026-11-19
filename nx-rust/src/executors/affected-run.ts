@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { hostTriple } from "../cargo/host-triple";
 import type { CargoPackage } from "../cargo/metadata";
 import { pickedTriples, pickText } from "../cargo/target-triples";
@@ -126,8 +127,8 @@ export async function affectedSelection(
     throw error;
   }
   const context = contextProblem(first.prepared, members, placement, mode, root);
-  if (context !== undefined) {
-    return { kind: "full", reason: context };
+  if ("problem" in context) {
+    return { kind: "full", reason: context.problem };
   }
   const status = await runStatus(first.prepared, runArgs, verbose, members);
   if ("problem" in status) {
@@ -137,6 +138,18 @@ export async function affectedSelection(
   const moved = collectionsProblem(report, mode.commits);
   if (moved !== undefined) {
     return { kind: "full", reason: moved };
+  }
+  // The record again: a collection of the same commit in another context,
+  // which ran whole between the first read and the report, changes neither
+  // the commits nor the report's collections, only the record
+  // (`DES-BASELINE`, "Collection and the test runs").
+  const again = readContextRecord(first.prepared.cwd);
+  if (!("context" in again) || !isDeepStrictEqual(again.context, context.record)) {
+    return {
+      kind: "full",
+      reason:
+        "the record of the baseline's context changed while the task ran, as a collection that ran meanwhile changes it",
+    };
   }
   const changed = gitChangedFiles(cwd, root, usableCollections(report), env);
   if ("problem" in changed) {
@@ -324,7 +337,7 @@ function nativeMatch(root: string): ((globs: string[], paths: string[]) => boole
 /**
  * Why the baseline's context does not fit the group's
  * (`ADR-AFFECTED-BASELINE-CONTEXT`): no record, or the options and variables
- * that differ; `undefined` where it fits.
+ * that differ; the record where it fits.
  */
 function contextProblem(
   prepared: PreparedTask,
@@ -332,10 +345,10 @@ function contextProblem(
   placement: InputPlacement,
   mode: Extract<TestMode, { kind: "affected" }>,
   repositoryRoot: string,
-): string | undefined {
+): { problem: string } | { record: BaselineContext } {
   const record = readContextRecord(prepared.cwd);
   if ("problem" in record) {
-    return record.problem;
+    return record;
   }
   const names = new Set<string>();
   const commands = new Set<string>();
@@ -352,7 +365,7 @@ function contextProblem(
   // show has to equal the collection's (`ADR-AFFECTED-BASELINE-CONTEXT`).
   const runtime = runtimeContext(contextRuntimeCommands(commands), repositoryRoot, prepared.env);
   if ("problem" in runtime) {
-    return runtime.problem;
+    return { problem: runtime.problem };
   }
   const current: BaselineContext = {
     version: 2,
@@ -363,8 +376,10 @@ function contextProblem(
   };
   const differences = contextDifferences(record.context, current);
   return differences.length === 0
-    ? undefined
-    : `the baseline ${mode.commits.join(",")} was collected in another context: ${describeList(differences)} ${differences.length === 1 ? "differs" : "differ"}`;
+    ? { record: record.context }
+    : {
+        problem: `the baseline ${mode.commits.join(",")} was collected in another context: ${describeList(differences)} ${differences.length === 1 ? "differs" : "differ"}`,
+      };
 }
 
 /**

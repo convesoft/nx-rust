@@ -2,12 +2,10 @@
 
 > **Status:** `test` runs `cargo test` for its crate, or with
 > `testRunner = "nextest"` cargo-nextest and then the doctests. With
-> `affectedTests`, a run in mode `affected` runs the tests that cargo-affected
-> selects against the coverage baseline, widened where coverage cannot see a
-> change, and each task says what it ran and why. The baseline target arrives
-> later in milestone 0.3; until then no baseline carries the record of the
-> context it was collected in, which selection needs, so a run in mode
-> `affected` runs the full suite and says so.
+> `affectedTests`, the workspace project's `coverage-baseline` target collects
+> the coverage baseline, and a run in mode `affected` runs the tests that
+> cargo-affected selects against it, widened where coverage cannot see a
+> change, and each task says what it ran and why.
 
 Every crate has one `test` target. Which runner it uses, and whether it runs
 the whole suite or only the tests a change can affect, are settings. You never
@@ -83,10 +81,25 @@ configured for your host makes each crate's tests run on their own instead
 ## Affected tests
 
 `affectedTests` says that a workspace is set up for selection. It puts the test
-mode into the cache key, adds the baseline target to the workspace project, and
-has every machine check for nextest and cargo-affected, so a missing tool shows
-on your machine and not first in CI. Whether a run actually selects is a second
-question, answered per run.
+mode into the cache key, adds the `coverage-baseline` target to the workspace
+project, and has every machine check for nextest, cargo-affected and the
+`llvm-tools` component, so a missing tool shows on your machine and not first
+in CI. Whether a run actually selects is a second question, answered per run.
+
+Selection needs a baseline: per-test coverage that cargo-affected collected
+for a commit, with the plugin's record of the context it was collected in.
+`coverage-baseline` makes both, in CI on the main branch or on your machine
+with a clean working tree:
+
+```sh
+nx run rust:coverage-baseline        # the workspace project of rust/
+nx test api                          # now selects against that baseline
+```
+
+Give the target the cargo options of your test runs, such as `features` or
+`-c all-features`: a baseline collected with other features, or with other
+values of the tests' environment inputs, makes every affected run take the
+full suite ([Continuous integration](ci.mara.md#the-coverage-baseline)).
 
 Each run of `test` in such a workspace is in one of two modes:
 
@@ -137,18 +150,21 @@ When selection is not possible, the full suite runs, and the task output says
 so and gives the reason: there is no baseline, it was collected with other
 features, another profile or triple or other values of the task's
 environment inputs, a runtime input of the task now prints something else,
-its record of that context is missing, cargo-affected
-refuses or fails, git and cargo-affected disagree on what changed, a
+its record of that context is missing, as after a collection that failed or
+was stopped, cargo-affected refuses or fails, git and cargo-affected disagree on what changed, a
 submodule changed, or git ignores a file among the task's inputs. A baseline
 whose `-wal` file is still there, from a collection that is running or was
 interrupted, gives the full suite as well, and so does a baseline that a
 collection created or changed after Nx computed the task's cache key, so that
 the key always says which suite ran.
 
-cargo-affected is yours to install, as nextest is. `nx add` reports it where a
-workspace turns on `affectedTests`; a run in mode `affected` that needs it
-and does not find it fails before cargo runs, and a run in mode `full`
-warns.
+cargo-affected is yours to install, as nextest is, and so is the
+`llvm-tools` component (`rustup component add llvm-tools`), whose `llvm-cov`
+and `llvm-profdata` it runs to collect coverage. `nx add` reports them where a
+workspace turns on `affectedTests`; a run in mode `affected` that needs
+cargo-affected and does not find it fails before cargo runs, a run in mode
+`full` warns, and `coverage-baseline` fails before it collects where one of
+the three tools is missing, saying how to get it.
 
 An affected run never stands in for the full run. One kind of change can pass
 in affected mode and fail in full: code that another crate evaluates while it
@@ -285,7 +301,7 @@ In mode `full`, and in a workspace without `affectedTests`, steps 1 and 2 are sk
 
 **How steps 1 to 3 are carried out.** The control plane decided these points on 16 November 2026 in nxr-tabkjx, from the steps above, [[GOAL-TRUSTED-CACHE]] and [[EVD-AFFECTED-RUNS]]; each can be undone on its own.
 
-- Step 1 runs only where a task of the group selects, after the check of [[DES-TEST-MODE]] between hashing and the run, and passes cargo-affected the arguments of step 3's `cargo nextest run` without `--no-fail-fast` and `--no-tests`, which `cargo nextest list` does not take. A task run on its own takes the way of a group and prints its part of the output once its steps have ended.
+- Step 1 runs only where a task of the group selects, after the check of [[DES-TEST-MODE]] between hashing and the run, and passes cargo-affected the arguments of step 3's `cargo nextest run` without `--no-fail-fast` and `--no-tests`, which `cargo nextest list` does not take. A task run on its own takes the way of a group and prints its part of the output once its steps have ended. After the report, the executor reads the baseline's context record again and runs the full suite where it is gone or differs from the record it compared, as after a collection of the same commit in another context that ran in between ([[DES-BASELINE]], "Collection and the test runs"); the control plane decided this on 17 November 2026 in nxr-d0t9vm, and dropping the second read undoes it.
 - The group's context for the comparison with the record ([[DES-BASELINE]]): the options of its tasks; the target triple as `host <triple>`, with the host's triple from `rustc -vV`, where neither Cargo's configuration nor `CARGO_BUILD_TARGET` picks one, and otherwise the pick as the toolchain input names it ([[DES-INPUTS]]); and the environment inputs of the group's `test` tasks as Nx expands them, the variables of the prefixes `CARGO_PROFILE_`, `CARGO_TARGET_` (apart from `CARGO_TARGET_DIR`) and `NEXTEST_` included, without `NX_CLOUD_ENCRYPTION_KEY` and `NX_RUST_RUN_ID`, which change nothing that is compiled or run. A variable that the group hashes and the record does not hold counts as differing.
 - Every input of the group's `test` tasks that git ignores runs the full suite, not only one that a `fileInputs` pattern adds, because the plugin reads the inputs as Nx lists their files and cannot tell which pattern added one; and so does an input outside the git repository, whose changes git cannot see. To narrow it, the check would take only the filesets of `fileInputs`.
 - Whose inputs hold a changed file comes from the files that Nx's `HashPlanInspector` lists for each `test` task, dependency sources included, under the name that `targetNames` gives the target, as do the runtime inputs and variables of the group's context; where the inspector cannot inspect a task, the group runs its full suite. A path that no longer exists, a deleted file or the old path of a rename, is placed with Nx's own expansion of the tasks' inputs and its native glob matcher, which the plugin trusts only where that expansion gives each task exactly the inspector's files apart from files of the repository root, which Nx adds to every task; otherwise the group runs its full suite. A path at the repository root counts for every crate.
