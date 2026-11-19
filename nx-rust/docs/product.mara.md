@@ -32,15 +32,15 @@ Rust-only repositories work too, but they do not drive priorities.
 
 ## Principles
 
-| Principle                                    | What it means                                                                        |
-| -------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Cargo is the source of truth                 | Projects, targets and dependencies come from `cargo metadata`.                       |
-| Nx decides what runs and what is cached      | Cargo builds, in as few invocations as possible.                                     |
-| Cargo owns its build directory               | Nx caches task results and final artifacts only.                                     |
-| Cargo behaves as it would without the plugin | Same directories, same default flags, no generated files inside crates.              |
-| Overrides live in `Cargo.toml`               | `[package.metadata.nx]` per crate, `[workspace.metadata.nx]` for workspace defaults. |
-| Cache correctness over cache ambition        | Running more than a cache key promises is fine. Running less is not.                 |
-| v1 targets a single machine                  | Rust tasks are not spread across CI agents.                                          |
+| Principle                                    | What it means                                                                                       |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Cargo is the source of truth                 | Projects, targets and dependencies come from `cargo metadata`.                                      |
+| Nx decides what runs and what is cached      | Cargo builds, in as few invocations as possible.                                                    |
+| Cargo owns its build directory               | Nx caches task results and final artifacts only.                                                    |
+| Cargo behaves as it would without the plugin | Same directories, same default flags, no generated files inside crates apart from artifact outputs. |
+| Overrides live in `Cargo.toml`               | `[package.metadata.nx]` per crate, `[workspace.metadata.nx]` for workspace defaults.                |
+| Cache correctness over cache ambition        | Running more than a cache key promises is fine. Running less is not.                                |
+| v1 targets a single machine                  | Rust tasks are not spread across CI agents.                                                         |
 
 ## What v1 includes
 

@@ -583,7 +583,7 @@ The Nx cache holds task results and final artifacts. It never stores a file from
 :status: accepted
 :satisfies: NEED-CARGO-UNCHANGED
 
-A cargo command that the plugin runs uses the same build directory, the same artifact directory and the same default flags as the equivalent plain `cargo` command in that workspace, so that builds through Nx and builds through plain cargo or rust-analyzer reuse each other's work. The plugin generates no files inside crates. Nx's own data folder, `.nx/workspace-data`, which Nx and git ignore, belongs to no crate and to neither of Cargo's directories, also where it lies in the folder of a crate at the repository root.
+A cargo command that the plugin runs uses the same build directory, the same artifact directory and the same default flags as the equivalent plain `cargo` command in that workspace, so that builds through Nx and builds through plain cargo or rust-analyzer reuse each other's work. The plugin generates no files inside crates apart from the outputs of an artifact target that the user runs: the addon's `.node` file, `index.js` and `index.d.ts` that `napi-build` writes into the crate's folder ([[DES-NAPI]]) and the `pkg` folder that `wasm-build` writes there ([[DES-WASM]]). Nx's own data folder, `.nx/workspace-data`, which Nx and git ignore, belongs to no crate and to neither of Cargo's directories, also where it lies in the folder of a crate at the repository root.
 :::
 
 :::mara requirement REQ-VERBOSE-COMMAND
