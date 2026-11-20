@@ -440,6 +440,11 @@ export function loadProjectJsonPlugin(
 export interface NxWorkspaceContext {
   globWithWorkspaceContext(workspaceRoot: string, globs: string[]): Promise<string[]>;
   globWithWorkspaceContextSync(workspaceRoot: string, globs: string[]): unknown;
+  /**
+   * Drops the workspace context of this process, so that its next read
+   * lists the repository's files anew.
+   */
+  resetWorkspaceContext(): void;
 }
 
 const workspaceContextModule = "nx/src/utils/workspace-context";

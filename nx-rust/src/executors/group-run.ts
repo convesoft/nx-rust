@@ -43,6 +43,7 @@ import {
   removeToolConfiguration,
   writeToolConfiguration,
 } from "./nextest";
+import { resetNxWorkspaceContext } from "./nx-task-files";
 import { checksAfterCargo, type GroupInvocation, type PreparedTask } from "./task";
 import { packagesVariable, type RecordEntry, recordVariable } from "./test-runner";
 import {
@@ -285,6 +286,19 @@ export async function runGroup(
         removeToolConfiguration(toolConfiguration);
       }
     }
+  }
+  // The build input checks read the repository's files from Nx's workspace
+  // context, which this process keeps from its first use, also across the
+  // groups of a batch. Cleared once here, after the group's cargo calls and
+  // before any member's check, it is listed again from the files as these
+  // calls left them (`DES-BUILD-INPUT-CHECK`, point 5). The members' checks
+  // run at the same time, so none clears it for itself.
+  if (
+    members.some(
+      (member, index) => !state[index].failed && member.invocation.inputCheck !== undefined,
+    )
+  ) {
+    resetNxWorkspaceContext(first.context.root);
   }
   return Promise.all(
     members.map(async (member, index) => {

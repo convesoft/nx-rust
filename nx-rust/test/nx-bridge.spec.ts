@@ -26,7 +26,11 @@ import {
 import { installedNx } from "../src/compatibility/nx-version";
 import { readTaskDotenv } from "../src/executors/dotenv-check";
 import { commandRecords, excludesTaskDependencies, parseAsNx } from "../src/executors/nx-command";
-import { nxTaskFileParts, NxTaskFilesError } from "../src/executors/nx-task-files";
+import {
+  nxTaskFileParts,
+  NxTaskFilesError,
+  resetNxWorkspaceContext,
+} from "../src/executors/nx-task-files";
 import {
   nxTaskConfiguration,
   TaskEnvironmentError,
@@ -277,6 +281,7 @@ describe("resolution from .nx/installation across migrated callers", () => {
       "dist/src/utils/workspace-context.js": [
         'exports.globWithWorkspaceContext = async () => ["seen/a.rs"];',
         'exports.globWithWorkspaceContextSync = () => ["seen/a.rs"];',
+        "exports.resetWorkspaceContext = () => {};",
         "",
       ].join("\n"),
       "dist/src/native.js":
@@ -343,6 +348,7 @@ describe("resolution from .nx/installation across migrated callers", () => {
     // nx-task-files.ts
     const parts = nxTaskFileParts(root);
     expect(parts.glob(root, ["**/*"])).toEqual(["seen/a.rs"]);
+    expect(parts.reset()).toBeUndefined();
 
     // task-env.ts & dotenv-check.ts
     expect(withoutUnloadedRootValues({ UNLOADED_BY_INSTALL: "1", KEPT: "2" }, root)).toEqual({
@@ -496,6 +502,12 @@ describe("bridge shape checks for missing or changed internal exports", () => {
       "function",
     );
     expectBridgeExportError(
+      () => loadWorkspaceContext(root, ["resetWorkspaceContext"]),
+      "nx/src/utils/workspace-context",
+      "resetWorkspaceContext",
+      "function",
+    );
+    expectBridgeExportError(
       () => loadNxNative(root),
       "nx/src/native",
       "matchGlobPaths",
@@ -542,6 +554,23 @@ describe("bridge shape checks for missing or changed internal exports", () => {
     ).toThrow(
       "the installed Nx lacks ProcessTasks.resolveConfiguration in nx/src/tasks-runner/create-task-graph",
     );
+  });
+
+  it("skips the build input check where the installed Nx lacks resetWorkspaceContext", () => {
+    writeFakeNx(root, "24.9.0", {
+      "dist/src/utils/workspace-context.js":
+        'exports.globWithWorkspaceContextSync = () => ["seen/a.rs"];\n',
+      "dist/src/hasher/hash-plan-inspector.js":
+        "exports.HashPlanInspector = class { async init() {} inspectTaskInputs() { return {}; } };\n",
+    });
+
+    expect(() => nxTaskFileParts(root)).toThrow(NxTaskFilesError);
+    expect(() => nxTaskFileParts(root)).toThrow(
+      "the installed Nx lacks resetWorkspaceContext in nx/src/utils/workspace-context",
+    );
+    // The reset of a group does not fail; each of its checks then warns
+    // that it did not run (skippedCheckWarning).
+    expect(() => resetNxWorkspaceContext(root)).not.toThrow();
   });
 
   it("reports missing or invalid nx dependencies through loadNxYargsParser, loadNxDependency and readNxDependencyVersion", () => {

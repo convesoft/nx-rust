@@ -18,7 +18,8 @@ export interface NxTaskFiles {
    * none that `.gitignore`, `.nxignore` or Nx's fixed exclusions leave out,
    * and none below a symbolic link to a folder. The repository is listed on
    * the first call alone, so an instance serves one check and is made after
-   * the cargo call whose build it judges.
+   * the cargo call whose build it judges, and after
+   * {@link resetNxWorkspaceContext} has cleared the context of this process.
    *
    * @param folder A path relative to the repository root, `""` for the root.
    */
@@ -53,14 +54,18 @@ export interface NxTaskFileParts {
   Inspector: new (...args: unknown[]) => NxHashPlanInspector;
   /** `globWithWorkspaceContextSync` of `nx/src/utils/workspace-context`. */
   glob: (workspaceRoot: string, globs: string[]) => unknown;
+  /** `resetWorkspaceContext` of `nx/src/utils/workspace-context`. */
+  reset: () => void;
 }
 
 /**
- * Loads the two parts of the installed Nx through which the check matches a
+ * Loads the parts of the installed Nx through which the check matches a
  * build's files with its inputs, which are not public API
  * (`RISK-UPSTREAM-CHANGES`): `HashPlanInspector`, which expands a task's
- * hash plan into the files it reads with Nx's own matching, and the glob of
- * the workspace context that it reads the files from.
+ * hash plan into the files it reads with Nx's own matching, and the glob and
+ * the reset of the workspace context that it reads the files from. Without
+ * the reset the check could judge a build by a list older than its cargo
+ * call, so it is as necessary as the other two.
  *
  * @throws {NxTaskFilesError} When the installed Nx lacks one of them, naming it.
  */
@@ -68,16 +73,45 @@ export interface NxTaskFileParts {
 export function nxTaskFileParts(workspaceRoot: string): NxTaskFileParts {
   try {
     const { HashPlanInspector: Inspector } = loadHashPlanInspector(workspaceRoot);
-    const { globWithWorkspaceContextSync: glob } = loadWorkspaceContext(workspaceRoot, [
-      "globWithWorkspaceContextSync",
-    ]);
-    return { Inspector, glob };
+    const { globWithWorkspaceContextSync: glob, resetWorkspaceContext: reset } =
+      loadWorkspaceContext(workspaceRoot, [
+        "globWithWorkspaceContextSync",
+        "resetWorkspaceContext",
+      ]);
+    return { Inspector, glob, reset };
   } catch (error) {
     if (error instanceof NxBridgeError) {
       throw toTaskFilesError(error);
     }
     throw error;
   }
+}
+
+/**
+ * Clears Nx's workspace context in this process, from which
+ * `HashPlanInspector` and the glob read the repository's files: Nx makes it
+ * on first use and keeps it for the life of the process, so that in a batch
+ * process a later group's check would read the files as they were when an
+ * earlier group's check first listed them. Cleared after a cargo call, the
+ * next read lists the files as the call left them (`DES-BUILD-INPUT-CHECK`,
+ * point 5). Called once after the cargo calls of a group and before any of
+ * its checks, which run at the same time, never between two of them.
+ *
+ * Where the installed Nx lacks a part of the check, nothing is cleared: each
+ * check then fails to load the parts and warns that it did not run.
+ */
+// @mara implements DES-BUILD-INPUT-CHECK
+export function resetNxWorkspaceContext(workspaceRoot: string): void {
+  let parts: NxTaskFileParts;
+  try {
+    parts = nxTaskFileParts(workspaceRoot);
+  } catch (error) {
+    if (error instanceof NxTaskFilesError) {
+      return;
+    }
+    throw error;
+  }
+  parts.reset();
 }
 
 /**
@@ -127,9 +161,11 @@ export async function nxTaskFiles(
   }
   // The repository's files as Nx sees them, listed once on first use and
   // kept for the instance's lifetime. The check makes an instance after the
-  // task's cargo call and drops it when that task's comparison ends, with no
-  // write of files in between (`DES-BUILD-INPUT-CHECK`), so the list cannot
-  // be older than the build it judges for want of being listed again.
+  // task's cargo call and after the workspace context was cleared
+  // (resetNxWorkspaceContext), and drops it when that task's comparison
+  // ends, with no write of files in between (`DES-BUILD-INPUT-CHECK`), so
+  // neither this list nor the inspector's files can be older than the build
+  // it judges.
   let repositoryFiles: string[] | undefined;
   return {
     inputFiles: new Set(files),

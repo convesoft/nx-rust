@@ -85,6 +85,7 @@ import {
   NxTaskFilesError,
   nxTaskFileParts,
   nxTaskFiles,
+  resetNxWorkspaceContext,
   skippedCheckWarning,
 } from "./nx-task-files";
 import { recordedNxCommand } from "./nx-command";
@@ -309,6 +310,13 @@ export async function runTask(
       }
       return { success: false };
     }
+  }
+  // As after a group's cargo calls (runGroup): the check lists the files as
+  // cargo left them, whatever in this process read Nx's workspace context
+  // before (`DES-BUILD-INPUT-CHECK`, point 5). Nothing does in Nx 24.0.6,
+  // which leaves the reset nothing to clear.
+  if (invocation.inputCheck !== undefined) {
+    resetNxWorkspaceContext(context.root);
   }
   const { failures, warnings } = await checksAfterCargo(invocation, context);
   for (const warning of warnings) {
