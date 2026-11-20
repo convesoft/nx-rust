@@ -723,8 +723,9 @@ describe("init", () => {
             "- the crate api in rust/crates/api/Cargo.toml: set `name` under [package.metadata.nx] in that manifest",
             "- the crate api in tools/api/Cargo.toml: set `name` under [package.metadata.nx] in that manifest",
           );
-          // One report per workspace, as graph creation reads them.
-          expect(workspace.cargoCalls()).toEqual([
+          // One report per workspace, as graph creation reads them. It reads
+          // the two at the same time, so the log's order is not fixed.
+          expect(workspace.cargoCalls().sort((a, b) => a.cwd.localeCompare(b.cwd))).toEqual([
             workspaceCall("rust"),
             workspaceCall("tools/api"),
           ]);

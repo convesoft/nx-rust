@@ -271,12 +271,16 @@ describe("crates that cargo vendor writes", () => {
         const graph = await copy.graph();
 
         expect(Object.keys(graph.projects).sort()).toEqual([...outside.projects, "extra"].sort());
-        // vendor/extra lies higher than the workspace in apps/, so it comes first.
-        expect(metadataCalls(copy.cargoCalls())).toEqual([
-          workspaceCall("services/billing"),
-          workspaceCall("vendor/extra"),
-          workspaceCall("apps/Billing.API/rust_v2"),
-        ]);
+        // One report per workspace. Graph creation reads the three at the
+        // same time, so the order in which their calls reach the log is not
+        // fixed.
+        expect(metadataCalls(copy.cargoCalls()).sort((a, b) => a.cwd.localeCompare(b.cwd))).toEqual(
+          [
+            workspaceCall("apps/Billing.API/rust_v2"),
+            workspaceCall("services/billing"),
+            workspaceCall("vendor/extra"),
+          ],
+        );
       } finally {
         copy.remove();
       }

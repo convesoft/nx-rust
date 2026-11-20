@@ -34,11 +34,11 @@ describe("workspace discovery through Nx", () => {
     async () => {
       const graph = await loadFixtureGraph("two-workspaces", { files: standaloneXtask });
 
-      expect(graph.cargoCalls).toEqual([
-        workspaceCall("."),
-        workspaceCall("tools"),
-        workspaceCall("xtask"),
-      ]);
+      // Graph creation reports separate workspaces at the same time, so the
+      // order in which their calls reach the log is not fixed.
+      expect(sortedByJson(graph.cargoCalls)).toEqual(
+        sortedByJson([workspaceCall("."), workspaceCall("tools"), workspaceCall("xtask")]),
+      );
       // Every member of the three: tools is the crate of its root manifest.
       expect(Object.keys(graph.projects).sort()).toEqual([
         "app",
@@ -484,12 +484,13 @@ describe("discovery in the plugin", () => {
 
       expect(first.workspaces.map((found) => found.root)).toEqual([".", "tools"]);
       expect(second).not.toBe(first);
-      expect(workspace.cargoCalls()).toEqual([
-        workspaceCall("."),
-        workspaceCall("tools"),
-        workspaceCall("."),
-        workspaceCall("tools"),
-      ]);
+      // Graph creation reports separate workspaces at the same time, so the
+      // order in which their calls reach the log is not fixed.
+      const calls = workspace.cargoCalls();
+      expect(sortedByJson(calls.slice(0, 2))).toEqual(
+        sortedByJson([workspaceCall("."), workspaceCall("tools")]),
+      );
+      expect(sortedByJson(calls.slice(2))).toEqual(sortedByJson(calls.slice(0, 2)));
     },
     HARNESS_TIMEOUT,
   );
