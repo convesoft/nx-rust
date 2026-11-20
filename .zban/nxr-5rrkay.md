@@ -57,3 +57,5 @@ From nxr-k64tm5 with the rest of nxr-pht7d6 (the `hakari` and `cargo` strategies
 - Line 8 is overturned: nxr-8paqsn is pulled back from the backlog and investigated before 1.0, because Cargo 1.91 is the compatibility floor on account of `build.build-dir` and the failure is deterministic.
 
 The marks of the confirmed lines are removed by nxr-qw96ne.
+
+Outcome of line 8 (nxr-8paqsn, merged 20 November 2026 as ec5cfaa): the failure is a defect of Cargo 1.91.0, not of the plugin, Nx or the harness. With a build directory apart from the artifact directory, Cargo 1.91 names a file generated in `OUT_DIR` under the artifact directory in the dependency file beside the artifact; Cargo 1.92 fixed it (rust-lang/cargo#16092). The plugin needed no change, because the build input check skips both directories; the review confirmed that no input is lost on 1.91. The test now expects each version's path and fails on both without the skip (`EVD-CARGO-DEP-INFO`).
