@@ -39,6 +39,10 @@ import {
   writeBaseline,
 } from "./harness";
 
+/** What a script input prints where its script cannot run or fails: the line that says so and a random value. */
+const failedOutput =
+  /^\n@convesoft\/nx-rust: this runtime input failed\n(( [0-9a-f]{2}){16}|[0-9a-f]{32})\n$/;
+
 // The parts of VER-TESTING and VER-CACHE-KEYS that the test mode decides
 // (DES-TEST-MODE, REQ-TEST-MODE-KEY): the rule that the mode command and the
 // executor share, the reading of cargo-affected's database, the command as
@@ -422,7 +426,7 @@ describeCompiled("the mode command", () => {
   it("prints a new random value each time where the script cannot run", () => {
     const missing = join(root, "missing/print-test-mode.js");
     const first = evaluate({}, missing);
-    expect(first).toMatch(/^( [0-9a-f]{2}){16}\n$/);
+    expect(first).toMatch(failedOutput);
     expect(evaluate({}, missing)).not.toBe(first);
   });
 });

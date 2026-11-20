@@ -5,6 +5,7 @@ import type { CargoPackage } from "../cargo/metadata";
 import type { CargoWorkspace } from "./discovery";
 import { digestFile, digestFolder, runIdVariable } from "./lockfile-task";
 import { napiAddon, napiOutputFiles, producesNodeAddon } from "./napi";
+import { scriptInputCommand, unrepeatableValue } from "./script-input";
 import type { ArtifactKind } from "./settings";
 import type { InferredTargetName } from "./targets";
 import { producesWasmPackage, wasmPackageFolder } from "./wasm";
@@ -753,12 +754,49 @@ export function toolchainCommand(
           `( cd ${shellQuote(folder)} && ${versionCommand("cargo nextest", "--version")} ) || echo 'cargo-nextest: not found'`,
         ]
       : []),
-    `{ cd ${shellQuote(folder)} && ${versions.join(" && ")} || od -An -N16 -tx1 /dev/urandom; }`,
-    nextest
-      ? `env | grep -E '^(CARGO_(PROFILE|TARGET)_|NEXTEST_)' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort`
-      : `env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort`,
+    `{ cd ${shellQuote(folder)} && ${versions.join(" && ")} || ${unrepeatableValue}; }`,
+    variablesCommand(nextest ? "^(CARGO_(PROFILE|TARGET)_|NEXTEST_)" : "^CARGO_(PROFILE|TARGET)_"),
     "true",
   ].join("; ");
+}
+
+/**
+ * Shell text that prints each variable of the environment whose name
+ * matches the extended regular expression `pattern`, apart from
+ * `CARGO_TARGET_DIR`, as one line `NAME=value`, sorted bytewise
+ * (`DES-INPUTS`, "Variables"). It reads the variables with POSIX awk's
+ * `ENVIRON`, so that a value holds whatever it holds: a line of `env`'s
+ * output cannot tell the continuation of a multi-line value from another
+ * variable, which let the end of such a value leave the key and a variable
+ * of another name enter it. In a name or value that holds a backslash or a
+ * line break, a backslash becomes `\\` and a line break `\n`, so that each
+ * variable keeps one line and two environments never print the same text;
+ * any other line is what `env` printed, so that those keys stay the same.
+ * After the last variable it prints the line {@link variablesEnd}, since
+ * Nx trims the whitespace at the end of what a runtime input prints, which
+ * would otherwise take a trailing space off the last value
+ * (`EVD-RUNTIME-INPUT-SCRIPTS`). Where awk fails, the text prints a value
+ * that no other evaluation prints ({@link unrepeatableValue}), as the
+ * toolchain's versions do.
+ */
+/** The line after the variables of the toolchain command ({@link variablesCommand}). */
+export const variablesEnd = "end of variables";
+
+function variablesCommand(pattern: string): string {
+  const program = [
+    "function escaped(text, out, i, c) {",
+    'out = ""; for (i = 1; i <= length(text); i++) { c = substr(text, i, 1);',
+    'if (c == "\\\\") out = out "\\\\\\\\"; else if (c == "\\n") out = out "\\\\n"; else out = out c }',
+    "return out }",
+    "BEGIN { n = 0; for (name in ENVIRON) {",
+    `if (name !~ /${pattern}/ || name == "CARGO_TARGET_DIR") continue;`,
+    'line = name "=" ENVIRON[name];',
+    'if (index(line, "\\\\") || index(line, "\\n")) line = escaped(line);',
+    "for (i = n++; i > 0 && lines[i - 1] > line; i--) lines[i] = lines[i - 1];",
+    "lines[i] = line }",
+    `for (i = 0; i < n; i++) print lines[i]; print "${variablesEnd}" }`,
+  ].join(" ");
+  return `{ LC_ALL=C awk '${program}' || ${unrepeatableValue}; }`;
 }
 
 /**
@@ -816,9 +854,10 @@ const artifactFoldersScript = join(__dirname, "..", "cargo", "print-artifact-fol
  * share the keys (`EVD-CARGO-TRIPLE-FOLDERS`). Where the script cannot run,
  * as for a plugin that Nx loads from its TypeScript source, or cargo fails,
  * as for a pinned toolchain that is not installed, the command prints a
- * random value instead, new at each evaluation, so that no result stored
- * under the key is ever restored. It always ends with status 0, like
- * {@link toolchainCommand}.
+ * line that says so and a random value, new at each evaluation, so that no
+ * result stored under the key is ever restored ({@link scriptInputCommand}),
+ * and the executor says why when the task runs. It always ends with status
+ * 0, like {@link toolchainCommand}.
  *
  * @param workspaceRoot The workspace's root folder, relative to the repository root.
  */
@@ -827,10 +866,7 @@ export function artifactFoldersCommand(
   workspaceRoot: string,
   script = artifactFoldersScript,
 ): string {
-  return [
-    `{ ${shellQuote(process.execPath)} ${shellQuote(script)} ${shellQuote(workspaceRoot)} 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
-    "true",
-  ].join("; ");
+  return scriptInputCommand(script, workspaceRoot);
 }
 
 /**
@@ -851,18 +887,16 @@ const testModeScript = join(__dirname, "..", "executors", "print-test-mode.js");
  * the same rule. Like {@link artifactFoldersCommand}, it names Node, the
  * script and the workspace root by paths that reach no key, and where the
  * script cannot run, as for a plugin that Nx loads from its TypeScript
- * source, it prints a random value instead, new at each evaluation, so that
- * no stored result is restored. It always ends with status 0.
+ * source, it prints a line that says so and a random value, new at each
+ * evaluation, so that no stored result is restored
+ * ({@link scriptInputCommand}). It always ends with status 0.
  *
  * @param workspaceRoot The workspace's root folder, relative to the repository root.
  */
 // @mara implements DES-TEST-MODE
 // @mara implements REQ-TEST-MODE-KEY
 export function testModeCommand(workspaceRoot: string, script = testModeScript): string {
-  return [
-    `{ ${shellQuote(process.execPath)} ${shellQuote(script)} ${shellQuote(workspaceRoot)} 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
-    "true",
-  ].join("; ");
+  return scriptInputCommand(script, workspaceRoot);
 }
 
 /**

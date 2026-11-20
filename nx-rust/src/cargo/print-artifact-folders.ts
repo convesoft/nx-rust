@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { repositoryFolder } from "../graph/real-path";
-import { reportedDirectories } from "./directories";
+import { DirectoryReportError, reportedDirectories } from "./directories";
 import { pickedTriples, pickText } from "./target-triples";
 
 /**
@@ -24,8 +24,9 @@ import { pickedTriples, pickText } from "./target-triples";
  * graph that the Nx daemon keeps is out of date or a dotenv file of the task
  * moves the directory (`DES-INPUTS`). The directory comes from cargo's
  * `cargo metadata --no-deps` report, with `RUSTUP_AUTO_INSTALL=0`, as graph
- * creation asks for it. Where cargo fails, the script prints nothing and
- * fails, and the command prints a random value instead.
+ * creation asks for it. Where cargo fails, the script prints nothing,
+ * writes the reason and cargo's standard error to its own and fails, and
+ * the command prints a value that is never repeated instead.
  */
 // @mara implements DES-INPUTS
 function printArtifactFolders(): void {
@@ -39,7 +40,13 @@ function printArtifactFolders(): void {
     });
     artifacts = repositoryFolder(directories.artifact, repositoryRoot);
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    // What cargo wrote to standard error after the reason, so that the
+    // executor's warning about a failing input shows cargo's own message
+    // (`DES-INPUTS`, "Failing runtime inputs").
+    const stderr = error instanceof DirectoryReportError ? error.stderr.trim() : "";
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n${stderr === "" ? "" : `${stderr}\n`}`,
+    );
     process.exitCode = 1;
     return;
   }

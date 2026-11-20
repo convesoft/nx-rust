@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { noConfiguredTools } from "../src/cargo/configured-tools";
-import { toolchainCommand } from "../src/graph/inputs";
+import { toolchainCommand, variablesEnd } from "../src/graph/inputs";
 import { listsPackage } from "../src/graph/plugin-package";
 import {
   FileChanges,
@@ -253,7 +253,7 @@ describe("caching", () => {
   );
 
   it(
-    "keeps what the toolchain command prints where no setting names a compiler or a rustdoc, so that those keys stay the same",
+    "keeps what the toolchain command prints where no setting names a compiler or a rustdoc, before the end line of its variables",
     () => {
       // The command before RUSTC, CARGO_BUILD_RUSTC and build.rustc counted.
       // Nx keys a runtime input on what it prints (EVD-CARGO-COMPILER-SELECTION).
@@ -271,7 +271,10 @@ describe("caching", () => {
           const printed = output(before);
           expect(printed).toMatch(/^release: /m);
           for (const rustdoc of [false, true]) {
-            expect(output(toolchainCommand("rust", noConfiguredTools, rustdoc))).toBe(printed);
+            // The end line of the variables, which nxr-aqgka5 added, follows them.
+            expect(output(toolchainCommand("rust", noConfiguredTools, rustdoc))).toBe(
+              `${printed}${variablesEnd}\n`,
+            );
           }
         }
       } finally {

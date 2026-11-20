@@ -88,6 +88,7 @@ import {
   skippedCheckWarning,
 } from "./nx-task-files";
 import { recordedNxCommand } from "./nx-command";
+import { failedInputWarnings } from "./runtime-input-check";
 import { type ExecutorOptions, OptionError, type TaskOptions, taskOptions } from "./task-options";
 import {
   invalidTestModeMessage,
@@ -833,7 +834,11 @@ export function prepareTask(
     target: metadata.target,
     options: examined.options,
     binaryArguments: examined.binaryArguments,
-    warnings: examined.warnings,
+    // Last, once every check that fails the task has passed.
+    warnings: [
+      ...examined.warnings,
+      ...failedInputWarnings(task, context.target?.inputs, context.root, env),
+    ],
     locked,
     workspaceRoot,
     cwd,

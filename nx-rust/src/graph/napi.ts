@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { hostTriple } from "../cargo/host-triple";
-import { type ArtifactSubject, producesArtifact, shellQuote } from "./artifact-kinds";
+import { type ArtifactSubject, producesArtifact } from "./artifact-kinds";
 import type { CargoWorkspace } from "./discovery";
+import { scriptInputCommand } from "./script-input";
 
 /** The npm package of the napi CLI, whose exported functions post-process an addon (`DES-NAPI`). */
 export const napiCliPackage = "@napi-rs/cli";
@@ -197,8 +198,9 @@ const napiCliScript = join(__dirname, "..", "tools", "print-napi-cli.js");
  *   that the task post-processes with. The command names Node, the script and
  *   the folder by paths that reach no key, as the artifact folder input of
  *   `build` does. Where the script cannot run, as for a plugin that Nx loads
- *   from its TypeScript source, it prints a random value instead, new at each
- *   evaluation, so that no stored result is restored;
+ *   from its TypeScript source, it prints a line that says so and a random
+ *   value, new at each evaluation, so that no stored result is restored
+ *   ({@link scriptInputCommand});
  * - `npm_new_version`, which the CLI's `napi build` writes into the loader in
  *   place of the version in `package.json`, as `napi-build` does;
  * - the file that the crate's napi settings name as `dtsHeaderFile`
@@ -221,13 +223,9 @@ export function napiInputs(
   header?: string,
   script = napiCliScript,
 ): ({ runtime: string } | { env: string } | { fileset: string; includeIgnored: true })[] {
-  const command = [
-    `{ ${shellQuote(process.execPath)} ${shellQuote(script)} ${shellQuote(root)} 2>/dev/null || od -An -N16 -tx1 /dev/urandom; }`,
-    "true",
-  ].join("; ");
   return [
     { env: "npm_new_version" },
-    { runtime: command },
+    { runtime: scriptInputCommand(script, root) },
     ...(header === undefined || isAbsolute(header)
       ? []
       : [{ fileset: `{workspaceRoot}/${header}`, includeIgnored: true as const }]),

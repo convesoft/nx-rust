@@ -20,6 +20,10 @@ import {
 import { artifactFoldersCommand } from "../src/graph/inputs";
 import { HARNESS_TIMEOUT, loadsCompiledPlugin, pluginPackage, testEnvironment } from "./harness";
 
+/** What a script input prints where its script cannot run or fails: the line that says so and a random value. */
+const failedOutput =
+  /^\n@convesoft\/nx-rust: this runtime input failed\n(( [0-9a-f]{2}){16}|[0-9a-f]{32})\n$/;
+
 // Checks the rule of DES-OUTPUTS ("Paths") by which the plugin names the
 // triples that cargo builds for without --target, from build.target in
 // Cargo's configuration files and CARGO_BUILD_TARGET (EVD-CARGO-TRIPLE-FOLDERS),
@@ -335,7 +339,7 @@ describe("the artifact input of build and doc", () => {
   it("prints a new random value at each evaluation where the script cannot run", () => {
     const missing = join(root, "missing/print-artifact-folders.js");
     const first = evaluate({}, missing);
-    expect(first).toMatch(/^( [0-9a-f]{2}){16}\n$/);
+    expect(first).toMatch(failedOutput);
     expect(evaluate({}, missing)).not.toBe(first);
   });
 
@@ -343,7 +347,7 @@ describe("the artifact input of build and doc", () => {
     it("prints a new random value at each evaluation where cargo cannot report the directories", () => {
       writeFileSync(join(root, "repo/rust/Cargo.toml"), "not a manifest\n");
       const first = evaluate({});
-      expect(first).toMatch(/^( [0-9a-f]{2}){16}\n$/);
+      expect(first).toMatch(failedOutput);
       expect(evaluate({})).not.toBe(first);
     });
   }

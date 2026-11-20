@@ -1,4 +1,5 @@
 import { type ArtifactSubject, producesArtifact, shellQuote } from "./artifact-kinds";
+import { unrepeatableValue } from "./script-input";
 
 /** The triple that `wasm-build` compiles for (`DES-WASM`). */
 export const wasmTriple = "wasm32-unknown-unknown";
@@ -73,7 +74,7 @@ export function wasmInputs(workspaceRoot: string): ({ runtime: string } | { env:
     ...wasmBindgenVariables.map((env) => ({ env })),
     {
       runtime: [
-        `{ cd ${shellQuote(workspaceRoot)} && wasm-bindgen --version; } 2>/dev/null || od -An -N16 -tx1 /dev/urandom`,
+        `{ cd ${shellQuote(workspaceRoot)} && wasm-bindgen --version; } 2>/dev/null || ${unrepeatableValue}`,
         ...presence,
         "true",
       ].join("; "),

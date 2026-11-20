@@ -76,7 +76,9 @@ const readRustWorkspace: CargoCall = {
 /**
  * The same call with which a cached `build` or `doc` asks cargo for its
  * artifact directory: once in its artifact folder input, when Nx hashes the
- * task, and once more when the task starts (`DES-OUTPUTS`).
+ * task; when the task starts, once as the executor runs that input again to
+ * say whether it fails (`DES-INPUTS`, "Failing runtime inputs"), and once
+ * more for its own check (`DES-OUTPUTS`).
  */
 const reportRustDirectories: CargoCall = readRustWorkspace;
 
@@ -354,10 +356,30 @@ describe("@convesoft/nx-rust", () => {
         expect(inputs.environment).toEqual(
           expect.arrayContaining(["RUSTFLAGS", "CARGO_BUILD_WARNINGS", "NX_RUST_RUN_ID"]),
         );
-        // test runs rustdoc for doctests, so it also asks a rustdoc that a setting names.
-        expect(inputs.runtime).toEqual([
-          `{ cd './rust' && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null && if [ -n "\${RUSTC+x}\${CARGO_BUILD_RUSTC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTC-$CARGO_BUILD_RUSTC}" -Vv 2>/dev/null; fi && if [ -n "\${RUSTDOC+x}\${CARGO_BUILD_RUSTDOC+x}" ]; then RUSTUP_AUTO_INSTALL=0 "\${RUSTDOC-$CARGO_BUILD_RUSTDOC}" -Vv 2>/dev/null; fi || od -An -N16 -tx1 /dev/urandom; }; env | grep -E '^CARGO_(PROFILE|TARGET)_' | grep -v '^CARGO_TARGET_DIR=' | LC_ALL=C sort; true`,
-        ]);
+        // One runtime input, the toolchain command, checked by what it prints
+        // as Nx runs it: the compiler's version, every profile and target
+        // variable whole, and the line after them (DES-INPUTS).
+        expect(inputs.runtime).toHaveLength(1);
+        const [toolchain] = inputs.runtime as string[];
+        const printed = spawnSync("sh", ["-c", toolchain], {
+          cwd: projectDirectory,
+          env: {
+            ...Object.fromEntries(
+              Object.entries(process.env).filter(
+                ([name]) => !/^CARGO_(PROFILE|TARGET)_/.test(name),
+              ),
+            ),
+            CARGO_PROFILE_DEV_DEBUG: "1\nCARGO_PROFILE_DEV_OPT_LEVEL=3 ",
+          },
+          encoding: "utf8",
+        }).stdout;
+        expect(printed).toMatch(/^rustc \d+\.\d+\.\d+/);
+        expect(printed).toMatch(/^host: /m);
+        expect(
+          printed.endsWith(
+            "\nCARGO_PROFILE_DEV_DEBUG=1\\nCARGO_PROFILE_DEV_OPT_LEVEL=3 \nend of variables\n",
+          ),
+        ).toBe(true);
         expect(inputs.files).toEqual(
           expect.arrayContaining([
             "rust/Cargo.toml",
@@ -535,6 +557,7 @@ describe("@convesoft/nx-rust", () => {
             updateRustLockfile,
             reportRustDirectories,
             reportRustDirectories,
+            reportRustDirectories,
             listRustMembers,
             {
               cwd: "rust",
@@ -607,6 +630,7 @@ describe("@convesoft/nx-rust", () => {
             updateRustLockfile,
             reportRustDirectories,
             reportRustDirectories,
+            reportRustDirectories,
             listRustMembers,
             {
               cwd: "rust",
@@ -614,6 +638,7 @@ describe("@convesoft/nx-rust", () => {
             },
             readRustWorkspace,
             updateRustLockfile,
+            reportRustDirectories,
             reportRustDirectories,
             reportRustDirectories,
             listRustMembers,

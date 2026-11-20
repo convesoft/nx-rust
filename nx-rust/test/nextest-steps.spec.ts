@@ -249,7 +249,7 @@ describe("the commands of the nextest runner", () => {
 
   it("puts the NEXTEST_ variables into the toolchain command of a test that nextest runs only", () => {
     expect(toolchainCommand(".", undefined, true, true)).toContain(
-      "grep -E '^(CARGO_(PROFILE|TARGET)_|NEXTEST_)'",
+      "name !~ /^(CARGO_(PROFILE|TARGET)_|NEXTEST_)/",
     );
     expect(toolchainCommand(".", undefined, true)).not.toContain("NEXTEST_");
   });

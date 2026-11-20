@@ -746,6 +746,43 @@ describe("keys with the environment", () => {
     },
     HARNESS_TIMEOUT,
   );
+  it(
+    "differ after a change in any line of a profile or target variable whose value spans lines, and not after a variable of another name whose value holds a line that looks like one",
+    async () => {
+      // The toolchain command once took the lines of `env`, which dropped
+      // the second line of a value and took the second line of OTHER_FLAGS
+      // as a variable of its own (nxr-aqgka5).
+      const workspace = FixtureWorkspace.create("subfolder-workspace");
+      try {
+        const tasks = ["api:build", "api:test", "rust:doc"];
+        const flags = "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS";
+        const base = await workspace.hashTasks(tasks, { env: { [flags]: "--cfg=a\n--cfg=b" } });
+        const changed = await workspace.hashTasks(tasks, { env: { [flags]: "--cfg=a\n--cfg=c" } });
+        const joined = await workspace.hashTasks(tasks, { env: { [flags]: "--cfg=a --cfg=b" } });
+        const other = await workspace.hashTasks(tasks, {
+          env: { [flags]: "--cfg=a\n--cfg=b", OTHER_FLAGS: "x\nCARGO_PROFILE_DEV_OPT_LEVEL=1" },
+        });
+        const verdicts = Object.fromEntries(
+          tasks.map((task) => [
+            task,
+            {
+              changed: changed[task].value !== base[task].value,
+              joined: joined[task].value !== base[task].value,
+              other: other[task].value !== base[task].value,
+            },
+          ]),
+        );
+        expect(verdicts).toEqual(
+          Object.fromEntries(
+            tasks.map((task) => [task, { changed: true, joined: true, other: false }]),
+          ),
+        );
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
 });
 
 /** The options of the plugin's entry in `nx.json`. */
