@@ -23,6 +23,7 @@ import {
   LocalRegistry,
   offlineRegistryKeyEnv,
   pinnedToolchainAvailable,
+  programVersion,
   runNx,
   taskCalls,
   testEnvironment,
@@ -110,6 +111,16 @@ function readerIncludes(path: string): FileChanges {
     "rust/crates/reader/src/lib.rs": (source = "") =>
       `${source}\npub fn more() -> &'static str {\n    include_str!(${JSON.stringify(path)})\n}\n`,
   };
+}
+
+/** The minor version of the default toolchain's cargo, such as 91 for 1.91.0. */
+function cargoMinorVersion(): number {
+  const version = programVersion("cargo");
+  const minor = /^cargo 1\.(\d+)\./.exec(version)?.[1];
+  if (minor === undefined) {
+    throw new Error(`cargo -V printed no version 1.x: ${version}`);
+  }
+  return Number(minor);
 }
 
 /** The triple that rustc builds for by default here. */
@@ -786,6 +797,13 @@ describe("the check of a build's dependency files", () => {
 
   // The graph names the workspace's usual build directory; the task's cargo
   // uses the one that the dotenv file names (EVD-NX-24-MOVED-ARTIFACT-DIRS).
+  //
+  // The build script also names the file that it generates with
+  // rerun-if-changed, so that the record names it in the build directory
+  // with every Cargo: Cargo 1.91 writes the path of the file that the library
+  // includes from OUT_DIR below the artifact directory instead, where nothing
+  // is, and Cargo 1.92 and later write it in the build directory
+  // (EVD-CARGO-DEP-INFO).
   it(
     "leaves out a file generated in OUT_DIR in the build directory that a dotenv file of the task names",
     async () => {
@@ -795,15 +813,22 @@ describe("the check of a build's dependency files", () => {
           ...readerDeclares,
           ".gitignore": (text = "") => `${text}.env\n/rust/bd/\n`,
           "rust/crates/reader/.env": "CARGO_BUILD_BUILD_DIR=bd\n",
+          "rust/crates/reader/build.rs": (source = "") =>
+            source.replace(
+              "    fs::write(out, ",
+              '    println!("cargo::rerun-if-changed={}", out.display());\n    fs::write(&out, ',
+            ),
         },
         async (workspace) => {
           const { status, output } = await nx(workspace, ["run", "reader:build"]);
           expect(output).not.toContain(failure);
           expect(status).toBe(0);
           expect(cargoCalls(workspace)).toEqual([workspaceArgs("build").join(" ")]);
-          expect(read(workspace, "rust/target/debug/libreader.d")).toMatch(
-            /\/rust\/bd\/\S*\/out\/lines\.rs/,
-          );
+          const generated = read(workspace, "rust/target/debug/libreader.d")
+            .split(/(?<!\\)\s+/)
+            .filter((path) => path.endsWith("/out/lines.rs"))
+            .map((path) => (/\/rust\/(bd|target)\/debug\/build\//.exec(path) ?? [])[1]);
+          expect(generated).toEqual(cargoMinorVersion() < 92 ? ["bd", "target"] : ["bd"]);
         },
       );
     },
