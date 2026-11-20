@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { testEnvironment } from "./environment";
+import { placeWarmBuilds } from "./fixture-builds";
 
 /**
  * The fixture repositories in `nx-rust/test/fixtures`, one per situation.
@@ -181,25 +182,67 @@ export interface CopyFixtureOptions {
  * its `nx.json`. A fixture without `nx.json` gets one that registers the
  * plugin with default options; in one that has it, every entry for
  * {@link pluginPackageName} is pointed at `options.plugin`. Build output
- * (`target` folders) left in the fixture folder is not copied.
+ * (`target` folders) left in the fixture folder is not copied; in a test
+ * run, a fixture that `warmBuilds` names gets a `target` folder with its
+ * third-party crates compiled ({@link placeWarmBuilds}).
  */
 export function copyFixture(
   fixture: FixtureName,
   destination: string,
   options: CopyFixtureOptions,
 ): void {
+  copyFixtureFiles(fixture, destination);
+  registerPlugin(destination, options.plugin);
+  placeWarmBuilds(fixture, destination);
+  for (const changes of options.files ?? []) {
+    applyFileChanges(destination, changes ?? {});
+  }
+}
+
+/**
+ * The fixtures with a Cargo local registry in place of crates.io, by the
+ * registry's folder and the Cargo configuration that names it, relative to
+ * the fixture's root.
+ */
+const localRegistries: Partial<Record<FixtureName, { registry: string; config: string }>> = {
+  "napi-addons": { registry: "registry", config: "rust/.cargo/config.toml" },
+  "wasm-packages": { registry: "registry", config: "rust/.cargo/config.toml" },
+};
+
+/**
+ * Copies the files of a fixture repository into `destination`, without its
+ * `target` folders and without its local registry, which the copy's Cargo
+ * configuration names in the fixture folder instead. Every copy then has the
+ * same registry, a source that cargo knows, so that what it compiled of the
+ * registry in one copy, or in the template of `warmBuilds`, it can reuse in
+ * another, and it unpacks the registry's crates into its home once rather
+ * than once per copy. Cargo only reads a local registry.
+ */
+export function copyFixtureFiles(fixture: FixtureName, destination: string): void {
   const source = join(fixturesDirectory, fixture);
   if (!existsSync(source)) {
     throw new Error(`There is no fixture "${fixture}" in ${fixturesDirectory}`);
   }
+  const local = localRegistries[fixture];
+  const registry = local === undefined ? undefined : join(source, ...local.registry.split("/"));
   mkdirSync(destination, { recursive: true });
   cpSync(source, destination, {
     recursive: true,
-    filter: (path) => basename(path) !== "target",
+    filter: (path) => basename(path) !== "target" && path !== registry,
   });
-  registerPlugin(destination, options.plugin);
-  for (const changes of options.files ?? []) {
-    applyFileChanges(destination, changes ?? {});
+  if (local !== undefined && registry !== undefined) {
+    applyFileChanges(destination, {
+      [local.config]: (text) => {
+        const pointed = (text ?? "").replace(
+          /^local-registry = .*$/m,
+          `local-registry = ${JSON.stringify(registry)}`,
+        );
+        if (pointed === text) {
+          throw new Error(`${local.config} of ${fixture} names no local-registry.`);
+        }
+        return pointed;
+      },
+    });
   }
 }
 

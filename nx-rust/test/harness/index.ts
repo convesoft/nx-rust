@@ -5,6 +5,7 @@ export * from "./compiler-links";
 export * from "./environment";
 export * from "./files";
 export * from "./fixtures";
+export * from "./fixture-builds";
 export * from "./js-lockfiles";
 export * from "./local-registry";
 export * from "./nx-package";

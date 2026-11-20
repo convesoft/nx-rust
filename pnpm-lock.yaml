@@ -173,6 +173,9 @@ importers:
         specifier: 1.9.0
         version: 1.9.0
     devDependencies:
+      '@jest/test-sequencer':
+        specifier: ~30.3.0
+        version: 30.3.0
       '@napi-rs/cli':
         specifier: ^3.10.12
         version: 3.10.12(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@22.20.5)(supports-color@8.1.1)

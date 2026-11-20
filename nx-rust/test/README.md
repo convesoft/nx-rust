@@ -54,7 +54,31 @@ are never copied.
 
 A fixture that needs crates of crates.io carries them as a Cargo local
 registry, an `index` folder and the `.crate` files of exactly the locked
-versions, as `napi-addons` does, so that no test depends on the network.
+versions, as `napi-addons` does, so that no test depends on the network. A
+copy does not get the registry: `localRegistries` in
+[`harness/fixtures.ts`](harness/fixtures.ts) points the copy's Cargo
+configuration at the fixture's own folder, which cargo only reads, so that
+every copy has the same source and cargo unpacks its crates into its home
+once.
+
+In a test run, the copies of a fixture that `warmBuilds`
+([`harness/fixture-builds.ts`](harness/fixture-builds.ts)) names start with
+a `target` folder in which the crates of the registry are compiled already.
+The first copy builds a template in the run's folder with the cargo
+commands that the table lists for the fixture, with the template's own
+`target` folder given to cargo as its target and build directory, so that
+no Cargo configuration or variable of the machine can move it; then
+`cargo clean -p` removes the build output of each crate of the workspace,
+for each triple and profile it was built for; Cargo 1.91 leaves the
+incremental folders of their build scripts, which the compiler does not
+reuse in a copy. Every copy gets a clone of the template, a reflink where
+the file system has them. A test in `napi-build.spec.ts` and one in
+`wasm-build.spec.ts` show that a copy compiles every crate of the workspace
+again and writes their records itself, also with its sources dated before
+the template, so this does not rest on the files' times;
+`fixture-builds.spec.ts` shows that the template stays in its folder. To warm another fixture, add its workspaces and the cargo commands
+that its tests repeat, with the same profile, features, package selection
+and triple. The template goes with the run's folder at the end of the run.
 
 To add a situation, add a folder, list it in `fixtureNames`
 ([`harness/fixtures.ts`](harness/fixtures.ts)), in `fixtures.spec.ts` and in

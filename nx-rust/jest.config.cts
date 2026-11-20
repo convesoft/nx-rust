@@ -16,6 +16,7 @@ module.exports = {
   maxWorkers: Math.max(1, Math.min(maxWorkers, availableParallelism() - 1)),
   globalSetup: "<rootDir>/test/harness/global-setup.ts",
   globalTeardown: "<rootDir>/test/harness/global-teardown.ts",
+  testSequencer: "<rootDir>/jest.sequencer.cjs",
   transform: {
     "^.+\\.[tj]s$": ["ts-jest", { tsconfig: "<rootDir>/tsconfig.spec.json" }],
   },

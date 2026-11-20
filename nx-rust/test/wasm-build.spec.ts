@@ -13,6 +13,8 @@ import { cargoArguments } from "../src/executors/command";
 import { groupSelection } from "../src/executors/groups";
 import type { PreparedTask } from "../src/executors/task";
 import {
+  backdateSources,
+  buildFreshness,
   type FileChanges,
   findExecutable,
   FixtureWorkspace,
@@ -28,6 +30,7 @@ import {
   taskCalls,
   testEnvironment,
   testHost,
+  testRunFolder,
   wasmBindgenFolder,
   wasmTargetInstalled,
 } from "./harness";
@@ -63,6 +66,8 @@ function expectSuccess(run: { status: number | null; output: string }): void {
 const hit = String.raw`\[(local cache|existing outputs match the cache, left as is)\]`;
 const restored = (output: string, task: string) =>
   new RegExp(`nx run ${task}\\s+${hit}`).test(output);
+/** Whether Nx ran `task` or restored it, as opposed to leaving it out. */
+const ran = (output: string, task: string) => new RegExp(`nx run ${task}(\\s|$)`, "m").test(output);
 
 /** The compile commands of the run, `cargo build` for the wasm triple. */
 function wasmCompiles(workspace: FixtureWorkspace): string[][] {
@@ -212,6 +217,69 @@ describe("the compile of wasm-build", () => {
     // A graph that recorded no crate types.
     expect(libraryRecordNames("codec", undefined, triple)).toEqual(["libcodec.d"]);
   });
+});
+
+describe("a copy of wasm-packages", () => {
+  it(
+    "starts with the registry's crates compiled and none of its own, for the host and, where the toolchain has it, for the wasm triple",
+    () => {
+      const workspace = FixtureWorkspace.create("wasm-packages");
+      try {
+        const rust = join(workspace.root, "rust");
+        const builds: [string[], string, string[]][] = [
+          [
+            ["build", "--workspace"],
+            "debug",
+            ["codec-b:codec_b", "codec:codec", "plain-cdylib:plain_cdylib", "shared:shared"],
+          ],
+          ...(wasmTargetInstalled()
+            ? [
+                [
+                  ["build", "--lib", "-p", "codec", "--target", triple],
+                  `${triple}/debug`,
+                  ["codec:codec", "shared:shared"],
+                ] as [string[], string, string[]],
+              ]
+            : []),
+        ];
+        for (const [index, [args, profile, crates]] of builds.entries()) {
+          // Each build in a copy of its own, so that neither finds what the other compiled.
+          if (index > 0) {
+            workspace.reset();
+          }
+          const folder = join(rust, "target", ...profile.split("/"));
+          // No library or record of the workspace's crates in the folder of
+          // the profile's artifacts.
+          expect(
+            existsSync(folder)
+              ? readdirSync(folder, { withFileTypes: true })
+                  .filter((entry) => !entry.isDirectory() && !entry.name.startsWith("."))
+                  .map((entry) => entry.name)
+              : [],
+          ).toEqual([]);
+          // Sources older than anything cargo built: a crate whose build
+          // state the copy still had would count as compiled already.
+          backdateSources(rust);
+          const build = buildFreshness(rust, workspace.root, args);
+          expect(build.ownCompiled).toEqual(crates);
+          expect(build.ownFresh).toEqual([]);
+          expect(build.othersCompiled).toEqual([]);
+          expect(build.othersFresh.length).toBeGreaterThan(0);
+          // The records that the build wrote name no file of the template.
+          const run = testRunFolder() as string;
+          for (const record of readdirSync(folder).filter((entry) => entry.endsWith(".d"))) {
+            expect({ record, text: readFileSync(join(folder, record), "utf8") }).toEqual({
+              record,
+              text: expect.not.stringContaining(run),
+            });
+          }
+        }
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
 });
 
 describe("wasm-build", () => {
@@ -589,10 +657,14 @@ if (cli === undefined || !target) {
 );
 
 (cli === undefined || !target ? describe.skip : describe)(
-  "a JS project that consumes the wasm package",
+  "JS projects that consume the wasm package",
   () => {
-    /** codec enrolled as the package @wasm/codec, and web, which depends on its wasm-build. */
-    const consumer = (input: boolean): FileChanges => ({
+    /**
+     * codec enrolled as the package @wasm/codec, and two projects whose build
+     * depends on its wasm-build: web, with the package's files as an input,
+     * and web-plain, without them.
+     */
+    const consumers: FileChanges = {
       "package.json": JSON.stringify({ name: "wasm-root", private: true }),
       "pnpm-workspace.yaml": "packages:\n  - rust/crates/codec\n  - apps/*\n",
       "rust/crates/codec/package.json": JSON.stringify({
@@ -600,52 +672,71 @@ if (cli === undefined || !target) {
         version: "0.1.0",
         main: "pkg/codec.js",
       }),
-      "apps/web/index.js": "module.exports = 1;\n",
-      "apps/web/package.json": JSON.stringify({
-        name: "web",
-        private: true,
-        dependencies: { "@wasm/codec": "workspace:*" },
-        nx: {
-          targets: {
-            build: {
-              command: "echo web",
-              cache: true,
-              dependsOn: [{ projects: ["@wasm/codec"], target: "wasm-build" }],
-              inputs: [
-                "default",
-                "^default",
-                ...(input ? [{ dependentTasksOutputFiles: "**/*" }] : []),
-              ],
-            },
-          },
-        },
-      }),
-    });
+      ...Object.fromEntries(
+        (
+          [
+            ["web", true],
+            ["web-plain", false],
+          ] as const
+        ).flatMap(([name, input]) => [
+          [`apps/${name}/index.js`, "module.exports = 1;\n"],
+          [
+            `apps/${name}/package.json`,
+            JSON.stringify({
+              name,
+              private: true,
+              dependencies: { "@wasm/codec": "workspace:*" },
+              nx: {
+                targets: {
+                  build: {
+                    command: `echo ${name}`,
+                    cache: true,
+                    dependsOn: [{ projects: ["@wasm/codec"], target: "wasm-build" }],
+                    inputs: [
+                      "default",
+                      "^default",
+                      ...(input ? [{ dependentTasksOutputFiles: "**/*" }] : []),
+                    ],
+                  },
+                },
+              },
+            }),
+          ],
+        ]),
+      ),
+    };
 
-    it.each([
-      [true, false],
-      [false, true],
-    ])(
-      "with the package's files as an input (%s), is restored after a change of RUSTFLAGS alone: %s",
-      async (input, hitAfterFlags) => {
-        const workspace = FixtureWorkspace.create("wasm-packages", consumer(input));
+    it(
+      "are restored after a change of RUSTFLAGS alone only without the package's files as an input",
+      async () => {
+        const workspace = FixtureWorkspace.create("wasm-packages", consumers);
         const env = { PATH: pathWith(cli ?? "") };
         try {
           const graph = await workspace.graph();
-          expect(graph.dependencies).toContainEqual(
-            expect.objectContaining({ source: "web", target: "@wasm/codec" }),
-          );
-          const first = await nx(workspace, ["run", "web:build"], env);
+          for (const source of ["web", "web-plain"]) {
+            expect(graph.dependencies).toContainEqual(
+              expect.objectContaining({ source, target: "@wasm/codec" }),
+            );
+          }
+          const builds = ["run-many", "-t", "build", "-p", "web", "web-plain"];
+          const first = await nx(workspace, builds, env);
           expectSuccess(first);
+          // Both consumers run; Nx leaves out a requested project without the target.
+          for (const task of ["web:build", "web-plain:build"]) {
+            expect({ task, ran: ran(first.output, task) }).toEqual({ task, ran: true });
+          }
           expect(first.output).toMatch(/nx run @wasm\/codec:wasm-build/);
           // Another optimisation level changes the code of the .wasm file.
-          const flags = await nx(workspace, ["run", "web:build"], {
-            ...env,
-            RUSTFLAGS: "-C opt-level=1",
-          });
+          const flags = await nx(workspace, builds, { ...env, RUSTFLAGS: "-C opt-level=1" });
           expectSuccess(flags);
+          for (const task of ["web:build", "web-plain:build"]) {
+            expect({ task, ran: ran(flags.output, task) }).toEqual({ task, ran: true });
+          }
           expect(restored(flags.output, "@wasm/codec:wasm-build")).toBe(false);
-          expect(restored(flags.output, "web:build")).toBe(hitAfterFlags);
+          // With the package's files as an input: a miss.
+          expect(restored(flags.output, "web:build")).toBe(false);
+          // Without them: a hit.
+          expect(restored(flags.output, "web-plain:build")).toBe(true);
         } finally {
           workspace.remove();
         }

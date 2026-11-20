@@ -11,6 +11,7 @@
     "smol-toml": "1.9.0"
   },
   "devDependencies": {
+    "@jest/test-sequencer": "~30.3.0",
     "@napi-rs/cli": "^3.10.12",
     "@nx/jest": "24.0.6",
     "@nx/js": "24.0.6",
