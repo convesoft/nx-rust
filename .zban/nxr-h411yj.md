@@ -3,6 +3,9 @@ title: Make the harness's terminal runs reach Nx's terminal UI
 status: todo
 type: task
 parent: nxr-e2z8sz
+blocked_by:
+  - nxr-4sr6hd
+  - nxr-yfh7zh
 related:
   - nxr-k63csj
 discovered_from: nxr-k63csj

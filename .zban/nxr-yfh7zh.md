@@ -1,6 +1,6 @@
 ---
 title: Keep a later build of a batch from replacing on disk the files that a task outside the batch reads from an earlier build
-status: todo
+status: in-progress
 type: bug
 priority: high
 parent: nxr-e2z8sz
