@@ -23,5 +23,6 @@ Reproduction of the reviewer, with the real Nx 24.0.6 and cargo: two binary crat
 - [ ] Settle the remedy in Mara before the code, and say what each option costs `REQ-STABLE-FEATURES`, JS tasks and build time. Options seen so far: the build of a later group selects only its own crates where its options or environment differ from an earlier group's; the batch puts the earlier group's stored files back after a later group replaced them; the batch fails such tasks with guidance instead of leaving them out (the "Undo" of nxr-5rrkay, line 15, with a row in `DES-DIAGNOSTICS`)
 - [ ] Implement it, with the check in `VER-BATCHING`
 - [ ] Say in the summary what the remedy means for nxr-fpc72j, and update that issue's body
+- [ ] Say whether the remedy also settles nxr-f04xen (a build left for a following batch keeps its early hash), and whether that early hash can give a wrong hit; update that issue's body
 
 Done when: the reproduction stores the right file for the outside task, Mara validation passes, and `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e` and `pnpm nx format:check --all` pass.
