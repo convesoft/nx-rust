@@ -4,6 +4,8 @@ status: todo
 type: bug
 priority: high
 parent: nxr-e2z8sz
+blocked_by:
+  - nxr-aqgka5
 discovered_from: nxr-3f5wqp
 created_at: 2026-11-20T14:35:45Z
 ---
@@ -26,4 +28,8 @@ Options to weigh (the fix touches `nx-rust/src/compatibility/nx-bridge.ts`, whic
 
 - [ ] Reproduce in a batch: a later group's build script writes a file into a folder it names with `rerun-if-changed`, and the check misses it
 - [ ] Check whether a non-batch task's process creates the workspace context before cargo
-- [ ] Record in Mara the approach that the control plane settles (both options above touch a rule: the first changes a process-wide singleton of Nx, the second lists files with the plugin's own walk instead of Nx's), then implement and test it
+- [ ] Verify the second opinion's reading of the installed Nx (below), record the settled approach in `DES-BUILD-INPUT-CHECK` with an evidence item, then implement and test it
+
+Settled by the control plane on 20 November 2026, after a second opinion that read and ran the installed Nx 24.0.6: clear Nx's own workspace context with `resetWorkspaceContext` (an export of `nx/src/utils/workspace-context`, the module the bridge already loads, which Nx itself calls after it wrote files) once after a group's cargo call and before that group's checks, and once before the check of a task run on its own. Not `refreshWorkspaceContext`, which returns at once while the daemon is enabled although neither the glob nor `HashPlanInspector` uses the daemon; not `updateFilesInContext`, which inserts the given paths past the ignore rules; not a reset per task, since the checks of one group's members run concurrently. Why this and not the plugin's own walk: Nx's listing and ignore rules stay the only source (the second opinion found that `createGitIgnoreChecker` misses `.git/info/exclude`, which the native walker honours), `inputFiles` from `HashPlanInspector` becomes fresh from the same snapshot as the folder listing, and it costs one warm native walk per checked group (measured: about 7 ms on this repository, about 35 ms on 10,000 files). What it gives up: it clears a process-wide singleton, which in Nx's forked batch or executor process only this plugin caused to be created, and it adds one private export, whose absence must degrade to the existing skipped-check warning (`REQ-COMPATIBILITY`). If clearing the singleton proves wrong, the alternative is a short-lived child process per group check, never the plugin's own walk. The worker verifies each of these claims against the installed `nx` before relying on it.
+
+The remedy touches `nx-rust/src/executors/group-run.ts` and `nx-rust/src/executors/task.ts`, so it starts after nxr-aqgka5 (which changes `task.ts`).
