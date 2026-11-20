@@ -5,6 +5,7 @@ type: task
 parent: nxr-e2z8sz
 blocked_by:
   - nxr-gtxq18
+  - nxr-4sr6hd
 related:
   - nxr-5rrkay
 created_at: 2026-11-20T10:24:42Z

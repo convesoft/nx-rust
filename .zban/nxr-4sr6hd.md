@@ -1,6 +1,6 @@
 ---
 title: Avoid mutating global process.env when building batch task environments
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:

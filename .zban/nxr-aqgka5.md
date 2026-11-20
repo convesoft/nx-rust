@@ -1,6 +1,6 @@
 ---
 title: Improve runtime-input scripts (overhead, silent /dev/urandom fallbacks, multiline env, hashing side effects)
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:
