@@ -67,7 +67,7 @@ export const releasePublishExecutor = "@convesoft/nx-rust:release-publish";
  * The commits that the oldest collection of a baseline may lie behind `HEAD`
  * before the coverage baseline target collects everything in place of
  * `collect --diff`, where the option `fullCollectThreshold` sets none
- * (`DES-BASELINE`, provisional).
+ * (`DES-BASELINE`).
  */
 export const defaultFullCollectThreshold = 100;
 

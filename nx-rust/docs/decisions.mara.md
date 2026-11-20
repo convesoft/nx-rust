@@ -746,7 +746,7 @@ The costs: a command that runs `test` without `build`, such as `nx test api` or 
 :status: accepted
 :justifies: DES-NAPI
 
-Provisional: the control plane took this decision on 16 November 2026, and it waits for the maintainer's review.
+The control plane took this decision on 16 November 2026, and the maintainer confirmed it on 20 November 2026.
 
 To collect type definitions, the compile step of `napi-build` sets variables that the build scripts of napi crates watch ([[DES-NAPI]]). Cargo then rebuilds each crate whose build script calls `napi_build::setup()`, and every crate that depends on one of them, whenever those variables change. That happens on every `napi-build` compile and again on the next command without them: a plain `cargo build`, `nx build` or rust-analyzer's check ([[EVD-NAPI-POSTPROCESS]]). For those crates, `napi-build` and plain cargo invalidate each other's work, which [[NEED-CARGO-UNCHANGED]] says should not happen. There were two options:
 
@@ -762,7 +762,7 @@ The shared directory costs less in the usual layout and is the easier of the two
 :status: accepted
 :justifies: DES-NAPI
 
-Provisional: the control plane took this decision on 16 November 2026, and it waits for the maintainer's review.
+The control plane took this decision on 16 November 2026, and the maintainer confirmed it on 20 November 2026.
 
 `napi-build` serves crates built with `napi-derive` 3 and post-processed with `@napi-rs/cli` 3.4.0 or later, and fails with a message for any other version ([[DES-NAPI]]). The requirement behind the artifact targets names no version ([[REQ-ARTIFACT-TARGETS]]), so this leaves out existing napi-rs 2 addons. Two facts settle it ([[EVD-NAPI-POSTPROCESS]]). `@napi-rs/cli` 2 exports no functions, so only `napi build`, which runs cargo itself, could post-process with it. And it cannot build `napi-derive` 3 crates, whose macros refuse its variable. napi-rs 3 was announced in July 2025, and `@napi-rs/cli` 3.4.0, the first release that exports all three functions the plugin calls, dates from October 2025. Supporting napi-rs 2 would take a second path for post-processing, with type information in a single file; it can be added later without changing the path for napi-rs 3.
 :::
