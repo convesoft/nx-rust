@@ -1,6 +1,6 @@
 ---
 title: Memoize the baseline task hashes of compareCacheKeys for rows that cannot change them
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:
