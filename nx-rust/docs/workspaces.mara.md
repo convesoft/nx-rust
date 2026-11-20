@@ -115,7 +115,7 @@ incomplete; Nx's error always names every folder.
 ## Workspace-level tasks
 
 Some tasks belong to a workspace, not to one crate: documentation, `cargo audit`,
-`cargo deny` and lockfile updates, and from milestone 0.3 the coverage
+`cargo deny` and lockfile updates, and the coverage
 baseline, in a workspace with `affectedTests`. Each workspace has one
 project for them, rooted at the workspace folder and depending on every member.
 If the root `Cargo.toml` also defines a crate, that crate's project hosts these

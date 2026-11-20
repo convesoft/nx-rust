@@ -4,12 +4,10 @@
 Nx projects while Cargo stays the build tool.** It is written for monorepos
 where Rust crates sit beside JS and TS projects.
 
-> **Status:** milestone 0.1 is implemented on `main`: the crates of your Cargo
-> workspaces become Nx projects, with the dependency graph between them,
-> inferred targets and caching of task results. It is not published to npm
-> yet; publishing is decided at 1.0. Batching and feature unification (0.2),
-> nextest and affected tests (0.3), napi and wasm artifacts (0.4) and releasing
-> crates (0.5) are still to come, as the [roadmap](#roadmap) shows. The
+> **Status:** milestones 0.1 to 0.5 of the [roadmap](#roadmap) are implemented
+> on `main`. What is left of v1 is 1.0, which checks the open assumptions and
+> validates the plugin on a real repository. It is not published to npm yet;
+> publishing is decided at 1.0. The
 > specification is in [`nx-rust/docs/`](nx-rust/docs/index.mara.md), and
 > progress is tracked in [`.zban/`](.zban/).
 
@@ -27,12 +25,12 @@ or caching that cuts corners. nx-rust reads the Cargo workspaces as they are:
   sources of its dependencies, the toolchain and a fixed list of environment
   variables. Nx stores task results and final artifacts, never Cargo's
   intermediate files.
-- **Few cargo invocations**, from milestone 0.2. Nx schedules one task per
+- **Few cargo invocations.** Nx schedules one task per
   crate, and the plugin runs each group of tasks with one cargo command per step
   of their target: one for most targets, a few for a test run with nextest,
-  never one per crate. Until then each task runs a cargo call of its own.
+  never one per crate.
 - **Rust and JS in one graph.** `nx affected -t lint test build` covers both
-  languages. From milestone 0.4, napi and wasm crates produce artifacts that JS
+  languages, and napi and wasm crates produce artifacts that JS
   projects depend on.
 
 See what nx-rust [deliberately does not do](nx-rust/docs/product.mara.md#what-nx-rust-deliberately-does-not-do).
@@ -74,14 +72,14 @@ supported, but CI covers Linux only for the moment. Every machine that runs
 
 ## Roadmap
 
-| Milestone | Contents                                                                                                |
-| --------- | ------------------------------------------------------------------------------------------------------- |
-| 0.1       | Project graph, inferred targets and caching, with one cargo call per task. `init` and crate generators. |
-| 0.2       | Batching and feature unification.                                                                       |
-| 0.3       | nextest, affected tests and the coverage baseline.                                                      |
-| 0.4       | napi and wasm artifacts.                                                                                |
-| 0.5       | Releasing with Nx release.                                                                              |
-| 1.0       | The open assumptions are checked and closed.                                                            |
+| Milestone | Status | Contents                                                                                                |
+| --------- | ------ | ------------------------------------------------------------------------------------------------------- |
+| 0.1       | Done   | Project graph, inferred targets and caching, with one cargo call per task. `init` and crate generators. |
+| 0.2       | Done   | Batching and feature unification.                                                                       |
+| 0.3       | Done   | nextest, affected tests and the coverage baseline.                                                      |
+| 0.4       | Done   | napi and wasm artifacts.                                                                                |
+| 0.5       | Done   | Releasing with Nx release.                                                                              |
+| 1.0       | Open   | The open assumptions are checked and closed.                                                            |
 
 ## Documentation
 

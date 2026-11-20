@@ -1,7 +1,6 @@
 # Targets
 
-> **Status:** the plugin infers the targets of this page; a cargo-hakari hack crate still gets
-> `nx-release-publish`, until its guard arrives with milestone 0.5. `test`
+> **Status:** the plugin infers the targets of this page. `test`
 > runs `cargo test`, or nextest where the workspace's `testRunner` says so.
 > `build`, `napi-build`, `wasm-build` and `doc` run
 > the executor `@convesoft/nx-rust:cargo-outputs`, the other cargo targets

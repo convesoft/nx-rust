@@ -1,9 +1,6 @@
 # Configuration
 
-> **Status:** the plugin reads and checks every setting of this page, but
-> two have no effect yet: `affectedTests` until milestone 0.3, and
-> `artifacts` until milestone 0.4. `NX_RUST_TEST_MODE` is not read until
-> milestone 0.3.
+> **Status:** implemented as this page describes.
 
 Most repositories need no configuration. When a crate or workspace needs
 something other than the default, you say so in the `Cargo.toml` that already

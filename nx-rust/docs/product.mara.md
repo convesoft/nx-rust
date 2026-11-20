@@ -3,9 +3,9 @@
 `@convesoft/nx-rust` is an Nx plugin that makes Cargo workspaces first-class Nx
 projects while Cargo stays the build tool.
 
-> **Status:** milestone 0.1 is implemented on `main` and not published to npm
-> yet. The [roadmap](#roadmap) gives the order in which the other parts are
-> built.
+> **Status:** milestones 0.1 to 0.5 are implemented on `main` and not
+> published to npm yet. What is left of v1 is 1.0, as the [roadmap](#roadmap)
+> shows.
 
 It is written for Nx monorepos where Rust crates sit beside JS and TS apps and
 libraries. In such a repository Nx knows every JS project, but Rust is usually
@@ -72,14 +72,14 @@ is tracked as one epic per milestone in [`.zban/`](../../.zban/). No 0.x
 milestone is published to npm on its own: whether and when the package is
 published is decided at 1.0 ([[ADR-PUBLISHING-AT-1-0]]).
 
-| Milestone | Contents                                                                                                |
-| --------- | ------------------------------------------------------------------------------------------------------- |
-| 0.1       | Project graph, inferred targets and caching, with one cargo call per task. `init` and crate generators. |
-| 0.2       | Batching and feature unification.                                                                       |
-| 0.3       | nextest, affected tests and the coverage baseline.                                                      |
-| 0.4       | napi and wasm artifacts.                                                                                |
-| 0.5       | Releasing with Nx release.                                                                              |
-| 1.0       | The open assumptions listed under [risks](decisions.mara.md#risks) are checked and closed.              |
+| Milestone | Status | Contents                                                                                                |
+| --------- | ------ | ------------------------------------------------------------------------------------------------------- |
+| 0.1       | Done   | Project graph, inferred targets and caching, with one cargo call per task. `init` and crate generators. |
+| 0.2       | Done   | Batching and feature unification.                                                                       |
+| 0.3       | Done   | nextest, affected tests and the coverage baseline.                                                      |
+| 0.4       | Done   | napi and wasm artifacts.                                                                                |
+| 0.5       | Done   | Releasing with Nx release.                                                                              |
+| 1.0       | Open   | The open assumptions listed under [risks](decisions.mara.md#risks) are checked and closed.              |
 
 ## What nx-rust deliberately does not do
 
