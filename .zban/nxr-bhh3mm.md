@@ -71,3 +71,5 @@ From the wasm target (nxr-0ap8n4, merged 16 November 2026; evidence `EVD-WASM-PO
 - Line 31 is overturned: the option is renamed from `jsFlavour` to `wasmTarget`, with the same values and default (nxr-sy0tsz). It matches `wasm-bindgen --target` as `targetTriple` matches `cargo --target`, and the option schema then has no British-spelled identifier.
 
 The marks of the confirmed lines are removed by nxr-qw96ne.
+
+Line 12 is provisional too (its mark stands in the middle of the line, and the list shown to the maintainer on 20 November 2026 missed it). Asked separately, he kept it the same day: it matches line 13 and `REQ-MIXED-PROJECTS`. So of the eight provisional lines of this list, lines 5, 6, 12, 13, 18, 30 and 32 stand and line 31 is overturned.

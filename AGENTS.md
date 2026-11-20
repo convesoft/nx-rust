@@ -160,6 +160,41 @@ the files you changed. Validate with Mara again afterwards.
   `cargo`, the real Nx hasher and fixture workspaces over mocks for those
   checks (`verification.mara.md`).
 
+### Running checks
+
+- Run the unit suite and the end-to-end suite one after the other, never both
+  at once. Agents often share one machine, and two suites together can run it
+  out of memory.
+- To run the end-to-end suite on another Cargo version, such as the minimum
+  1.91, use a private rustup home, and never run `rustup default`: other
+  checkouts on the machine depend on it. The test harness drops
+  `RUSTUP_TOOLCHAIN` but passes `RUSTUP_HOME` through:
+
+  ```sh
+  rh=$(mktemp -d "$TMPDIR/rustup-191.XXXX")
+  mkdir "$rh/downloads" "$rh/tmp"
+  ln -s ~/.rustup/toolchains "$rh/toolchains"
+  ln -s ~/.rustup/update-hashes "$rh/update-hashes"
+  printf 'version = "12"\ndefault_toolchain = "1.91.0-x86_64-unknown-linux-gnu"\n' \
+    > "$rh/settings.toml"
+  RUSTUP_HOME=$rh pnpm nx e2e nx-rust-e2e --skip-nx-cache
+  rm -r "$rh"
+  ```
+
+  `--skip-nx-cache` is needed because the cache keys of the `test` and `e2e`
+  targets name no toolchain.
+
+- If you give an Nx command in a checkout its own `NX_CACHE_DIRECTORY`, set
+  `NX_DAEMON=false` with it, or use the same value for every Nx command in that
+  checkout. Otherwise the command and the daemon write to different task
+  databases, and the run exits 1 with `FOREIGN KEY constraint failed` although
+  every task succeeded. If that error appears once after successful tasks,
+  rerun once.
+- The test harness runs fixture commands as CI does. A test that sets `CI`,
+  `GITHUB_ACTIONS` or AI-agent variables itself must also pass when run as CI
+  runs it, before you report it done:
+  `env -u CLAUDECODE -u CLAUDE_CODE -u AI_AGENT -u CODEX_THREAD_ID CI=true GITHUB_ACTIONS=true pnpm nx test nx-rust --testPathPatterns=<file>`.
+
 ## Commits
 
 Use Conventional Commits without a scope (`<type>: <imperative summary>`), and add a
