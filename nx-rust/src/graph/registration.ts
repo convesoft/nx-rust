@@ -26,16 +26,23 @@ interface Outcome {
 
 /**
  * One entry of the plugin in `nx.json`, with what its `createNodes` hook
- * found for its `createDependencies` hook.
+ * found for its `createDependencies` and `createMetadata` hooks.
  *
  * Nx loads the plugin module once per process and copies its properties for
  * each entry, reading `createNodes` anew for each copy. Each read creates a
  * registration with a `createNodes` of its own ({@link Registration.createNodes}).
- * Nx calls `createDependencies` as a method of the entry's copy, so
- * {@link registrationOf} finds the registration through the copy's
- * `createNodes`. An entry's `createDependencies` therefore sees only what its
- * own `createNodes` discovered, whether Nx runs the entries in one process or
- * each in a worker of its own.
+ * Nx calls the function of the copy's `createNodes` tuple as an element of
+ * that tuple, so that its `this` is the tuple and not the copy, and
+ * `createDependencies` and `createMetadata` as methods of the entry's copy, so {@link registrationOf}
+ * finds the registration through the copy's `createNodes`. Nothing else that
+ * Nx passes to the hooks tells the entries apart: their context is the same
+ * for all, and the options of an entry without options are `undefined`
+ * (EVD-NX-24-PLUGIN-ENTRIES). An entry's later hooks therefore see only what
+ * its own `createNodes` discovered, whether Nx runs the entries in one
+ * process or each in a worker of its own.
+ *
+ * Where a call shows that this does not hold, the hook fails rather than
+ * answer with another entry's projects ({@link entryRegistration}).
  */
 // @mara implements DES-DISCOVERY
 // @mara implements DES-METADATA-REPORT
@@ -46,6 +53,13 @@ export class Registration {
   readonly createNodes: CreateNodes;
   private started = 0;
   private latest: Outcome | undefined;
+  /**
+   * The options of this entry's first `createNodes` call. Nx keeps one value
+   * with its copy of the plugin for the entry and passes it to every hook of
+   * the entry, also across graph computations, so another value comes from
+   * another entry.
+   */
+  private options: { value: unknown } | undefined;
 
   constructor() {
     this.createNodes = [
@@ -95,7 +109,8 @@ export class Registration {
    *   in `entries.ts`), which says whether Nx analyses the JS lockfile
    *   (`pluginInput` in `plugin-package.ts`), and whose `namedInputs` give
    *   the repository's `default` (`cacheContext` in `caching.ts`).
-   * @throws {Error} When the installed Nx is not supported (see
+   * @throws {Error} When the call cannot be this entry's alone (see
+   *   {@link Registration.claim}), when the installed Nx is not supported (see
    *   {@link checkNxForGraph}), when the options are invalid, when discovery
    *   fails (see {@link discoverWorkspaces}), when a metadata table is
    *   invalid (see {@link readSettings}), when two entries of the plugin
@@ -110,9 +125,10 @@ export class Registration {
     options?: unknown,
     nxJson?: NxJsonConfiguration,
   ): Promise<CargoGraph> {
-    const sequence = ++this.started;
     // Before the first await: it decides which computation this call joins.
     const reports = computationReports();
+    this.claim(options);
+    const sequence = ++this.started;
     let graph: CargoGraph | undefined;
     try {
       const nxWarning = checkNxForGraph(workspaceRoot, reports);
@@ -146,6 +162,33 @@ export class Registration {
         this.latest = { sequence, workspaceRoot, graph };
       }
     }
+  }
+
+  /**
+   * Takes a `createNodes` call for this entry, or fails where it comes with
+   * other options than the entry's first call, which shows that entries
+   * share this registration. Calls with the entry's options may overlap, as
+   * where the daemon starts a graph computation before an earlier one has
+   * finished; {@link Registration.discover} keeps the newest.
+   */
+  private claim(options: unknown): void {
+    if (this.options !== undefined && this.options.value !== options) {
+      throw entryError("createNodes", "it got other options than the entry's earlier call");
+    }
+    this.options ??= { value: options };
+  }
+
+  /**
+   * This registration, for a later hook of the entry, which Nx calls with the
+   * options that it passed to the entry's `createNodes`.
+   *
+   * @throws {Error} When `options` are not those.
+   */
+  forHook(hook: string, options: unknown): this {
+    if (this.options !== undefined && this.options.value !== options) {
+      throw entryError(hook, "it got other options than the entry's createNodes");
+    }
+    return this;
   }
 
   /**
@@ -199,18 +242,40 @@ const registrations = new WeakMap<object, Registration>();
  * The registration of the plugin entry that `plugin`, Nx's copy of the
  * plugin module for that entry, belongs to.
  *
- * @throws {Error} When `plugin` is no such copy.
+ * @throws {Error} When `plugin` is no such copy, as where a later hook is
+ *   called detached from the copy, after destructuring, rather than as a
+ *   method of the copy.
  */
-export function registrationOf(plugin: unknown): Registration {
+export function registrationOf(plugin: unknown, hook = "createDependencies"): Registration {
   const createNodes = (plugin as { createNodes?: unknown } | null | undefined)?.createNodes;
   const registration =
     typeof createNodes === "object" && createNodes !== null
       ? registrations.get(createNodes)
       : undefined;
   if (registration === undefined) {
-    throw new Error(
-      "nx-rust could not tell which of its entries in nx.json Nx asked for the dependencies. Please report this at https://github.com/convesoft/nx-rust/issues together with the Nx version and command.",
+    throw entryError(
+      hook,
+      "Nx did not call it as a method of its copy of the plugin for the entry",
     );
   }
   return registration;
+}
+
+/**
+ * The registration of the entry whose `hook` Nx called as a method of
+ * `plugin` with `options`: {@link registrationOf}, checked against the
+ * options of the entry's `createNodes` ({@link Registration.forHook}).
+ *
+ * @throws {Error} When the plugin cannot tell that the call is the entry's.
+ */
+export function entryRegistration(plugin: unknown, hook: string, options: unknown): Registration {
+  return registrationOf(plugin, hook).forHook(hook, options);
+}
+
+// A wrong graph is worse than none (GOAL-TRUSTED-CACHE): where a call may
+// belong to another entry, the hook fails instead of answering.
+function entryError(hook: string, reason: string): Error {
+  return new Error(
+    `nx-rust could not tell which of its entries in nx.json Nx called ${hook} for: ${reason}. It stops rather than answer with the projects of another entry. Please report this at https://github.com/convesoft/nx-rust/issues together with the Nx version, the plugin's entries in nx.json and the command.`,
+  );
 }

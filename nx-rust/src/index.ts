@@ -13,7 +13,7 @@ import { failOnUncoveredProjectFolders } from "./graph/declared-files";
 import { nxSegmentMatcher } from "./graph/nx-glob";
 import { projectEdges } from "./graph/edges";
 import { failOnPluginVersionOption } from "./graph/plugin-version";
-import { Registration, registrationOf } from "./graph/registration";
+import { entryRegistration, Registration } from "./graph/registration";
 import { failOnTargetDefaults } from "./graph/target-defaults";
 import { failOnAffectedTestsOption } from "./graph/target-tables";
 
@@ -35,14 +35,16 @@ import { failOnAffectedTestsOption } from "./graph/target-tables";
  * their warnings for {@link createMetadata}.
  *
  * Nx calls it as a method of its copy of the plugin for the entry, which is
- * `this`.
+ * `this`, with the options it passed to the entry's `createNodes`; where it
+ * does not, the plugin cannot tell the entry and fails
+ * ({@link entryRegistration}).
  */
 function createDependencies(
   this: unknown,
-  _options: unknown,
+  options: unknown,
   context: CreateDependenciesContext,
 ): RawProjectGraphDependency[] | Promise<RawProjectGraphDependency[]> {
-  const registration = registrationOf(this);
+  const registration = entryRegistration(this, "createDependencies", options);
   const graph = registration.graphForDependencies(context.workspaceRoot);
   if (graph === undefined) {
     return [];
@@ -72,20 +74,20 @@ function createDependencies(
  * the metadata into the project's own and keeps it out of task keys.
  *
  * Nx calls it after `createDependencies`, in the same process, as a method
- * of its copy of the plugin for the entry, which is `this`.
+ * of its copy of the plugin for the entry, which is `this`, with the entry's
+ * options, as {@link createDependencies}.
  */
 // @mara implements DES-DIAGNOSTICS
 // @mara implements DES-TARGET-DEFAULT-GUARD
 function createMetadata(
   this: unknown,
   _graph: ProjectGraph,
-  _options: unknown,
+  options: unknown,
   context: CreateMetadataContext,
 ): ProjectsMetadata {
   const metadata: ProjectsMetadata = {};
-  for (const [project, targetWarnings] of registrationOf(this).targetWarnings(
-    context.workspaceRoot,
-  )) {
+  const registration = entryRegistration(this, "createMetadata", options);
+  for (const [project, targetWarnings] of registration.targetWarnings(context.workspaceRoot)) {
     metadata[project] = {
       metadata: { [cargoMetadataKey]: { targetWarnings } } as ProjectsMetadata[string]["metadata"],
     };
@@ -105,7 +107,8 @@ function createMetadata(
  *
  * `createNodes` is a getter: Nx copies the module's properties once for each
  * entry in `nx.json`, so that each entry gets a registration of its own
- * ({@link Registration}). Nx reads it when it loads the plugin for an entry,
+ * ({@link Registration}). Nx passes the hooks nothing else that tells the
+ * entries apart (EVD-NX-24-PLUGIN-ENTRIES). Nx reads it when it loads the plugin for an entry,
  * and an unsupported Nx stops the plugin there, which fails graph creation
  * also where Nx calls none of its hooks ({@link checkNxOnLoad}).
  *
