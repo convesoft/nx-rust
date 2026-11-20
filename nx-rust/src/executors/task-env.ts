@@ -284,6 +284,14 @@ const taskLayerVariables = [
 ];
 
 /**
+ * The root dotenv files that the `nx` process loads when it starts and that
+ * Nx's `getTaskSpecificEnv` removes again from every task's environment,
+ * each on its own, in this order (`unloadDotEnvFiles` in
+ * `tasks-runner/task-env.js`; `EVD-NX-24-BATCHES`, "Dotenv expansion").
+ */
+export const rootDotenvFiles = [".env", ".local.env", ".env.local"] as const;
+
+/**
  * `env` as the plugin gives it to cargo where Nx loads no dotenv files for
  * the task, its `NX_LOAD_DOT_ENV_FILES` not being `true` (`DES-BATCH`,
  * "Dotenv files"). Nx's `getTaskSpecificEnv` then still removes each variable
@@ -321,7 +329,7 @@ export function withoutUnloadedRootValues(env: NodeJS.ProcessEnv, root: string):
       delete rest[name];
     }
   }
-  for (const file of [".env", ".local.env", ".env.local"]) {
+  for (const file of rootDotenvFiles) {
     unload(join(root, file), rest);
   }
   return { ...rest, ...kept };
@@ -382,16 +390,17 @@ export type EnvVariablesForTask = NxTaskEnv["getEnvVariablesForTask"];
  * the functions that Nx uses for that, from `nx/src/tasks-runner/task-env`,
  * which are no public API (`RISK-UPSTREAM-CHANGES`):
  *
- * 1. `getTaskSpecificEnv`: the environment of the `nx` command without the
- *    values that the repository's root `.env`, `.local.env` and `.env.local`
- *    gave it, with the task's dotenv files loaded in the order Nx reads them,
- *    those in the project's folder and those at the repository root named for
- *    the target or a configuration, with the root files last. Nx hands a
- *    batch process the command's environment, so the batch builds this layer
- *    from its own, which Nx made for its child processes as it makes a
- *    task's: with `NX_WORKSPACE_ROOT`, `NX_SKIP_NX_CACHE`,
- *    `NX_INVOCATION_ANCESTOR_PIDS` and `NX_FORKED_TASK_EXECUTOR`, and with
- *    `NX_CLI_SET`, which the process of a task run on its own sets too.
+ * 1. {@link taskDotenvLayer}: the dotenv layer of Nx's `getTaskSpecificEnv`,
+ *    the environment of the `nx` command without the values that the
+ *    repository's root `.env`, `.local.env` and `.env.local` gave it, with
+ *    the task's dotenv files loaded in the order Nx reads them, those in the
+ *    project's folder and those at the repository root named for the target
+ *    or a configuration, with the root files last. Nx hands a batch process
+ *    the command's environment, so the batch builds this layer from its own,
+ *    which Nx made for its child processes as it makes a task's: with
+ *    `NX_WORKSPACE_ROOT`, `NX_SKIP_NX_CACHE`, `NX_INVOCATION_ANCESTOR_PIDS`
+ *    and `NX_FORKED_TASK_EXECUTOR`, and with `NX_CLI_SET`, which the process
+ *    of a task run on its own sets too.
  * 2. {@link batchTaskEnvironment}: Nx's `getEnvVariablesForTask` with the
  *    task's own variables, `NX_TASK_TARGET_PROJECT`, `NX_TASK_TARGET_TARGET`,
  *    `NX_TASK_TARGET_CONFIGURATION`, `LERNA_PACKAGE_NAME` and `NX_TUI=false`,
@@ -401,7 +410,12 @@ export type EnvVariablesForTask = NxTaskEnv["getEnvVariablesForTask"];
  *    {@link withoutUnloadedRootValues}, as for a task run on its own. What a
  *    task run on its own and a task of a batch give cargo is the same.
  *
+ * Neither step writes to the batch process's environment; dotenv itself
+ * does where a vault lies beside a task's files ({@link taskDotenvLayer}).
+ *
  * @param root The repository root, from where the installed Nx is loaded.
+ * @param shielded The variables of {@link runDependentVariables} that the
+ *   task's dotenv files define ({@link shieldValue}).
  * @returns A function that gives a task's environment, as a new object.
  * @throws {TaskEnvironmentError} When the installed Nx lacks a function.
  */
@@ -411,11 +425,18 @@ export function taskEnvironments(
   graph: ProjectGraph,
   shielded: (task: Task) => readonly string[] = () => [],
 ): (task: Task) => NodeJS.ProcessEnv {
-  let dotenvLayer: NxTaskEnv["getTaskSpecificEnv"];
+  let parts: DotenvParts;
   let taskLayer: EnvVariablesForTask;
   try {
-    const loaded = loadTaskEnv(root, ["getTaskSpecificEnv", "getEnvVariablesForTask"]);
-    dotenvLayer = loaded.getTaskSpecificEnv;
+    // getEnvVariablesForTask first, as the batch's message names the first
+    // part that the installed Nx lacks.
+    const loaded = loadTaskEnv(root, [
+      "getEnvVariablesForTask",
+      "getEnvFilesForTask",
+      "loadAndExpandDotEnvFile",
+      "unloadDotEnvFile",
+    ]);
+    parts = loaded;
     taskLayer = loaded.getEnvVariablesForTask;
   } catch (error) {
     if (error instanceof NxBridgeError) {
@@ -423,44 +444,104 @@ export function taskEnvironments(
     }
     throw error;
   }
-  return (task) => {
-    // Nx's getTaskSpecificEnv reads the batch process's own environment.
-    const saved = new Map<string, string | undefined>();
-    for (const name of shielded(task)) {
-      saved.set(name, process.env[name]);
-      process.env[name] = shieldValue;
-    }
-    let base: NodeJS.ProcessEnv;
-    try {
-      base = environment(dotenvLayer(task, graph), "getTaskSpecificEnv", task);
-    } finally {
-      for (const [name, value] of saved) {
-        if (value === undefined) {
-          delete process.env[name];
-        } else {
-          process.env[name] = value;
-        }
-      }
-    }
-    return withoutUnloadedRootValues(
-      batchTaskEnvironment(base, task, taskLayer, process.env),
+  return (task) =>
+    withoutUnloadedRootValues(
+      batchTaskEnvironment(
+        taskDotenvLayer(parts, root, task, graph, process.env, shielded(task)),
+        task,
+        taskLayer,
+        process.env,
+      ),
       root,
     );
-  };
+}
+
+/** The functions of `nx/src/tasks-runner/task-env` with which {@link taskDotenvLayer} builds a layer. */
+export type DotenvParts = Pick<
+  NxTaskEnv,
+  "getEnvFilesForTask" | "loadAndExpandDotEnvFile" | "unloadDotEnvFile"
+>;
+
+/**
+ * A task's dotenv layer, as Nx 24's `getTaskSpecificEnv` builds it from the
+ * process's environment, built instead on a copy of `processEnv`, so that
+ * the plugin writes nothing to the batch process's own environment
+ * (`DES-BATCH`, "Dotenv files"): Nx's `unloadDotEnvFile` removes from the copy each value that a
+ * root dotenv file ({@link rootDotenvFiles}) gives, and, where `processEnv`
+ * has `NX_LOAD_DOT_ENV_FILES=true`, Nx's `loadAndExpandDotEnvFile` loads and
+ * expands into it the files that Nx's `getEnvFilesForTask` names for the
+ * task, under `root`, which is Nx's workspace root in a batch. Which files,
+ * in which order, and how their expansion sees the copy's values is Nx's
+ * own code. The plugin repeats three facts of Nx's wrapper: the root files,
+ * the order of the calls, and the load switch. A test compares the result
+ * with `getTaskSpecificEnv` itself on the installed Nx, and another fails
+ * where the source of the wrapper changes (`VER-BATCHING`).
+ *
+ * With `DOTENV_KEY` set and a vault beside the files, dotenv 16.4.7 parses
+ * the vault into the live `process.env` before it decrypts it, so Nx's
+ * loader sets the vault's `DOTENV_VAULT_<ENVIRONMENT>` there, as it does in
+ * the `nx` process for a task run on its own; the dotenv check refuses such
+ * a task (`DES-BATCH`, nxr-gcknzm).
+ *
+ * Each name of `shielded` has {@link shieldValue} in the copy before Nx's
+ * functions see it.
+ *
+ * @param processEnv The batch process's environment; the plugin does not change it.
+ * @returns The layer, as a new object.
+ * @throws {TaskEnvironmentError} When `getEnvFilesForTask` fails or gives no
+ *   list of files.
+ */
+// @mara implements DES-BATCH
+export function taskDotenvLayer(
+  parts: DotenvParts,
+  root: string,
+  task: Task,
+  graph: ProjectGraph,
+  processEnv: NodeJS.ProcessEnv,
+  shielded: readonly string[],
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...processEnv };
+  for (const name of shielded) {
+    env[name] = shieldValue;
+  }
+  for (const file of rootDotenvFiles) {
+    parts.unloadDotEnvFile(join(root, file), env);
+  }
+  if (processEnv.NX_LOAD_DOT_ENV_FILES !== "true") {
+    return env;
+  }
+  let files: unknown;
+  try {
+    files = parts.getEnvFilesForTask(task, graph);
+  } catch (error) {
+    throw new TaskEnvironmentError(
+      `getEnvFilesForTask of the installed Nx fails for ${task.id} (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  if (!Array.isArray(files) || !files.every((file) => typeof file === "string")) {
+    throw new TaskEnvironmentError(
+      `getEnvFilesForTask of the installed Nx gives no list of files for ${task.id}`,
+    );
+  }
+  parts.loadAndExpandDotEnvFile(
+    files.map((file: string) => join(root, file)),
+    env,
+  );
+  return env;
 }
 
 /**
- * The value that the batch gives, while Nx's `getTaskSpecificEnv` builds a
- * task's dotenv layer, to each variable of {@link runDependentVariables} that
- * the task's dotenv files define (`DES-BATCH`, "Dotenv files"). dotenv-expand
- * then takes this value, which no file gives, instead of expanding the
- * file's, as it takes the `nx` process's own value where that process has
- * one: so a definition whose expansion would not end, as
- * `NX_ORIGINAL_FORCE_COLOR=${CMD}z` with `CMD=x${CMD}` in the command, which
- * the `nx` process does not expand where the command has `FORCE_COLOR=0`,
- * cannot exhaust the batch process's memory either. The value never reaches
- * cargo: each of those variables is left out of cargo's environment or set
- * after the dotenv layer in both paths.
+ * The value that the batch gives, in the copy on which it builds a task's
+ * dotenv layer ({@link taskDotenvLayer}), to each variable of
+ * {@link runDependentVariables} that the task's dotenv files define
+ * (`DES-BATCH`, "Dotenv files"). dotenv-expand then takes this value, which
+ * no file gives, instead of expanding the file's, as it takes the `nx`
+ * process's own value where that process has one: so a definition whose
+ * expansion would not end, as `NX_ORIGINAL_FORCE_COLOR=${CMD}z` with
+ * `CMD=x${CMD}` in the command, which the `nx` process does not expand where
+ * the command has `FORCE_COLOR=0`, cannot exhaust the batch process's memory
+ * either. The value never reaches cargo: each of those variables is left out
+ * of cargo's environment or set after the dotenv layer in both paths.
  */
 export const shieldValue = "\u0001@convesoft/nx-rust";
 
@@ -481,7 +562,7 @@ function environment(value: unknown, part: string, task: Task): NodeJS.ProcessEn
       `${part} of the installed Nx gives no environment for ${task.id}`,
     );
   }
-  // Nx keeps the object for later calls; the batch must not change it.
+  // A copy, which the batch may change without changing Nx's.
   return { ...(value as NodeJS.ProcessEnv) };
 }
 

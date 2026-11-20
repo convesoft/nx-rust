@@ -568,7 +568,7 @@ export function loadTaskHasher(workspaceRoot: string, options?: BridgeLoadOption
 
 /** The exports of `nx/src/tasks-runner/task-env` used by the plugin. */
 export interface NxTaskEnv {
-  getTaskSpecificEnv(task: Task, graph: ProjectGraph): unknown;
+  loadAndExpandDotEnvFile(files: string[], env: NodeJS.ProcessEnv): unknown;
   getEnvVariablesForTask(
     task: Task,
     taskSpecificEnv: NodeJS.ProcessEnv,

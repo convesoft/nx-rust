@@ -286,7 +286,7 @@ describe("resolution from .nx/installation across migrated callers", () => {
       "dist/src/tasks-runner/task-env.js": [
         'exports.getEnvFilesForTask = () => [".env.install"];',
         "exports.unloadDotEnvFile = (_file, env) => { delete env.UNLOADED_BY_INSTALL; };",
-        "exports.getTaskSpecificEnv = () => ({ FROM_INSTALL: 'yes' });",
+        "exports.loadAndExpandDotEnvFile = (_files, env) => { env.FROM_INSTALL = 'yes'; };",
         "exports.getEnvVariablesForTask = (_task, env) => ({ ...env });",
         "",
       ].join("\n"),
@@ -353,17 +353,27 @@ describe("resolution from .nx/installation across migrated callers", () => {
       dependencies: {},
     } as unknown as ProjectGraph;
     const envOf = taskEnvironments(root, fakeGraph);
-    expect(
-      envOf({
-        id: "app:build",
-        target: { project: "app", target: "build" },
-        overrides: {},
-        outputs: [],
-        parallelism: true,
-        cache: false,
-        projectRoot: "app",
-      }).FROM_INSTALL,
-    ).toBe("yes");
+    const loadSwitch = process.env.NX_LOAD_DOT_ENV_FILES;
+    process.env.NX_LOAD_DOT_ENV_FILES = "true";
+    try {
+      expect(
+        envOf({
+          id: "app:build",
+          target: { project: "app", target: "build" },
+          overrides: {},
+          outputs: [],
+          parallelism: true,
+          cache: false,
+          projectRoot: "app",
+        }).FROM_INSTALL,
+      ).toBe("yes");
+    } finally {
+      if (loadSwitch === undefined) {
+        delete process.env.NX_LOAD_DOT_ENV_FILES;
+      } else {
+        process.env.NX_LOAD_DOT_ENV_FILES = loadSwitch;
+      }
+    }
     expect(nxTaskConfiguration(root, fakeGraph, "app", "build", undefined)).toBe("install-config");
     const dotenv = readTaskDotenv(
       { id: "app:build", projectRoot: "app", target: { project: "app", target: "build" } },
@@ -409,7 +419,7 @@ describe("bridge shape checks for missing or changed internal exports", () => {
       "dist/src/hasher/hash-plan-inspector.js": "exports.HashPlanInspector = {};\n",
       "dist/src/hasher/task-hasher.js":
         "exports.getInputs = () => {};\nexports.getNamedInputs = () => {};\nexports.expandSingleProjectInputs = () => {};\n",
-      "dist/src/tasks-runner/task-env.js": "exports.getTaskSpecificEnv = () => {};\n",
+      "dist/src/tasks-runner/task-env.js": "exports.loadAndExpandDotEnvFile = () => {};\n",
       "dist/src/tasks-runner/create-task-graph.js": "exports.ProcessTasks = class {};\n",
     });
 
@@ -504,7 +514,7 @@ describe("bridge shape checks for missing or changed internal exports", () => {
       "function",
     );
     expectBridgeExportError(
-      () => loadTaskEnv(root, ["getTaskSpecificEnv", "getEnvVariablesForTask"]),
+      () => loadTaskEnv(root, ["loadAndExpandDotEnvFile", "getEnvVariablesForTask"]),
       "nx/src/tasks-runner/task-env",
       "getEnvVariablesForTask",
       "function",

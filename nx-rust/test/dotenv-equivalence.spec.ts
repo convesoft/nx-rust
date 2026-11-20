@@ -15,6 +15,7 @@ import {
   type EnvVariablesForTask,
   runDependentVariables,
   shieldValue,
+  taskDotenvLayer,
   withoutUnloadedRootValues,
 } from "../src/executors/task-env";
 
@@ -25,16 +26,24 @@ import {
 // for a task run on its own, piped, with its output in a file or in Nx's
 // pseudo-terminal, equals the one it gives the task in a batch; the check
 // decides the same in both; and the check's own expansion gives what
-// dotenv-expand gives. Set NX_RUST_DOTENV_SEED to rerun one seed.
+// dotenv-expand gives. The task run on its own gets its dotenv layer from
+// Nx's own getTaskSpecificEnv, run over the nx process's environment; the
+// task in a batch from the plugin's taskDotenvLayer, which builds it on a
+// copy of the batch process's. Set NX_RUST_DOTENV_SEED to rerun one seed.
 
 const nx = dirname(require.resolve("nx/package.json"));
 const taskEnv = require("nx/src/tasks-runner/task-env") as {
+  getTaskSpecificEnv(task: Task, graph: ProjectGraph): NodeJS.ProcessEnv;
   unloadDotEnvFile(file: string, env: NodeJS.ProcessEnv): void;
   loadAndExpandDotEnvFile(files: string[], env: NodeJS.ProcessEnv): void;
   getEnvFilesForTask(task: Task, graph: ProjectGraph): string[];
   getEnvVariablesForTask: EnvVariablesForTask;
 };
-const { workspaceRoot } = require("nx/src/utils/workspace-root") as { workspaceRoot: string };
+const workspaceRootModule = require("nx/src/utils/workspace-root") as {
+  workspaceRoot: string;
+  setWorkspaceRoot(root: string): void;
+};
+const { workspaceRoot } = workspaceRootModule;
 const dotenv = require(require.resolve("dotenv", { paths: [nx] })) as {
   config(options: object): { parsed?: Record<string, string> };
   parse(source: string): Record<string, string>;
@@ -237,19 +246,19 @@ function nxProcess(root: string, generated: ReturnType<typeof caseOf>) {
   return { env, skipNxCache };
 }
 
-// getTaskSpecificEnv over `processEnv`, with Nx's own parts.
-function dotenvLayer(root: string, task: Task, processEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = { ...processEnv };
-  for (const file of [".env", ".local.env", ".env.local"]) {
-    taskEnv.unloadDotEnvFile(join(root, file), env);
+// Nx's own getTaskSpecificEnv in a process whose environment is
+// `processEnv`, under the case's root (beforeAll). Nx keeps its result by
+// task id for the life of the process, so each call gets an id of its own.
+let calls = 0;
+function nxDotenvLayer(task: Task, processEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const own = process.env;
+  process.env = { ...processEnv };
+  try {
+    calls += 1;
+    return { ...taskEnv.getTaskSpecificEnv({ ...task, id: `${task.id}#${calls}` }, graph) };
+  } finally {
+    process.env = own;
   }
-  if (processEnv.NX_LOAD_DOT_ENV_FILES === "true") {
-    taskEnv.loadAndExpandDotEnvFile(
-      taskEnv.getEnvFilesForTask(task, graph).map((file) => join(root, file)),
-      env,
-    );
-  }
-  return env;
 }
 
 /**
@@ -297,9 +306,12 @@ let root: string;
 
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "nx-rust-dotenv-equivalence-"));
+  // Where Nx's getTaskSpecificEnv reads the dotenv files.
+  workspaceRootModule.setWorkspaceRoot(root);
 });
 
 afterAll(() => {
+  workspaceRootModule.setWorkspaceRoot(workspaceRoot);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -377,13 +389,14 @@ function runCase(seed: number): {
     ]) {
       delete batchProcess[name];
     }
-    // While Nx builds the batch task's dotenv layer, the batch gives Nx's
-    // own variables that the task's files define a value of its own.
+    // While the batch builds the task's dotenv layer, it gives Nx's own
+    // variables that the task's files define a value of its own.
+    const shieldedNames = dotenvDefinitions(task, graph, root).filter((name) =>
+      Object.prototype.hasOwnProperty.call(runDependentVariables, name),
+    );
     const shielded: NodeJS.ProcessEnv = { ...batchProcess };
-    for (const name of dotenvDefinitions(task, graph, root)) {
-      if (Object.prototype.hasOwnProperty.call(runDependentVariables, name)) {
-        shielded[name] = shieldValue;
-      }
+    for (const name of shieldedNames) {
+      shielded[name] = shieldValue;
     }
     const unloadedBatch = { ...shielded };
     for (const file of [".env", ".local.env", ".env.local"]) {
@@ -398,7 +411,7 @@ function runCase(seed: number): {
     const layer = defined(
       taskEnv.getEnvVariablesForTask(
         task,
-        { ...dotenvLayer(root, task, nxEnv) },
+        nxDotenvLayer(task, nxEnv),
         piped ? forceColorForChild(nxEnv) : undefined,
         skipNxCache,
         false,
@@ -419,7 +432,7 @@ function runCase(seed: number): {
 
     const batched = withoutUnloadedRootValues(
       batchTaskEnvironment(
-        dotenvLayer(root, task, shielded),
+        taskDotenvLayer(taskEnv, root, task, graph, batchProcess, shieldedNames),
         task,
         taskEnv.getEnvVariablesForTask,
         batchProcess,
