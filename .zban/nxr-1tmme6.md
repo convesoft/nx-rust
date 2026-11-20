@@ -1,6 +1,6 @@
 ---
 title: Build input check reads Nx's process-wide workspace context, which misses files cargo wrote after its first use
-status: todo
+status: in-progress
 type: bug
 priority: high
 parent: nxr-e2z8sz

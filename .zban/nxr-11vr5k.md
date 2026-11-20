@@ -1,6 +1,6 @@
 ---
 title: Reuse test registries and daemon workspaces and remove fixed sleeps in the unit tests
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 created_at: 2026-11-20T16:37:58Z
