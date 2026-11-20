@@ -3,6 +3,8 @@ title: Memoize the workspace-wide glob in nxTaskFiles.filesBelow
 status: todo
 type: task
 parent: nxr-e2z8sz
+blocked_by:
+  - nxr-gtxq18
 created_at: 2026-11-20T10:24:44Z
 ---
 

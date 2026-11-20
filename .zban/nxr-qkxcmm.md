@@ -3,6 +3,8 @@ title: Simplify dotenv-check.ts without re-implementing dotenv-expand 12.0.3
 status: todo
 type: task
 parent: nxr-e2z8sz
+blocked_by:
+  - nxr-gtxq18
 related:
   - nxr-5rrkay
 created_at: 2026-11-20T10:24:42Z

@@ -3,6 +3,15 @@ title: Split monolithic modules (target-defaults, task, publish, version-actions
 status: todo
 type: task
 parent: nxr-e2z8sz
+blocked_by:
+  - nxr-gtxq18
+  - nxr-gp1awx
+  - nxr-hjpc99
+  - nxr-k63csj
+  - nxr-3f5wqp
+  - nxr-4sr6hd
+  - nxr-qkxcmm
+  - nxr-aqgka5
 related:
   - nxr-2vzmt5
 created_at: 2026-11-20T10:24:50Z

@@ -3,6 +3,8 @@ title: Improve runtime-input scripts (overhead, silent /dev/urandom fallbacks, m
 status: todo
 type: task
 parent: nxr-e2z8sz
+blocked_by:
+  - nxr-gtxq18
 related:
   - nxr-4byqv8
 created_at: 2026-11-20T10:24:49Z
