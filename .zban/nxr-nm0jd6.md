@@ -14,6 +14,7 @@ blocked_by:
   - nxr-43zkh8
   - nxr-sv61dx
   - nxr-bhh3mm
+  - nxr-e2z8sz
   - nxr-8paqsn
   - nxr-sy0tsz
   - nxr-4884vg
