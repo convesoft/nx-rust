@@ -1,6 +1,6 @@
 ---
 title: Simplify dotenv-check.ts without re-implementing dotenv-expand 12.0.3
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:
