@@ -1,7 +1,17 @@
 import type { ProjectGraph } from "@nx/devkit";
 import { existsSync, lstatSync } from "node:fs";
 import { join } from "node:path";
-import { load, NxTaskFilesError } from "./nx-task-files";
+import {
+  loadHashPlanInspector,
+  loadNxNative,
+  loadTaskHasher,
+  loadWorkspaceContext,
+  type MatchGlobPaths,
+  NxBridgeError,
+  type NxHashPlanInspector,
+  type NxTaskHasher,
+} from "../compatibility/nx-bridge";
+import { NxTaskFilesError, toTaskFilesError } from "./nx-task-files";
 
 // Which `test` tasks have a path among their inputs (`DES-TEST-RUN`, step 2;
 // `DES-INPUTS`), from the installed Nx: its `HashPlanInspector` lists the
@@ -33,16 +43,6 @@ export interface InputPlacement {
   owners(path: string): string[] | undefined;
 }
 
-interface Inspector {
-  init(): Promise<void>;
-  inspectTaskInputs(
-    target: { project: string; target: string },
-    parsedArgs: Record<string, unknown>,
-    extraTargetDependencies: Record<string, unknown>,
-    excludeTaskDependencies: boolean,
-  ): Record<string, { files?: unknown; environment?: unknown }>;
-}
-
 /**
  * The inputs of the `test` targets of `projects`, under the name `target`
  * that the plugin's options give them (`targetNames`), and how to place a path
@@ -59,19 +59,20 @@ export async function inputPlacement(
   projects: readonly string[],
   target: string,
 ): Promise<InputPlacement> {
-  const Inspector = load("nx/src/hasher/hash-plan-inspector", root).HashPlanInspector as
-    | (new (...args: unknown[]) => Inspector)
-    | undefined;
-  if (typeof Inspector !== "function") {
-    throw new NxTaskFilesError(
-      "the installed Nx lacks HashPlanInspector in nx/src/hasher/hash-plan-inspector",
-    );
+  let Inspector: new (...args: unknown[]) => NxHashPlanInspector;
+  try {
+    Inspector = loadHashPlanInspector(root).HashPlanInspector;
+  } catch (error) {
+    if (error instanceof NxBridgeError) {
+      throw toTaskFilesError(error);
+    }
+    throw error;
   }
   const inspector = new Inspector(projectGraph, root, nxJson);
   await inspector.init();
   const inputs = new Map<string, TaskInputs>();
   for (const project of projects) {
-    let inspected: ReturnType<Inspector["inspectTaskInputs"]>;
+    let inspected: ReturnType<NxHashPlanInspector["inspectTaskInputs"]>;
     try {
       inspected = inspector.inspectTaskInputs({ project, target }, {}, {}, true);
     } catch (error) {
@@ -131,24 +132,6 @@ interface FilesetGroup {
   negative: string[];
 }
 
-type NxHasher = {
-  getInputs(
-    task: { target: { project: string; target: string } },
-    graph: ProjectGraph,
-    nxJson: unknown,
-  ): {
-    selfInputs: unknown[];
-    depsInputs: { input: string }[];
-    depsFilesets: { fileset: string }[];
-    projectInputs: unknown[];
-  };
-  getNamedInputs(nxJson: unknown, project: unknown): Record<string, unknown[]>;
-  expandSingleProjectInputs(inputs: unknown[], namedInputs: Record<string, unknown[]>): unknown[];
-  expandNamedInput(input: string, namedInputs: Record<string, unknown[]>): unknown[];
-};
-
-type MatchGlobPaths = (globs: string[], paths: string[]) => boolean[];
-
 /**
  * Places paths with Nx's own expansion of each task's inputs
  * (`getInputs`, `expandSingleProjectInputs` and `expandNamedInput` of its
@@ -164,25 +147,17 @@ function globPlacement(
   inspected: ReadonlyMap<string, TaskInputs>,
   target: string,
 ): GlobPlacement | undefined {
-  let hasher: NxHasher;
+  let hasher: NxTaskHasher;
   let match: MatchGlobPaths;
   let all: string[];
   try {
-    hasher = load("nx/src/hasher/task-hasher", root) as unknown as NxHasher;
-    match = load("nx/src/native", root).matchGlobPaths as MatchGlobPaths;
-    const glob = load("nx/src/utils/workspace-context", root).globWithWorkspaceContextSync as (
-      root: string,
-      globs: string[],
-    ) => unknown;
+    hasher = loadTaskHasher(root);
+    match = loadNxNative(root).matchGlobPaths;
+    const { globWithWorkspaceContextSync: glob } = loadWorkspaceContext(root, [
+      "globWithWorkspaceContextSync",
+    ]);
     const files = glob(root, ["**/*"]);
-    if (
-      typeof hasher.getInputs !== "function" ||
-      typeof hasher.getNamedInputs !== "function" ||
-      typeof hasher.expandSingleProjectInputs !== "function" ||
-      typeof hasher.expandNamedInput !== "function" ||
-      typeof match !== "function" ||
-      !isStringList(files)
-    ) {
+    if (!isStringList(files)) {
       return undefined;
     }
     all = files;
@@ -265,7 +240,7 @@ function filesetGroups(
   project: string,
   graph: ProjectGraph,
   nxJson: unknown,
-  hasher: NxHasher,
+  hasher: NxTaskHasher,
   target: string,
 ): FilesetGroup[] | undefined {
   const node = graph.nodes[project];

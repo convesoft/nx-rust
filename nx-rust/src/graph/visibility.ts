@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { loadWorkspaceContext } from "../compatibility/nx-bridge";
 
 /**
  * Which of `files`, relative to the repository root, are in the files that
@@ -60,12 +61,8 @@ type Glob = (workspaceRoot: string, globs: string[]) => Promise<string[]>;
 // `globWithWorkspaceContext` of the Nx installed in the repository.
 function workspaceContextGlob(workspaceRoot: string): Glob | undefined {
   try {
-    const context = require(
-      require.resolve("nx/src/utils/workspace-context", { paths: [workspaceRoot] }),
-    );
-    return typeof context?.globWithWorkspaceContext === "function"
-      ? context.globWithWorkspaceContext
-      : undefined;
+    return loadWorkspaceContext(workspaceRoot, ["globWithWorkspaceContext"])
+      .globWithWorkspaceContext;
   } catch {
     return undefined;
   }

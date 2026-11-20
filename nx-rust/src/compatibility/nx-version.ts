@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { resolveFromRepository } from "./nx-bridge";
 
 /** The name of the plugin's package. */
 const packageName = "@convesoft/nx-rust";
@@ -96,7 +97,7 @@ export function installedNx(workspaceRoot: string): InstalledNx {
     );
   let packageJson: string;
   try {
-    packageJson = resolveNxPackageJson(workspaceRoot);
+    packageJson = resolveFromRepository("nx/package.json", workspaceRoot);
   } catch (error) {
     if (errorCode(error) !== "MODULE_NOT_FOUND") {
       // Node.js could not read the package.json it found, and names it.
@@ -120,22 +121,6 @@ export function installedNx(workspaceRoot: string): InstalledNx {
     throw unreadable(`${packageJson} gives the version ${JSON.stringify(version)}`);
   }
   return { version, major: Number(major) };
-}
-
-// Where no nx package resolves from the repository, the one that resolves
-// from the plugin; any other failure, such as a package.json that Node.js
-// cannot read, stands.
-function resolveNxPackageJson(workspaceRoot: string): string {
-  try {
-    return require.resolve("nx/package.json", {
-      paths: [join(workspaceRoot, ".nx", "installation"), workspaceRoot],
-    });
-  } catch (error) {
-    if (errorCode(error) !== "MODULE_NOT_FOUND") {
-      throw error;
-    }
-    return require.resolve("nx/package.json");
-  }
 }
 
 // The supported majors in words, or where the plugin's own package is

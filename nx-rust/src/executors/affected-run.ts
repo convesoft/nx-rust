@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { hostTriple } from "../cargo/host-triple";
 import type { CargoPackage } from "../cargo/metadata";
 import { pickedTriples, pickText } from "../cargo/target-triples";
+import { loadNxNative, type MatchGlobPaths } from "../compatibility/nx-bridge";
 import { cargoMetadataOf } from "../graph/collisions";
 import { targetCargoMetadataKey } from "../graph/targets";
 import {
@@ -319,16 +320,9 @@ function declaredFilesets(
   return (path) => (match === undefined ? true : match([...patterns], [path])[0] === true);
 }
 
-function nativeMatch(root: string): ((globs: string[], paths: string[]) => boolean[]) | undefined {
+function nativeMatch(root: string): MatchGlobPaths | undefined {
   try {
-    const match = (
-      require(
-        require.resolve("nx/src/native", { paths: [join(root, ".nx", "installation"), root] }),
-      ) as { matchGlobPaths?: unknown }
-    ).matchGlobPaths;
-    return typeof match === "function"
-      ? (match as (g: string[], p: string[]) => boolean[])
-      : undefined;
+    return loadNxNative(root).matchGlobPaths;
   } catch {
     return undefined;
   }

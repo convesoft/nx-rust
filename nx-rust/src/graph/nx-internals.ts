@@ -1,6 +1,11 @@
 import type { TargetConfiguration } from "@nx/devkit";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  loadDevkitInternals,
+  loadRetrieveWorkspaceFiles,
+  NxBridgeError,
+} from "../compatibility/nx-bridge";
 
 /** The parts of Nx's internal modules that graph creation uses. */
 export interface NxGraphInternals {
@@ -45,8 +50,6 @@ export interface NxGraphInternals {
   ): Promise<string[]>;
 }
 
-const parts = ["mergeTargetConfigurations", "findMatchingConfigFiles"] as const;
-
 const pluginFilesPath = "nx/src/project-graph/utils/retrieve-workspace-files";
 const pluginFilesPart = "retrieveProjectConfigurationPaths";
 
@@ -69,19 +72,20 @@ export function nxGraphInternals(workspaceRoot: string): NxGraphInternals {
   if (cached !== undefined) {
     return cached;
   }
-  const path = "nx/src/devkit-internals";
-  let module: Record<string, unknown>;
+  let nx: ReturnType<
+    typeof loadDevkitInternals<"mergeTargetConfigurations" | "findMatchingConfigFiles">
+  >;
   try {
-    module = require(resolveFromRepository(path, workspaceRoot));
+    nx = loadDevkitInternals(workspaceRoot, [
+      "mergeTargetConfigurations",
+      "findMatchingConfigFiles",
+    ]);
   } catch (error) {
-    throw unsupported(`${path} could not be loaded (${reason(error)})`);
-  }
-  for (const part of parts) {
-    if (typeof module?.[part] !== "function") {
-      throw unsupported(`${part} from ${path} is not a function`);
+    if (error instanceof NxBridgeError) {
+      throw unsupported(error.message);
     }
+    throw error;
   }
-  const nx = module as unknown as NxGraphInternals;
   const internals: NxGraphInternals = {
     mergeTargetConfigurations: (...args) =>
       checked(
@@ -98,21 +102,23 @@ export function nxGraphInternals(workspaceRoot: string): NxGraphInternals {
         isPathList,
       ),
     pluginFiles: async (root, pattern, include, exclude) => {
-      let retrieve: unknown;
+      let retrieve: ReturnType<
+        typeof loadRetrieveWorkspaceFiles<"retrieveProjectConfigurationPaths">
+      >["retrieveProjectConfigurationPaths"];
       try {
-        retrieve = require(resolveFromRepository(pluginFilesPath, workspaceRoot))[pluginFilesPart];
+        retrieve = loadRetrieveWorkspaceFiles(workspaceRoot, [
+          pluginFilesPart,
+        ]).retrieveProjectConfigurationPaths;
       } catch (error) {
-        throw unsupported(`${pluginFilesPath} could not be loaded (${reason(error)})`);
-      }
-      if (typeof retrieve !== "function") {
-        throw unsupported(`${pluginFilesPart} from ${pluginFilesPath} is not a function`);
+        if (error instanceof NxBridgeError) {
+          throw unsupported(error.message);
+        }
+        throw error;
       }
       // The parts of a loaded plugin entry that Nx's globPluginFiles reads.
       const entry = { createNodes: [pattern], include, exclude };
       return checked(
-        (await (retrieve as (root: string, plugins: object[]) => Promise<unknown>)(root, [
-          entry,
-        ])) as string[],
+        (await retrieve(root, [entry])) as string[],
         pluginFilesPart,
         "no list of file paths",
         isPathList,
@@ -141,14 +147,12 @@ export function nxGraphInternals(workspaceRoot: string): NxGraphInternals {
  *   reads the directory; `undefined` where the installed Nx cannot tell.
  */
 export function nxIgnoreRules(workspaceRoot: string): ((directory: string) => boolean) | undefined {
-  let module: Record<string, unknown> | undefined;
+  let create: ReturnType<
+    typeof loadDevkitInternals<"createGitIgnoreChecker">
+  >["createGitIgnoreChecker"];
   try {
-    module = require(resolveFromRepository("nx/src/devkit-internals", workspaceRoot));
+    create = loadDevkitInternals(workspaceRoot, ["createGitIgnoreChecker"]).createGitIgnoreChecker;
   } catch {
-    return undefined;
-  }
-  const create = module?.createGitIgnoreChecker;
-  if (typeof create !== "function") {
     return undefined;
   }
   // The only part of a generator's file tree that the checker reads.
@@ -191,18 +195,6 @@ function isPathList(value: unknown): boolean {
   return Array.isArray(value) && value.every((path) => typeof path === "string");
 }
 
-// Where Nx resolves from the repository, as the version check does; otherwise
-// from the plugin.
-function resolveFromRepository(path: string, workspaceRoot: string): string {
-  try {
-    return require.resolve(path, {
-      paths: [join(workspaceRoot, ".nx", "installation"), workspaceRoot],
-    });
-  } catch {
-    return require.resolve(path);
-  }
-}
-
 function unsupported(detail: string): Error {
   return new Error(
     [
@@ -211,8 +203,4 @@ function unsupported(detail: string): Error {
       "Use an Nx version that @convesoft/nx-rust supports, or a version of @convesoft/nx-rust that supports the installed Nx.",
     ].join("\n"),
   );
-}
-
-function reason(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).split("\n")[0];
 }

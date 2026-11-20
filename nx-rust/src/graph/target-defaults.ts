@@ -6,6 +6,14 @@ import type {
 } from "@nx/devkit";
 import { existsSync, realpathSync } from "node:fs";
 import { extname, join } from "node:path";
+import {
+  loadDevkitInternals,
+  loadPackageJsonPlugin,
+  loadProjectJsonPlugin,
+  loadProjectNodesManager,
+  NxBridgeError,
+  readNxPackageVersion,
+} from "../compatibility/nx-bridge";
 import type { TargetWarning } from "./collisions";
 import { pluginPackageName } from "./plugin-package";
 import { CargoGraph, CargoProject, projectNodes } from "./projects";
@@ -1640,128 +1648,87 @@ export function loadTargetDefaultsInternals(
   workspaceRoot: string,
   load: (path: string) => unknown = require,
 ): TargetDefaultsInternals {
-  const module = (path: string): Record<string, unknown> => {
-    let loaded: unknown;
-    try {
-      loaded = load(require.resolve(path, { paths: [workspaceRoot] }));
-    } catch (error) {
-      unsupported(
-        workspaceRoot,
-        load,
-        `${path} could not be loaded (${error instanceof Error ? error.message : String(error)})`,
-      );
-    }
-    return isRecord(loaded) ? loaded : {};
-  };
-  const part = <T>(from: Record<string, unknown>, path: string, name: string): T => {
-    const value = from[name];
-    if (typeof value !== "function") {
-      unsupported(workspaceRoot, load, `${name} from ${path} is not a function`);
-    }
-    return value as T;
-  };
-  const internalsPath = "nx/src/devkit-internals";
-  const devkit = module(internalsPath);
-  const createTargetDefaultsResults = part<TargetDefaultsInternals["createTargetDefaultsResults"]>(
-    devkit,
-    internalsPath,
-    "createTargetDefaultsResults",
-  );
-  const matchingTargetNames = part<(pattern: string, names: string[]) => string[]>(
-    devkit,
-    internalsPath,
-    "findMatchingTargetNames",
-  );
-  const expand = part<(entry: unknown, graph: DependencyGraph, project: string) => unknown>(
-    devkit,
-    internalsPath,
-    "expandDependencyConfigSyntaxSugar",
-  );
-  const normalise = part<
-    (entry: unknown, project: string, graph: DependencyGraph) => NormalisedDependency
-  >(devkit, internalsPath, "normalizeDependencyConfigProjects");
-  const nodesPath = "nx/src/project-graph/utils/project-configuration/project-nodes-manager";
-  const mergeIntoRootMap = part<
-    (
-      rootMap: Record<string, RootMapProject>,
-      project: RootMapProject,
-      sourceMaps: SourceMaps | undefined,
-      sourceInformation: [string | null, string] | undefined,
-      skipTargetNormalization: boolean | undefined,
-      deferSpreadsWithoutBase: boolean,
-    ) => unknown
-  >(module(nodesPath), nodesPath, "mergeProjectConfigurationIntoRootMap");
-  const packageJsonPath = "nx/src/plugins/package-json";
-  const packageJson = createNodesOf(module(packageJsonPath).createNodes, packageJsonPath);
-  const projectJsonPath = "nx/src/plugins/project-json/build-nodes/project-json";
-  const projectJsonModule = module(projectJsonPath);
-  const projectJson = createNodesOf(
-    isRecord(projectJsonModule.ProjectJsonProjectsPlugin)
-      ? projectJsonModule.ProjectJsonProjectsPlugin.createNodes
-      : undefined,
-    projectJsonPath,
-  );
-  function createNodesOf(value: unknown, path: string): DefaultCreateNodes {
-    if (!Array.isArray(value) || typeof value[1] !== "function") {
-      unsupported(workspaceRoot, load, `createNodes from ${path} is not a pattern and a function`);
-    }
-    return value[1] as DefaultCreateNodes;
-  }
-  return {
-    createTargetDefaultsResults,
-    mergeProject(rootMap, project, sourceMaps, sourceInformation, deferSpreadsWithoutBase) {
-      mergeIntoRootMap(
-        rootMap,
-        project,
-        sourceMaps,
-        sourceInformation,
-        undefined,
-        deferSpreadsWithoutBase,
-      );
-    },
-    async defaultNodes(files, nxJson, root) {
-      const context = { nxJsonConfiguration: nxJson, workspaceRoot: root };
-      const nodes: DefaultNode[] = [];
-      // In the order in which Nx runs its default plugins.
-      for (const [createNodes, given] of [
-        [packageJson, files],
-        [projectJson, files.filter((file) => file.endsWith("project.json"))],
-      ] as const) {
-        if (given.length === 0) {
-          continue;
-        }
-        for (const [file, result] of await createNodes(given, undefined, context)) {
-          for (const [projectRoot, project] of Object.entries(result?.projects ?? {})) {
-            nodes.push({ file, project: { ...project, root: projectRoot } });
+  try {
+    const devkit = loadDevkitInternals(
+      workspaceRoot,
+      [
+        "createTargetDefaultsResults",
+        "findMatchingTargetNames",
+        "expandDependencyConfigSyntaxSugar",
+        "normalizeDependencyConfigProjects",
+      ],
+      { load },
+    );
+    const { mergeProjectConfigurationIntoRootMap: mergeIntoRootMap } = loadProjectNodesManager(
+      workspaceRoot,
+      { load },
+    );
+    const { createNodes: packageJson } = loadPackageJsonPlugin(workspaceRoot, { load });
+    const { createNodes: projectJson } = loadProjectJsonPlugin(workspaceRoot, { load });
+    return {
+      createTargetDefaultsResults: devkit.createTargetDefaultsResults,
+      mergeProject(rootMap, project, sourceMaps, sourceInformation, deferSpreadsWithoutBase) {
+        mergeIntoRootMap(
+          rootMap,
+          project,
+          sourceMaps,
+          sourceInformation,
+          undefined,
+          deferSpreadsWithoutBase,
+        );
+      },
+      async defaultNodes(files, nxJson, root) {
+        const context = { nxJsonConfiguration: nxJson, workspaceRoot: root };
+        const nodes: DefaultNode[] = [];
+        // In the order in which Nx runs its default plugins.
+        for (const [createNodes, given] of [
+          [packageJson, files],
+          [projectJson, files.filter((file) => file.endsWith("project.json"))],
+        ] as const) {
+          if (given.length === 0) {
+            continue;
+          }
+          for (const [file, result] of await createNodes(given, undefined, context)) {
+            for (const [projectRoot, project] of Object.entries(result?.projects ?? {})) {
+              nodes.push({ file, project: { ...project, root: projectRoot } });
+            }
           }
         }
-      }
-      return nodes;
-    },
-    keyMayApply(key, targetName, executor) {
-      return (
-        key === executor || key === targetName || matchingTargetNames(key, [targetName]).length > 0
-      );
-    },
-    normaliseDependency(entry, project, graph) {
-      return normalise(expand(structuredClone(entry), graph, project), project, graph);
-    },
-  };
+        return nodes;
+      },
+      keyMayApply(key, targetName, executor) {
+        return (
+          key === executor ||
+          key === targetName ||
+          devkit.findMatchingTargetNames(key, [targetName]).length > 0
+        );
+      },
+      normaliseDependency(entry, project, graph) {
+        return devkit.normalizeDependencyConfigProjects(
+          devkit.expandDependencyConfigSyntaxSugar(structuredClone(entry), graph, project),
+          project,
+          graph,
+        );
+      },
+    };
+  } catch (error) {
+    if (error instanceof NxBridgeError) {
+      const problem =
+        error.failure.kind === "load"
+          ? `${error.failure.module} could not be loaded (${error.failure.fullReason})`
+          : error.message;
+      unsupported(workspaceRoot, load, problem);
+    }
+    throw error;
+  }
 }
-
-/** The `createNodes` function of one of Nx's default plugins. */
-type DefaultCreateNodes = (
-  files: string[],
-  options: unknown,
-  context: { nxJsonConfiguration: object; workspaceRoot: string },
-) => Promise<[string, { projects?: Record<string, RootMapProject> } | null][]>;
 
 function unsupported(
   workspaceRoot: string,
   load: (path: string) => unknown,
   problem: string,
 ): never {
-  const nx = nxVersion(workspaceRoot, load);
+  const nx = readNxPackageVersion(workspaceRoot, load);
   throw new Error(
     [
       `nx-rust cannot check what the targetDefaults in nx.json do to Rust targets with ${nx === undefined ? "the installed Nx" : `the installed Nx ${nx}`}: ${problem}.`,
@@ -2161,16 +2128,6 @@ function canonical(value: unknown): string {
       ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => compare(a, b)))
       : inner,
   );
-}
-
-function nxVersion(workspaceRoot: string, load: (path: string) => unknown): string | undefined {
-  try {
-    const manifest = load(require.resolve("nx/package.json", { paths: [workspaceRoot] }));
-    const version = isRecord(manifest) ? manifest.version : undefined;
-    return typeof version === "string" ? version : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

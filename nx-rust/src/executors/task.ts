@@ -637,6 +637,7 @@ export function prepareTask(
       configured,
       graphTask: graphTaskOf(context),
       record: recordedNxCommand(env),
+      workspaceRoot: context.root,
     });
   } catch (error) {
     throw error instanceof OptionError ? new TaskError(error.message) : error;

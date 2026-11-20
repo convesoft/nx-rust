@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { loadNxNative, type MatchGlobPaths } from "../compatibility/nx-bridge";
 
 /**
  * Whether one segment of a glob matches the name of a folder, as a folder
@@ -43,22 +43,14 @@ export function nxSegmentMatcher(workspaceRoot: string): SegmentMatcher {
   return matcher;
 }
 
-type MatchGlobPaths = (globs: string[], paths: string[]) => boolean[];
-
 // `matchGlobPaths` of the Nx that resolves from the repository, as the
 // version check and the build input check resolve it; else of the plugin's.
 function nativeMatch(workspaceRoot: string): MatchGlobPaths | undefined {
-  for (const paths of [[join(workspaceRoot, ".nx", "installation"), workspaceRoot], undefined]) {
-    try {
-      const native = require(require.resolve("nx/src/native", paths && { paths }));
-      if (typeof native?.matchGlobPaths === "function") {
-        return native.matchGlobPaths as MatchGlobPaths;
-      }
-    } catch {
-      // Not there; try the next.
-    }
+  try {
+    return loadNxNative(workspaceRoot).matchGlobPaths;
+  } catch {
+    return undefined;
   }
-  return undefined;
 }
 
 /**

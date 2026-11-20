@@ -35,6 +35,8 @@ export interface OptionSubject {
   graphTask: Task | undefined;
   /** The arguments of the `nx` command, as the plugin's hook recorded them, if it did. */
   record: readonly string[] | undefined;
+  /** The repository root, from which the installed `nx` package is resolved. */
+  workspaceRoot?: string;
 }
 
 /** What a task does with its options. */
@@ -204,7 +206,7 @@ export function passedOnCommandLine(subject: OptionSubject, name: string, value:
   if (name === "_") {
     return (
       isDeepStrictEqual(overrides._, value) &&
-      isDeepStrictEqual(parseAsNx(unparsed)._, value) &&
+      isDeepStrictEqual(parseAsNx(unparsed, subject.workspaceRoot)._, value) &&
       positionalWords(unparsed).every((word) => record.includes(word))
     );
   }
@@ -248,10 +250,12 @@ export function forwardedArguments(
   if (!isWordList(unparsed) || !isDeepStrictEqual(unparsed, words)) {
     return undefined;
   }
-  const optionNames = Object.entries(parseAsNx(words)).map(([key, parsed]) => {
-    const name = executor.declared.has(nxCamelCase(key)) ? nxCamelCase(key) : key;
-    return { name, parsed };
-  });
+  const optionNames = Object.entries(parseAsNx(words, subject.workspaceRoot)).map(
+    ([key, parsed]) => {
+      const name = executor.declared.has(nxCamelCase(key)) ? nxCamelCase(key) : key;
+      return { name, parsed };
+    },
+  );
   const held = optionNames.every(
     ({ name, parsed }) =>
       executor.declared.has(name) || isDeepStrictEqual(subject.options[name], parsed),

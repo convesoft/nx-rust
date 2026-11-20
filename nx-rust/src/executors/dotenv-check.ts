@@ -1,8 +1,14 @@
 import type { ProjectGraph, Task } from "@nx/devkit";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
-import { nxTaskEnv, runDependentVariables, TaskEnvironmentError } from "./task-env";
+import { join } from "node:path";
+import {
+  loadNxDependency,
+  loadTaskEnv,
+  NxBridgeError,
+  readNxDependencyVersion,
+} from "../compatibility/nx-bridge";
+import { runDependentVariables, TaskEnvironmentError, toTaskEnvironmentError } from "./task-env";
 
 /**
  * The version of dotenv-expand whose expansion this module follows: the one
@@ -66,13 +72,16 @@ export interface TaskDotenv {
  * @throws {TaskEnvironmentError} When the installed Nx lacks what it reads.
  */
 export function readTaskDotenv(task: DotenvTask, graph: ProjectGraph, root: string): TaskDotenv {
-  const { module, file: taskEnvFile } = nxTaskEnv(root);
-  const filesOf = module.getEnvFilesForTask;
-  if (typeof filesOf !== "function") {
-    throw new TaskEnvironmentError(
-      "the installed Nx lacks getEnvFilesForTask in nx/src/tasks-runner/task-env",
-    );
+  let loaded: ReturnType<typeof loadTaskEnv<"getEnvFilesForTask">>;
+  try {
+    loaded = loadTaskEnv(root, ["getEnvFilesForTask"]);
+  } catch (error) {
+    if (error instanceof NxBridgeError) {
+      throw toTaskEnvironmentError(error);
+    }
+    throw error;
   }
+  const { getEnvFilesForTask: filesOf, file: taskEnvFile } = loaded;
   let paths: unknown;
   try {
     paths = filesOf(task, graph);
@@ -194,7 +203,16 @@ export function dotenvProblem(
   if (!Object.values(raw).some((value) => value.includes("$"))) {
     return undefined;
   }
-  const version = nxDependencyVersion(nxTaskEnv(root).file, "dotenv-expand");
+  let taskEnvFile: string;
+  try {
+    taskEnvFile = loadTaskEnv(root, []).file;
+  } catch (error) {
+    if (error instanceof NxBridgeError) {
+      throw toTaskEnvironmentError(error);
+    }
+    throw error;
+  }
+  const version = readNxDependencyVersion(taskEnvFile, "dotenv-expand");
   if (version !== followedDotenvExpand) {
     const name = Object.keys(raw).find((key) => raw[key].includes("$")) as string;
     return `${origin.get(name)} has a value with $, which the installed Nx expands with dotenv-expand ${version ?? "of an unknown version"}; @convesoft/nx-rust knows how dotenv-expand ${followedDotenvExpand} expands it, and cannot tell whether this expansion gives the same values in a batch as for the task run on its own (\`DES-BATCH\`, "Dotenv files"). The task does not run, so that Nx stores no result for it. Run the tasks with --batch=false and use an Nx version that @convesoft/nx-rust supports.`;
@@ -818,19 +836,13 @@ function expandValueLikeNx(
 // A dependency of the installed Nx, as Nx itself loads it.
 export function nxDependency(nxFile: string, name: string): Record<string, unknown> {
   try {
-    return require(require.resolve(name, { paths: [dirname(nxFile)] }));
+    return loadNxDependency(nxFile, name);
   } catch (error) {
-    const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
-    throw new TaskEnvironmentError(`${name} of the installed Nx cannot be loaded (${reason})`);
-  }
-}
-
-// The version of a dependency of the installed Nx, or undefined.
-function nxDependencyVersion(nxFile: string, name: string): string | undefined {
-  try {
-    const manifest = require(require.resolve(`${name}/package.json`, { paths: [dirname(nxFile)] }));
-    return typeof manifest?.version === "string" ? manifest.version : undefined;
-  } catch {
-    return undefined;
+    if (error instanceof NxBridgeError && error.failure.kind === "load") {
+      throw new TaskEnvironmentError(
+        `${name} of the installed Nx cannot be loaded (${error.failure.reason})`,
+      );
+    }
+    throw error;
   }
 }

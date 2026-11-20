@@ -1,8 +1,8 @@
 import type { PostTasksExecutionContext, PreTasksExecutionContext } from "@nx/devkit";
 import { randomUUID } from "node:crypto";
 import { readdirSync, rmSync, statSync } from "node:fs";
-import { createRequire } from "node:module";
 import { join } from "node:path";
+import { loadNxYargsParser } from "../compatibility/nx-bridge";
 import {
   commandIdVariable,
   commandsFolderName,
@@ -53,11 +53,15 @@ export const maxRecordBytes = 64 * 1024;
  * @param commandId The `id` that Nx gives the command's hooks.
  */
 // @mara implements DES-LOCKFILE-HASHING
-export function commandRecords(argv: readonly string[], commandId = ""): Record<string, string> {
+export function commandRecords(
+  argv: readonly string[],
+  commandId = "",
+  workspaceRoot?: string,
+): Record<string, string> {
   const record = JSON.stringify(argv);
   return {
     [nxCommandVariable]: Buffer.byteLength(record) <= maxRecordBytes ? record : "",
-    [runIdVariable]: excludesTaskDependencies(argv) ? randomUUID() : "",
+    [runIdVariable]: excludesTaskDependencies(argv, workspaceRoot) ? randomUUID() : "",
     [commandIdVariable]: `${commandIdPrefix(commandId)}${randomUUID()}`,
   };
 }
@@ -75,8 +79,8 @@ function commandIdPrefix(id: string): string {
  * `=false` and `--no-exclude-task-dependencies` as Nx does. Words after
  * `--` go to the tasks and do not count.
  */
-export function excludesTaskDependencies(argv: readonly string[]): boolean {
-  const parsed = nxParser()([...argv], {
+export function excludesTaskDependencies(argv: readonly string[], workspaceRoot?: string): boolean {
+  const parsed = loadNxYargsParser(workspaceRoot)([...argv], {
     boolean: ["excludeTaskDependencies"],
     configuration: { "populate--": true },
   });
@@ -99,7 +103,7 @@ export function excludesTaskDependencies(argv: readonly string[]): boolean {
 // @mara implements DES-UNKNOWN-OPTIONS
 export function preTasksExecution(_options: unknown, context: PreTasksExecutionContext): void {
   for (const [name, value] of Object.entries(
-    commandRecords(context.argv ?? [], context.id ?? ""),
+    commandRecords(context.argv ?? [], context.id ?? "", context.workspaceRoot),
   )) {
     process.env[name] = value;
   }
@@ -194,19 +198,6 @@ export function recordedNxCommand(env: NodeJS.ProcessEnv = process.env): string[
 /** The options that Nx parses from arguments it hands a task, keyed as Nx keys them. */
 export type ParsedOverrides = Record<string, unknown> & { _?: unknown[] };
 
-type YargsParser = (
-  args: string[],
-  options: { boolean?: string[]; configuration: Record<string, boolean> },
-) => Record<string, unknown> & { _: unknown[] };
-
-let nxYargsParser: YargsParser | undefined;
-
-// The `yargs-parser` that the installed `nx` package uses.
-function nxParser(): YargsParser {
-  nxYargsParser ??= createRequire(require.resolve("nx/package.json"))("yargs-parser");
-  return nxYargsParser;
-}
-
 /**
  * The options that Nx parses from `args` when it hands them to a task as
  * overrides: with the `yargs-parser` that the installed `nx` package uses,
@@ -214,8 +205,8 @@ function nxParser(): YargsParser {
  * `utils/command-line-utils.js` of `nx` 24), and without `_` when no
  * positional word is left.
  */
-export function parseAsNx(args: readonly string[]): ParsedOverrides {
-  const parsed: ParsedOverrides = nxParser()([...args], {
+export function parseAsNx(args: readonly string[], workspaceRoot?: string): ParsedOverrides {
+  const parsed: ParsedOverrides = loadNxYargsParser(workspaceRoot)([...args], {
     configuration: { "camel-case-expansion": false, "dot-notation": true },
   });
   if (parsed._ === undefined || parsed._.length === 0) {

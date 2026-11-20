@@ -1,5 +1,10 @@
 import type { ExecutorContext } from "@nx/devkit";
-import { join } from "node:path";
+import {
+  loadHashPlanInspector,
+  loadWorkspaceContext,
+  NxBridgeError,
+  type NxHashPlanInspector,
+} from "../compatibility/nx-bridge";
 
 /** What Nx knows about the files of one task, from the Nx installed in the repository. */
 export interface NxTaskFiles {
@@ -30,21 +35,20 @@ export class NxTaskFilesError extends Error {
   }
 }
 
-/** The part of Nx's `HashPlanInspector` that the check uses. */
-interface HashPlanInspector {
-  init(): Promise<void>;
-  inspectTaskInputs(
-    target: { project: string; target: string; configuration?: string },
-    parsedArgs: Record<string, unknown>,
-    extraTargetDependencies: Record<string, unknown>,
-    excludeTaskDependencies: boolean,
-  ): Record<string, { files?: unknown }>;
+/** Converts a bridge failure into an {@link NxTaskFilesError} with its diagnostic wording. */
+export function toTaskFilesError(error: NxBridgeError): NxTaskFilesError {
+  const { failure } = error;
+  return new NxTaskFilesError(
+    failure.kind === "load"
+      ? `${failure.module} cannot be loaded from the installed Nx (${failure.reason})`
+      : `the installed Nx lacks ${failure.exportName} in ${failure.module}`,
+  );
 }
 
 /** The internal parts of the installed Nx that the check uses, loaded. */
 export interface NxTaskFileParts {
   /** `HashPlanInspector` of `nx/src/hasher/hash-plan-inspector`. */
-  Inspector: new (...args: unknown[]) => HashPlanInspector;
+  Inspector: new (...args: unknown[]) => NxHashPlanInspector;
   /** `globWithWorkspaceContextSync` of `nx/src/utils/workspace-context`. */
   glob: (workspaceRoot: string, globs: string[]) => unknown;
 }
@@ -60,19 +64,18 @@ export interface NxTaskFileParts {
  */
 // @mara implements DES-BUILD-INPUT-CHECK
 export function nxTaskFileParts(workspaceRoot: string): NxTaskFileParts {
-  const Inspector = load("nx/src/hasher/hash-plan-inspector", workspaceRoot).HashPlanInspector;
-  if (typeof Inspector !== "function") {
-    throw new NxTaskFilesError(
-      "the installed Nx lacks HashPlanInspector in nx/src/hasher/hash-plan-inspector",
-    );
+  try {
+    const { HashPlanInspector: Inspector } = loadHashPlanInspector(workspaceRoot);
+    const { globWithWorkspaceContextSync: glob } = loadWorkspaceContext(workspaceRoot, [
+      "globWithWorkspaceContextSync",
+    ]);
+    return { Inspector, glob };
+  } catch (error) {
+    if (error instanceof NxBridgeError) {
+      throw toTaskFilesError(error);
+    }
+    throw error;
   }
-  const glob = load("nx/src/utils/workspace-context", workspaceRoot).globWithWorkspaceContextSync;
-  if (typeof glob !== "function") {
-    throw new NxTaskFilesError(
-      "the installed Nx lacks globWithWorkspaceContextSync in nx/src/utils/workspace-context",
-    );
-  }
-  return { Inspector, glob } as NxTaskFileParts;
 }
 
 /**
@@ -143,33 +146,6 @@ export async function nxTaskFiles(
 // @mara implements DES-DIAGNOSTICS
 export function skippedCheckWarning(task: string, error: NxTaskFilesError): string {
   return `nx-rust: ${task}: the build input check did not run, because ${error.message}, so Nx caches the result without it. Use an Nx version that @convesoft/nx-rust supports, or a version of @convesoft/nx-rust that supports the installed one.`;
-}
-
-/**
- * A module of the installed Nx, resolved from the repository as Nx resolves
- * itself, else from the plugin.
- *
- * @throws {NxTaskFilesError} When it cannot be loaded.
- */
-export function load(path: string, workspaceRoot: string): Record<string, unknown> {
-  try {
-    return require(resolveFromRepository(path, workspaceRoot));
-  } catch (error) {
-    const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
-    throw new NxTaskFilesError(`${path} cannot be loaded from the installed Nx (${reason})`);
-  }
-}
-
-// Where Nx resolves from the repository, as the version check does; otherwise
-// from the plugin.
-function resolveFromRepository(path: string, workspaceRoot: string): string {
-  try {
-    return require.resolve(path, {
-      paths: [join(workspaceRoot, ".nx", "installation"), workspaceRoot],
-    });
-  } catch {
-    return require.resolve(path);
-  }
 }
 
 function isPathList(value: unknown): value is string[] {

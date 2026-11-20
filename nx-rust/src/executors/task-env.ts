@@ -1,5 +1,11 @@
 import type { ProjectGraph, Task } from "@nx/devkit";
 import { join } from "node:path";
+import {
+  loadCreateTaskGraph,
+  loadTaskEnv,
+  NxBridgeError,
+  type NxTaskEnv,
+} from "../compatibility/nx-bridge";
 
 /**
  * Why the batch cannot rebuild a task's environment: the installed Nx lacks,
@@ -11,6 +17,16 @@ export class TaskEnvironmentError extends Error {
     super(message);
     this.name = "TaskEnvironmentError";
   }
+}
+
+/** Converts a bridge failure into a {@link TaskEnvironmentError} with its diagnostic wording. */
+export function toTaskEnvironmentError(error: NxBridgeError): TaskEnvironmentError {
+  const { failure } = error;
+  return new TaskEnvironmentError(
+    failure.kind === "load"
+      ? `${failure.module} cannot be loaded from the installed Nx (${failure.reason})`
+      : `the installed Nx lacks ${failure.exportName} in ${failure.module}`,
+  );
 }
 
 /**
@@ -288,9 +304,14 @@ export function withoutUnloadedRootValues(env: NodeJS.ProcessEnv, root: string):
   if (env.NX_LOAD_DOT_ENV_FILES === "true") {
     return env;
   }
-  const unload = nxTaskEnv(root).module.unloadDotEnvFile;
-  if (typeof unload !== "function") {
-    throw new TaskEnvironmentError(`the installed Nx lacks unloadDotEnvFile in ${path}`);
+  let unload: NxTaskEnv["unloadDotEnvFile"];
+  try {
+    unload = loadTaskEnv(root, ["unloadDotEnvFile"]).unloadDotEnvFile;
+  } catch (error) {
+    if (error instanceof NxBridgeError) {
+      throw toTaskEnvironmentError(error);
+    }
+    throw error;
   }
   const rest: NodeJS.ProcessEnv = { ...env };
   const kept: NodeJS.ProcessEnv = {};
@@ -352,21 +373,8 @@ export function batchTaskEnvironment(
   });
 }
 
-/** `getTaskSpecificEnv` of Nx 24, the dotenv layer of a task's environment. */
-type TaskSpecificEnv = (task: Task, graph: ProjectGraph) => unknown;
-
 /** `getEnvVariablesForTask` of Nx 24, which lays the per-task layer over it. */
-export type EnvVariablesForTask = (
-  task: Task,
-  taskSpecificEnv: NodeJS.ProcessEnv,
-  forceColor: string | undefined,
-  skipNxCache: boolean,
-  captureStderr: boolean,
-  outputPath: string | null,
-  streamOutput: boolean | null,
-) => unknown;
-
-const path = "nx/src/tasks-runner/task-env";
+export type EnvVariablesForTask = NxTaskEnv["getEnvVariablesForTask"];
 
 /**
  * The environment of each task of a batch, as Nx builds it for the task run
@@ -403,14 +411,17 @@ export function taskEnvironments(
   graph: ProjectGraph,
   shielded: (task: Task) => readonly string[] = () => [],
 ): (task: Task) => NodeJS.ProcessEnv {
-  const { module } = nxTaskEnv(root);
-  const dotenvLayer = module?.getTaskSpecificEnv as TaskSpecificEnv | undefined;
-  const taskLayer = module?.getEnvVariablesForTask as EnvVariablesForTask | undefined;
-  if (typeof dotenvLayer !== "function") {
-    throw new TaskEnvironmentError(`the installed Nx lacks getTaskSpecificEnv in ${path}`);
-  }
-  if (typeof taskLayer !== "function") {
-    throw new TaskEnvironmentError(`the installed Nx lacks getEnvVariablesForTask in ${path}`);
+  let dotenvLayer: NxTaskEnv["getTaskSpecificEnv"];
+  let taskLayer: EnvVariablesForTask;
+  try {
+    const loaded = loadTaskEnv(root, ["getTaskSpecificEnv", "getEnvVariablesForTask"]);
+    dotenvLayer = loaded.getTaskSpecificEnv;
+    taskLayer = loaded.getEnvVariablesForTask;
+  } catch (error) {
+    if (error instanceof NxBridgeError) {
+      throw toTaskEnvironmentError(error);
+    }
+    throw error;
   }
   return (task) => {
     // Nx's getTaskSpecificEnv reads the batch process's own environment.
@@ -475,22 +486,6 @@ function environment(value: unknown, part: string, task: Task): NodeJS.ProcessEn
 }
 
 /**
- * `nx/src/tasks-runner/task-env` of the installed Nx, which is no public API
- * (`RISK-UPSTREAM-CHANGES`), and the file it was loaded from.
- *
- * @throws {TaskEnvironmentError} When it cannot be loaded.
- */
-export function nxTaskEnv(root: string): { module: Record<string, unknown>; file: string } {
-  try {
-    const file = resolveFromRepository(path, root);
-    return { module: require(file), file };
-  } catch (error) {
-    const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
-    throw new TaskEnvironmentError(`${path} cannot be loaded from the installed Nx (${reason})`);
-  }
-}
-
-/**
  * The configuration with which Nx 24 would run `target` of `project` for a
  * command that passes `configuration`, by the installed Nx's own rule
  * (`ProcessTasks.resolveConfiguration` in `create-task-graph.js`): the
@@ -507,21 +502,14 @@ export function nxTaskConfiguration(
   target: string,
   configuration: string | undefined,
 ): string | undefined {
-  const module = "nx/src/tasks-runner/create-task-graph";
-  let processTasks: unknown;
+  let resolve: ReturnType<typeof loadCreateTaskGraph>["resolveConfiguration"];
   try {
-    processTasks = (require(resolveFromRepository(module, root)) as Record<string, unknown>)
-      .ProcessTasks;
+    resolve = loadCreateTaskGraph(root).resolveConfiguration;
   } catch (error) {
-    const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
-    throw new TaskEnvironmentError(`${module} cannot be loaded from the installed Nx (${reason})`);
-  }
-  const resolve = (processTasks as { prototype?: { resolveConfiguration?: unknown } } | undefined)
-    ?.prototype?.resolveConfiguration;
-  if (typeof resolve !== "function") {
-    throw new TaskEnvironmentError(
-      `the installed Nx lacks ProcessTasks.resolveConfiguration in ${module}`,
-    );
+    if (error instanceof NxBridgeError) {
+      throw toTaskEnvironmentError(error);
+    }
+    throw error;
   }
   const node = graph.nodes[project];
   if (node === undefined) {
@@ -529,14 +517,4 @@ export function nxTaskConfiguration(
   }
   const resolved: unknown = resolve.call({ projectGraph: graph }, node, target, configuration);
   return typeof resolved === "string" && resolved !== "" ? resolved : undefined;
-}
-
-// Where Nx resolves from the repository, as the version check does; otherwise
-// from the plugin.
-function resolveFromRepository(module: string, root: string): string {
-  try {
-    return require.resolve(module, { paths: [join(root, ".nx", "installation"), root] });
-  } catch {
-    return require.resolve(module);
-  }
 }

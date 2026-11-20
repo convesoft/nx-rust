@@ -5,6 +5,13 @@ import type {
   ProjectConfiguration,
 } from "@nx/devkit";
 import { basename } from "node:path";
+import {
+  loadDevkitInternals,
+  loadGetPlugins,
+  loadRetrieveWorkspaceFiles,
+  NxBridgeError,
+  readNxPackageVersion,
+} from "../../compatibility/nx-bridge";
 import { describeNxMajors, nxVerdictFor, supportedNxMajors } from "../../compatibility/nx-version";
 import type { CargoWorkspace } from "../../graph/discovery";
 import type { FeatureUnification } from "../../graph/settings";
@@ -243,44 +250,38 @@ interface NxInternals {
  * @throws {UnsupportedNxError} When a part is missing or of another kind.
  */
 function nxInternals(workspaceRoot: string): NxInternals {
-  const version = nxVersion(workspaceRoot);
-  const modules = {
-    "nx/src/devkit-internals": [
-      "LoadedNxPlugin",
-      "retrieveProjectConfigurations",
-      "isProjectConfigurationsError",
-    ],
-    "nx/src/project-graph/plugins/get-plugins": ["getPluginsSeparated"],
-    "nx/src/project-graph/utils/retrieve-workspace-files": ["retrieveWorkspaceFiles"],
-  };
-  const internals: Record<string, unknown> = { version };
-  for (const [path, names] of Object.entries(modules)) {
-    let module: Record<string, unknown>;
-    try {
-      module = require(require.resolve(path, { paths: [workspaceRoot] }));
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new UnsupportedNxError(version, `${path} could not be loaded (${reason})`);
+  const version = readNxPackageVersion(workspaceRoot);
+  try {
+    const devkit = loadDevkitInternals(
+      workspaceRoot,
+      ["LoadedNxPlugin", "retrieveProjectConfigurations", "isProjectConfigurationsError"],
+      { optional: ["ProcessDependenciesError"] },
+    );
+    const { getPluginsSeparated } = loadGetPlugins(workspaceRoot);
+    const { retrieveWorkspaceFiles } = loadRetrieveWorkspaceFiles(workspaceRoot, [
+      "retrieveWorkspaceFiles",
+    ]);
+    return {
+      version,
+      LoadedNxPlugin: devkit.LoadedNxPlugin,
+      retrieveProjectConfigurations: devkit.retrieveProjectConfigurations,
+      isProjectConfigurationsError: devkit.isProjectConfigurationsError,
+      ...(devkit.ProcessDependenciesError === undefined
+        ? {}
+        : { ProcessDependenciesError: devkit.ProcessDependenciesError }),
+      getPluginsSeparated,
+      retrieveWorkspaceFiles,
+    };
+  } catch (error) {
+    if (error instanceof NxBridgeError) {
+      const detail =
+        error.failure.kind === "load"
+          ? `${error.failure.module} could not be loaded (${error.failure.fullReason})`
+          : error.message;
+      throw new UnsupportedNxError(version, detail);
     }
-    for (const name of names) {
-      const part = module?.[name];
-      if (name === "LoadedNxPlugin") {
-        if (typeof part !== "function" || typeof part.prototype !== "object") {
-          throw new UnsupportedNxError(version, `${name} from ${path} is not a constructor`);
-        }
-      } else if (typeof part !== "function") {
-        throw new UnsupportedNxError(version, `${name} from ${path} is not a function`);
-      }
-      internals[name] = part;
-    }
-    if (
-      path === "nx/src/devkit-internals" &&
-      typeof module.ProcessDependenciesError === "function"
-    ) {
-      internals.ProcessDependenciesError = module.ProcessDependenciesError;
-    }
+    throw error;
   }
-  return internals as unknown as NxInternals;
 }
 
 // The plugins of `nx.json` other than this one's entries, and Nx's default
@@ -331,13 +332,13 @@ function readConfigurations(result: unknown, workspaceRoot: string): Configurati
     !value.matchingProjectFiles.every((file) => typeof file === "string")
   ) {
     throw new UnsupportedNxError(
-      nxVersion(workspaceRoot),
+      readNxPackageVersion(workspaceRoot),
       "the result of retrieveProjectConfigurations from nx/src/devkit-internals has no matchingProjectFiles list of file paths",
     );
   }
   if (!isRecord(value.projects) || !isRecord(value.projectRootMap)) {
     throw new UnsupportedNxError(
-      nxVersion(workspaceRoot),
+      readNxPackageVersion(workspaceRoot),
       "the result of retrieveProjectConfigurations from nx/src/devkit-internals has no projects and projectRootMap by project root",
     );
   }
@@ -421,16 +422,4 @@ function dependenciesErrorMessage(nx: NxInternals, name: string, cause: unknown)
   return nx.ProcessDependenciesError === undefined
     ? `The "${name}" plugin threw an error while creating dependencies: ${error.message}`
     : new nx.ProcessDependenciesError(name, { cause: error }).message;
-}
-
-// The version of the Nx installed in the repository, if it can be read.
-function nxVersion(workspaceRoot: string): string | undefined {
-  try {
-    const version: unknown = require(
-      require.resolve("nx/package.json", { paths: [workspaceRoot] }),
-    ).version;
-    return typeof version === "string" ? version : undefined;
-  } catch {
-    return undefined;
-  }
 }
