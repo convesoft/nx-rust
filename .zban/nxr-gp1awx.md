@@ -1,6 +1,6 @@
 ---
 title: Run cargo metadata concurrently for independent Cargo workspaces in ComputationReports
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 created_at: 2026-11-20T10:24:46Z

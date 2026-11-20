@@ -1,6 +1,6 @@
 ---
 title: Harden plugin entry state wiring against hook destructuring and this rebinding
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 created_at: 2026-11-20T10:24:47Z

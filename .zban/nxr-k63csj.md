@@ -1,6 +1,6 @@
 ---
 title: Review and harden unreported-task deferral in batch.ts
-status: todo
+status: in-progress
 type: task
 priority: low
 parent: nxr-e2z8sz

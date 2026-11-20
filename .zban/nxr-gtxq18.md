@@ -1,6 +1,6 @@
 ---
 title: Unify private nx/src/* loaders into one bridge and fix .nx/installation resolution
-status: todo
+status: in-progress
 type: bug
 parent: nxr-e2z8sz
 created_at: 2026-11-20T10:24:40Z
