@@ -2,6 +2,7 @@
 title: Make the hold check of test-after-build.spec.ts able to fail without the test-on-build dependency
 status: todo
 type: bug
+parent: nxr-e2z8sz
 discovered_from: nxr-11vr5k
 created_at: 2026-11-20T18:24:46Z
 ---
