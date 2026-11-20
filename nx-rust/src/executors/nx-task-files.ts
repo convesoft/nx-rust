@@ -16,7 +16,9 @@ export interface NxTaskFiles {
   /**
    * The files that Nx sees below a folder, relative to the repository root:
    * none that `.gitignore`, `.nxignore` or Nx's fixed exclusions leave out,
-   * and none below a symbolic link to a folder.
+   * and none below a symbolic link to a folder. The repository is listed on
+   * the first call alone, so an instance serves one check and is made after
+   * the cargo call whose build it judges.
    *
    * @param folder A path relative to the repository root, `""` for the root.
    */
@@ -123,16 +125,27 @@ export async function nxTaskFiles(
       `the inputs that HashPlanInspector of the installed Nx gives for ${id} hold no list of files`,
     );
   }
+  // The repository's files as Nx sees them, listed once on first use and
+  // kept for the instance's lifetime. The check makes an instance after the
+  // task's cargo call and drops it when that task's comparison ends, with no
+  // write of files in between (`DES-BUILD-INPUT-CHECK`), so the list cannot
+  // be older than the build it judges for want of being listed again.
+  let repositoryFiles: string[] | undefined;
   return {
     inputFiles: new Set(files),
     filesBelow(folder) {
-      const all = glob(context.root, ["**/*"]);
-      if (!isPathList(all)) {
-        throw new NxTaskFilesError(
-          "globWithWorkspaceContextSync of the installed Nx gives no list of file paths",
-        );
+      if (repositoryFiles === undefined) {
+        const all = glob(context.root, ["**/*"]);
+        if (!isPathList(all)) {
+          throw new NxTaskFilesError(
+            "globWithWorkspaceContextSync of the installed Nx gives no list of file paths",
+          );
+        }
+        repositoryFiles = all;
       }
-      return folder === "" ? all : all.filter((file) => file.startsWith(`${folder}/`));
+      return folder === ""
+        ? [...repositoryFiles]
+        : repositoryFiles.filter((file) => file.startsWith(`${folder}/`));
     },
   };
 }
