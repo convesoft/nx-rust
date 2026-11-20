@@ -29,8 +29,8 @@ export interface CargoTargetOptions {
   args?: string;
   /** Selection of affected tests on `test`; no flag (nxr-tabkjx). */
   affectedTests?: boolean;
-  /** The JS flavour of `wasm-build`, the `--target` of the `wasm-bindgen` CLI; no flag of cargo. */
-  jsFlavour?: string;
+  /** The wasm target of `wasm-build`, the `--target` of the `wasm-bindgen` CLI; no flag of cargo. */
+  wasmTarget?: string;
   /**
    * On the coverage baseline target: always collect everything, never
    * `collect --diff` (`DES-BASELINE`, the switch for nightly and full runs); no flag.
@@ -94,7 +94,7 @@ export const optionTargets: Readonly<Record<TargetOptionName, ReadonlySet<Inferr
   bin: new Set(["run"]),
   args: new Set(["run"]),
   affectedTests: new Set(["test"]),
-  jsFlavour: new Set(["wasm-build"]),
+  wasmTarget: new Set(["wasm-build"]),
   fullCollect: new Set(["coverage-baseline"]),
   diffOnly: new Set(["coverage-baseline"]),
   fullCollectThreshold: new Set(["coverage-baseline"]),

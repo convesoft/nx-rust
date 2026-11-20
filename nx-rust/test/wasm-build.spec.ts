@@ -118,7 +118,7 @@ describe("the compile of wasm-build", () => {
     ({
       task: "codec:wasm-build",
       target: "wasm-build",
-      options: { jsFlavour: "bundler" },
+      options: { wasmTarget: "bundler" },
       binaryArguments: [],
       warnings: [],
       locked: false,
@@ -163,7 +163,7 @@ describe("the compile of wasm-build", () => {
     expect(
       cargoArguments(
         { target: "wasm-build", crates, locked: true },
-        { jsFlavour: "web", profile: "release", targetTriple: host, features: ["extra"] },
+        { wasmTarget: "web", profile: "release", targetTriple: host, features: ["extra"] },
       ),
     ).toEqual([
       "build",
@@ -236,7 +236,7 @@ describe("wasm-build", () => {
         expect(target).toMatchObject({
           executor: "@convesoft/nx-rust:cargo-outputs",
           cache: true,
-          options: { jsFlavour: "bundler" },
+          options: { wasmTarget: "bundler" },
           outputs: ["{projectRoot}/pkg"],
           dependsOn: [expect.objectContaining({ target: "lockfile" })],
         });
@@ -419,19 +419,19 @@ if (cli === undefined || !target) {
   () => {
     const env = () => ({ PATH: pathWith(cli ?? "") });
 
-    /** What Node gets from `expression` with the package's module loaded as `m`, for each flavour. */
+    /** What Node gets from `expression` with the package's module loaded as `m`, for each wasmTarget. */
     function load(
       workspace: FixtureWorkspace,
       crate: string,
       module: string,
-      flavour: string,
+      wasmTarget: string,
       expression: string,
     ): string {
       const folder = join(workspace.root, crate, "pkg");
       const script =
-        flavour === "nodejs"
+        wasmTarget === "nodejs"
           ? `const m = require(${JSON.stringify(join(folder, `${module}.js`))}); console.log(JSON.stringify(${expression}));`
-          : flavour === "web"
+          : wasmTarget === "web"
             ? // As a browser loads it: the module's own init with the bytes of the .wasm file.
               `import(${JSON.stringify(join(folder, `${module}.js`))}).then((m) => { m.initSync({ module: require("node:fs").readFileSync(${JSON.stringify(join(folder, `${module}_bg.wasm`))}) }); console.log(JSON.stringify(${expression})); });`
             : `import(${JSON.stringify(join(folder, `${module}.js`))}).then((m) => console.log(JSON.stringify(${expression})));`;
@@ -441,7 +441,7 @@ if (cli === undefined || !target) {
     }
 
     it(
-      "builds each crate's package with a compile of its own under workspace-build, which Node loads in every JS flavour, and which Nx restores",
+      "builds each crate's package with a compile of its own under workspace-build, which Node loads in every JS wasmTarget, and which Nx restores",
       async () => {
         const workspace = FixtureWorkspace.create("wasm-packages");
         try {
@@ -478,15 +478,15 @@ if (cli === undefined || !target) {
           );
           expect(wasmCompiles(workspace)).toEqual([]);
 
-          for (const flavour of ["web", "nodejs"]) {
+          for (const wasmTarget of ["web", "nodejs"]) {
             const other = await nx(
               workspace,
-              ["run", "codec:wasm-build", `--jsFlavour=${flavour}`],
+              ["run", "codec:wasm-build", `--wasmTarget=${wasmTarget}`],
               env(),
             );
             expectSuccess(other);
             expect(restored(other.output, "codec:wasm-build")).toBe(false);
-            expect(load(workspace, codec, "codec", flavour, "m.encode(5)")).toBe("11");
+            expect(load(workspace, codec, "codec", wasmTarget, "m.encode(5)")).toBe("11");
           }
         } finally {
           workspace.remove();
@@ -504,7 +504,11 @@ if (cli === undefined || !target) {
           "rust/crates/codec/src/main.rs": 'fn main() {\n    println!("hello CLI");\n}\n',
         });
         try {
-          const run = await nx(workspace, ["run", "codec:wasm-build", "--jsFlavour=nodejs"], env());
+          const run = await nx(
+            workspace,
+            ["run", "codec:wasm-build", "--wasmTarget=nodejs"],
+            env(),
+          );
           expectSuccess(run);
           const spec = packageSpec(workspace.root, "rust", "codec");
           expect(wasmCompiles(workspace)).toEqual([aloneArgs(spec)]);

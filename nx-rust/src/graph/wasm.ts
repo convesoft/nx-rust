@@ -10,14 +10,14 @@ export const wasmTriple = "wasm32-unknown-unknown";
  */
 export const wasmPackageFolder = "pkg";
 
-/** The JS flavours of the `wasm-bindgen` CLI that `wasm-build` takes, its `--target` values (`DES-WASM`). */
-export const jsFlavours = ["bundler", "web", "nodejs"] as const;
+/** The wasm targets of the `wasm-bindgen` CLI that `wasm-build` takes, its `--target` values (`DES-WASM`). */
+export const wasmTargets = ["bundler", "web", "nodejs"] as const;
 
-/** A JS flavour of {@link jsFlavours}. */
-export type JsFlavour = (typeof jsFlavours)[number];
+/** A wasm target of {@link wasmTargets}. */
+export type WasmTarget = (typeof wasmTargets)[number];
 
-/** The JS flavour that the inferred `wasm-build` sets in its options: the CLI's own default. */
-export const defaultJsFlavour: JsFlavour = "bundler";
+/** The wasm target that the inferred `wasm-build` sets in its options: the CLI's own default. */
+export const defaultWasmTarget: WasmTarget = "bundler";
 
 /**
  * The variables that the `wasm-bindgen` CLI reads and that change what it

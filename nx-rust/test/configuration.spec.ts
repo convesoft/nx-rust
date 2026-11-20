@@ -899,7 +899,7 @@ describe("options in the target tables", () => {
   const testOptions =
     'The options that "test" takes are "features", "allFeatures", "noDefaultFeatures", "profile" and "affectedTests".';
   const cargoOptions =
-    'The options that @convesoft/nx-rust:cargo knows are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple", "allTargets", "noDeps", "jsFlavour" and "affectedTests".';
+    'The options that @convesoft/nx-rust:cargo knows are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple", "allTargets", "noDeps", "wasmTarget" and "affectedTests".';
 
   it.each<[string, FixtureName, FileChanges, string[]]>([
     [
@@ -961,6 +961,20 @@ describe("options in the target tables", () => {
       [
         'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc.options] sets the option "open", which @convesoft/nx-rust:cargo-outputs, the executor of the inferred target "doc", does not know. The options that "doc" takes are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple" and "noDeps".',
         'rust/Cargo.toml: [workspace.metadata.nx.project.targets.doc.configurations.ci] sets the option "documentPrivateItems", which @convesoft/nx-rust:cargo-outputs, the executor of the inferred target "doc", does not know.',
+      ],
+    ],
+    [
+      // The option was renamed to wasmTarget before anything was published, so
+      // the old name has no alias and is unknown like any other name.
+      "the former name jsFlavour of wasm-build's option wasmTarget",
+      "wasm-packages",
+      {
+        "rust/crates/codec/Cargo.toml": appendTo(
+          '[package.metadata.nx.targets.wasm-build.options]\njsFlavour = "web"',
+        ),
+      },
+      [
+        'rust/crates/codec/Cargo.toml: [package.metadata.nx.targets.wasm-build.options] sets the option "jsFlavour", which @convesoft/nx-rust:cargo-outputs, the executor of the inferred target "wasm-build", does not know. The options that "wasm-build" takes are "features", "allFeatures", "noDefaultFeatures", "profile" and "wasmTarget".',
       ],
     ],
     [

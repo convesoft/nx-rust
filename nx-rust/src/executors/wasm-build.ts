@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { type Lockfile, LockfileError, parseLockfile, reachedEntries } from "../cargo/lockfile";
 import type { TargetCargoMetadata } from "../graph/targets";
-import { type JsFlavour, jsFlavours, wasmPackageFolder, wasmTriple } from "../graph/wasm";
+import { type WasmTarget, wasmTargets, wasmPackageFolder, wasmTriple } from "../graph/wasm";
 import {
   describeFolder,
   findExecutable,
@@ -23,8 +23,8 @@ export interface WasmTask {
   cli: string;
   /** The CLI's version, which matches the `wasm-bindgen` crate in the lockfile. */
   version: string;
-  /** The JS flavour, the CLI's `--target`. */
-  flavour: JsFlavour;
+  /** The wasm target, the CLI's `--target`. */
+  wasmTarget: WasmTarget;
 }
 
 /** Thrown by {@link prepareWasmTask} with the message with which the task fails before cargo. */
@@ -42,7 +42,7 @@ export class WasmTaskError extends Error {
  * - the crate's library has the file name of another crate's file, which
  *   graph creation records ({@link TargetCargoMetadata.sharedLibrary}), so
  *   that cargo builds one `.wasm` file for both;
- * - the `jsFlavour` option is none of `bundler`, `web` and `nodejs`;
+ * - the `wasmTarget` option is none of `bundler`, `web` and `nodejs`;
  * - the toolchain that the workspace root selects has no standard library
  *   for the wasm triple;
  * - the `wasm-bindgen` CLI is not on the task's `PATH`, as cargo looks it
@@ -67,7 +67,7 @@ export function prepareWasmTask(
   crateFolder: string,
   cwd: string,
   env: NodeJS.ProcessEnv,
-  options: { jsFlavour?: unknown },
+  options: { wasmTarget?: unknown },
   repositoryRoot: string,
   version?: string,
 ): WasmTask {
@@ -76,10 +76,10 @@ export function prepareWasmTask(
       `${task}: the library of ${crate} has the file name of another crate's library: ${metadata.sharedLibrary}. Cargo builds one file for crates whose libraries share a file name, so that the wasm package could hold the other crate's functions. The task does not run, so that Nx stores no result for it. Give the crates different [lib] names in their Cargo.toml.`,
     );
   }
-  const flavour = options.jsFlavour;
-  if (typeof flavour !== "string" || !(jsFlavours as readonly string[]).includes(flavour)) {
+  const wasmTarget = options.wasmTarget;
+  if (typeof wasmTarget !== "string" || !(wasmTargets as readonly string[]).includes(wasmTarget)) {
     throw new WasmTaskError(
-      `${task}: the option jsFlavour is ${JSON.stringify(flavour)}, but wasm-build writes the JS flavours ${describeList(jsFlavours.map((name) => `"${name}"`))} of the wasm-bindgen CLI. Set jsFlavour to one of them.`,
+      `${task}: the option wasmTarget is ${JSON.stringify(wasmTarget)}, but wasm-build writes the wasm targets ${describeList(wasmTargets.map((name) => `"${name}"`))} of the wasm-bindgen CLI. Set wasmTarget to one of them.`,
     );
   }
   const workspace = describeFolder(relative(repositoryRoot, cwd) || ".");
@@ -122,7 +122,7 @@ export function prepareWasmTask(
       `${task}: the wasm-bindgen CLI is ${cliVersion}, but Cargo.lock locks the wasm-bindgen crate of ${crate} at ${locked[0]}, and the CLI post-processes only the version it was released with. The task does not run, so that Nx stores no result for it. Install the matching CLI with \`cargo install --locked wasm-bindgen-cli --version ${locked[0]}\`.`,
     );
   }
-  return { crateFolder, cli, version: cliVersion, flavour: flavour as JsFlavour };
+  return { crateFolder, cli, version: cliVersion, wasmTarget: wasmTarget as WasmTarget };
 }
 
 /**
@@ -207,7 +207,7 @@ export async function runWasmGroup(
 /**
  * Writes a task's package (`DES-WASM`, "Post-processing"): removes the
  * package folder of an earlier run, then runs the `wasm-bindgen` CLI with
- * the task's JS flavour on the file that cargo reported in this compile,
+ * the task's wasm target on the file that cargo reported in this compile,
  * with the environment that cargo had, so that it writes the package
  * folder anew.
  */
@@ -232,7 +232,7 @@ function postProcess(
   }
   const folder = join(wasm.crateFolder, wasmPackageFolder);
   rmSync(folder, { recursive: true, force: true });
-  const run = spawnSync(wasm.cli, ["--target", wasm.flavour, "--out-dir", folder, reported[0]], {
+  const run = spawnSync(wasm.cli, ["--target", wasm.wasmTarget, "--out-dir", folder, reported[0]], {
     cwd: invocation.cwd,
     env: cargoEnvironment(invocation, prepared.env),
     encoding: "utf8",

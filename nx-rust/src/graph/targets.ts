@@ -14,7 +14,7 @@ import { producesNodeAddon } from "./napi";
 import type { TargetNames } from "./options";
 import type { ArtifactKind, FeatureUnification } from "./settings";
 import { hackCrateName, memberNames } from "./unification";
-import { defaultJsFlavour, producesWasmPackage, wasmPackageFolder, wasmTriple } from "./wasm";
+import { defaultWasmTarget, producesWasmPackage, wasmPackageFolder, wasmTriple } from "./wasm";
 
 /**
  * The plugin's cargo executor, which runs every inferred target but `build`
@@ -381,7 +381,7 @@ export interface TargetSubject {
  * report gives as an empty `publish` list, or it is the hack crate that the
  * workspace's cargo-hakari configuration names (`DES-RELEASE`, "Publish
  * target", "Hack crate"), `napi-build` where it produces a Node addon and
- * `wasm-build` where it produces a wasm package, with the JS flavour of
+ * `wasm-build` where it produces a wasm package, with the wasm target of
  * `wasm-bindgen`'s own default in its options (`DES-ARTIFACT-STEPS`,
  * `DES-WASM`). The
  * workspace project gets `doc`, `lockfile`, `audit` and `update`, `deny`
@@ -468,7 +468,7 @@ export function inferTargets(
         target(
           "wasm-build",
           `Builds the crate for ${wasmTriple} with cargo build, and writes the wasm package, the .wasm file with its JS glue and type definitions, into the crate's ${wasmPackageFolder} folder with the wasm-bindgen CLI.`,
-          { jsFlavour: defaultJsFlavour },
+          { wasmTarget: defaultWasmTarget },
         ),
       );
     }

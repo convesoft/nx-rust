@@ -37,10 +37,10 @@
       "type": "boolean",
       "description": "Document the workspace's members only, passed as --no-deps. Taken by doc, where the inferred target sets it."
     },
-    "jsFlavour": {
+    "wasmTarget": {
       "type": "string",
       "enum": ["bundler", "web", "nodejs"],
-      "description": "The JS flavour of the wasm package, passed to the wasm-bindgen CLI as --target. Taken by wasm-build, where the inferred target sets bundler."
+      "description": "The wasm target of the wasm package, passed to the wasm-bindgen CLI as --target. Taken by wasm-build, where the inferred target sets bundler."
     },
     "affectedTests": {
       "type": "boolean",
