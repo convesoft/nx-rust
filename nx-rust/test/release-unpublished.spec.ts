@@ -18,13 +18,14 @@ import {
   testHost,
   uploadNames,
   withPublishCopy,
+  removeSharedRegistry,
 } from "./harness";
 
 // Checks group 8 of VER-RELEASE: the check _Unpublished dependencies_ of
 // DES-RELEASE and the hack crate of cargo-hakari, with the real Nx and
-// cargo, in copies of the fixture publish-crates, each with a harness
-// registry of its own (`SparseRegistry`) that stands in for crates.io and
-// receives the uploads. Every command gets the registry's variables, which
+// cargo, in copies of the fixture publish-crates, each with an empty harness
+// registry (`SparseRegistry`), whose server the file's tests share, that
+// stands in for crates.io and receives the uploads. Every command gets the registry's variables, which
 // pin `CARGO_REGISTRY_DEFAULT` to it, so that the executor runs no probe. No
 // test reaches a real registry. The hack crate is written as cargo-hakari
 // 0.9.39 writes it (`hackCrateFiles`, `EVD-HAKARI-PUBLISHING`); the last case
@@ -114,6 +115,8 @@ function publishedCrates(copy: PublishCopy): string[] {
     .flatMap((call) => call.crates)
     .sort();
 }
+
+afterAll(removeSharedRegistry);
 
 describe("nx release publish with dependencies that are not published", () => {
   it(

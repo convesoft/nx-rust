@@ -11,12 +11,13 @@ import {
   trackedFiles,
   withPublishCopy,
   withReleaseGroups,
+  removeSharedRegistry,
 } from "./harness";
 
 // Checks group 6 of VER-RELEASE: `nx release publish --dry-run` with the
 // plugin's publish executor, with the real Nx and cargo, in copies of the
-// fixture publish-crates, each with a harness registry of its own
-// (`SparseRegistry`), whose variables every command gets: crates.io replaced
+// fixture publish-crates, each with an empty harness registry
+// (`SparseRegistry`), whose server the file's tests share, and whose variables every command gets: crates.io replaced
 // by the registry, its proxy, which refuses every other host, and
 // `CARGO_REGISTRY_DEFAULT`, which chooses the target registry, so that the
 // executor runs no probe. No test reaches a real registry, and no cargo call
@@ -27,6 +28,8 @@ async function bumpBase(copy: PublishCopy): Promise<void> {
   const { status, output } = await nxRelease(copy, ["version", "0.2.0", "--projects", "pub-base"]);
   expect({ status, output }).toMatchObject({ status: 0 });
 }
+
+afterAll(removeSharedRegistry);
 
 describe("nx release publish --dry-run", () => {
   it(

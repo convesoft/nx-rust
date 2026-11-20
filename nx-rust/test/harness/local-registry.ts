@@ -53,6 +53,8 @@ export class LocalRegistry {
   readonly cargoHome: string;
   private readonly index: string;
   private readonly crates: string;
+  /** Whether the index has changes that are not committed, which cargo does not see. */
+  private uncommitted = true;
 
   private constructor(readonly base: string) {
     this.index = join(base, "index");
@@ -66,22 +68,26 @@ export class LocalRegistry {
       `${JSON.stringify({ dl: `file://${this.crates}/{crate}-{version}.crate` })}\n`,
     );
     this.git("init", "-q");
-    this.git("add", "-A");
-    this.git("commit", "-q", "-m", "config");
     writeFileSync(
       join(this.cargoHome, "config.toml"),
       `[source.crates-io]\nreplace-with = "local"\n\n[source.local]\nregistry = "file://${this.index}"\n`,
     );
   }
 
-  /** Creates an empty registry in a new temporary folder and publishes `crates` in order. */
+  /**
+   * Creates an empty registry in a new temporary folder and publishes
+   * `crates` in order. It commits the index once at the end, and before a
+   * crate with dependencies, which `cargo package` resolves against what the
+   * index has committed.
+   */
   static create(crates: readonly RegistryCrate[] = []): LocalRegistry {
     const base = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-registry-")));
     try {
       const registry = new LocalRegistry(base);
       for (const crate of crates) {
-        registry.publish(crate);
+        registry.add(crate);
       }
+      registry.commit("config and crates");
       return registry;
     } catch (error) {
       rmSync(base, { recursive: true, force: true });
@@ -89,8 +95,17 @@ export class LocalRegistry {
     }
   }
 
-  /** Packages the crate version and adds it to the registry and its index. */
+  /** Packages the crate version and adds it to the registry and its index, which it commits. */
   publish(crate: RegistryCrate): void {
+    this.add(crate);
+    this.commit(`${crate.name} ${crate.version}`);
+  }
+
+  /** Packages the crate version and adds it to the registry and to its index, without a commit. */
+  private add(crate: RegistryCrate): void {
+    if ((crate.dependencies ?? []).length > 0 && this.uncommitted) {
+      this.commit("crates");
+    }
     const packaged = packageRegistryCrate(
       crate,
       join(this.base, "sources", `${crate.name}-${crate.version}`),
@@ -111,8 +126,14 @@ export class LocalRegistry {
       // The crate's first version.
     }
     writeFileSync(indexFile, `${lines}${JSON.stringify(entry)}\n`);
+    this.uncommitted = true;
+  }
+
+  /** Commits everything in the index, which is what cargo reads of a git index. */
+  private commit(message: string): void {
     this.git("add", "-A");
-    this.git("commit", "-q", "-m", `${crate.name} ${crate.version}`);
+    this.git("commit", "-q", "-m", message);
+    this.uncommitted = false;
   }
 
   /** Deletes the registry and its Cargo home, unless `NX_RUST_KEEP_FIXTURES` is set. */

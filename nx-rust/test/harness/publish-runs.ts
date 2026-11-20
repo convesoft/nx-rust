@@ -8,12 +8,13 @@ import {
   type RegistryEnvOptions,
   SparseRegistry,
   type SparseRegistryOptions,
+  withSharedRegistry,
 } from "./sparse-registry";
 import { FixtureWorkspace, withoutColours } from "./workspace";
 
 /**
  * A copy of the fixture `publish-crates`, committed to a git repository of
- * its own, with a harness registry of its own (`VER-RELEASE`, groups 6, 7
+ * its own, with an empty harness registry (`VER-RELEASE`, groups 6, 7
  * and 9). Every cargo and Nx command of a test runs with {@link env}: the
  * registry's Cargo home and variables, which the fixture's `registry` keys
  * need for every cargo command, graph creation included, and git's identity.
@@ -59,35 +60,37 @@ export function git(workspace: FixtureWorkspace, ...args: string[]): string {
 }
 
 /**
- * Runs `test` in a new copy of `publish-crates` with a new harness registry,
- * and removes both afterwards.
+ * Runs `test` in a new copy of `publish-crates` with an empty harness
+ * registry, the one that the test file shares ({@link withSharedRegistry}),
+ * and removes the copy afterwards. A test file that uses it removes the
+ * registry with `afterAll(removeSharedRegistry)`.
  */
 export async function withPublishCopy(
   options: PublishCopyOptions,
   test: (copy: PublishCopy) => Promise<void>,
 ): Promise<void> {
-  const registry = await SparseRegistry.start(options.registryOptions);
-  let workspace: FixtureWorkspace | undefined;
-  try {
-    workspace = FixtureWorkspace.create(
-      "publish-crates",
-      typeof options.files === "function" ? options.files(registry) : options.files,
-    );
-    writeFileSync(join(workspace.root, "..", "gitconfig"), "");
-    const copy: PublishCopy = {
-      workspace,
-      registry,
-      env: { ...registry.env(options.registryEnv), ...gitVariables(workspace) },
-    };
-    git(workspace, "init", "--quiet", "--initial-branch=main");
-    options.prepare?.(copy);
-    git(workspace, "add", "--all");
-    git(workspace, "commit", "--quiet", "--message", "The fixture");
-    await test(copy);
-  } finally {
-    workspace?.remove();
-    await registry.remove();
-  }
+  await withSharedRegistry(async (registry) => {
+    let workspace: FixtureWorkspace | undefined;
+    try {
+      workspace = FixtureWorkspace.create(
+        "publish-crates",
+        typeof options.files === "function" ? options.files(registry) : options.files,
+      );
+      writeFileSync(join(workspace.root, "..", "gitconfig"), "");
+      const copy: PublishCopy = {
+        workspace,
+        registry,
+        env: { ...registry.env(options.registryEnv), ...gitVariables(workspace) },
+      };
+      git(workspace, "init", "--quiet", "--initial-branch=main");
+      options.prepare?.(copy);
+      git(workspace, "add", "--all");
+      git(workspace, "commit", "--quiet", "--message", "The fixture");
+      await test(copy);
+    } finally {
+      workspace?.remove();
+    }
+  }, options.registryOptions);
 }
 
 /**

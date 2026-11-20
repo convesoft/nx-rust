@@ -5,8 +5,10 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -17,11 +19,13 @@ import {
   HARNESS_TIMEOUT,
   pinnedToolchain,
   pinnedToolchainAvailable,
+  removeSharedRegistry,
   shortPublishTimeout,
   SparseRegistry,
   SparseRegistryOptions,
   testEnvironment,
   testRunFolder,
+  withSharedRegistry,
 } from "./harness";
 
 // Checks the harness's sparse registry, which the tests of VER-RELEASE
@@ -886,6 +890,185 @@ describe("SparseRegistry", () => {
         await registry.remove();
       }
       expect(existsSync(registry.base)).toBe(false);
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+/**
+ * Uploads a version as `cargo publish` does, without cargo: the metadata and
+ * a `.crate` file, which here holds a few bytes only.
+ */
+async function upload(
+  registry: SparseRegistry,
+  name: string,
+  version: string,
+  to?: { prefix: string; token: string },
+): Promise<number> {
+  const metadata = Buffer.from(
+    JSON.stringify({ name, vers: version, deps: [], features: {}, links: null }),
+  );
+  const crate = Buffer.from(`${name} ${version}`);
+  const lengths = (bytes: Buffer) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32LE(bytes.length);
+    return length;
+  };
+  const response = await fetch(`${registry.url}${to?.prefix ?? ""}/api/v1/crates/new`, {
+    method: "PUT",
+    headers: { authorization: to?.token ?? registry.token },
+    body: Buffer.concat([lengths(metadata), metadata, lengths(crate), crate]),
+  });
+  return response.status;
+}
+
+describe("a registry that the tests of a test file share", () => {
+  afterAll(removeSharedRegistry);
+
+  it(
+    "puts every waiting upload into the index at once when asked to flush the index",
+    async () => {
+      await withSharedRegistry(async (registry) => {
+        await registry.setIndexDelay(Infinity);
+        expect(await upload(registry, "flushed", "0.1.0")).toBe(200);
+        expect(registry.index("flushed")).toEqual([]);
+
+        expect(await registry.flushIndex()).toBe(1);
+
+        expect(registry.index("flushed").map((entry) => entry.vers)).toEqual(["0.1.0"]);
+        expect(await registry.flushIndex()).toBe(0);
+        // The delay stays, and the version stays refused.
+        expect(await upload(registry, "flushed", "0.2.0")).toBe(200);
+        expect(registry.index("flushed").map((entry) => entry.vers)).toEqual(["0.1.0"]);
+        expect(await upload(registry, "flushed", "0.1.0")).toBe(400);
+        // A delay is checked as start() checks it.
+        await expect(registry.setIndexDelay(-1)).rejects.toThrow(
+          "The index delay has to be 0 or more milliseconds, not -1.",
+        );
+        await expect(registry.setIndexDelay(Number.NaN)).rejects.toThrow("not NaN");
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "starts each test with an empty registry on the same server: no index entry, upload, waiting upload, timer, log line, delay or Cargo home cache of the test before",
+    async () => {
+      const timer = 1500;
+      let timedAt = 0;
+      const first = await withSharedRegistry(async (registry) => {
+        registry.seed({ name: "seeded", version: "1.0.0" });
+        expect(
+          await upload(registry, "alpha-crate", "0.1.0", {
+            prefix: "/alpha",
+            ...registry.named.alpha,
+          }),
+        ).toBe(200);
+        expect(await upload(registry, "shown", "0.1.0")).toBe(200);
+        // One upload that waits on a timer, one that waits for ever.
+        await registry.setIndexDelay(timer);
+        timedAt = Date.now();
+        expect(await upload(registry, "timed", "0.1.0")).toBe(200);
+        await registry.setIndexDelay(Infinity);
+        expect(await upload(registry, "never", "0.1.0")).toBe(200);
+        // What cargo and seed with a .crate file leave in the Cargo home and the folder.
+        mkdirSync(join(registry.cargoHome, "registry", "index"), { recursive: true });
+        writeFileSync(join(registry.cargoHome, "registry", "index", "cached"), "");
+        writeFileSync(join(registry.cargoHome, "config.toml"), "# changed by a test\n");
+        mkdirSync(join(registry.base, "sources", "seeded-1.0.0"), { recursive: true });
+        expect(registry.allUploads()).toHaveLength(4);
+        expect(registry.requests()).toHaveLength(4);
+        // The timed upload still waits when the test ends.
+        expect(registry.index("timed")).toEqual([]);
+        return {
+          port: registry.port,
+          home: readdirSync(registry.cargoHome),
+        };
+      });
+      expect(first.home).toEqual(expect.arrayContaining(["config.toml", "registry"]));
+
+      await withSharedRegistry(async (registry) => {
+        expect(registry.port).toBe(first.port);
+        expect(registry.allUploads()).toEqual([]);
+        expect(registry.requests()).toEqual([]);
+        for (const name of ["seeded", "shown", "timed", "never"]) {
+          expect({ name, index: registry.index(name) }).toEqual({ name, index: [] });
+        }
+        expect(registry.index("alpha-crate", "alpha")).toEqual([]);
+        expect(readdirSync(join(registry.base, "index"))).toEqual([]);
+        expect(existsSync(join(registry.base, "sources"))).toBe(false);
+        expect(readdirSync(registry.cargoHome).sort()).toEqual(["config.toml", "credentials.toml"]);
+        expect(readFileSync(join(registry.cargoHome, "config.toml"), "utf8")).toContain(
+          `[source.crates-io]\nreplace-with = "${registryName}"`,
+        );
+        // No upload waits, and the delay is 0 again.
+        expect(await registry.flushIndex()).toBe(0);
+        expect(await upload(registry, "never", "0.1.0")).toBe(200);
+        expect(registry.index("never").map((entry) => entry.vers)).toEqual(["0.1.0"]);
+        // The timer of the earlier test does not fire into this one.
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.max(0, timedAt + timer + 300 - Date.now())),
+        );
+        expect(registry.index("timed")).toEqual([]);
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails the test whose reset fails, without running it, and gives the next test a new server",
+    async () => {
+      // The registry's folder moves away, so that the server cannot create its
+      // empty index again, whatever its permissions.
+      let moved = "";
+      const before = await withSharedRegistry(async (registry) => {
+        expect(await upload(registry, "lost", "0.1.0")).toBe(200);
+        moved = `${registry.base}-moved`;
+        renameSync(registry.base, moved);
+        return registry;
+      });
+      try {
+        let ran = false;
+        await expect(
+          withSharedRegistry(async () => {
+            ran = true;
+          }),
+        ).rejects.toThrow("The test registry's server could not reset");
+        expect(ran).toBe(false);
+        expect(before.stopped).toBe(true);
+      } finally {
+        await before.remove();
+        rmSync(moved, { recursive: true, force: true });
+      }
+      await withSharedRegistry(async (registry) => {
+        expect(registry.port).not.toBe(before.port);
+        expect(registry.allUploads()).toEqual([]);
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "gives a test that stops the server a new one afterwards, and a test that runs while another uses the server a server of its own",
+    async () => {
+      const stopped = await withSharedRegistry(async (registry) => {
+        await registry.stop();
+        return registry.port;
+      });
+      await withSharedRegistry(async (outer) => {
+        expect(outer.stopped).toBe(false);
+        expect(outer.port).not.toBe(stopped);
+        // What env() reads cannot be changed for the next test.
+        expect(() => {
+          (outer.named.alpha as { token: string }).token = "changed";
+        }).toThrow(TypeError);
+        expect(Object.isFrozen(outer.named) && Object.isFrozen(outer.spare)).toBe(true);
+        await withSharedRegistry(async (inner) => {
+          expect(inner.port).not.toBe(outer.port);
+          expect(await upload(inner, "inner", "0.1.0")).toBe(200);
+        });
+        expect(outer.allUploads()).toEqual([]);
+      });
     },
     HARNESS_TIMEOUT,
   );

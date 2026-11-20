@@ -163,6 +163,19 @@ and a Cargo home, lies in the test run's folder. A test starts a registry for
 itself and calls `remove()` when it is done, which stops the server and
 deletes the folder; the server also exits with the process that started it.
 
+The tests of one test file can share one server instead:
+`withSharedRegistry(test)` starts it for the first test and, for each later
+one, empties it first with `reset()`, so that every test finds a registry as
+a new one is: no index entry, `.crate` file, upload, upload that waits for
+the index or its timer, line of `uploads.jsonl` or `requests.jsonl`, index
+delay or file that cargo or `seed` left in the Cargo homes, at the same port
+and with the same tokens. A reset that fails fails the test that asked for
+it, and the next test gets a new server, as does a test after one that
+stopped the server; a test that runs while another uses the server, as with
+`it.concurrent`, gets a server of its own. The file removes the server with
+`afterAll(removeSharedRegistry)`. `withPublishCopy` and the release specs
+use it.
+
 Give cargo and Nx `testEnvironment(registry.env())`. The Cargo home names the
 registry `nx-rust-test` (`SparseRegistry.registryName`), replaces crates.io
 with it, makes it `registry.default`, so that `cargo publish` needs no
@@ -231,7 +244,9 @@ itself can write; and Nx's own requests.
   its unstable `publish.timeout`, so that a test reaches the timeout in a
   second or two. A test that has to show the 60 seconds of a cargo as users
   run it leaves them out and takes the time in a test file of its own, which
-  Jest runs beside the others.
+  Jest runs beside the others. `flushIndex()` puts every upload that waits
+  into the index at once, for a test that lets cargo time out and then needs
+  the index to show the upload.
 - `stop()` stops the server and keeps the files, for a test of a registry that
   does not answer.
 - Beside it, the same server serves two more registries, `alpha` and `beta`

@@ -19,6 +19,7 @@ import {
   uploadNames,
   withPublishCopy,
   withReleaseGroups,
+  removeSharedRegistry,
 } from "./harness";
 
 // Checks group 9 of VER-RELEASE: which registry the plugin's publish
@@ -61,6 +62,8 @@ function namedRegistries(copy: PublishCopy): string[] {
     .filter((call) => !isProbe(call))
     .map((call) => call.args[call.args.indexOf("--registry") + 1] ?? "(none)");
 }
+
+afterAll(removeSharedRegistry);
 
 describe("the registries of nx release publish", () => {
   it(

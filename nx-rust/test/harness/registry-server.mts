@@ -43,10 +43,26 @@
  * The process sends {@link ServerMessage}s and takes {@link ParentMessage}s
  * through its IPC channel, and exits when asked to stop or when its parent
  * goes away.
+ *
+ * `flush-index` puts every upload that waits for the index delay into its
+ * index at once. `reset` empties every registry, so that the server can serve
+ * the next test as if it had just started: it stops the timers of the index
+ * delay and forgets the uploads that wait, sets the delay back to 0, closes
+ * every connection, ignores what requests that arrived before it still do,
+ * and deletes the indexes, the `.crate` files, `uploads.jsonl` and
+ * `requests.jsonl`. It keeps the port and the tokens, and leaves the other
+ * files of the main folder, such as the Cargo homes, to its parent.
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { dirname, join } from "node:path";
@@ -55,12 +71,19 @@ import { dirname, join } from "node:path";
 export type ServerMessage =
   | { type: "listening"; port: number }
   | { type: "settings-applied" }
+  /** The answer to `flush-index`: how many waiting uploads it put into an index. */
+  | { type: "index-flushed"; count: number }
+  /** The answer to `reset`, with the error that stopped it, if one did. */
+  | { type: "reset-done"; error?: string }
   | { type: "failed"; message: string };
 
 /** What the process that started the server sends to it. */
 export type ParentMessage =
   /** `indexDelay` is in milliseconds, `null` for never. */
-  { type: "settings"; indexDelay: number | null } | { type: "stop" };
+  | { type: "settings"; indexDelay: number | null }
+  | { type: "flush-index" }
+  | { type: "reset" }
+  | { type: "stop" };
 
 /** A dependency as `cargo publish` describes it in its upload. */
 export interface PublishDependency {
@@ -215,17 +238,25 @@ class Refusal extends Error {
   }
 }
 
-/** What the registries of one server share: the port and the index delay. */
+/** What the registries of one server share: the port, the index delay and the number of resets. */
 interface ServerState {
   port: number;
   /** In milliseconds; `null` for never. */
   indexDelay: number | null;
+  /** How many times the server was reset; a request that began before a reset writes nothing. */
+  generation: number;
 }
 
 class Registry {
-  /** Uploads not shown in the index yet, by `name@version` without build metadata. */
-  private readonly waiting = new Set<string>();
-  private readonly timers = new Set<NodeJS.Timeout>();
+  /**
+   * Uploads not shown in the index yet, by `name@version` without build
+   * metadata, each with what appends it to the index and its timer, `null`
+   * where the index delay is never.
+   */
+  private readonly waiting = new Map<
+    string,
+    { append: () => void; timer: NodeJS.Timeout | null }
+  >();
   private readonly server: ServerState;
   /** The registry's name, `null` for the main registry. */
   readonly name: string | null;
@@ -287,7 +318,20 @@ class Registry {
     if (request.headers.authorization !== this.token) {
       throw new Refusal(403, "authentication failed: the test registry takes only its own token");
     }
-    const body = await readBody(request);
+    const generation = this.server.generation;
+    let body: Buffer;
+    try {
+      body = await readBody(request);
+    } catch (error) {
+      // A reset closes the connection; what it cut off is not an error to log.
+      if (generation !== this.server.generation) {
+        throw new Refusal(503, "the test registry was reset during the upload");
+      }
+      throw error;
+    }
+    if (generation !== this.server.generation) {
+      throw new Refusal(503, "the test registry was reset during the upload");
+    }
     const { metadata, crate } = parseUpload(body);
     const key = versionKey(metadata.name, metadata.vers);
     if (this.waiting.has(key) || this.indexed(metadata.name).has(key)) {
@@ -325,16 +369,24 @@ class Registry {
       append();
       return;
     }
-    this.waiting.add(key);
-    if (delay === null) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      this.timers.delete(timer);
-      this.waiting.delete(key);
+    const timer =
+      delay === null
+        ? null
+        : setTimeout(() => {
+            this.waiting.delete(key);
+            append();
+          }, delay);
+    this.waiting.set(key, { append, timer });
+  }
+
+  /** Puts every waiting upload into the index now, in the order they arrived, and returns how many. */
+  flushIndex(): number {
+    const waiting = [...this.waiting.values()];
+    this.stopTimers();
+    for (const { append } of waiting) {
       append();
-    }, delay);
-    this.timers.add(timer);
+    }
+    return waiting.length;
   }
 
   /** The versions in a crate's index file. */
@@ -354,11 +406,21 @@ class Registry {
     );
   }
 
+  /** Stops the timers of the waiting uploads and forgets them. */
   stopTimers(): void {
-    for (const timer of this.timers) {
-      clearTimeout(timer);
+    for (const { timer } of this.waiting.values()) {
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
     }
-    this.timers.clear();
+    this.waiting.clear();
+  }
+
+  /** Deletes the index, the `.crate` files and the log of uploads; stop the timers first ({@link stopTimers}). */
+  reset(): void {
+    for (const entry of ["index", "crates", "uploads.jsonl"]) {
+      rmSync(join(this.folder, entry), { recursive: true, force: true });
+    }
   }
 }
 
@@ -466,7 +528,11 @@ function main(): void {
     );
   }
   const tell = (message: ServerMessage) => process.send?.(message);
-  const state: ServerState = { port: 0, indexDelay: delay === "never" ? null : Number(delay) };
+  const state: ServerState = {
+    port: 0,
+    indexDelay: delay === "never" ? null : Number(delay),
+    generation: 0,
+  };
   const registries = [
     new Registry(state, null, folder, token),
     ...others.map((spec) => {
@@ -489,9 +555,13 @@ function main(): void {
     );
 
   const server = createServer((request, response: ServerResponse) => {
+    const generation = state.generation;
     void reply(state, registries, request).then(({ status, type, body }) => {
-      // Logged before the answer, so that the log is complete when cargo exits.
-      log(request, status);
+      // Logged before the answer, so that the log is complete when cargo
+      // exits; not where the server was reset since the request began.
+      if (generation === state.generation) {
+        log(request, status);
+      }
       response.writeHead(status, { "content-type": type });
       response.end(body);
     });
@@ -502,6 +572,22 @@ function main(): void {
     socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
   });
 
+  // Every registry's files, the named ones' folders included, and the log of requests.
+  const reset = () => {
+    state.generation += 1;
+    state.indexDelay = 0;
+    server.closeAllConnections();
+    // Every registry's timers first, so that a deletion that fails leaves none running.
+    for (const registry of registries) {
+      registry.stopTimers();
+    }
+    for (const registry of registries) {
+      registry.reset();
+    }
+    rmSync(join(folder, "registries"), { recursive: true, force: true });
+    rmSync(join(folder, "requests.jsonl"), { force: true });
+    mkdirSync(join(folder, "index"));
+  };
   const stop = () => {
     for (const registry of registries) {
       registry.stopTimers();
@@ -516,6 +602,16 @@ function main(): void {
     } else if (message.type === "settings") {
       state.indexDelay = message.indexDelay;
       tell({ type: "settings-applied" });
+    } else if (message.type === "flush-index") {
+      const count = registries.reduce((sum, registry) => sum + registry.flushIndex(), 0);
+      tell({ type: "index-flushed", count });
+    } else if (message.type === "reset") {
+      try {
+        reset();
+        tell({ type: "reset-done" });
+      } catch (error) {
+        tell({ type: "reset-done", error: (error as Error).message });
+      }
     }
   });
   process.on("disconnect", stop);

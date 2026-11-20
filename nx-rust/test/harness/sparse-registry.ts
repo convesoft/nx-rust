@@ -6,13 +6,14 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { testEnvironment } from "./environment";
 import {
   indexPath,
@@ -138,7 +139,9 @@ export interface RegistryEnvOptions {
  * picks, so that tests, test files and checkouts can each run their own at
  * once, and {@link SparseRegistry.remove} stops it and deletes its folder
  * with the Cargo home. A test that uses one removes it when it is done, as
- * with any fixture. Its folder lies in the test run's folder
+ * with any fixture, or shares the server of its test file through
+ * {@link withSharedRegistry}, which empties it before each test
+ * ({@link SparseRegistry.reset}). Its folder lies in the test run's folder
  * (`testRunFolder()`), so that the end of the run deletes what a crashed
  * test left. The server exits with the process that started it. Because it
  * runs in a process of its own, a test may run cargo or Nx synchronously, as
@@ -190,8 +193,10 @@ export class SparseRegistry {
   /** The registries that the server serves beside this one, by name. */
   readonly named: Readonly<Record<NamedRegistryName, NamedRegistry>>;
   /** The registry that the server serves and nothing names ({@link ServedRegistryName}). */
-  readonly spare: { indexUrl: string; token: string };
+  readonly spare: Readonly<{ indexUrl: string; token: string }>;
   private readonly homes: Readonly<Record<CargoHomeKind, string>>;
+  /** The files of each Cargo home, which {@link reset} writes again, by path. */
+  private readonly homeFiles: ReadonlyMap<string, string>;
   private child: ChildProcess | undefined;
   private exited: Promise<void>;
 
@@ -219,8 +224,16 @@ export class SparseRegistry {
         { name, indexUrl: `sparse+${this.url}/${name}/index/`, token: tokens.named[name] },
       ]),
     ) as Record<NamedRegistryName, NamedRegistry>;
-    this.named = named;
-    this.spare = { indexUrl: `sparse+${this.url}/spare/index/`, token: tokens.spare };
+    // Frozen, so that a test of a shared registry cannot change them for the next.
+    this.named = Object.freeze(
+      Object.fromEntries(
+        Object.entries(named).map(([name, registry]) => [name, Object.freeze(registry)]),
+      ),
+    ) as Readonly<Record<NamedRegistryName, NamedRegistry>>;
+    this.spare = Object.freeze({
+      indexUrl: `sparse+${this.url}/spare/index/`,
+      token: tokens.spare,
+    });
     const name = SparseRegistry.registryName;
     const registries = [
       `[registries.${name}]`,
@@ -255,14 +268,16 @@ export class SparseRegistry {
       "no-default": join(base, "home-no-default"),
       "alpha-replaced": join(base, "home-alpha-replaced"),
     };
+    const homeFiles = new Map<string, string>();
     for (const kind of Object.keys(folders) as CargoHomeKind[]) {
-      mkdirSync(folders[kind], { recursive: true });
-      writeFileSync(join(folders[kind], "config.toml"), contents[kind].join("\n"));
-      writeFileSync(
+      homeFiles.set(join(folders[kind], "config.toml"), contents[kind].join("\n"));
+      homeFiles.set(
         join(folders[kind], "credentials.toml"),
         `[registries.${name}]\ntoken = "${tokens.main}"\n`,
       );
     }
+    this.homeFiles = homeFiles;
+    this.writeHomes();
     this.homes = folders;
     this.cargoHome = folders.default;
   }
@@ -471,32 +486,75 @@ export class SparseRegistry {
    * `Infinity` for never, for the uploads that arrive from now on.
    */
   async setIndexDelay(indexDelay: number): Promise<void> {
-    const child = this.running();
-    child.channel?.ref();
-    try {
-      const applied = new Promise<void>((resolve, reject) => {
-        const onMessage = (message: ServerMessage) => {
-          if (message.type === "settings-applied") {
-            child.off("exit", onExit);
-            child.off("message", onMessage);
-            resolve();
-          }
-        };
-        const onExit = () => {
-          child.off("message", onMessage);
-          reject(new Error("The test registry's server exited."));
-        };
-        child.on("message", onMessage);
-        child.once("exit", onExit);
-      });
-      send(child, {
-        type: "settings",
-        indexDelay: Number.isFinite(indexDelay) ? indexDelay : null,
-      });
-      await applied;
-    } finally {
-      child.channel?.unref();
+    // Checked and rounded as start() checks its option.
+    const delay = delayArgument(indexDelay);
+    await this.ask(
+      { type: "settings", indexDelay: delay === "never" ? null : Number(delay) },
+      "settings-applied",
+    );
+  }
+
+  /**
+   * Puts every upload that waits for the index delay into its registry's
+   * index now, and returns how many there were. The delay stays as it is for
+   * later uploads.
+   */
+  async flushIndex(): Promise<number> {
+    const { count } = await this.ask({ type: "flush-index" }, "index-flushed");
+    return count;
+  }
+
+  /**
+   * Empties the registry, so that the next test finds it as {@link start}
+   * left it, at the same port and with the same tokens: the server forgets
+   * the uploads that wait for the index delay and their timers, sets the
+   * delay back to 0, closes its connections and deletes every index,
+   * `.crate` file and log of uploads and requests; this side deletes what
+   * cargo and {@link seed} wrote into the Cargo homes and the registry's
+   * folder, and writes the homes' configuration again. Then it checks that
+   * nothing is left.
+   *
+   * @throws {Error} Where the server has stopped or could not empty a
+   * registry, or something is left; the registry is then not fit for
+   * another test.
+   */
+  async reset(): Promise<void> {
+    const done = await this.ask({ type: "reset" }, "reset-done");
+    if (done.error !== undefined) {
+      throw new Error(`The test registry's server could not reset: ${done.error}`);
     }
+    // What the server owns and has just emptied, which this side leaves to it and checks.
+    const emptied = ["crates", "uploads.jsonl", "requests.jsonl", "registries"];
+    const kept = new Set([
+      "index",
+      ...emptied,
+      "server.log",
+      ...Object.values(this.homes).map((home) => relative(this.base, home)),
+    ]);
+    for (const entry of readdirSync(this.base)) {
+      if (!kept.has(entry)) {
+        rmSync(join(this.base, entry), { recursive: true, force: true });
+      }
+    }
+    for (const home of Object.values(this.homes)) {
+      rmSync(home, { recursive: true, force: true });
+    }
+    this.writeHomes();
+
+    const left = [
+      ...emptied.filter((entry) => existsSync(join(this.base, entry))),
+      ...readdirSync(join(this.base, "index")).map((entry) => `index/${entry}`),
+    ];
+    if (left.length > 0) {
+      throw new Error(
+        `The test registry's server left files of an earlier test after its reset: ${left.join(", ")}.`,
+      );
+    }
+  }
+
+  /** Whether the server has stopped or exited, so that it answers no request. */
+  get stopped(): boolean {
+    return this.child === undefined || !this.child.connected;
   }
 
   /**
@@ -535,12 +593,118 @@ export class SparseRegistry {
     }
   }
 
+  /** Writes the configuration and credentials of every Cargo home. */
+  private writeHomes(): void {
+    for (const [file, content] of this.homeFiles) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, content);
+    }
+  }
+
+  /** Sends `message` to the server and resolves to its answer of type `answer`; rejects where the server exits first. */
+  private async ask<T extends ServerMessage["type"]>(
+    message: ParentMessage,
+    answer: T,
+  ): Promise<Extract<ServerMessage, { type: T }>> {
+    const child = this.running();
+    child.channel?.ref();
+    try {
+      const answered = new Promise<Extract<ServerMessage, { type: T }>>((resolve, reject) => {
+        const onMessage = (reply: ServerMessage) => {
+          if (reply.type === answer) {
+            child.off("exit", onExit);
+            child.off("message", onMessage);
+            resolve(reply as Extract<ServerMessage, { type: T }>);
+          }
+        };
+        const onExit = () => {
+          child.off("message", onMessage);
+          reject(new Error("The test registry's server exited."));
+        };
+        child.on("message", onMessage);
+        child.once("exit", onExit);
+      });
+      send(child, message);
+      return await answered;
+    } finally {
+      child.channel?.unref();
+    }
+  }
+
   private running(): ChildProcess {
     if (this.child === undefined || !this.child.connected) {
       throw new Error("The test registry's server has stopped.");
     }
     return this.child;
   }
+}
+
+/**
+ * The registry that the tests of one test file share through
+ * {@link withSharedRegistry}. Jest loads the modules afresh for each test
+ * file, so that each file has its own.
+ */
+let shared: SparseRegistry | undefined;
+/** Whether a test is using {@link shared}. */
+let sharedInUse = false;
+
+/**
+ * Runs `test` with a registry that is empty as a new one, whose server the
+ * tests of a test file share, so that each test does not start a server of
+ * its own; the test file removes it with {@link removeSharedRegistry} in its
+ * `afterAll`. The first test starts it, and each later one resets it first
+ * ({@link SparseRegistry.reset}); a reset that fails fails the test, and the
+ * next test starts a new server. A test that stops the server, or runs while
+ * another test of the same file uses it, as with `it.concurrent`, gets a
+ * server of its own, which is removed after it.
+ */
+export async function withSharedRegistry<T>(
+  test: (registry: SparseRegistry) => Promise<T>,
+  options: SparseRegistryOptions = {},
+): Promise<T> {
+  if (sharedInUse) {
+    const own = await SparseRegistry.start(options);
+    try {
+      return await test(own);
+    } finally {
+      await own.remove();
+    }
+  }
+  sharedInUse = true;
+  try {
+    let registry = shared;
+    if (registry === undefined || registry.stopped) {
+      await registry?.remove();
+      shared = undefined;
+      registry = await SparseRegistry.start();
+      shared = registry;
+    } else {
+      try {
+        await registry.reset();
+      } catch (error) {
+        shared = undefined;
+        try {
+          await registry.remove();
+        } catch {
+          // What the reset left may not be removable either; the reset's error says why.
+        }
+        throw error;
+      }
+    }
+    if (options.indexDelay !== undefined) {
+      await registry.setIndexDelay(options.indexDelay);
+    }
+    return await test(registry);
+  } finally {
+    sharedInUse = false;
+  }
+}
+
+/** Stops the registry of {@link withSharedRegistry} and deletes its folder, for a test file's `afterAll`. */
+export async function removeSharedRegistry(): Promise<void> {
+  const registry = shared;
+  shared = undefined;
+  await registry?.remove();
 }
 
 /**

@@ -13,12 +13,14 @@ import {
   uploadNames,
   withPublishCopy,
   withReleaseGroups,
+  removeSharedRegistry,
 } from "./harness";
 
 // Checks group 7 of VER-RELEASE: `nx release publish` with the plugin's
 // publish executor, with the real Nx and cargo, in copies of the fixture
-// publish-crates, each with a harness registry of its own (`SparseRegistry`)
-// that stands in for crates.io and receives the uploads. Every command gets
+// publish-crates, each with an empty harness registry (`SparseRegistry`),
+// whose server the file's tests share, that stands in for crates.io and
+// receives the uploads. Every command gets
 // the registry's variables, which pin `CARGO_REGISTRY_DEFAULT` to it, so that
 // the executor runs no probe. No test reaches a real registry, and no cargo
 // call that the wrapper logs carries `--registry crates-io`, a token or
@@ -50,6 +52,8 @@ function seedOldBase(copy: PublishCopy): void {
     { crateFile: true },
   );
 }
+
+afterAll(removeSharedRegistry);
 
 describe("nx release publish", () => {
   it(
@@ -250,9 +254,9 @@ describe("nx release publish", () => {
     "gives each task of a call that fails after its first upload the result of its own upload, and a second run uploads only the rest",
     async () => {
       await withPublishCopy({}, async (copy) => {
-        // The index shows pub-base only after cargo, which waits a second,
+        // The index shows pub-base only once cargo, which waits a second,
         // has given up on it, so that cargo stops before pub-core.
-        await copy.registry.setIndexDelay(4000);
+        await copy.registry.setIndexDelay(Infinity);
 
         const first = await nxRelease(copy, ["publish", "--projects", "pub-base,pub-core"], {
           ...shortPublishTimeout(1),
@@ -270,13 +274,7 @@ describe("nx release publish", () => {
         expect(first.output).not.toMatch(/^- pub-base:nx-release-publish$/m);
 
         // Once the index shows pub-base, a second run leaves it out.
-        for (
-          let waited = 0;
-          copy.registry.index("pub-base").length === 0 && waited < 20_000;
-          waited += 200
-        ) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
-        }
+        await copy.registry.flushIndex();
         await copy.registry.setIndexDelay(0);
         copy.workspace.cargo.clear();
 

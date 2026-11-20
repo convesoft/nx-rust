@@ -139,8 +139,10 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
         );
         await hold.held();
         // While the cargo call of app:build waits, no cargo test starts. Without
-        // the dependency, Nx starts app:test beside it at once.
-        const early = await within(4000, () =>
+        // the dependency, Nx's per-task scheduling (--batch=false) starts
+        // app:test before the first poll of held(), well within the hold; this
+        // batched run does not start it early either way (nxr-7v04ge).
+        const early = await within(1000, () =>
           calls(workspace).some((call) => call.startsWith("test")),
         );
         hold.release();

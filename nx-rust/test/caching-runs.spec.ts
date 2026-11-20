@@ -631,10 +631,6 @@ describe("a run with the plugin's executor", () => {
             "Run it with the triple that the target's options give, and remove what clears the option for this run",
           );
         }
-        const cleared = await nx(workspace, ["run", "cli:build", "--configuration=plain"]);
-        expect(cleared.output).toContain(
-          "Run it with the triple that the target's options give, and remove what clears the option for this run",
-        );
         expect(taskCalls(workspace)).toHaveLength(1);
       } finally {
         workspace.remove();

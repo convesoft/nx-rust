@@ -19,16 +19,19 @@ import {
   FixtureWorkspace,
   HARNESS_TIMEOUT,
   lockfileCalls,
+  removeSharedRegistry,
   SparseRegistry,
   testEnvironment,
+  withSharedRegistry,
   withoutColours,
 } from "./harness";
 
 // Checks group 4 of VER-RELEASE: the `cargo update --workspace` that the
 // version actions' `afterAllProjectsVersioned` runs after `nx release
 // version`, with the real Nx and cargo, in copies of release-crates that each
-// test gives registry dependencies, locked against a harness registry of its
-// own (`SparseRegistry`). Every cargo and Nx command runs with that
+// test gives registry dependencies, locked against an empty harness registry
+// (`SparseRegistry`), whose server the file's tests share. Every cargo and Nx
+// command runs with that
 // registry's variables: its own Cargo home, crates.io replaced by it, and its
 // proxy, which refuses every other host, so that no test reaches a real
 // registry or waits for the machine's package cache lock.
@@ -89,38 +92,38 @@ interface LockfileCopy {
 
 /**
  * A copy of release-crates with `files` applied, its lockfiles generated
- * against a new registry that has `regdep` 1.0.0 and `base` 0.1.0, committed
- * to a git repository of its own, after which the registry gets `regdep`
- * 1.0.1. `prepare` runs before the commit.
+ * against an empty registry ({@link withSharedRegistry}) that gets `regdep`
+ * 1.0.0 and `base` 0.1.0, committed to a git repository of its own, after
+ * which the registry gets `regdep` 1.0.1. `prepare` runs before the commit.
  */
 async function withLockfileCopy(
   files: FileChanges,
   test: (copy: LockfileCopy) => Promise<void>,
   prepare?: (copy: LockfileCopy) => void,
 ): Promise<void> {
-  const registry = await SparseRegistry.start();
-  const workspace = FixtureWorkspace.create("release-crates", files);
-  try {
-    const env = registry.env();
-    registry.seed({ name: "regdep", version: "1.0.0" });
-    registry.seed({ name: "base", version: "0.1.0" });
-    for (const folder of ["rust", "tools"]) {
-      const generated = cargo(workspace, folder, env, "generate-lockfile");
-      if (generated.status !== 0) {
-        throw new Error(`cargo generate-lockfile failed in ${folder}:\n${generated.output}`);
+  await withSharedRegistry(async (registry) => {
+    const workspace = FixtureWorkspace.create("release-crates", files);
+    try {
+      const env = registry.env();
+      registry.seed({ name: "regdep", version: "1.0.0" });
+      registry.seed({ name: "base", version: "0.1.0" });
+      for (const folder of ["rust", "tools"]) {
+        const generated = cargo(workspace, folder, env, "generate-lockfile");
+        if (generated.status !== 0) {
+          throw new Error(`cargo generate-lockfile failed in ${folder}:\n${generated.output}`);
+        }
       }
+      writeFileSync(join(workspace.root, "..", "gitconfig"), "");
+      prepare?.({ workspace, registry, env });
+      git(workspace, "init", "--quiet", "--initial-branch=main");
+      git(workspace, "add", "--all");
+      git(workspace, "commit", "--quiet", "--message", "The fixture");
+      registry.seed({ name: "regdep", version: "1.0.1" });
+      await test({ workspace, registry, env });
+    } finally {
+      workspace.remove();
     }
-    writeFileSync(join(workspace.root, "..", "gitconfig"), "");
-    prepare?.({ workspace, registry, env });
-    git(workspace, "init", "--quiet", "--initial-branch=main");
-    git(workspace, "add", "--all");
-    git(workspace, "commit", "--quiet", "--message", "The fixture");
-    registry.seed({ name: "regdep", version: "1.0.1" });
-    await test({ workspace, registry, env });
-  } finally {
-    workspace.remove();
-    await registry.remove();
-  }
+  });
 }
 
 /** Runs `nx release version` and returns its output without colours and trailing spaces. */
@@ -210,6 +213,8 @@ const bumpedByBase: Record<string, [string, string]> = {
   "target-user": ["0.1.0", "0.1.1"],
   xtask: ["0.1.0", "0.1.1"],
 };
+
+afterAll(removeSharedRegistry);
 
 describe("the lockfile step of nx release version (VER-RELEASE, group 4)", () => {
   it(
