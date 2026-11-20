@@ -2,9 +2,8 @@
 title: Find why a build's OUT_DIR test sees target/ where Cargo 1.91.0 is rustup's default
 status: todo
 type: bug
-priority: deferred
-tags:
-  - backlog
+related:
+  - nxr-5rrkay
 discovered_from: nxr-s12cpg
 created_at: 2026-11-14T20:43:21Z
 ---
@@ -17,3 +16,5 @@ Found on 14 November 2026 while nxr-s12cpg ran every spec that uses the pinned t
 - [ ] Fix the cause, or the test where it expects what Cargo 1.91 does not do, and record what was found in the evidence that `DES-BUILD-INPUT-CHECK` cites, if it concerns the plugin's behaviour
 
 Done when: the test passes with 1.91.0 and with the latest stable as rustup's default, and `pnpm nx run-many -t build lint test` and `pnpm nx format:check --all` pass.
+
+Pulled back from the backlog on 20 November 2026 by the maintainer, overturning line 8 of nxr-5rrkay: Cargo 1.91 is the compatibility floor because of `build.build-dir`, and the failure is deterministic on one test, so it has to be known before 1.0 whether the plugin, Nx or the test is wrong.

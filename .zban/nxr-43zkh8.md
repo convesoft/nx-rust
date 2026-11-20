@@ -32,3 +32,7 @@ From nxr-k4c6ek (merged 16 November 2026; evidence `EVD-HAKARI-PUBLISHING`, carg
 12. An entry that points to a registry other than crates.io whose name the plugin cannot read fails the crate: unknown means fail. Rests on `GOAL-TRUSTED-CACHE` in spirit and on the rule that an upload cannot be taken back. Undo: let cargo decide.
 13. The check runs after the crate's own lookup of whether its version is already in the registry (a crate already published is skipped as before); that lookup uploads nothing. Undo: move the check before the lookup.
 14. nxr-2mjeq7 went to the backlog: under cargo-hakari's dep-format 1 the dependency on the hack crate has no version, so cargo itself refuses the crate with its own message and the plugin adds no cargo-hakari guidance. Nothing wrong is uploaded. Undo: pull the issue back.
+
+## The maintainer's review of the provisional lines (20 November 2026)
+
+- Line 6 is overturned: nxr-4884vg is pulled back from the backlog and fixed, because an upload to a registry cannot be undone. Each dependency's target registry is established in its own environment, or the release fails early where its tasks disagree on their registry settings.

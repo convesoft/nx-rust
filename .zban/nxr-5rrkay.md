@@ -50,3 +50,10 @@ From nxr-k64tm5 with the rest of nxr-pht7d6 (the `hakari` and `cargo` strategies
 23. `VER-BATCHING` was changed so that the test harness writes the hakari fixtures exactly as cargo-hakari 0.9.39 generates them, with one test that confirms the match with the real tool; the grouping tests otherwise use a stand-in for the tool.
 24. Provisional (a capability the design names and v1 will not have unless the maintainer says otherwise). The optional strict per-crate build target of the `hakari` strategy was not built: no cargo command line builds a crate without the hack crate, and cargo-hakari's own way rewrites manifests, which `REQ-NO-MANIFEST-WRITES` forbids (`EVD-HAKARI-UNIFICATION`, "Without the hack crate"). It waits in the backlog as nxr-ys8rx5 and needs the maintainer's word on how such a build should work. Undo: pull the issue back.
 25. Two exotic findings went to the backlog: nxr-x7kn5n (members that declare the hack crate as an optional dependency and never enable it pass all four checks and cargo-hakari's own verification, yet get different features alone and in a group under one key; cargo-hakari itself writes that dependency as not optional) and nxr-3d9kmn (the lockfile task cannot read a `Cargo.lock` with two packages of one name and version from different git sources). Undo: pull an issue back.
+
+## The maintainer's review of the provisional lines (20 November 2026)
+
+- Lines 3, 17 and 24 stand.
+- Line 8 is overturned: nxr-8paqsn is pulled back from the backlog and investigated before 1.0, because Cargo 1.91 is the compatibility floor on account of `build.build-dir` and the failure is deterministic.
+
+The marks of the confirmed lines are removed by nxr-qw96ne.

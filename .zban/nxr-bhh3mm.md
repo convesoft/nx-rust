@@ -64,3 +64,10 @@ From the wasm target (nxr-0ap8n4, merged 16 November 2026; evidence `EVD-WASM-PO
 36. From the review: the key tells a present `WASM_BINDGEN_ANYREF`, `WASM_BINDGEN_EXTERNREF` or `WASM_BINDGEN_MULTI_VALUE` from an absent one, through the runtime command that prints the CLI's version, because Nx hashes an unset and an empty variable alike while the CLI switches each on by its presence; the CLI's environment is unchanged. Rests on `GOAL-TRUSTED-CACHE`, `DES-INPUTS`. Undo: none that is safe.
 37. From the review: the wasm compile builds the library targets only (`--lib`), because a binary of the crate's name would overwrite the library's `.wasm` file (a crate with a wasm library and a command-line binary). `napi-build` was checked and is unchanged: on the host the two do not collide. Undo: drop `--lib`, which brings the CLI's failure back for such crates.
 38. Three issues went to the backlog: nxr-pw77kk (a plain `build` for a wasm triple stores no `.wasm` file), nxr-z8cn3b (a wasm crate's dependency file is not counted among the record names that crates share), nxr-27zbta (CI installs none of the optional tools although `verification.mara.md` says it does, so the real-tool cases skip there). Not run: `wasm-build` under the `cargo` strategy with a real cargo (needs nightly), and the real-tool wasm cases on Cargo 1.91.0 (no wasm target installed for it on this machine). Undo: pull an issue back.
+
+## The maintainer's review of the provisional lines (20 November 2026)
+
+- Lines 5, 6, 13, 18, 30 and 32 stand.
+- Line 31 is overturned: the option is renamed from `jsFlavour` to `wasmTarget`, with the same values and default (nxr-sy0tsz). It matches `wasm-bindgen --target` as `targetTriple` matches `cargo --target`, and the option schema then has no British-spelled identifier.
+
+The marks of the confirmed lines are removed by nxr-qw96ne.

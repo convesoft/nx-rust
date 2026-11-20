@@ -88,3 +88,9 @@ From the coverage baseline target (nxr-d0t9vm, merged 19 November 2026 as 7c4400
 52. From the review: a lock left by a killed collection is taken over atomically. Lock files appear whole through a hard link, which fails where the name exists, and only the holder of a takeover marker, `nx-rust-collect.lock.takeover`, removes a stale lock, after reading again that it still names the dead process. So two collections never both hold the lock. Nothing to undo.
 53. From the re-check: a marker left by a collection that was killed during a takeover fails a later collection only where that collection also finds a stale lock; beside no lock, the collection runs and the marker stays. The re-check had asked for every collection to fail. The code stayed and the texts were corrected, without a third review round: the case needs a kill between two adjacent file operations, the result is still one holder, and failing until someone removes a file by hand would be worse for a CI checkout. Undo: check the marker before the lock is created.
 54. Three issues went to the backlog: nxr-rhbpee (line 48), nxr-5pphav (line 49) and nxr-tcttks (two cases of `nextest-runs.spec.ts` fail where the machine's environment sets `NEXTEST_TEST_THREADS`; test harness only). Not run: macOS, a CI runner, the Nx daemon, and the real-coverage cases on Cargo 1.91.0, for which the machine has no matching LLVM tools. Undo: pull an issue back.
+
+## The maintainer's review of the provisional lines (20 November 2026)
+
+- Lines 10, 21, 44 and 45 stand.
+
+The marks of the confirmed lines are removed by nxr-qw96ne.
