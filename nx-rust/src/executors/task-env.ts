@@ -490,6 +490,47 @@ export function nxTaskEnv(root: string): { module: Record<string, unknown>; file
   }
 }
 
+/**
+ * The configuration with which Nx 24 would run `target` of `project` for a
+ * command that passes `configuration`, by the installed Nx's own rule
+ * (`ProcessTasks.resolveConfiguration` in `create-task-graph.js`): the
+ * configuration passed where the target declares it, otherwise the target's
+ * `defaultConfiguration`, and none where that is empty.
+ *
+ * @throws {TaskEnvironmentError} When the installed Nx lacks the rule.
+ */
+// @mara implements DES-RELEASE
+export function nxTaskConfiguration(
+  root: string,
+  graph: ProjectGraph,
+  project: string,
+  target: string,
+  configuration: string | undefined,
+): string | undefined {
+  const module = "nx/src/tasks-runner/create-task-graph";
+  let processTasks: unknown;
+  try {
+    processTasks = (require(resolveFromRepository(module, root)) as Record<string, unknown>)
+      .ProcessTasks;
+  } catch (error) {
+    const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+    throw new TaskEnvironmentError(`${module} cannot be loaded from the installed Nx (${reason})`);
+  }
+  const resolve = (processTasks as { prototype?: { resolveConfiguration?: unknown } } | undefined)
+    ?.prototype?.resolveConfiguration;
+  if (typeof resolve !== "function") {
+    throw new TaskEnvironmentError(
+      `the installed Nx lacks ProcessTasks.resolveConfiguration in ${module}`,
+    );
+  }
+  const node = graph.nodes[project];
+  if (node === undefined) {
+    throw new TaskEnvironmentError(`the project graph has no project ${project}`);
+  }
+  const resolved: unknown = resolve.call({ projectGraph: graph }, node, target, configuration);
+  return typeof resolved === "string" && resolved !== "" ? resolved : undefined;
+}
+
 // Where Nx resolves from the repository, as the version check does; otherwise
 // from the plugin.
 function resolveFromRepository(module: string, root: string): string {

@@ -268,18 +268,311 @@ describe("the registries of nx release publish", () => {
 
             expect({ status, output }).toMatchObject({ status: 1 });
             expect(output).toContain(
-              `${core}: pub-core depends on pub-base through the entry in rust/Cargo.toml, which points to crates.io, while pub-base is published to the registry \`alpha\`, and @convesoft/nx-rust cannot establish that these are one registry: the entry has no \`registry\` key`,
+              `${core}: pub-core depends on pub-base through the entry in rust/Cargo.toml, which points to crates.io, while pub-base is published to the registry \`alpha\`, which CARGO_REGISTRY_DEFAULT chooses in the environment of ${base}, and @convesoft/nx-rust cannot establish that these are one registry: the entry has no \`registry\` key`,
             );
             expect(output).toContain('add `registry = "alpha"` to that entry');
-            expect(copy.registry.uploads("alpha").map((upload) => upload.name)).not.toContain(
-              "pub-core",
+            // The check runs before the first call, so pub-base, whose call
+            // comes first, is not uploaded either.
+            expect(output).toContain(
+              `${base}: @convesoft/nx-rust uploads nothing of this run, because the registry of a dependency of a crate that the run publishes cannot be established`,
             );
+            expect(publishCalls(copy)).toEqual([]);
+            expect(copy.registry.allUploads()).toEqual([]);
           },
         );
       }
     },
     HARNESS_TIMEOUT * 3,
   );
+
+  describe("a dependency whose dotenv file chooses another registry", () => {
+    // The crates of rust/ go to alpha by registry.default in the workspace's
+    // Cargo configuration; a dotenv file in pub-base's folder can send
+    // pub-base elsewhere, which Nx gives pub-base's task only.
+    const alphaByDefault = allOf(entriesNaming("alpha"), {
+      "rust/.cargo/config.toml": '[registry]\ndefault = "alpha"\n',
+    });
+    const baseToBeta = { "rust/crates/base/.env": "CARGO_REGISTRY_DEFAULT=beta\n" };
+    const noDefault = { registryDefault: null, home: "no-default" } as const;
+    const modes: Record<string, string>[] = [{}, { NX_BATCH_MODE: "false" }];
+
+    it(
+      "stops the run before any upload where the dependent's entry names the registry that the dependency's own task does not publish to, with a batch and without one",
+      async () => {
+        await withPublishCopy(
+          { files: allOf(alphaByDefault, baseToBeta), registryEnv: noDefault },
+          async (copy) => {
+            // alpha holds another pub-base 0.1.0, against which cargo would
+            // publish pub-core.
+            copy.registry.seed(
+              { name: "pub-base", version: "0.1.0", source: "pub fn base() -> u32 {\n    7\n}\n" },
+              { crateFile: true, registry: "alpha" },
+            );
+            const stops: [Record<string, string>, string[]][] = [
+              [
+                {},
+                [
+                  `${core}: pub-core depends on pub-base through the entry in rust/Cargo.toml, which points to the registry \`alpha\`, while pub-base is published to the registry \`beta\`, which CARGO_REGISTRY_DEFAULT chooses in the environment of ${base}, set by rust/crates/base/.env, and @convesoft/nx-rust cannot establish that these are one registry: the entry names \`alpha\`, not \`beta\``,
+                  "give the crates of one release the same Cargo settings, such as in the environment of the command or in .cargo/config.toml, rather than in a dotenv file of one crate",
+                ],
+              ],
+              // Without a batch, each task runs on its own and cannot rebuild
+              // the other's environment, so both stop.
+              [
+                { NX_BATCH_MODE: "false" },
+                [
+                  `${core}: pub-core depends on pub-base, which ${base} publishes, and @convesoft/nx-rust cannot rebuild the environment of that task, because Nx runs it on its own, apart from this task, while the dotenv files that Nx loads for ${core} and ${base} give different values to CARGO_REGISTRY_DEFAULT (rust/crates/base/.env)`,
+                  `${core}: pub-core depends on pub-base, and Nx runs ${core} on its own, so @convesoft/nx-rust cannot rebuild its environment`,
+                ],
+              ],
+            ];
+            for (const [extra, expected] of stops) {
+              copy.workspace.cargo.clear();
+              const { status, output } = await nxRelease(
+                copy,
+                ["publish", "--projects", "pub-base,pub-core"],
+                extra,
+              );
+
+              expect({ status, output }).toMatchObject({ status: 1 });
+              expect(publishCalls(copy)).toEqual([]);
+              expect(copy.registry.allUploads()).toEqual([]);
+              for (const text of [
+                `${base}: @convesoft/nx-rust uploads nothing of this run, because the registry of a dependency of a crate that the run publishes cannot be established`,
+                ...expected,
+              ]) {
+                expect(output).toContain(text);
+              }
+            }
+          },
+        );
+      },
+      HARNESS_TIMEOUT * 3,
+    );
+
+    it(
+      "publishes each crate to its own registry where the dependent's entry names the registry that the dependency's dotenv file chooses",
+      async () => {
+        const files = allOf(
+          alphaByDefault,
+          baseToBeta,
+          replacing(["rust/Cargo.toml"], 'registry = "alpha"', 'registry = "beta"'),
+        );
+        await withPublishCopy({ files, registryEnv: noDefault }, async (copy) => {
+          const { status, output } = await nxRelease(copy, [
+            "publish",
+            "--projects",
+            "pub-base,pub-core",
+          ]);
+
+          expect({ status, output }).toMatchObject({ status: 0 });
+          expect(uploadNames(copy)).toEqual(["alpha:pub-core@0.1.0", "beta:pub-base@0.1.0"]);
+          expect(publishCalls(copy).map((call) => call.flags.slice(-1)[0])).toEqual([
+            "beta",
+            "alpha",
+          ]);
+          expect(
+            copy.registry
+              .uploads("alpha")[0]
+              .metadata.deps.map((dependency) => dependency.registry),
+          ).toEqual([copy.registry.named.beta.indexUrl]);
+        });
+        // Without a batch, a task cannot rebuild the other's environment, so
+        // the same release stops before any upload.
+        await withPublishCopy({ files, registryEnv: noDefault }, async (copy) => {
+          const { status, output } = await nxRelease(
+            copy,
+            ["publish", "--projects", "pub-base,pub-core"],
+            { NX_BATCH_MODE: "false" },
+          );
+
+          expect({ status, output }).toMatchObject({ status: 1 });
+          expect(output).toContain("cannot rebuild the environment of that task");
+          expect(copy.registry.allUploads()).toEqual([]);
+        });
+      },
+      HARNESS_TIMEOUT * 3,
+    );
+
+    it(
+      "publishes both crates to the registry of the workspace's configuration where no dotenv file chooses another, with a batch and without one",
+      async () => {
+        for (const extra of modes) {
+          await withPublishCopy({ files: alphaByDefault, registryEnv: noDefault }, async (copy) => {
+            const args = ["publish", "--projects", "pub-base,pub-core"];
+            const first = await nxRelease(copy, args, extra);
+            // Without a batch, the tasks run in no set order, and pub-core
+            // stops before any upload until pub-base is in the registry, so
+            // a second run publishes it.
+            const result = first.status === 0 ? first : await nxRelease(copy, args, extra);
+
+            expect([first.status === 0, first.output.includes("Publish pub-base first")]).toContain(
+              true,
+            );
+            expect(result).toMatchObject({ status: 0 });
+            expect(uploadNames(copy).sort()).toEqual([
+              "alpha:pub-base@0.1.0",
+              "alpha:pub-core@0.1.0",
+            ]);
+          });
+        }
+      },
+      HARNESS_TIMEOUT * 3,
+    );
+
+    describe("whose publish target has configurations", () => {
+      /** pub-base's nx-release-publish with `configurations` and `defaultConfiguration` in a project.json beside its crate. */
+      const baseConfigurations = (configurations: string[], defaultConfiguration: string) => ({
+        "rust/crates/base/project.json": `${JSON.stringify(
+          {
+            targets: {
+              "nx-release-publish": {
+                defaultConfiguration,
+                configurations: Object.fromEntries(configurations.map((name) => [name, {}])),
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      });
+      const production = allOf(alphaByDefault, baseConfigurations(["production"], "production"), {
+        "rust/crates/base/.env.production": "CARGO_REGISTRY_DEFAULT=beta\n",
+      });
+      /** Seeds alpha with another pub-base 0.1.0, against which cargo would publish pub-core. */
+      const seedAlpha = (copy: PublishCopy) =>
+        copy.registry.seed(
+          { name: "pub-base", version: "0.1.0", source: "pub fn base() -> u32 {\n    7\n}\n" },
+          { crateFile: true, registry: "alpha" },
+        );
+      const refusal = `${core}: pub-core depends on pub-base, which pub-base:nx-release-publish publishes outside this run, and the configurations of that target give different Cargo settings`;
+      const differing = `the dotenv files that Nx loads for pub-base:nx-release-publish:production and pub-base:nx-release-publish give different values to CARGO_REGISTRY_DEFAULT (rust/crates/base/.env.production)`;
+
+      it(
+        "stops pub-core where pub-base went to beta through the dotenv file of its default configuration, across release groups and across two commands, with a batch and without one",
+        async () => {
+          const runs: [FileChanges, string[][]][] = [
+            // Two release groups: Nx publishes pub-base's group first.
+            [
+              withReleaseGroups({ base: ["pub-base"], core: ["pub-core"] }),
+              [["publish", "--projects", "pub-base,pub-core"]],
+            ],
+            // Two commands, each with one crate.
+            [
+              {},
+              [
+                ["publish", "--projects", "pub-base"],
+                ["publish", "--projects", "pub-core"],
+              ],
+            ],
+          ];
+          for (const [groups, commands] of runs) {
+            for (const extra of modes) {
+              await withPublishCopy(
+                { files: allOf(production, groups), registryEnv: noDefault },
+                async (copy) => {
+                  seedAlpha(copy);
+                  const outputs: string[] = [];
+                  for (const args of commands) {
+                    outputs.push((await nxRelease(copy, args, extra)).output);
+                  }
+                  const output = outputs.join("\n");
+
+                  // pub-base went where its own task sent it before pub-core's
+                  // run; pub-core was not uploaded against alpha's copy.
+                  expect(uploadNames(copy)).toEqual(["beta:pub-base@0.1.0"]);
+                  expect(copy.registry.uploads("alpha")).toEqual([]);
+                  expect(output).toContain(refusal);
+                  expect(output).toContain(differing);
+                },
+              );
+            }
+          }
+        },
+        HARNESS_TIMEOUT * 8,
+      );
+
+      it(
+        "refuses pub-core where another configuration of pub-base's target than the default gives another registry",
+        async () => {
+          const files = allOf(
+            alphaByDefault,
+            baseConfigurations(["production", "staging"], "production"),
+            {
+              "rust/crates/base/.env.staging": "CARGO_REGISTRY_DEFAULT=beta\n",
+            },
+          );
+          await withPublishCopy({ files, registryEnv: noDefault }, async (copy) => {
+            seedAlpha(copy);
+            const { status, output } = await nxRelease(copy, ["publish", "--projects", "pub-core"]);
+
+            expect({ status, output }).toMatchObject({ status: 1 });
+            expect(copy.registry.allUploads()).toEqual([]);
+            expect(output).toContain(refusal);
+            expect(output).toContain(
+              "the dotenv files that Nx loads for pub-base:nx-release-publish:production and pub-base:nx-release-publish:staging give different values to CARGO_REGISTRY_DEFAULT (rust/crates/base/.env.staging)",
+            );
+          });
+        },
+        HARNESS_TIMEOUT,
+      );
+
+      it(
+        "publishes where the dotenv file of pub-base's default configuration names the registry of pub-core's entry, in one batch and across two commands that agree",
+        async () => {
+          // One batch: Nx runs pub-base's task with its configuration.
+          await withPublishCopy(
+            {
+              files: allOf(
+                production,
+                replacing(["rust/Cargo.toml"], 'registry = "alpha"', 'registry = "beta"'),
+              ),
+              registryEnv: noDefault,
+            },
+            async (copy) => {
+              const { status, output } = await nxRelease(copy, [
+                "publish",
+                "--projects",
+                "pub-base,pub-core",
+              ]);
+
+              expect({ status, output }).toMatchObject({ status: 0 });
+              expect(uploadNames(copy)).toEqual(["alpha:pub-core@0.1.0", "beta:pub-base@0.1.0"]);
+            },
+          );
+          // Two commands: every configuration of pub-base's target, and none,
+          // gives beta, as pub-core's own dotenv file does.
+          await withPublishCopy(
+            {
+              files: allOf(
+                production,
+                replacing(["rust/Cargo.toml"], 'registry = "alpha"', 'registry = "beta"'),
+                {
+                  "rust/crates/base/.env.nx-release-publish": "CARGO_REGISTRY_DEFAULT=beta\n",
+                  "rust/crates/core/.env": "CARGO_REGISTRY_DEFAULT=beta\n",
+                },
+              ),
+              registryEnv: noDefault,
+            },
+            async (copy) => {
+              expect(await nxRelease(copy, ["publish", "--projects", "pub-base"])).toMatchObject({
+                status: 0,
+              });
+              const { status, output } = await nxRelease(copy, [
+                "publish",
+                "--projects",
+                "pub-core",
+              ]);
+
+              expect({ status, output }).toMatchObject({ status: 0 });
+              expect(uploadNames(copy)).toEqual(["beta:pub-base@0.1.0", "beta:pub-core@0.1.0"]);
+            },
+          );
+        },
+        HARNESS_TIMEOUT * 3,
+      );
+    });
+  });
 
   it(
     "fails an upload to alpha with cargo's message when only CARGO_REGISTRY_TOKEN holds alpha's token",
@@ -450,10 +743,16 @@ describe("the registries of nx release publish", () => {
         const first = await nxRelease(copy, ["publish"], shared);
 
         expect(first).toMatchObject({ status: 1 });
-        expect(uploadNames(copy)).toEqual(["spare:pub-base@0.1.0", "spare:pub-core@0.1.0"]);
+        // Nothing of the run is uploaded, also not the crates of rust/, whose
+        // call would come first.
+        expect(uploadNames(copy)).toEqual([]);
+        expect(publishCalls(copy)).toEqual([]);
         expect(first.output).toContain(
-          `${tool}: pub-tool depends on pub-core through the entry in tools/Cargo.toml, which points to the registry \`shared\`, while pub-core is published to the registry \`shared\`, and @convesoft/nx-rust cannot establish that these are one registry: the two crates lie in different Cargo workspaces`,
+          `${tool}: pub-tool depends on pub-core through the entry in tools/Cargo.toml, which points to the registry \`shared\`, while pub-core is published to the registry \`shared\`, which CARGO_REGISTRY_DEFAULT chooses in the environment of ${core}, and @convesoft/nx-rust cannot establish that these are one registry: the two crates lie in different Cargo workspaces`,
         );
+        for (const task of [base, core]) {
+          expect(first.output).toContain(`${task}: @convesoft/nx-rust uploads nothing of this run`);
+        }
         expect(first.output).toContain(
           "give the registry's index in the environment as CARGO_REGISTRIES_SHARED_INDEX, so that it is the same for every workspace, or keep both crates in one Cargo workspace",
         );

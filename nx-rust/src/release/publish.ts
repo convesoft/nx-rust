@@ -17,6 +17,8 @@ import {
   targetCargoMetadataKey,
 } from "../graph/targets";
 import { recordedNxCommand } from "../executors/nx-command";
+import { readTaskDotenv } from "../executors/dotenv-check";
+import { nxTaskConfiguration, TaskEnvironmentError } from "../executors/task-env";
 import { dependencyEntries, parseManifest } from "./manifests";
 import {
   crateKey,
@@ -40,6 +42,7 @@ import {
   uploadedCrates,
   verifiedCrates,
 } from "./publish-cargo";
+import { dotenvDifferences, dotenvSettings, settingDifferences } from "./publish-settings";
 
 /** One task that the publish executor receives, alone or in a batch. */
 export interface PublishInput {
@@ -125,24 +128,52 @@ export interface Crate {
   hack: boolean;
 }
 
-/** A task whose checks before cargo passed so far. */
-interface Prepared {
-  id: string;
+/** What a crate's cargo commands run with: a task's label and environment. */
+interface Runner {
   /** `<project>:nx-release-publish`. */
   label: string;
-  crate: Crate;
+  /** The task, as the task graph holds it, with its project's root. */
+  task: Task;
   /** The environment of the task's cargo commands ({@link perTaskVariables} left out). */
   env: NodeJS.ProcessEnv;
   /** A key of {@link env}, equal for equal environments. */
   envKey: string;
+}
+
+/** A task whose checks before cargo passed so far. */
+interface Prepared extends Runner {
+  id: string;
+  crate: Crate;
   dryRun: boolean;
   /** What the task prints before anything else: its project's warnings and the lines for ignored options. */
   head: string[];
   start: number;
 }
 
-/** Where a crate goes: a registry, or why the executor cannot tell. */
-type Target = { kind: "registry"; registry: Registry } | { kind: "unknown"; reason: string };
+/**
+ * Where a crate goes: a registry, with the setting that chooses it, or why
+ * the executor cannot tell.
+ */
+type Target =
+  | { kind: "registry"; registry: Registry; source: string }
+  | { kind: "unknown"; reason: string };
+
+/**
+ * Another `nx-release-publish` task of the run, which the executor did not
+ * receive, as for a task run on its own (`DES-RELEASE`, "Checks before the
+ * first call"). Its environment is that of a task the executor received
+ * whose dotenv files give the same Cargo settings; where none does, it runs
+ * with the first such task's environment and `foreign` says how they differ.
+ */
+interface Other extends Prepared {
+  foreign?: string;
+}
+
+/** A crate of the run whose registry the executor cannot establish, with the message that says why. */
+interface Disagreement {
+  task: Prepared;
+  message: string;
+}
 
 /** A dependency of a crate on another crate of the repository, with what its entry says. */
 export interface DependencyLink {
@@ -242,6 +273,12 @@ class Publisher {
   private readonly hackCrates = new Map<string, string | undefined>();
   /** Lookups that found their version, which a later call cannot take back. */
   private readonly found = new Set<string>();
+  /** The prepared tasks that the executor received, by the real path of their crate's folder. */
+  private byFolder = new Map<string, Prepared>();
+  /** The other tasks of the run, by the real path of their crate's folder ({@link others}). */
+  private othersByFolder = new Map<string, Other>();
+  /** The dotenv files of each task, by its id, or why they cannot be read. */
+  private readonly dotenvs = new Map<string, Record<string, string> | { failure: string }>();
 
   constructor(private readonly run: PublishRun) {
     this.root = run.context.root;
@@ -341,6 +378,7 @@ class Publisher {
     return {
       id: input.id,
       label,
+      task: withProjectRoot(task, project?.root),
       crate,
       env,
       envKey,
@@ -358,8 +396,10 @@ class Publisher {
   async *publish(tasks: readonly Prepared[]): AsyncGenerator<[Prepared, boolean, string[]]> {
     const outcomes = new Map<Prepared, Outcome>();
     const byFolder = new Map(tasks.map((task) => [task.crate.folder, task]));
+    this.byFolder = byFolder;
     // The target registry of each task's crate.
     const calls = new Map<string, { registry: Registry; tasks: Prepared[] }>();
+    const targeted: Prepared[] = [];
     for (const task of tasks) {
       const target = await this.targetOf(task.crate, task);
       if (target.kind === "unknown") {
@@ -367,6 +407,7 @@ class Publisher {
         yield [task, false, [`${task.label}: ${target.reason}`]];
         continue;
       }
+      targeted.push(task);
       const key = [
         task.crate.workspaceRoot,
         task.envKey,
@@ -377,12 +418,410 @@ class Publisher {
       call.tasks.push(task);
       calls.set(key, call);
     }
+    // Checks before the first call: where the registry of any dependency of
+    // a crate of the run cannot be established, nothing is uploaded.
+    const disagreements = await this.disagreements(targeted, this.others(tasks));
+    if (disagreements.length > 0) {
+      for (const task of targeted) {
+        const own = disagreements.filter((disagreement) => disagreement.task === task);
+        const lines =
+          own.length > 0
+            ? [
+                ...own.map((disagreement) => disagreement.message),
+                "  Because an upload cannot be undone, @convesoft/nx-rust uploads nothing of this run until this is corrected.",
+              ]
+            : [
+                `${task.label}: @convesoft/nx-rust uploads nothing of this run, because the registry of a dependency of a crate that the run publishes cannot be established as the registry that the dependency goes to, and an upload cannot be undone. Nothing was uploaded for ${task.crate.name}. Correct what follows and run nx release publish again:`,
+                ...disagreements.map((disagreement) => indented(disagreement.message)),
+              ];
+        outcomes.set(task, { kind: "failed", lines });
+        yield [task, false, lines];
+      }
+      return;
+    }
     for (const call of orderCalls([...calls.values()], (task) =>
       this.dependencyFolders(task.crate),
     )) {
       for await (const end of this.publishCall(call.registry, call.tasks, outcomes, byFolder)) {
         yield end;
       }
+    }
+  }
+
+  /**
+   * The other `nx-release-publish` tasks of the run's task graph, those of
+   * crates whose tasks the executor did not receive, as when Nx runs each
+   * task on its own (`DES-RELEASE`, "Checks before the first call"). Each
+   * gets the environment of a received task whose dotenv files give the
+   * same Cargo settings (**A dependency's environment**), or, where none
+   * does, the first one's, and says why it is foreign.
+   */
+  private others(tasks: readonly Prepared[]): Other[] {
+    const [first] = tasks;
+    const received = new Set(tasks.map((task) => task.id));
+    const others: Other[] = [];
+    if (first === undefined) {
+      return others;
+    }
+    for (const graphTask of Object.values(this.run.context.taskGraph?.tasks ?? {})) {
+      if (graphTask.target.target !== releasePublishTarget || received.has(graphTask.id)) {
+        continue;
+      }
+      const project = this.run.context.projectsConfigurations?.projects?.[graphTask.target.project];
+      const cargo = project === undefined ? undefined : cargoMetadataOf(project);
+      if (cargo?.packageName === undefined) {
+        continue;
+      }
+      const task = withProjectRoot(graphTask, project?.root);
+      let runner: Prepared = first;
+      let foreign: string | undefined;
+      const same = tasks.find(
+        (candidate) => this.sameDotenvSettings(candidate.task, task) === true,
+      );
+      if (same !== undefined) {
+        runner = same;
+      } else {
+        foreign = this.dotenvComparison(first.task, task);
+      }
+      const workspaceRoot = realPath(join(this.root, dirname(cargo.workspaceManifest)));
+      const report = this.reportOf(workspaceRoot, runner.env, runner.envKey);
+      const folder = realPath(join(this.root, dirname(cargo.manifest)));
+      const pkg =
+        "failure" in report
+          ? undefined
+          : report.packages.find(
+              (candidate) => realPath(dirname(candidate.manifest_path)) === folder,
+            );
+      if ("failure" in report || pkg === undefined) {
+        continue;
+      }
+      const other: Other = {
+        id: graphTask.id,
+        label: labelOf(graphTask),
+        task,
+        crate: this.crateOf(pkg, workspaceRoot, report),
+        env: runner.env,
+        envKey: runner.envKey,
+        dryRun: runner.dryRun,
+        head: [],
+        start: Date.now(),
+        ...(foreign === undefined ? {} : { foreign }),
+      };
+      others.push(other);
+      this.othersByFolder.set(other.crate.folder, other);
+    }
+    return others;
+  }
+
+  /**
+   * The checks before the first call (`DES-RELEASE`): for each crate of the
+   * run, those that the executor received with a target registry and the
+   * others of the task graph, the registry of each normal or build
+   * dependency with a version requirement on a crate of the repository,
+   * other than one that fails _Unpublished dependencies_, has to be
+   * established as the registry that the dependency goes to, in the
+   * dependency's own environment. A crate whose version its target registry
+   * has already is left out of the check, as it is left out of cargo.
+   *
+   * @returns Each crate whose check fails, with the message that says why.
+   */
+  private async disagreements(
+    targeted: readonly Prepared[],
+    others: readonly Other[],
+  ): Promise<Disagreement[]> {
+    const found: Disagreement[] = [];
+    for (const task of [...targeted, ...others]) {
+      let links: DependencyLink[];
+      try {
+        links = await this.links(task);
+      } catch (error) {
+        if (!(error instanceof LinkError)) {
+          throw error;
+        }
+        // Reported by the checks before the crate's call.
+        continue;
+      }
+      const message = await this.disagreement(task, links);
+      if (message !== undefined && (await this.reachesCargo(task))) {
+        found.push({ task, message });
+      }
+    }
+    return found;
+  }
+
+  /** The message of {@link disagreements} for one crate, or `undefined` where its dependencies' registries are established. */
+  private async disagreement(
+    task: Prepared,
+    links: readonly DependencyLink[],
+  ): Promise<string | undefined> {
+    const foreign = (task as Other).foreign;
+    if (foreign !== undefined && links.length > 0) {
+      return `${task.label}: ${task.crate.name} depends on ${links.map((link) => link.dependency.name).join(", ")}, and Nx runs ${task.label} on its own, so @convesoft/nx-rust cannot rebuild its environment, while ${foreign}. So it cannot establish where the dependencies of ${task.crate.name} go, and nothing was uploaded. Run nx release publish with batches, as it runs by default, or give the crates of one release the same Cargo settings, such as in the environment of the command or in .cargo/config.toml.`;
+    }
+    for (const link of links) {
+      if (
+        unpublishedMessage(task, link, this.relativePath(link.dependency.manifest)) !== undefined
+      ) {
+        // Failed by the check _Unpublished dependencies_ before the crate's call.
+        continue;
+      }
+      const established = await this.dependencyTarget(task, link.dependency);
+      if ("failure" in established) {
+        return established.failure;
+      }
+      const elsewhere = this.publishedElsewhere(task, link, established, established.own);
+      if (elsewhere !== undefined) {
+        return elsewhere;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Whether the lookup of `task`'s crate in its target registry leaves it
+   * for cargo (**Existing versions**): not where the registry has its version
+   * already, which leaves it out, or where the lookup fails, which fails it
+   * before its call, as the checks before each call report. A foreign task
+   * of {@link others}, whose environment is not established, counts as
+   * reaching cargo.
+   */
+  private async reachesCargo(task: Prepared): Promise<boolean> {
+    if ((task as Other).foreign !== undefined) {
+      return true;
+    }
+    const target = await this.targetOf(task.crate, task);
+    return (
+      target.kind === "registry" &&
+      (await this.lookup(task.crate, target.registry, task)).kind === "missing"
+    );
+  }
+
+  /**
+   * The target registry of `dependency`, a dependency of `task`'s crate, in
+   * the dependency's own environment ({@link ownRunner}), with that
+   * environment, or the message of `task` that says why it cannot be told.
+   */
+  private async dependencyTarget(
+    task: Prepared,
+    dependency: Crate,
+  ): Promise<{ target: Registry; source: string; own: Runner } | { failure: string }> {
+    const own = this.ownRunner(dependency, task);
+    if ("failure" in own) {
+      return { failure: own.failure };
+    }
+    const target = await this.targetOf(dependency, own);
+    if (target.kind === "unknown") {
+      return {
+        failure: `${task.label}: ${task.crate.name} depends on ${dependency.name}, whose target registry @convesoft/nx-rust cannot tell, so it publishes neither: ${target.reason}`,
+      };
+    }
+    return { target: target.registry, source: target.source, own };
+  }
+
+  /**
+   * What the cargo commands for `dependency` run with, the environment of
+   * its own task (`DES-RELEASE`, "A dependency's environment"): the task
+   * that the executor received for it, or another task of the run for it;
+   * otherwise `task`, where the dependency has no `nx-release-publish`
+   * task, or where the dotenv files that Nx loads for the dependency's task
+   * give the same Cargo settings as those of `task`. Otherwise the message
+   * of `task` that says why its environment cannot be established.
+   */
+  private ownRunner(dependency: Crate, task: Prepared): Runner | { failure: string } {
+    const own = this.byFolder.get(dependency.folder) ?? this.othersByFolder.get(dependency.folder);
+    if (own !== undefined && (own as Other).foreign === undefined) {
+      return own;
+    }
+    const project =
+      dependency.project === undefined
+        ? undefined
+        : this.run.context.projectsConfigurations?.projects?.[dependency.project];
+    if (dependency.project === undefined || !dependency.hasPublishTarget || project === undefined) {
+      return task;
+    }
+    let dependencyTask: Task;
+    if (own !== undefined) {
+      // In the run's task graph, as Nx built it, with its configuration.
+      dependencyTask = own.task;
+    } else {
+      const outside = this.taskOutsideRun(dependency, dependency.project, project, task);
+      if ("failure" in outside) {
+        return outside;
+      }
+      dependencyTask = outside.task;
+    }
+    if (this.sameDotenvSettings(task.task, dependencyTask) === true) {
+      return task;
+    }
+    return {
+      failure: `${task.label}: ${task.crate.name} depends on ${dependency.name}, which ${labelOf(dependencyTask)} publishes, and @convesoft/nx-rust cannot rebuild the environment of that task, because ${own === undefined ? "the run does not hand it to this" : "Nx runs it on its own, apart from this"} task, while ${this.dotenvComparison(task.task, dependencyTask)}. So it cannot establish where ${dependency.name} goes, and nothing was uploaded for ${task.crate.name}. Publish both in one nx release publish with batches, as it runs by default, or give the crates of one release the same Cargo settings, such as in the environment of the command or in .cargo/config.toml.`,
+    };
+  }
+
+  /**
+   * The `nx-release-publish` task of `dependency`'s project, which is not in
+   * the run's task graph, with the configuration that Nx would give it in a
+   * command like this one (`DES-RELEASE`, "A dependency's environment"):
+   * the configuration of `task` where `task`'s target did not take it as its
+   * own default and the dependency's target declares it, otherwise the
+   * dependency's `defaultConfiguration`, by Nx's own rule. Because another
+   * command may have published the dependency with any configuration, the
+   * task counts only where every configuration that its target declares,
+   * and none, give the same Cargo settings; otherwise the message of `task`
+   * that names the configurations that differ.
+   */
+  private taskOutsideRun(
+    dependency: Crate,
+    projectName: string,
+    project: {
+      root: string;
+      targets?: Record<string, { configurations?: Record<string, unknown> }>;
+    },
+    task: Prepared,
+  ): { task: Task } | { failure: string } {
+    const variant = (configuration: string | undefined): Task =>
+      withProjectRoot(
+        {
+          id: `${projectName}:${releasePublishTarget}${configuration === undefined ? "" : `:${configuration}`}`,
+          target: {
+            project: projectName,
+            target: releasePublishTarget,
+            ...(configuration === undefined ? {} : { configuration }),
+          },
+          overrides: {},
+          outputs: [],
+          cache: false,
+          parallelism: true,
+        },
+        project.root,
+      );
+    const graph = this.run.context.projectGraph;
+    const fail = (reason: string) => ({
+      failure: `${task.label}: ${task.crate.name} depends on ${dependency.name}, which ${projectName}:${releasePublishTarget} publishes outside this run, and ${reason}. So @convesoft/nx-rust cannot establish where ${dependency.name} goes, and nothing was uploaded for ${task.crate.name}.`,
+    });
+    if (graph === undefined) {
+      return fail("Nx gave the task no project graph to tell that task's configuration");
+    }
+    const dependentTarget =
+      this.run.context.projectsConfigurations?.projects?.[task.task.target.project]?.targets?.[
+        releasePublishTarget
+      ];
+    const own = task.task.target.configuration;
+    // A configuration that the dependent's target took as its own default
+    // may not have been passed by the command.
+    const passed =
+      own !== undefined && own !== dependentTarget?.defaultConfiguration ? own : undefined;
+    let configuration: string | undefined;
+    try {
+      configuration = nxTaskConfiguration(
+        this.root,
+        graph,
+        projectName,
+        releasePublishTarget,
+        passed,
+      );
+    } catch (error) {
+      if (!(error instanceof TaskEnvironmentError)) {
+        throw error;
+      }
+      return fail(`it cannot tell that task's configuration (${error.message})`);
+    }
+    const resolved = variant(configuration);
+    const declared = Object.keys(project.targets?.[releasePublishTarget]?.configurations ?? {});
+    const differing = [undefined, ...declared]
+      .filter((other) => other !== configuration)
+      .map(variant)
+      .filter((other) => this.sameDotenvSettings(resolved, other) !== true);
+    if (differing.length > 0) {
+      return {
+        failure: [
+          `${task.label}: ${task.crate.name} depends on ${dependency.name}, which ${projectName}:${releasePublishTarget} publishes outside this run, and the configurations of that target give different Cargo settings, so @convesoft/nx-rust cannot tell with which of them ${dependency.name} was published, cannot establish where it went, and nothing was uploaded for ${task.crate.name}:`,
+          ...differing.map((other) => `  ${this.dotenvComparison(resolved, other)}.`),
+          `  Give every configuration of ${projectName}:${releasePublishTarget} the same Cargo settings, such as in the environment of the command or in .cargo/config.toml rather than in a dotenv file of one configuration, or publish ${dependency.name} and ${task.crate.name} in one nx release publish with batches.`,
+        ].join("\n"),
+      };
+    }
+    return { task: resolved };
+  }
+
+  /**
+   * Whether the dotenv files that Nx loads for two tasks give the same Cargo
+   * settings ({@link dotenvSettings}); `undefined` where they cannot be read.
+   */
+  private sameDotenvSettings(a: Task, b: Task): boolean | undefined {
+    const first = this.dotenvOf(a);
+    const second = this.dotenvOf(b);
+    if ("failure" in first || "failure" in second) {
+      return undefined;
+    }
+    return dotenvDifferences(dotenvSettings(first), dotenvSettings(second)).length === 0;
+  }
+
+  /** How the Cargo settings of the dotenv files of two tasks differ, as a clause. */
+  private dotenvComparison(a: Task, b: Task): string {
+    const first = this.dotenvOf(a);
+    const second = this.dotenvOf(b);
+    if ("failure" in first || "failure" in second) {
+      return `@convesoft/nx-rust cannot read their dotenv files to compare their Cargo settings (${"failure" in first ? first.failure : (second as { failure: string }).failure})`;
+    }
+    const names = dotenvDifferences(dotenvSettings(first), dotenvSettings(second));
+    return `the dotenv files that Nx loads for ${configuredLabel(a)} and ${configuredLabel(b)} give different values to ${sentenceAnd(names)}${this.dotenvFiles(a, b, names)}`;
+  }
+
+  /** Where the dotenv files of two tasks define `names`, as a parenthesis. */
+  private dotenvFiles(a: Task, b: Task, names: readonly string[]): string {
+    const files = [a, b].flatMap((task) => {
+      const origin = this.dotenvOrigins(task);
+      return names.flatMap((name) => {
+        const file = origin.get(name);
+        return file === undefined ? [] : [file];
+      });
+    });
+    const unique = [...new Set(files)];
+    return unique.length === 0 ? "" : ` (${unique.join(", ")})`;
+  }
+
+  /** The values that the dotenv files of `task` define, before expansion, or why they cannot be read. */
+  private dotenvOf(task: Task): Record<string, string> | { failure: string } {
+    let dotenv = this.dotenvs.get(task.id);
+    if (dotenv === undefined) {
+      const graph = this.run.context.projectGraph;
+      if (graph === undefined) {
+        dotenv = { failure: "Nx gave the task no project graph" };
+      } else {
+        try {
+          dotenv = readTaskDotenv(task, graph, this.root).raw;
+        } catch (error) {
+          if (!(error instanceof TaskEnvironmentError)) {
+            throw error;
+          }
+          dotenv = { failure: error.message };
+        }
+      }
+      this.dotenvs.set(task.id, dotenv);
+    }
+    return dotenv;
+  }
+
+  /** The value that the dotenv files of `task` give `name`, before expansion. */
+  private dotenvValue(task: Task, name: string): string | undefined {
+    const dotenv = this.dotenvOf(task);
+    return "failure" in dotenv ? undefined : dotenv[name];
+  }
+
+  /** The file that gives each variable of the dotenv files of `task`, relative to the repository root. */
+  private dotenvOrigins(task: Task): Map<string, string> {
+    const graph = this.run.context.projectGraph;
+    if (graph === undefined) {
+      return new Map();
+    }
+    try {
+      return readTaskDotenv(task, graph, this.root).origin;
+    } catch (error) {
+      if (!(error instanceof TaskEnvironmentError)) {
+        throw error;
+      }
+      return new Map();
     }
   }
 
@@ -563,23 +1002,21 @@ class Publisher {
     let notVerified: Outcome | undefined;
     for (const link of links) {
       const { dependency } = link;
-      const target = await this.targetOf(dependency, task);
-      if (target.kind === "unknown") {
-        return {
-          kind: "failed",
-          lines: [
-            `${task.label}: ${crate.name} depends on ${dependency.name}, whose target registry @convesoft/nx-rust cannot tell, so it publishes neither: ${target.reason}`,
-          ],
-        };
+      // Established before the first call, in the dependency's own
+      // environment, which its lookups use as well.
+      const established = await this.dependencyTarget(task, dependency);
+      if ("failure" in established) {
+        return { kind: "failed", lines: [established.failure] };
       }
-      const elsewhere = this.publishedElsewhere(task, link, target.registry);
+      const target = { registry: established.target };
+      const elsewhere = this.publishedElsewhere(task, link, established, established.own);
       if (elsewhere !== undefined) {
         return { kind: "failed", lines: [elsewhere] };
       }
       if (inCall.has(dependency.folder)) {
         continue;
       }
-      const lookup = await this.lookup(dependency, target.registry, task);
+      const lookup = await this.lookup(dependency, target.registry, established.own, task.label);
       if (lookup.kind === "found") {
         continue;
       }
@@ -640,26 +1077,34 @@ class Publisher {
   private publishedElsewhere(
     task: Prepared,
     link: DependencyLink,
-    target: Registry,
+    established: { target: Registry; source: string },
+    own: Runner,
   ): string | undefined {
     const { dependency, points } = link;
+    const { target } = established;
     const sameWorkspace = dependency.workspaceRoot === task.crate.workspaceRoot;
+    // Cargo's settings, apart from the choice of the target registry, in
+    // which the two environments differ.
+    const differing = settingDifferences(task.env, own.env, ["CARGO_REGISTRY_DEFAULT"]);
     if (points.kind === "crates-io" && target.kind === "crates-io") {
       return undefined;
     }
     let reason: string;
     if (points.kind === "named" && target.kind === "named") {
-      if (sameWorkspace && points.name === target.name) {
+      if (sameWorkspace && points.name === target.name && differing.length === 0) {
         return undefined;
       }
       const variable = indexVariable(target.name);
-      const index = task.env[variable];
+      const index = own.env[variable];
       if (index !== undefined && sameIndex(index, points.index)) {
         return undefined;
       }
-      reason = sameWorkspace
-        ? `the entry names \`${points.name}\`, not \`${target.name}\`, and ${variable} does not give \`${target.name}\` the index that \`${points.name}\` has (${points.index})`
-        : `the two crates lie in different Cargo workspaces, whose configuration files can give one name different indexes, and ${variable} ${index === undefined ? "is not set" : `gives ${index}`} where the entry's index is ${points.index}`;
+      const where = own.envKey === task.envKey ? "" : `in the environment of ${own.label}, `;
+      reason = !sameWorkspace
+        ? `the two crates lie in different Cargo workspaces, whose configuration files can give one name different indexes, and ${where}${variable} ${index === undefined ? "is not set" : `gives ${index}`} where the entry's index is ${points.index}`
+        : points.name === target.name
+          ? `${task.label} and ${own.label} run with different Cargo settings, ${sentenceAnd(differing)}, with which one name can stand for different indexes, and ${where}${variable} ${index === undefined ? "is not set" : `gives ${index}`} where the entry's index is ${points.index}`
+          : `the entry names \`${points.name}\`, not \`${target.name}\`, and ${where}${variable} does not give \`${target.name}\` the index that \`${points.name}\` has (${points.index})`;
     } else if (points.kind === "crates-io") {
       reason =
         "the entry has no `registry` key, so the published crate would depend on crates.io's crate of that name, also where the Cargo configuration replaces crates.io";
@@ -680,8 +1125,13 @@ class Publisher {
                   `because ${dependency.name} lies in another Cargo workspace, give the registry's index in the environment as ${indexVariable(target.name)}, so that it is the same for every workspace, or keep both crates in one Cargo workspace`,
                 ]),
           ];
+    if (own.envKey !== task.envKey) {
+      remedies.push(
+        "give the crates of one release the same Cargo settings, such as in the environment of the command or in .cargo/config.toml, rather than in a dotenv file of one crate",
+      );
+    }
     return [
-      `${task.label}: ${task.crate.name} depends on ${dependency.name} through the entry in ${link.entryManifest}, which points to ${pointsLabel}, while ${dependency.name} is published to ${registryLabel(target)}, and @convesoft/nx-rust cannot establish that these are one registry: ${reason}. Nothing was uploaded for ${task.crate.name}: cargo would publish it with a dependency on the crate of that name in ${pointsLabel}.`,
+      `${task.label}: ${task.crate.name} depends on ${dependency.name} through the entry in ${link.entryManifest}, which points to ${pointsLabel}, while ${dependency.name} is published to ${registryLabel(target)}, ${established.source}, and @convesoft/nx-rust cannot establish that these are one registry: ${reason}. Nothing was uploaded for ${task.crate.name}: cargo would publish it with a dependency on the crate of that name in ${pointsLabel}.`,
       `  To publish it, ${sentence(remedies)}.`,
     ].join("\n");
   }
@@ -692,7 +1142,7 @@ class Publisher {
    * without a probe, where it holds one; otherwise what the probe shows, as
    * the crate's `publish` list allows it.
    */
-  private targetOf(crate: Crate, task: Prepared): Promise<Target> {
+  private targetOf(crate: Crate, task: Runner): Promise<Target> {
     const key = [crate.folder, task.envKey].join("\u0000");
     let target = this.targets.get(key);
     if (target === undefined) {
@@ -702,7 +1152,7 @@ class Publisher {
     return target;
   }
 
-  private async findTarget(crate: Crate, task: Prepared): Promise<Target> {
+  private async findTarget(crate: Crate, task: Runner): Promise<Target> {
     const list = crate.publish;
     const listText = list === null ? "" : JSON.stringify(list);
     const named = task.env.CARGO_REGISTRY_DEFAULT;
@@ -713,7 +1163,14 @@ class Publisher {
           reason: `CARGO_REGISTRY_DEFAULT names the registry \`${named}\`, which the publish list of ${crate.name} in ${this.relativePath(crate.manifest)}, ${listText}, leaves out, so cargo would refuse to publish it, and in a call with other crates the whole call. Nothing was uploaded for ${crate.name}. Add "${named}" to the list, or publish ${crate.name} in a run with CARGO_REGISTRY_DEFAULT set to an entry of the list, or without it.`,
         };
       }
-      return { kind: "registry", registry: registryNamed(named) };
+      const file = this.dotenvOrigins(task.task).get("CARGO_REGISTRY_DEFAULT");
+      const fromFile =
+        file !== undefined && this.dotenvValue(task.task, "CARGO_REGISTRY_DEFAULT") === named;
+      return {
+        kind: "registry",
+        registry: registryNamed(named),
+        source: `which CARGO_REGISTRY_DEFAULT chooses in the environment of ${task.label}${fromFile ? `, set by ${file}` : ""}`,
+      };
     }
     // One probe per workspace, environment and publish value.
     const probeKey = [crate.workspaceRoot, task.envKey, listText].join("\u0000");
@@ -728,7 +1185,7 @@ class Publisher {
       : result;
   }
 
-  private async probe(crate: Crate, task: Prepared): Promise<Target> {
+  private async probe(crate: Crate, task: Runner): Promise<Target> {
     const cwd = crate.workspaceRoot;
     const list = crate.publish;
     const announce = this.run.announce;
@@ -754,7 +1211,14 @@ class Publisher {
     const shown = result.shown;
     const registry = registryFromProbe(list, shown);
     if (registry !== undefined) {
-      return { kind: "registry", registry };
+      return {
+        kind: "registry",
+        registry,
+        source:
+          list !== null && list.length === 1
+            ? `which the publish list of ${crate.name} in ${this.relativePath(crate.manifest)} chooses`
+            : `which cargo chooses for it in the folder ${this.relativePath(cwd)}, by registry.default in its Cargo configuration${list === null ? "" : ` from the publish list of ${crate.name}`}`,
+      };
     }
     if (list !== null && list.length > 1) {
       return {
@@ -773,12 +1237,17 @@ class Publisher {
    * crate's Cargo workspace with `task`'s environment (`DES-RELEASE`,
    * "Lookups"). A version once found is not asked again.
    */
-  private async lookup(crate: Crate, registry: Registry, task: Prepared): Promise<Lookup> {
+  private async lookup(
+    crate: Crate,
+    registry: Registry,
+    task: Runner,
+    label = task.label,
+  ): Promise<Lookup> {
     const key = lookupKey(crate, registry, task.envKey);
     if (this.found.has(key)) {
       return { kind: "found" };
     }
-    await this.run.announce?.(task.label, {
+    await this.run.announce?.(label, {
       args: lookupArguments(crate.name, crate.version, registry),
       cwd: crate.workspaceRoot,
     });
@@ -1109,6 +1578,34 @@ function indexVariable(name: string): string {
 /** Whether two index URLs are the same, apart from a final `/`. */
 function sameIndex(a: string, b: string): boolean {
   return a.replace(/\/$/, "") === b.replace(/\/$/, "");
+}
+
+/** `task` with its project's root, which Nx's dotenv files of a task need. */
+function withProjectRoot(task: Task, root: string | undefined): Task {
+  return task.projectRoot === undefined && root !== undefined
+    ? { ...task, projectRoot: root }
+    : task;
+}
+
+/** Each line of a message indented by two spaces. */
+function indented(message: string): string {
+  return message
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+/** "a, b and c". */
+function sentenceAnd(items: readonly string[]): string {
+  return items.length <= 1
+    ? items.join("")
+    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** `<project>:<target>`, with `:<configuration>` where the task has one. */
+function configuredLabel(task: Task): string {
+  const { configuration } = task.target;
+  return configuration === undefined ? labelOf(task) : `${labelOf(task)}:${configuration}`;
 }
 
 function labelOf(task: Task): string {
