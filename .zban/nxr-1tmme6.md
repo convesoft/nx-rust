@@ -2,6 +2,8 @@
 title: Build input check reads Nx's process-wide workspace context, which misses files cargo wrote after its first use
 status: todo
 type: bug
+priority: high
+parent: nxr-e2z8sz
 discovered_from: nxr-3f5wqp
 created_at: 2026-11-20T14:35:45Z
 ---
@@ -24,4 +26,4 @@ Options to weigh (the fix touches `nx-rust/src/compatibility/nx-bridge.ts`, whic
 
 - [ ] Reproduce in a batch: a later group's build script writes a file into a folder it names with `rerun-if-changed`, and the check misses it
 - [ ] Check whether a non-batch task's process creates the workspace context before cargo
-- [ ] Settle the approach with the maintainer, record it in Mara, implement and test it
+- [ ] Record in Mara the approach that the control plane settles (both options above touch a rule: the first changes a process-wide singleton of Nx, the second lists files with the plugin's own walk instead of Nx's), then implement and test it
