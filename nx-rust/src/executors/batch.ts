@@ -67,9 +67,11 @@ interface ReadyTask extends PreparedTask {
  * groups of the tasks it depends on have run; a task whose dependency in
  * the batch failed is reported skipped, as Nx skips it outside a batch.
  *
- * The batch reports every task that it receives and throws for none
- * (`EVD-NX-24-BATCHES`: a throw fails every task of the batch, and a task
- * left out runs again). A failure of its own machinery fails the tasks it
+ * The batch reports every task that it receives, apart from those that it
+ * leaves for a following batch ({@link writesStoredFiles},
+ * {@link unreportedProblems}), and throws for none (`EVD-NX-24-BATCHES`: a
+ * throw fails every task of the batch, and a task left out runs again in a
+ * new batch process). A failure of its own machinery fails the tasks it
  * concerns, with a message that says so: no task is reported successful
  * without cargo's output showing that its crate passed.
  *
@@ -191,8 +193,9 @@ export async function* runBatch(
       ids.filter((id) => !ready.has(id)).map((id) => [id, false]),
     );
     // Tasks that this batch leaves unreported, so that Nx runs them in a
-    // following batch once it has stored this one's (writesStoredFiles), and
-    // the folders that the build groups of this batch have written.
+    // following batch once it has stored this one's (writesStoredFiles):
+    // the tasks of a group that would write files that a group before it
+    // wrote, and every task that depends on one of them.
     const deferred = new Set<string>();
     // The crates whose stored files a build group of this batch has
     // written, by workspace root.
@@ -277,6 +280,18 @@ export async function* runBatch(
           yield report(entry.task, entry.result);
         }
       }
+    }
+    // What Nx does with a task that the batch leaves unreported is safe only
+    // for the tasks left for a following batch, and only where this batch
+    // reports a task of its own.
+    const ended = Date.now();
+    for (const [id, problem] of unreportedProblems(ids, reported, deferred)) {
+      yield report(id, {
+        success: false,
+        terminalOutput: `${taskLabel(taskGraph.tasks[id])}: @convesoft/nx-rust ${problem} The task fails without running, so that Nx stores no successful result for it. Run the tasks with --batch=false, and report this as a bug of @convesoft/nx-rust.`,
+        startTime: ended,
+        endTime: ended,
+      });
     }
   } catch (error) {
     // A failure of the batch's own machinery: every task that has no result
@@ -446,8 +461,8 @@ function wholeWorkspaceFirst<T extends { selection: GroupSelection }>(groups: re
  * batch has run before it in the same workspace root for a crate whose files
  * it writes: a group that selects the whole workspace only where none has
  * run there at all. Otherwise its tasks are left unreported, and Nx runs them
- * in a following batch once it has stored this one's ("Tasks left
- * unreported").
+ * in a following batch once it has stored this one's ("Tasks left for a
+ * following batch").
  */
 // @mara implements DES-BATCH
 function writesStoredFiles(group: {
@@ -466,6 +481,53 @@ function writesStoredFiles(group: {
     crates:
       group.selection.kind === "workspace" ? "all" : group.tasks.map((task) => task.crate ?? ""),
   };
+}
+
+/**
+ * The tasks that a batch must not leave unreported as it ends, each with
+ * the reason (`DES-BATCH`, "Tasks left for a following batch"). Nx 24 runs
+ * again, in a new batch process, every task that a batch does not report,
+ * for as long as the batch leaves it out (`EVD-NX-24-BATCHES`, "Tasks left
+ * out"). The batch relies on that only for the tasks it leaves for a
+ * following batch on purpose (`deferred`), and only where it reports at
+ * least one task itself, so that Nx's loop, which has no limit, ends. A
+ * deferral needs a group of the same batch to have run before, which
+ * reports its tasks, so neither case arises unless the plugin's own logic
+ * is wrong; the batch then fails the tasks concerned instead of having Nx
+ * start them again, perhaps without end.
+ *
+ * @param ids The tasks of the batch.
+ * @param reported The tasks for which the batch has reported a result.
+ * @param deferred The tasks that the batch leaves for a following batch.
+ * @returns The reason for each task that has to fail, by task id, in the
+ *   order of `ids`; empty where the batch may end as it is.
+ */
+// @mara implements DES-BATCH
+// @mara implements DES-DIAGNOSTICS
+export function unreportedProblems(
+  ids: readonly string[],
+  reported: ReadonlySet<string>,
+  deferred: ReadonlySet<string>,
+): Map<string, string> {
+  const problems = new Map<string, string>();
+  const reportsNone = !ids.some((id) => reported.has(id));
+  for (const id of ids) {
+    if (reported.has(id)) {
+      continue;
+    }
+    if (!deferred.has(id)) {
+      problems.set(
+        id,
+        "ended this batch without a result for this task and without leaving it for a following batch.",
+      );
+    } else if (reportsNone) {
+      problems.set(
+        id,
+        "would leave every task of this batch for a following batch without running any, so that Nx would start the same batch again without end.",
+      );
+    }
+  }
+  return problems;
 }
 
 /**

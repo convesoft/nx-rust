@@ -342,12 +342,19 @@ export class FixtureWorkspace {
    * unless nx.json sets `analytics` (`ensureAnalyticsPreferenceSet`), and
    * then waits for an answer, so the fixture's nx.json has to set it.
    *
+   * `script` gives the terminal no size, with which Nx 24.0.6 does not start
+   * its terminal UI where `--tui` asks for it ("not supported in this
+   * environment"), and with `NX_TUI_SKIP_CAPABILITY_CHECK=true` its
+   * pseudo-terminal panics. Pass `size` to have `stty` give the terminal
+   * one before Nx starts.
+   *
    * @throws {Error} On another system, or where nx.json does not set `analytics`.
    */
   nxInTerminal(
     args: string[],
     env: Record<string, string | undefined> = {},
     seconds = 180,
+    size?: { columns: number; rows: number },
   ): Promise<{ status: number | null; output: string }> {
     if (process.platform !== "linux") {
       throw new Error(`nxInTerminal runs on Linux only, through util-linux's script`);
@@ -361,7 +368,9 @@ export class FixtureWorkspace {
     const command = [process.execPath, join(this.root, "node_modules", "nx", nxBin), ...args]
       .map((word) => `'${word.split("'").join(`'"'"'`)}'`)
       .join(" ");
-    return run("timeout", ["-k", "5", String(seconds), "script", "-qfec", command, "/dev/null"], {
+    const sized =
+      size === undefined ? command : `stty cols ${size.columns} rows ${size.rows} && ${command}`;
+    return run("timeout", ["-k", "5", String(seconds), "script", "-qfec", sized, "/dev/null"], {
       cwd: this.root,
       env: this.environment({ NX_TUI: "false", INIT_CWD: undefined, ...env }),
     });
