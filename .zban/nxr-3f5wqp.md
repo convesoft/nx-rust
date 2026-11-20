@@ -1,6 +1,6 @@
 ---
 title: Memoize the workspace-wide glob in nxTaskFiles.filesBelow
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:
