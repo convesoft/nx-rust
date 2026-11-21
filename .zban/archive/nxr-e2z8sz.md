@@ -30,3 +30,7 @@ Rejected along the way: keeping and putting back files for build groups (a windo
 Decisions made for the maintainer are listed in nxr-vk19v5, lines 1 to 35.
 
 Checks run on 21 November 2026 at 12e7309 in the integration checkout, uncached: `pnpm nx run-many -t build lint test` (80 suites, 2100 tests passed, 61 skipped, 6 todo), `pnpm nx e2e nx-rust-e2e` on the installed cargo and on Cargo 1.91 (27 passed each), `pnpm nx format:check --all`, `mara schema validate`, `mara project validate` with a fresh code index (valid, evaluation complete, no errors or warnings) and `zban check`. Not checked: the CI workflow of nxr-ryhjf1, which runs only once the maintainer pushes.
+
+## After the milestone: architecture audit
+
+One auditor read the whole repository at 54adf17 on 21 November 2026 and returned 14 findings. None is a defect that a realistic setup reaches, so all 14 are in the backlog, where nothing starts without the maintainer: nxr-aa287j, nxr-es2rrj, nxr-2m21ya, nxr-rxetx7, nxr-peg4yx and nxr-8jv932 (shared code to create or unify), nxr-rarqzn (the same in the tests), nxr-mdpha2 and nxr-f2j7ec (cleanups on top of it), and nxr-95a32m, nxr-n83w5r, nxr-xccm6a, nxr-y7pxgd and nxr-28vt4j (pure splits). Their order is in their `blocked_by` edges. Recommended: one cleanup epic that takes these 14 as children, before or beside 1.0.
