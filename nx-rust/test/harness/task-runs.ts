@@ -195,19 +195,47 @@ export function workspaceTestSteps(tail: readonly string[] = [], doctests = true
 /**
  * The arguments of a `build`, `check` or `clippy` group under
  * `workspace-build`, which selects the whole workspace (`DES-UNIFICATION`),
- * with `tail`, the feature, profile, triple and `--locked` flags.
+ * with `tail`, the feature, profile, triple and `--locked` flags. A `build`
+ * of the whole workspace builds in a stage of its own ({@link stagedArgs};
+ * `DES-BATCH`, "Staged builds"), in the artifact directory `artifact` and
+ * with the build directory `build`, each with `{workspaceRoot}` for the root.
  */
 export function workspaceArgs(
   subcommand: "build" | "check" | "clippy",
   tail: readonly string[] = [],
   allTargets = subcommand !== "build",
+  artifact = "{workspaceRoot}/rust/target",
+  build = artifact,
 ): string[] {
-  return [
+  const args = [
     subcommand,
     ...(allTargets ? ["--all-targets"] : []),
     "--keep-going",
     "--message-format=json",
     "--workspace",
     ...tail,
+  ];
+  return subcommand === "build" ? stagedArgs(args, artifact, build) : args;
+}
+
+/**
+ * `args` of a staged command, as the cargo wrapper's `calls` gives them with
+ * the workspace root: with `--target-dir` naming the stage in the artifact
+ * directory and `build.build-dir` the build directory, which is the
+ * artifact directory where nothing sets it (`DES-BATCH`, "Staged builds").
+ *
+ * @param artifact The artifact directory, with `{workspaceRoot}` for the root.
+ */
+export function stagedArgs(
+  args: readonly string[],
+  artifact = "{workspaceRoot}/rust/target",
+  build = artifact,
+): string[] {
+  return [
+    ...args,
+    "--target-dir",
+    `${artifact}/.nx-rust-stage/{stage}`,
+    "--config",
+    `build.build-dir="${build}"`,
   ];
 }

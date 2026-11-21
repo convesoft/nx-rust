@@ -76,7 +76,10 @@ the file system has them. A test in `napi-build.spec.ts` and one in
 `wasm-build.spec.ts` show that a copy compiles every crate of the workspace
 again and writes their records itself, also with its sources dated before
 the template, so this does not rest on the files' times;
-`fixture-builds.spec.ts` shows that the template stays in its folder. To warm another fixture, add its workspaces and the cargo commands
+`fixture-builds.spec.ts` shows that the template stays in its folder. The
+two tests run the build as the plugin does, in a stage with the copy's
+`target` folder as the build directory, which reuses what the plain commands
+of the template compiled (`DES-BATCH`, "Staged builds"). To warm another fixture, add its workspaces and the cargo commands
 that its tests repeat, with the same profile, features, package selection
 and triple. The template goes with the run's folder at the end of the run.
 

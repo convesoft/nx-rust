@@ -561,7 +561,7 @@ describe("@convesoft/nx-rust", () => {
             listRustMembers,
             {
               cwd: "rust",
-              args: ["build", "--keep-going", "--message-format=json", "--workspace"],
+              args: workspaceArgs("build"),
             },
           ]);
         },
@@ -634,7 +634,7 @@ describe("@convesoft/nx-rust", () => {
             listRustMembers,
             {
               cwd: "rust",
-              args: ["build", "--keep-going", "--message-format=json", "--workspace"],
+              args: workspaceArgs("build"),
             },
             readRustWorkspace,
             updateRustLockfile,
@@ -644,7 +644,7 @@ describe("@convesoft/nx-rust", () => {
             listRustMembers,
             {
               cwd: "rust",
-              args: ["build", "--keep-going", "--message-format=json", "--workspace"],
+              args: workspaceArgs("build"),
             },
           ]);
         },

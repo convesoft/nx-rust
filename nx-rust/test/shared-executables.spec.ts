@@ -158,9 +158,11 @@ async function nx(
 
 /**
  * The plugin's `cargo build` of a group of crates of one workspace, which
- * selects the whole workspace under workspace-build (DES-UNIFICATION).
+ * selects the whole workspace under workspace-build (DES-UNIFICATION), in a
+ * stage of the artifact directory `artifact` (DES-BATCH, "Staged builds").
  */
-const build = workspaceArgs("build").join(" ");
+const buildIn = (artifact: string): string => workspaceArgs("build", [], false, artifact).join(" ");
+const build = buildIn("{workspaceRoot}/rust/target");
 
 /** What the executable at `path`, relative to the workspace root, prints. */
 function prints(workspace: FixtureWorkspace, path: string): string {
@@ -519,7 +521,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         ).toBe(1);
         // The uncached builds of alpha and beta wait for no lockfile task,
         // so they form a batch and a group of their own before gamma's.
-        expect(calls(workspace)).toEqual([build, build, build]);
+        expect(calls(workspace)).toEqual([build, build, buildIn("{workspaceRoot}/tools/target")]);
 
         const second = await nx(workspace, ["run-many", "-t", "build"]);
         expectStatus(second, 0);
@@ -530,8 +532,9 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         expect(restored(second.output, "beta:build")).toBe(false);
 
         // Without the file, alpha's build runs cargo, which builds the whole
-        // workspace and writes the file of whichever crate it wrote last, as
-        // plain cargo build --workspace does; neither build is stored.
+        // workspace into its stage, where the file is that of whichever crate
+        // cargo wrote last, and alpha's build moves it; neither build is
+        // stored.
         rmSync(join(workspace.root, "rust/target/debug/cli"));
         const alone = await nx(workspace, ["run", "alpha:build"]);
         expectStatus(alone, 0);
@@ -566,7 +569,8 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         expectStatus(first, 0);
         const second = await nx(workspace, ["run-many", "-t", "build"]);
         expectStatus(second, 0);
-        expect(calls(workspace)).toEqual([build, build]);
+        const shared = buildIn("{workspaceRoot}/target");
+        expect(calls(workspace)).toEqual([shared, shared]);
         for (const task of ["beta:build", "gamma:build"]) {
           expect({ task, restored: restored(second.output, task) }).toEqual({
             task,
@@ -578,7 +582,7 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         rmSync(join(workspace.root, "target/debug/cli"));
         const alone = await nx(workspace, ["run", "tools:build"]);
         expectStatus(alone, 0);
-        expect(calls(workspace)).toEqual([build]);
+        expect(calls(workspace)).toEqual([shared]);
         expect(prints(workspace, "target/debug/cli")).toBe("tools");
       } finally {
         workspace.remove();
@@ -587,13 +591,23 @@ describe("crates whose artifacts share a file name in one artifact directory", (
     HARNESS_TIMEOUT * 2,
   );
 
-  it.each<[string, (triple: string) => FileChanges, (triple: string) => string, string[], number]>([
+  it.each<
+    [
+      string,
+      (triple: string) => FileChanges,
+      (triple: string) => string,
+      string[],
+      number,
+      (triple: string) => string[],
+    ]
+  >([
     [
       "two entries of the plugin receive workspaces with one artifact directory",
       () => ({ ...twoEntries, ...oneArtifactDirectory }),
       () => "target/debug/cli",
       [],
       0,
+      () => ["{workspaceRoot}/target", "{workspaceRoot}/target"],
     ],
     [
       "one workspace's artifact directory is the folder of a triple in another's",
@@ -609,10 +623,11 @@ describe("crates whose artifacts share a file name in one artifact directory", (
       // runs its tasks one at a time.
       ["--parallel=1"],
       2,
+      (triple) => ["{workspaceRoot}/target", `{workspaceRoot}/target/${triple}`],
     ],
   ])(
     "run both builds in every run and restore neither where %s",
-    async (_case, files, executable, firstRun, firstBuildNotes) => {
+    async (_case, files, executable, firstRun, firstBuildNotes, artifacts) => {
       const triple = hostTriple();
       const workspace = FixtureWorkspace.create("shared-executables", files(triple), betaRenamed);
       try {
@@ -624,10 +639,9 @@ describe("crates whose artifacts share a file name in one artifact directory", (
         const second = await nx(workspace, ["run-many", "-t", "build"]);
         expectStatus(second, 0);
         // alpha's build names the triple of its project.json where it has one.
-        expect(calls(workspace).map((call) => call.replace(/ --target \S+$/, ""))).toEqual([
-          build,
-          build,
-        ]);
+        expect(calls(workspace).map((call) => call.replace(/ --target [^-\s]\S*/, ""))).toEqual(
+          artifacts(triple).map(buildIn),
+        );
         for (const task of ["alpha:build", "tools:build"]) {
           expect({ task, restored: restored(second.output, task) }).toEqual({
             task,

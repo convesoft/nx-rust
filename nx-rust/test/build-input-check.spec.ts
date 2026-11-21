@@ -823,7 +823,15 @@ describe("the check of a build's dependency files", () => {
           const { status, output } = await nx(workspace, ["run", "reader:build"]);
           expect(output).not.toContain(failure);
           expect(status).toBe(0);
-          expect(cargoCalls(workspace)).toEqual([workspaceArgs("build").join(" ")]);
+          expect(cargoCalls(workspace)).toEqual([
+            workspaceArgs(
+              "build",
+              [],
+              false,
+              "{workspaceRoot}/rust/target",
+              "{workspaceRoot}/rust/bd",
+            ).join(" "),
+          ]);
           const generated = read(workspace, "rust/target/debug/libreader.d")
             .split(/(?<!\\)\s+/)
             .filter((path) => path.endsWith("/out/lines.rs"))

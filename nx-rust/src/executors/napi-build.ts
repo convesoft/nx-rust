@@ -189,7 +189,10 @@ export async function runNapiGroup(
       output: `${member.prepared.task}: @convesoft/nx-rust has no report of Cargo's directories for this napi-build group.`,
     }));
   }
-  const tree = cargoTree(first.invocation.args, cwd, cargoEnvironment(first.invocation, env));
+  // The compile's arguments without a stage's flags, which change on every
+  // run and are no part of the configuration (`DES-BATCH`, "Staged builds").
+  const compile = first.invocation.unstagedArgs ?? first.invocation.args;
+  const tree = cargoTree(compile, cwd, cargoEnvironment(first.invocation, env));
   if (typeof tree === "string") {
     return members.map((member) => ({
       success: false,
@@ -243,7 +246,7 @@ export async function runNapiGroup(
       "nx-rust",
       "napi",
       createHash("sha256")
-        .update(JSON.stringify([cwd, first.invocation.args]))
+        .update(JSON.stringify([cwd, compile]))
         .digest("hex")
         .slice(0, 16),
     );

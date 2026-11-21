@@ -746,7 +746,9 @@ describe("a run with the plugin's executor", () => {
         expect(restored.output).toMatch(new RegExp(`nx run tools:build\\s+${hit}`));
         expect(existsSync(binary)).toBe(true);
         expect(existsSync(join(workspace.root, "tools", "target"))).toBe(false);
-        expect(taskCalls(workspace)).toEqual([workspaceArgs("build").join(" ")]);
+        expect(taskCalls(workspace)).toEqual([
+          workspaceArgs("build", [], false, "{workspaceRoot}/deep/target").join(" "),
+        ]);
       } finally {
         workspace.remove();
       }
@@ -909,8 +911,8 @@ if (!pinnedToolchainBesideDefault()) {
           );
           expect(programVersion(links.rustc)).not.toBe(old);
           expect(taskCalls(workspace)).toEqual([
-            workspaceArgs("build").join(" "),
-            workspaceArgs("build").join(" "),
+            workspaceArgs("build", [], false, "{workspaceRoot}/tools/target").join(" "),
+            workspaceArgs("build", [], false, "{workspaceRoot}/tools/target").join(" "),
           ]);
         } finally {
           workspace.remove();
@@ -939,8 +941,8 @@ if (!pinnedToolchainBesideDefault()) {
             () => programVersion(pinned),
           );
           expect(taskCalls(workspace)).toEqual([
-            workspaceArgs("build").join(" "),
-            workspaceArgs("build").join(" "),
+            workspaceArgs("build", [], false, "{workspaceRoot}/tools/target").join(" "),
+            workspaceArgs("build", [], false, "{workspaceRoot}/tools/target").join(" "),
           ]);
         } finally {
           workspace.remove();

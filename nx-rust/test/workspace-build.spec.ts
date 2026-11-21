@@ -959,8 +959,8 @@ describe("the files that a batch stores", () => {
         const restored = await buildAndRestore(workspace);
         const other = own === "pa" ? "pb" : "pa";
         expect(restored).toEqual({ [own]: "extra", [other]: "plain" });
-        // The crate with its own feature set ran alone, after the build of
-        // the whole workspace.
+        // The crate with its own feature set ran alone, without a stage,
+        // after the build of the whole workspace, in a stage.
         workspace.cargo.clear();
         await runNx(workspace, ["run-many", "-t", "build", "-p", "pa", "pb", "--skip-nx-cache"]);
         expect(taskCalls(workspace).map((call) => call.args.join(" "))).toEqual([
@@ -975,7 +975,7 @@ describe("the files that a batch stores", () => {
   );
 
   it(
-    "runs a second whole-workspace build that would write the files of the first in a following batch, once Nx has stored the first",
+    "runs a second whole-workspace build whose environment differs in the same batch process, each in a stage of its own",
     async () => {
       // pb's .env gives its build other RUSTFLAGS, so its group builds the
       // whole workspace into the same folder with another environment.
@@ -996,9 +996,8 @@ describe("the files that a batch stores", () => {
           "--skip-nx-cache",
         ]);
         expect(run.status).toBe(0);
-        // Two batches of the build executor, one whole-workspace build each.
-        // One batch, as Nx reports it, whose second wave runs pb's group:
-        // each group's own status line, one whole-workspace build each.
+        // One batch, as Nx reports it, with each group's own status line, one
+        // staged whole-workspace build each.
         expect(
           run.output.match(/Running \d+ tasks? with @convesoft\/nx-rust:cargo-outputs/g),
         ).toHaveLength(1);

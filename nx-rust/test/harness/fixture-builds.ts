@@ -42,8 +42,9 @@ export interface WarmedWorkspace {
  *
  * To warm another fixture, add it here with the cargo commands its tests
  * run, as cargo runs them (the same profile, features, package selection and
- * triple; `--keep-going` and `--message-format` change nothing that cargo
- * reuses). Whatever a copy builds otherwise compiles as before.
+ * triple; `--keep-going`, `--message-format` and the stage of a staged
+ * build, which keeps the build directory, change nothing that cargo reuses).
+ * Whatever a copy builds otherwise compiles as before.
  */
 export const warmBuilds: Partial<Record<FixtureName, () => WarmedWorkspace[]>> = {
   // The host build of napi-build and the build of the workspace, and the

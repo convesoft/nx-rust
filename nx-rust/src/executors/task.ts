@@ -60,9 +60,11 @@ import {
   type SelectingRunner,
   selectsBySpecification,
 } from "./command";
-import { hasLibrary, runGroup } from "./group-run";
-import { type NapiTask, NapiTaskError, prepareNapiTask, runNapiGroup } from "./napi-build";
-import { prepareWasmTask, runWasmGroup, type WasmTask, WasmTaskError } from "./wasm-build";
+import { hasLibrary } from "./group-run";
+import { sharedBuildFolders } from "./stage";
+import { runTargetGroup } from "./staged-run";
+import { type NapiTask, NapiTaskError, prepareNapiTask } from "./napi-build";
+import { prepareWasmTask, type WasmTask, WasmTaskError } from "./wasm-build";
 import { type GroupSelection, type PlannedGroup, planGroups } from "./groups";
 import { runnerCommand } from "./runner-script";
 import {
@@ -249,6 +251,17 @@ export async function runTask(
       );
     }
     prepared = prepareTask(executor, options, context, env);
+    // Two builds of one crate into one folder in one command, which no stage
+    // keeps apart, fail before cargo runs, as in a batch (`DES-BATCH`, "Files
+    // that a batch stores").
+    const graphTask = prepared.target === "build" ? graphTaskOf(context) : undefined;
+    const refused =
+      graphTask === undefined
+        ? undefined
+        : sharedBuildFolders([graphTask.id], context).get(graphTask.id);
+    if (refused !== undefined) {
+      throw new TaskError(refused);
+    }
     [planned] = planGroups([[prepared]]);
     const [finished] = groupInvocations([prepared], context.root, planned.selection);
     if (typeof finished === "string") {
@@ -284,13 +297,14 @@ export async function runTask(
     prepared.wasm !== undefined ||
     prepared.testMode?.selects === true
   ) {
-    const [result] = await (
-      prepared.napi !== undefined
-        ? runNapiGroup
-        : prepared.wasm !== undefined
-          ? runWasmGroup
-          : runGroup
-    )([{ prepared, invocation, context }], verbose);
+    // A whole-workspace `build` and the compile of `napi-build` and
+    // `wasm-build` build in a stage of their own, as in a batch (`DES-BATCH`,
+    // "Staged builds").
+    const [result] = await runTargetGroup(
+      [{ prepared, invocation, context }],
+      planned.selection,
+      verbose,
+    );
     if (result.output !== "") {
       await new Promise<void>((resolve) =>
         process.stdout.write(`${result.output}\n`, () => resolve()),
@@ -901,6 +915,12 @@ export interface GroupInvocation extends CargoInvocation {
    * ({@link cargoSteps}); `args` is the first one's.
    */
   steps: CargoStep[];
+  /**
+   * Of a staged command, `args` without the stage's two flags (`DES-BATCH`,
+   * "Staged builds"): what names the command's configuration, as for the
+   * type folder and `cargo tree` of `napi-build` (`DES-NAPI`).
+   */
+  unstagedArgs?: string[];
   /**
    * Every member of the workspace, as the group's report of the members
    * gives them, where the group selects the whole workspace: the reading of

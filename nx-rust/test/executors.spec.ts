@@ -188,7 +188,12 @@ describe("the cargo executor", () => {
         const result = await nx(workspace, ["run", "rust-engine:build"]);
 
         expect(result.status).toBe(0);
-        expect(taskCalls(workspace)).toEqual([{ cwd: "libs/rust", args: workspaceArgs("build") }]);
+        expect(taskCalls(workspace)).toEqual([
+          {
+            cwd: "libs/rust",
+            args: workspaceArgs("build", [], false, "{workspaceRoot}/libs/rust/target"),
+          },
+        ]);
       }),
     HARNESS_TIMEOUT,
   );

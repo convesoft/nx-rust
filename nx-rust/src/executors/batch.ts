@@ -2,9 +2,9 @@ import type { ExecutorContext, Task, TaskGraph } from "@nx/devkit";
 import { batchRunsVerbosely } from "./cargo-invocation";
 import type { CargoTargetOptions } from "./command";
 import { formGroups, type GroupSelection, planGroups } from "./groups";
-import { batchLiveOutput, type GroupMember, type LiveOutput, runGroup } from "./group-run";
-import { runNapiGroup } from "./napi-build";
-import { runWasmGroup } from "./wasm-build";
+import { batchLiveOutput, type GroupMember, type LiveOutput } from "./group-run";
+import { sharedBuildFolders } from "./stage";
+import { runTargetGroup } from "./staged-run";
 import {
   groupInvocations,
   type PluginExecutor,
@@ -67,11 +67,16 @@ interface ReadyTask extends PreparedTask {
  * groups of the tasks it depends on have run; a task whose dependency in
  * the batch failed is reported skipped, as Nx skips it outside a batch.
  *
- * The batch reports every task that it receives, apart from those that it
- * leaves for a following batch ({@link writesStoredFiles},
- * {@link unreportedProblems}), and throws for none (`EVD-NX-24-BATCHES`: a
- * throw fails every task of the batch, and a task left out runs again in a
- * new batch process). A failure of its own machinery fails the tasks it
+ * Two `build` tasks of one crate whose files lie in one folder fail before
+ * any cargo command runs ({@link sharedBuildFolders}). A whole-workspace
+ * `build` and every compile of `napi-build` and `wasm-build` build in a
+ * stage of their own, from which a `build` moves only its own crates' final
+ * artifacts (`DES-BATCH`, "Staged builds"), so that no group writes another
+ * task's files and every group runs in this batch.
+ *
+ * The batch reports every task that it receives ({@link unreportedProblems})
+ * and throws for none (`EVD-NX-24-BATCHES`: a throw fails every task of the
+ * batch, and a task left out runs again in a new batch process). A failure of its own machinery fails the tasks it
  * concerns, with a message that says so: no task is reported successful
  * without cargo's output showing that its crate passed.
  *
@@ -188,34 +193,41 @@ export async function* runBatch(
       }
     }
 
+    // Two builds of one crate into one folder, which no stage keeps apart,
+    // fail before any cargo command of the batch runs (`DES-BATCH`, "Files
+    // that a batch stores").
+    const refused = sharedBuildFolders(
+      [...ready.values()].filter((task) => task.target === "build").map((task) => task.id),
+      context,
+    );
+    for (const [id, problem] of refused) {
+      const task = ready.get(id);
+      ready.delete(id);
+      const now = Date.now();
+      yield report(id, {
+        success: false,
+        terminalOutput: [...(task?.head ?? []), problem].join("\n"),
+        startTime: now,
+        endTime: now,
+      });
+    }
+
     // The groups, in waves of tasks whose dependencies in the batch have run.
     const done = new Map<string, boolean>(
       ids.filter((id) => !ready.has(id)).map((id) => [id, false]),
     );
-    // Tasks that this batch leaves unreported, so that Nx runs them in a
-    // following batch once it has stored this one's (writesStoredFiles):
-    // the tasks of a group that would write files that a group before it
-    // wrote, and every task that depends on one of them.
-    const deferred = new Set<string>();
-    // The crates whose stored files a build group of this batch has
-    // written, by workspace root.
-    const written = new Map<string, Set<string>>();
     const dependencies = (id: string): string[] =>
       (taskGraph.dependencies?.[id] ?? []).flatMap((edge: unknown) => {
         const dependency = typeof edge === "string" ? edge : (edge as { id?: string } | null)?.id;
         return dependency !== undefined && dependency in taskGraph.tasks ? [dependency] : [];
       });
-    while (done.size + deferred.size < ids.length) {
+    while (done.size < ids.length) {
       const wave: ReadyTask[] = [];
       for (const [id, task] of ready) {
-        if (done.has(id) || deferred.has(id)) {
+        if (done.has(id)) {
           continue;
         }
         const deps = dependencies(id);
-        if (deps.some((dependency) => deferred.has(dependency))) {
-          deferred.add(id);
-          continue;
-        }
         const failed = deps.filter((dependency) => done.get(dependency) === false);
         if (failed.length > 0) {
           done.set(id, false);
@@ -233,12 +245,12 @@ export async function* runBatch(
           wave.push(task);
         }
       }
-      if (wave.length === 0 && done.size + deferred.size >= ids.length) {
+      if (wave.length === 0 && done.size >= ids.length) {
         break;
       }
       if (wave.length === 0) {
         // Only a cycle, which Nx does not create, leaves tasks here.
-        for (const id of ids.filter((id) => !done.has(id) && !deferred.has(id))) {
+        for (const id of ids.filter((id) => !done.has(id))) {
           done.set(id, false);
           const now = Date.now();
           yield report(id, {
@@ -250,25 +262,10 @@ export async function* runBatch(
         }
         break;
       }
+      // No group writes another task's files (`DES-BATCH`, "Staged
+      // builds"), so every group runs in this batch; the whole-workspace
+      // groups still come first.
       for (const group of wholeWorkspaceFirst(planGroups(formGroups(wave)))) {
-        const writes = writesStoredFiles(group);
-        if (writes !== undefined) {
-          const before = written.get(writes.root) ?? new Set<string>();
-          if (
-            writes.crates === "all"
-              ? before.size > 0
-              : writes.crates.some((crate) => before.has(crate))
-          ) {
-            for (const task of group.tasks) {
-              deferred.add(task.id);
-            }
-            continue;
-          }
-          for (const task of group.tasks) {
-            before.add(task.crate ?? "");
-          }
-          written.set(writes.root, before);
-        }
         for (const entry of await runReadyGroup(
           group.tasks,
           group.selection,
@@ -281,11 +278,10 @@ export async function* runBatch(
         }
       }
     }
-    // What Nx does with a task that the batch leaves unreported is safe only
-    // for the tasks left for a following batch, and only where this batch
-    // reports a task of its own.
+    // Nx would start a task that the batch leaves unreported again in a new
+    // batch process: only a fault of the plugin can leave one.
     const ended = Date.now();
-    for (const [id, problem] of unreportedProblems(ids, reported, deferred)) {
+    for (const [id, problem] of unreportedProblems(ids, reported)) {
       yield report(id, {
         success: false,
         terminalOutput: `${taskLabel(taskGraph.tasks[id])}: @convesoft/nx-rust ${problem} The task fails without running, so that Nx stores no successful result for it. Run the tasks with --batch=false, and report this as a bug of @convesoft/nx-rust.`,
@@ -348,12 +344,12 @@ async function runReadyGroup(
     });
     // `napi-build` runs its compile with variables of its own and its
     // post-processing after it, and `wasm-build` the wasm-bindgen CLI after
-    // its compile (`DES-NAPI`, `DES-WASM`).
-    const target = group[0]?.target;
-    const results = await (
-      target === "napi-build" ? runNapiGroup : target === "wasm-build" ? runWasmGroup : runGroup
-    )(
+    // its compile (`DES-NAPI`, `DES-WASM`); a whole-workspace `build` and
+    // every such compile build in a stage of their own (`DES-BATCH`,
+    // "Staged builds").
+    const results = await runTargetGroup(
       members.map(({ member }) => member),
+      selection,
       verbose,
       live,
     );
@@ -437,97 +433,30 @@ function wholeWorkspaceFirst<T extends { selection: GroupSelection }>(groups: re
 }
 
 /**
- * Where a group's cargo command writes files that the `build` tasks of a
- * batch store, or `undefined` for a group that writes none (`DES-BATCH`,
- * "Files that a batch stores"): the workspace root, and the crates whose
- * files it writes. A group of `build` writes the executables, `cdylib` and
- * `staticlib` files of `build`'s outputs in the folder of its profile and
- * triple: every member's where it selects the whole workspace, and only
- * those of the crates it selects with `-p` otherwise, as a group of one
- * crate and a group under `hakari` or `cargo` do, also where its feature set
- * changes that of crates they depend on, as Cargo 1.91.0 and 1.100.0 do
- * (`EVD-CARGO-ARTIFACT-WRITERS`). The crates count by workspace root alone,
- * so that two groups whose profiles or triples share a folder under other
- * names, such as `dev` and `test`, count as writing the same files.
- *
- * `doc` is not concerned: it belongs to the workspace project, one task per
- * Cargo workspace, and writes only its workspace's `doc` folder, which no
- * `build` writes. `check`, `lint` and `test` run in the other batch executor
- * and store no files; a `test` waits for every `build` whose executables its
- * commands replace (`ADR-WORKSPACE-TEST-EXECUTABLES`).
- *
- * Nx stores a batch's outputs once the whole batch has ended
- * (`EVD-NX-24-BATCHES`). So a group runs only where no `build` group of this
- * batch has run before it in the same workspace root for a crate whose files
- * it writes: a group that selects the whole workspace only where none has
- * run there at all. Otherwise its tasks are left unreported, and Nx runs them
- * in a following batch once it has stored this one's ("Tasks left for a
- * following batch").
- */
-// @mara implements DES-BATCH
-function writesStoredFiles(group: {
-  tasks: readonly PreparedTask[];
-  selection: GroupSelection;
-}): { root: string; crates: string[] | "all" } | undefined {
-  const [first] = group.tasks;
-  if (
-    first === undefined ||
-    (first.target !== "build" && first.target !== "napi-build" && first.target !== "wasm-build")
-  ) {
-    return undefined;
-  }
-  return {
-    root: first.cwd,
-    crates:
-      group.selection.kind === "workspace" ? "all" : group.tasks.map((task) => task.crate ?? ""),
-  };
-}
-
-/**
- * The tasks that a batch must not leave unreported as it ends, each with
- * the reason (`DES-BATCH`, "Tasks left for a following batch"). Nx 24 runs
+ * The tasks that a batch did not report as it ends, each with the reason
+ * (`DES-BATCH`, "Every task in the batch that receives it"). Nx 24 runs
  * again, in a new batch process, every task that a batch does not report,
  * for as long as the batch leaves it out (`EVD-NX-24-BATCHES`, "Tasks left
- * out"). The batch relies on that only for the tasks it leaves for a
- * following batch on purpose (`deferred`), and only where it reports at
- * least one task itself, so that Nx's loop, which has no limit, ends. A
- * deferral needs a group of the same batch to have run before, which
- * reports its tasks, so neither case arises unless the plugin's own logic
- * is wrong; the batch then fails the tasks concerned instead of having Nx
- * start them again, perhaps without end.
+ * out"). The batch reports every task that it receives, so only a fault of
+ * the plugin leaves one; the batch then fails it instead of having Nx start
+ * it again, perhaps without end.
  *
  * @param ids The tasks of the batch.
  * @param reported The tasks for which the batch has reported a result.
- * @param deferred The tasks that the batch leaves for a following batch.
  * @returns The reason for each task that has to fail, by task id, in the
- *   order of `ids`; empty where the batch may end as it is.
+ *   order of `ids`; empty where the batch reported every task.
  */
 // @mara implements DES-BATCH
 // @mara implements DES-DIAGNOSTICS
 export function unreportedProblems(
   ids: readonly string[],
   reported: ReadonlySet<string>,
-  deferred: ReadonlySet<string>,
 ): Map<string, string> {
-  const problems = new Map<string, string>();
-  const reportsNone = !ids.some((id) => reported.has(id));
-  for (const id of ids) {
-    if (reported.has(id)) {
-      continue;
-    }
-    if (!deferred.has(id)) {
-      problems.set(
-        id,
-        "ended this batch without a result for this task and without leaving it for a following batch.",
-      );
-    } else if (reportsNone) {
-      problems.set(
-        id,
-        "would leave every task of this batch for a following batch without running any, so that Nx would start the same batch again without end.",
-      );
-    }
-  }
-  return problems;
+  return new Map(
+    ids
+      .filter((id) => !reported.has(id))
+      .map((id) => [id, "ended this batch without a result for this task."]),
+  );
 }
 
 /**

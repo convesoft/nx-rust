@@ -27,7 +27,11 @@
 // first argument is that subcommand is logged, writes `<folder>/held` and
 // waits until `<folder>/release` exists before it runs the real cargo, so
 // that a test can act while a task is between its cache key and its cargo
-// call (holdCargo in cargo-wrapper.ts).
+// call (holdCargo in cargo-wrapper.ts). With `|after` after the folder, it
+// waits in the same way once the real cargo has ended and before the call
+// exits, so that a test can look at the files while a task's cargo command
+// has run and its task has not ended; and with `|<NAME>=<value>` after
+// that, only a call whose environment has that value holds.
 
 const { spawn } = require("node:child_process");
 const { appendFileSync, existsSync, writeFileSync } = require("node:fs");
@@ -55,13 +59,33 @@ if (fakeVersion && args.length === 1 && ["--version", "-V", "version"].includes(
   holdIfAsked(() => runCargo(Boolean(fakeVersion) && args[0] === "metadata"));
 }
 
-// Waits as NX_RUST_TEST_HOLD_CARGO asks, then calls `next`.
-function holdIfAsked(next) {
-  const [subcommand, folder] = (process.env.NX_RUST_TEST_HOLD_CARGO ?? "").split("|");
+// The hold that NX_RUST_TEST_HOLD_CARGO asks of this call, if any.
+function askedHold() {
+  const [subcommand, folder, when, filter] = (process.env.NX_RUST_TEST_HOLD_CARGO ?? "").split("|");
   if (!subcommand || !folder || args[0] !== subcommand) {
+    return undefined;
+  }
+  if (filter) {
+    const at = filter.indexOf("=");
+    if (process.env[filter.slice(0, at)] !== filter.slice(at + 1)) {
+      return undefined;
+    }
+  }
+  return { folder, after: when === "after" };
+}
+
+// Waits as NX_RUST_TEST_HOLD_CARGO asks before cargo runs, then calls `next`.
+function holdIfAsked(next) {
+  const hold = askedHold();
+  if (hold === undefined || hold.after) {
     next();
     return;
   }
+  waitForRelease(hold.folder, next);
+}
+
+// Writes `<folder>/held` and calls `next` once `<folder>/release` exists.
+function waitForRelease(folder, next) {
   writeFileSync(join(folder, "held"), "");
   const wait = setInterval(() => {
     if (existsSync(join(folder, "release"))) {
@@ -89,7 +113,7 @@ function runCargo(rewriteReport) {
     process.exit(127);
   });
   child.on("close", (code, signal) => {
-    const finish = () => {
+    const exit = () => {
       if (signal) {
         for (const forwarded of forwardedSignals) {
           process.removeAllListeners(forwarded);
@@ -99,6 +123,9 @@ function runCargo(rewriteReport) {
       }
       process.exit(code ?? 1);
     };
+    const hold = askedHold();
+    const finish = () =>
+      hold !== undefined && hold.after ? waitForRelease(hold.folder, exit) : exit();
     if (rewriteReport) {
       process.stdout.write(withoutBuildDirectory(Buffer.concat(stdout).toString("utf8")), finish);
     } else {

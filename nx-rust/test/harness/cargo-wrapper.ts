@@ -131,7 +131,8 @@ export class CargoWrapper {
    *
    * @param root If given, folders become relative to it (`.` for `root`
    *   itself) and every occurrence of it in an argument becomes
-   *   `{workspaceRoot}`.
+   *   `{workspaceRoot}`; the name of a staged command's stage, which holds
+   *   the process id, becomes `{stage}` (`DES-BATCH`, "Staged builds").
    */
   calls(root?: string): CargoCall[] {
     return this.callsWithEnv(root).map(({ cwd, args }) => ({ cwd, args }));
@@ -152,7 +153,12 @@ export class CargoWrapper {
     }
     return calls.map(({ cwd, args, env }) => ({
       cwd: relative(root, cwd) || ".",
-      args: args.map((arg) => arg.split(root).join("{workspaceRoot}")),
+      args: args.map((arg) =>
+        arg
+          .split(root)
+          .join("{workspaceRoot}")
+          .replace(/(\.nx-rust-stage\/)\d+-\d+/g, "$1{stage}"),
+      ),
       env,
     }));
   }
@@ -217,11 +223,27 @@ export interface CargoHold {
  * after Nx has computed the task's key and started its executor, and
  * before cargo reads `Cargo.lock`. Meanwhile a test can change the
  * repository or run another command.
+ *
+ * @param options `after` waits once the real cargo has ended instead, before
+ *   the call exits, so that a test can look at the files while the task's
+ *   cargo command has run and the task has not ended; `when` holds only a
+ *   call whose environment has that variable with that value.
  */
-export function holdCargo(subcommand: string): CargoHold {
+export function holdCargo(
+  subcommand: string,
+  options: { after?: boolean; when?: { name: string; value: string } } = {},
+): CargoHold {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "nx-rust-hold-")));
+  const parts = [
+    subcommand,
+    folder,
+    ...(options.after === true || options.when !== undefined
+      ? [options.after === true ? "after" : "before"]
+      : []),
+    ...(options.when === undefined ? [] : [`${options.when.name}=${options.when.value}`]),
+  ];
   return {
-    env: { NX_RUST_TEST_HOLD_CARGO: `${subcommand}|${folder}` },
+    env: { NX_RUST_TEST_HOLD_CARGO: parts.join("|") },
     async held(timeout = 60_000) {
       for (const start = Date.now(); !existsSync(join(folder, "held"));) {
         if (Date.now() - start > timeout) {

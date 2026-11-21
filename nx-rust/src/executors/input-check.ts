@@ -30,6 +30,14 @@ export interface BuildInputCheck {
    * paths, which cargo reports with the task's environment.
    */
   directories: { artifact: string; build: string };
+  /**
+   * Where the records lie in the layout of an artifact directory, where
+   * that is not the artifact directory: the stage of a `napi-build` or
+   * `wasm-build` compile, which moves nothing out of it (`DES-BATCH`,
+   * "Staged builds"). The stage lies in the artifact directory, which the
+   * check leaves out as every one of Cargo's directories.
+   */
+  recordsFolder?: string;
   /** The task's feature, profile and triple options. */
   selection: BuildSelection;
   /** The task's environment, for `CARGO_BUILD_TARGET` and Cargo's configuration. */
@@ -78,7 +86,7 @@ export async function checkBuildInputs(
     check.crate,
     check.selection,
     check.env,
-    artifactDirectory,
+    check.recordsFolder ?? artifactDirectory,
     check.cwd,
   );
   const found = new Map<string, ReadFile>();

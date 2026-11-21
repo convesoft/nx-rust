@@ -864,7 +864,9 @@ describe("the check after cargo's call", () => {
         hold.release();
         const run = await raced;
 
-        const build = [`sibling: ${workspaceArgs("build").join(" ")}`];
+        const build = [
+          `sibling: ${workspaceArgs("build", [], false, "{workspaceRoot}/sibling/target").join(" ")}`,
+        ];
         expect(run.status).toBe(1);
         expect(ran(workspace)).toEqual(build);
         for (const name of crates) {

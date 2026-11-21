@@ -27,6 +27,7 @@ import {
   pathWithoutWasmBindgen,
   runNx,
   StubHakari,
+  stagedArgs,
   taskCalls,
   testEnvironment,
   testHost,
@@ -78,7 +79,8 @@ function wasmCompiles(workspace: FixtureWorkspace): string[][] {
 
 /** The compile of one crate's group of one crate: JSON messages for the library it post-processes. */
 function aloneArgs(spec: string, tail: readonly string[] = []): string[] {
-  return [
+  // Every compile of wasm-build builds in a stage (DES-BATCH, "Staged builds").
+  return stagedArgs([
     "build",
     "--lib",
     "--keep-going",
@@ -88,7 +90,7 @@ function aloneArgs(spec: string, tail: readonly string[] = []): string[] {
     ...tail,
     "--target",
     triple,
-  ];
+  ]);
 }
 
 let fakes = 0;
@@ -260,15 +262,29 @@ describe("a copy of wasm-packages", () => {
           // Sources older than anything cargo built: a crate whose build
           // state the copy still had would count as compiled already.
           backdateSources(rust);
-          const build = buildFreshness(rust, workspace.root, args);
+          // As the plugin runs it: in a stage, with the copy's target folder
+          // as the build directory (DES-BATCH, "Staged builds").
+          const stage = join(rust, "target", ".nx-rust-stage", "guard");
+          const build = buildFreshness(rust, workspace.root, [
+            ...args,
+            "--target-dir",
+            stage,
+            "--config",
+            `build.build-dir="${join(rust, "target")}"`,
+          ]);
           expect(build.ownCompiled).toEqual(crates);
           expect(build.ownFresh).toEqual([]);
           expect(build.othersCompiled).toEqual([]);
           expect(build.othersFresh.length).toBeGreaterThan(0);
-          // The records that the build wrote name no file of the template.
+          // The records that the build wrote, in the stage, name no file of
+          // the template.
           const run = testRunFolder() as string;
-          for (const record of readdirSync(folder).filter((entry) => entry.endsWith(".d"))) {
-            expect({ record, text: readFileSync(join(folder, record), "utf8") }).toEqual({
+          const records = join(stage, ...profile.split("/"));
+          expect(
+            readdirSync(records).filter((entry) => entry.endsWith(".d")).length,
+          ).toBeGreaterThan(0);
+          for (const record of readdirSync(records).filter((entry) => entry.endsWith(".d"))) {
+            expect({ record, text: readFileSync(join(records, record), "utf8") }).toEqual({
               record,
               text: expect.not.stringContaining(run),
             });
@@ -521,6 +537,14 @@ if (cli === undefined || !target) {
           expect(wasmCompiles(workspace).sort()).toEqual(
             specs.map((spec) => aloneArgs(spec)).sort(),
           );
+          // The compiles built in stages and moved nothing into the artifact
+          // directory, where the copy started without its crates' files.
+          const wasmFolder = join(workspace.root, "rust", "target", triple, "debug");
+          expect(
+            existsSync(wasmFolder)
+              ? readdirSync(wasmFolder).filter((name) => /\.(wasm|d)$/.test(name))
+              : [],
+          ).toEqual([]);
           expect(readdirSync(join(workspace.root, codec, "pkg")).sort()).toEqual([
             "codec.d.ts",
             "codec.js",
@@ -792,16 +816,18 @@ if (cli === undefined || !target) {
           // One command, which selects both crates.
           const compiles = wasmCompiles(listed);
           expect(compiles).toHaveLength(1);
-          expect(compiles[0].filter((arg) => !specs.includes(arg))).toEqual([
-            "build",
-            "--lib",
-            "--keep-going",
-            "--message-format=json",
-            "-p",
-            "-p",
-            "--target",
-            triple,
-          ]);
+          expect(compiles[0].filter((arg) => !specs.includes(arg))).toEqual(
+            stagedArgs([
+              "build",
+              "--lib",
+              "--keep-going",
+              "--message-format=json",
+              "-p",
+              "-p",
+              "--target",
+              triple,
+            ]),
+          );
           expect(compiles[0].filter((arg) => specs.includes(arg)).sort()).toEqual(
             [...specs].sort(),
           );

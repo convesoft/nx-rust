@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  statSync,
   readFileSync,
   realpathSync,
   symlinkSync,
@@ -22,6 +23,7 @@ import {
   pathWith,
   runNx,
   StubHakari,
+  stagedArgs,
   taskCalls,
   testEnvironment,
   testRunFolder,
@@ -141,20 +143,75 @@ describe("a copy of napi-addons", () => {
           // Sources older than anything cargo built: a crate whose build
           // state the copy still had would count as compiled already.
           backdateSources(rust);
-          const build = buildFreshness(rust, workspace.root, ["build", "--workspace", ...tail]);
+          // As the plugin runs it: in a stage, with the copy's target folder
+          // as the build directory (DES-BATCH, "Staged builds").
+          const stage = join(rust, "target", ".nx-rust-stage", "guard");
+          const build = buildFreshness(rust, workspace.root, [
+            "build",
+            "--workspace",
+            ...tail,
+            "--target-dir",
+            stage,
+            "--config",
+            `build.build-dir="${join(rust, "target")}"`,
+          ]);
           expect(build.ownCompiled).toEqual(crates);
           expect(build.ownFresh).toEqual([]);
           expect(build.othersCompiled).toEqual([]);
           expect(build.othersFresh.length).toBeGreaterThan(0);
-          // The records that the build wrote name no file of the template.
+          // The records that the build wrote, in the stage, name no file of
+          // the template.
           const run = testRunFolder() as string;
-          for (const record of readdirSync(profile).filter((entry) => entry.endsWith(".d"))) {
-            expect({ record, text: readFileSync(join(profile, record), "utf8") }).toEqual({
+          const records = join(stage, ...tail.slice(1), "debug");
+          expect(
+            readdirSync(records).filter((entry) => entry.endsWith(".d")).length,
+          ).toBeGreaterThan(0);
+          for (const record of readdirSync(records).filter((entry) => entry.endsWith(".d"))) {
+            expect({ record, text: readFileSync(join(records, record), "utf8") }).toEqual({
               record,
               text: expect.not.stringContaining(run),
             });
           }
         }
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT * 2,
+  );
+});
+
+/** Each file below `folder` whose path names `name`, outside stages, with its modification time. */
+function compiledFiles(folder: string, name: string): Record<string, number> {
+  const files: Record<string, number> = {};
+  for (const entry of readdirSync(folder, { recursive: true, withFileTypes: true })) {
+    const path = join(entry.parentPath, entry.name);
+    if (entry.isFile() && path.includes(name) && !path.includes(".nx-rust-stage")) {
+      files[path] = statSync(path).mtimeMs;
+    }
+  }
+  return files;
+}
+
+describe("napi-build in a stage", () => {
+  it(
+    "keeps one type folder from run to run, so that a crate outside the forced closure stays fresh",
+    async () => {
+      const workspace = create();
+      try {
+        const target = join(workspace.root, "rust", "target");
+        const folders = () => readdirSync(join(target, "nx-rust", "napi"));
+        const first = await nx(workspace, ["run", "addon-a:napi-build", "--skip-nx-cache"]);
+        expectSuccess(first);
+        const before = compiledFiles(target, "addon_b");
+        expect(Object.keys(before).length).toBeGreaterThan(0);
+        const second = await nx(workspace, ["run", "addon-a:napi-build", "--skip-nx-cache"]);
+        expectSuccess(second);
+        // One configuration, one folder, as before stages (DES-NAPI).
+        expect(folders()).toHaveLength(1);
+        // addon-b, which the whole workspace's compile builds but addon-a's
+        // closure does not hold, is not compiled again.
+        expect(compiledFiles(target, "addon_b")).toEqual(before);
       } finally {
         workspace.remove();
       }
@@ -240,6 +297,11 @@ describe("napi-build", () => {
             .filter((c) => c.args[0] === "build")
             .map((c) => c.args),
         ).toEqual([workspaceArgs("build")]);
+        // The compile built in a stage and moved nothing into the artifact
+        // directory, where the copy started without its crates' files.
+        expect(artifactFiles(join(workspace.root, "rust", "target", "debug"))).toEqual([]);
+        expect(existsSync(join(workspace.root, "rust", "target", ".nx-rust-stage"))).toBe(true);
+        expect(readdirSync(join(workspace.root, "rust", "target", ".nx-rust-stage"))).toEqual([]);
         for (const [crate, name] of [
           [addonA, "addon-a"],
           [addonB, "addon-b"],
@@ -733,7 +795,7 @@ describe("napi-build under the hakari strategy", () => {
   };
 
   it(
-    "selects its crates with -p, waits for hakari-check, leaves out the hack crate, and keeps the stored files of each crate to one command per batch",
+    "selects its crates with -p, waits for hakari-check, leaves out the hack crate, and compiles in a stage, beside a build of the same crate in one batch",
     async () => {
       const workspace = create(hakari);
       const env = { PATH: pathWith(stub.folder) };
@@ -755,7 +817,15 @@ describe("napi-build under the hakari strategy", () => {
             .filter((c) => c.args[0] === "build")
             .map((c) => c.args),
         ).toEqual([
-          ["build", "--keep-going", "--message-format=json", "-p", specs[0], "-p", specs[1]],
+          stagedArgs([
+            "build",
+            "--keep-going",
+            "--message-format=json",
+            "-p",
+            specs[0],
+            "-p",
+            specs[1],
+          ]),
         ]);
         expect(call(workspace, addonA, "[m.sumA(2, 1), m.coreFn(1)]")).toBe("[5,2]");
         expect(read(workspace, `${addonB}/index.d.ts`)).toContain("sumB");
@@ -771,18 +841,20 @@ describe("napi-build under the hakari strategy", () => {
             .sort(),
         ).toEqual(
           [
-            ["build", "--keep-going", "--message-format=json", "-p", specs[0]],
+            stagedArgs(["build", "--keep-going", "--message-format=json", "-p", specs[0]]),
             ["build", "-p", specs[1]],
           ].sort(),
         );
 
-        // A build and a napi-build of one crate: the second in a batch of its own.
+        // A build and a napi-build of one crate share a batch: the compile
+        // writes nothing that the build stores (DES-BATCH, "Staged builds").
         const same = await nx(
           workspace,
           ["run-many", "-t", "build", "napi-build", "-p", "addon-a", "--skip-nx-cache"],
           env,
         );
         expectSuccess(same);
+        expect(same.output).toMatch(/Running 2 tasks with @convesoft\/nx-rust:cargo-outputs/);
         expect(
           taskCalls(workspace)
             .filter((c) => c.args[0] === "build")
@@ -790,7 +862,7 @@ describe("napi-build under the hakari strategy", () => {
             .sort(),
         ).toEqual(
           [
-            ["build", "--keep-going", "--message-format=json", "-p", specs[0]],
+            stagedArgs(["build", "--keep-going", "--message-format=json", "-p", specs[0]]),
             ["build", "-p", specs[0]],
           ].sort(),
         );

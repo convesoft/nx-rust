@@ -141,7 +141,13 @@ describe("the cargo command of a task", () => {
           const buildByHand = runByHand(workspace, printedLines(build.output, "good:build"));
           expect(buildByHand.status).toBe(0);
           expect(buildByHand.calls).toEqual(buildCalls);
-          expect(buildCalls[0].args).toEqual(workspaceArgs("build"));
+          // A build of the whole workspace, in a stage: the printed lines name
+          // it and the build directory, and run by hand build there too
+          // (REQ-VERBOSE-COMMAND, ADR-STAGED-BUILDS).
+          expect(
+            workspace.cargo.calls(workspace.root).filter((call) => call.args[0] === "build")[0]
+              .args,
+          ).toEqual(workspaceArgs("build"));
         },
       ),
     HARNESS_TIMEOUT,
