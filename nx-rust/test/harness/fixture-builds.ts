@@ -45,6 +45,10 @@ export interface WarmedWorkspace {
  * triple; `--keep-going`, `--message-format` and the stage of a staged
  * build, which keeps the build directory, change nothing that cargo reuses).
  * Whatever a copy builds otherwise compiles as before.
+ *
+ * A fixture whose crates are all its own, such as `batch-groups` and
+ * `workspace-tests`, gains nothing here: after `cargo clean -p` of its
+ * members its template holds no build output, so it is left out.
  */
 export const warmBuilds: Partial<Record<FixtureName, () => WarmedWorkspace[]>> = {
   // The host build of napi-build and the build of the workspace, and the
