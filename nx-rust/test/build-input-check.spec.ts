@@ -960,6 +960,25 @@ function restoredTasks(output: string): string[] {
     .sort();
 }
 
+/**
+ * A build script that writes `file` and names `named` with
+ * `rerun-if-changed`, both relative to the crate.
+ */
+function buildScript(file: string, named: string): string {
+  return [
+    "use std::{fs, path::Path};",
+    "",
+    "fn main() {",
+    `    let file = Path::new(${JSON.stringify(file)});`,
+    '    fs::create_dir_all(file.parent().unwrap()).expect("the folder");',
+    '    fs::write(file, "written by the build script\\n").expect("the file");',
+    '    println!("cargo::rerun-if-changed=build.rs");',
+    `    println!("cargo::rerun-if-changed=${named}");`,
+    "}",
+    "",
+  ].join("\n");
+}
+
 /** A new member `rust/crates/<name>` with a library, its dependencies and its own table. */
 function newCrate(
   name: string,
@@ -1101,6 +1120,55 @@ describe("the check of a build's dependency files in a group of several crates",
         expect(output).not.toContain(`multi:build: ${failure}`);
         // The command built three, whose record names the undeclared file.
         expect(read(workspace, "rust/target/debug/three.d")).toContain("shared/extra.txt");
+      });
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "fails, in one staged group, the crate whose build script wrote an undeclared file in the group's cargo call, and passes those whose included file it wrote into a declared folder",
+    async () => {
+      // A staged `cargo build --workspace` of three crates. plain's build
+      // script writes gen/plain/new.txt into the folder gen/plain, which it
+      // names and nothing declares. base's writes generated/value.txt into
+      // base's own folder, an input of its tasks and of reader's, and its
+      // library includes it, so that only a check that reads the
+      // repository's files after the cargo call covers it, for base and for
+      // reader, which depends on base and declares every file it reads.
+      const files: FileChanges = {
+        ...readerDeclares,
+        "rust/crates/plain/Cargo.toml": crateTable('fileInputs = ["../../../shared/plain.txt"]'),
+        "rust/crates/plain/build.rs": buildScript(
+          "../../../gen/plain/new.txt",
+          "../../../gen/plain",
+        ),
+        "rust/crates/base/build.rs": buildScript("generated/value.txt", "build.rs"),
+        "rust/crates/base/src/lib.rs": (source = "") =>
+          `${source}\npub fn generated() -> &'static str {\n    include_str!("../generated/value.txt")\n}\n`,
+      };
+      await inFixture("undeclared-files", files, async (workspace) => {
+        const { status, output } = await nx(workspace, [
+          "run-many",
+          "-t",
+          "build",
+          "-p",
+          "reader",
+          "base",
+          "plain",
+        ]);
+        expect(cargoCalls(workspace)).toEqual([buildAll]);
+        expect(status).not.toBe(0);
+        expect(failedTasks(output)).toEqual(["plain:build"]);
+        expect(listedFiles(output, "plain")).toEqual([
+          "gen/plain/new.txt, in the folder gen/plain, which cargo records as a whole",
+        ]);
+        for (const crate of ["base", "reader"]) {
+          expect(read(workspace, `rust/target/debug/lib${crate}.d`)).toContain(
+            "rust/crates/base/generated/value.txt",
+          );
+        }
+        expect(output).not.toContain(`base:build: ${failure}`);
+        expect(output).not.toContain(`reader:build: ${failure}`);
       });
     },
     HARNESS_TIMEOUT,
