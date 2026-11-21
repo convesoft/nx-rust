@@ -28,3 +28,5 @@ Context: finding 2 of the architecture audit after 0.6 (21 November 2026, at 54a
 - [ ] Close or update nxr-vwpjg2 and nxr-gcknzm with what this settles
 
 Done when: the copies are gone, the four dotenv specs pass as CI runs them, and `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e`, `pnpm nx format:check --all` and the Mara validation pass.
+
+Note of 21 November 2026: nxr-c63t0r is done. The maintainer answered that the publish executor runs the dotenv check, and it now calls `dotenvProblem` for each task, alone and in a batch (`DES-RELEASE`, "Dotenv files"). So the second task item above has its answer, and the statements in the context that the publish executor never calls the check are out of date. What remains for this seam is unchanged: the publish executor still builds its layers with its own copies of the wrappers, and in a batch the check still runs after the layer is built (nxr-vwpjg2).
