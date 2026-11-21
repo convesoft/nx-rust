@@ -228,25 +228,26 @@ export class FixtureWorkspace {
    * @throws {GraphCreationError} When Nx or the plugin fails.
    */
   async graph(env: Record<string, string | undefined> = {}): Promise<FixtureGraph> {
-    const result = await this.inspect({ command: "graph" }, env);
+    return (await this.graphWithOutput(env)).graph;
+  }
+
+  /**
+   * Creates the project graph as {@link FixtureWorkspace.graph} does and
+   * returns it with what graph creation printed, such as the warnings of the
+   * plugins: one Nx process, where
+   * `nx show projects` for the output and {@link FixtureWorkspace.graph} for
+   * the graph would start two on the same files.
+   *
+   * @throws {GraphCreationError} When Nx or the plugin fails.
+   */
+  async graphWithOutput(
+    env: Record<string, string | undefined> = {},
+  ): Promise<{ graph: FixtureGraph; output: string }> {
+    const { result, output } = await this.inspectWithOutput({ command: "graph" }, env);
     if (!result.ok) {
       throw new GraphCreationError(result.error, this.cargoCalls(), result.errors);
     }
-    const graph = result.graph;
-    return {
-      projects: Object.fromEntries(
-        Object.entries(graph.nodes).map(([name, node]) => [name, node.data]),
-      ),
-      dependencies: Object.values(graph.dependencies)
-        .flat()
-        .sort(
-          (a, b) =>
-            a.source.localeCompare(b.source) ||
-            a.target.localeCompare(b.target) ||
-            a.type.localeCompare(b.type),
-        ),
-      externalNodes: graph.externalNodes ?? {},
-    };
+    return { graph: arrangeGraph(result.graph), output };
   }
 
   /**
@@ -414,12 +415,21 @@ export class FixtureWorkspace {
     rmSync(this.base, { recursive: true, force: true });
   }
 
-  // Runs inspect-workspace.cjs in the workspace. Request and result live
-  // outside the workspace, so that Nx does not see them.
+  // Runs inspect-workspace.cjs in the workspace and returns its result.
   private async inspect(
     request: object,
     env: Record<string, string | undefined>,
   ): Promise<InspectResult> {
+    return (await this.inspectWithOutput(request, env)).result;
+  }
+
+  // Runs inspect-workspace.cjs in the workspace and returns its result with
+  // what the process printed. Request and result live outside the
+  // workspace, so that Nx does not see them.
+  private async inspectWithOutput(
+    request: object,
+    env: Record<string, string | undefined>,
+  ): Promise<{ result: InspectResult; output: string }> {
     const directory = join(this.base, "requests");
     mkdirSync(directory, { recursive: true });
     const number = ++this.requests;
@@ -436,7 +446,7 @@ export class FixtureWorkspace {
         `Nx exited with status ${status} in ${this.root} and reported nothing:\n${output}`,
       );
     }
-    return JSON.parse(readFileSync(resultFile, "utf8"));
+    return { result: JSON.parse(readFileSync(resultFile, "utf8")), output };
   }
 
   // The environment of every command the harness runs in the workspace.
@@ -456,6 +466,24 @@ export class FixtureWorkspace {
     }
     return this.cargo.environment(base);
   }
+}
+
+/** A project graph as {@link FixtureGraph} arranges it for comparison. */
+function arrangeGraph(graph: ProjectGraph): FixtureGraph {
+  return {
+    projects: Object.fromEntries(
+      Object.entries(graph.nodes).map(([name, node]) => [name, node.data]),
+    ),
+    dependencies: Object.values(graph.dependencies)
+      .flat()
+      .sort(
+        (a, b) =>
+          a.source.localeCompare(b.source) ||
+          a.target.localeCompare(b.target) ||
+          a.type.localeCompare(b.type),
+      ),
+    externalNodes: graph.externalNodes ?? {},
+  };
 }
 
 /**

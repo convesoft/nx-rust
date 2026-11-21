@@ -79,11 +79,24 @@ const tripleFromConfiguration: FileChanges = {
 /**
  * The two ways in which Nx runs the plugin, as `env` of a command: in Nx's
  * own process, the harness's default, and in a plugin worker, Nx's default.
+ *
+ * Every case runs in Nx's own process, but the one where Cargo's
+ * configuration picks a triple, which runs in a worker alone. A worker puts
+ * process boundaries between the plugin and Nx, and only the cases that
+ * cross one of them run in a worker: the guard's error and its warnings, which leave the
+ * worker; `nx.json` and the projects that the plugins listed before and
+ * after nx-rust give, which reach it; and what `createNodes` recorded, which
+ * `createDependencies` reads in the same worker (VER-TARGET-DEFAULT-GUARD).
+ * The permutations of rules and messages run in Nx's own process alone, in
+ * {@link nxProcessOnly}.
  */
 const pluginModes: [string, Env][] = [
   ["with the plugin in Nx's own process", {}],
   ["with the plugin in a worker", pluginWorkers],
 ];
+
+/** Nx's own process alone, for a case that crosses no boundary that a case in both modes does not. */
+const nxProcessOnly: [string, Env][] = [pluginModes[0]];
 
 /** Sets `targetDefaults` in a fixture copy's `nx.json`. */
 function targetDefaults(defaults: object): FileChanges {
@@ -119,11 +132,22 @@ async function created(
   defaults: object,
   files: FileChanges = {},
 ): Promise<{ output: string; projects: Record<string, ProjectConfiguration> }> {
-  const { status, output, workspace } = await showProjects(targetDefaults(defaults), files);
+  return createdWith({}, targetDefaults(defaults), files);
+}
+
+/**
+ * Creates the graph of a copy of `subfolder-workspace` with `files` and the
+ * variables `env`, once, and returns what graph creation printed and the
+ * merged projects; graph creation that fails fails the test with its error.
+ */
+async function createdWith(
+  env: Env,
+  ...files: FileChanges[]
+): Promise<{ output: string; projects: Record<string, ProjectConfiguration> }> {
+  const workspace = FixtureWorkspace.create("subfolder-workspace", web, ...files);
   try {
-    expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-    const { projects } = await workspace.graph();
-    return { output, projects };
+    const { graph, output } = await workspace.graphWithOutput(env);
+    return { output: withoutColours(output), projects: graph.projects };
   } finally {
     workspace.remove();
   }
@@ -447,11 +471,10 @@ describe("a target default that fails graph creation", () => {
         targetDefaults({ build: { outputs: ["...", "{projectRoot}/dist"] } }),
       );
       try {
-        const { status, output } = await kept.nx(["show", "projects"]);
+        const { graph, output } = await kept.graphWithOutput();
 
-        expect(status).toBe(0);
         expect(withoutColours(output)).not.toContain("targetDefaults");
-        const outputs = (await kept.graph()).projects.cli.targets?.build.outputs;
+        const outputs = graph.projects.cli.targets?.build.outputs;
         expect(outputs).toContain("{projectRoot}/dist");
         expect(outputs?.length).toBeGreaterThan(1);
       } finally {
@@ -591,17 +614,12 @@ describe("nothing is reported", () => {
   it(
     "for a repository without targetDefaults, which gets no warning either",
     async () => {
-      const { status, output, workspace } = await showProjects();
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        expect(output).not.toContain("targetDefaults");
-        const { projects } = await workspace.graph();
-        expect(projects.api.targets?.build.cache).toBe(true);
-        expect(projects.api.targets?.fmt.cache).toBe(false);
-      } finally {
-        workspace.remove();
-      }
+      const { output, projects } = await createdWith({});
+
+      expect(output).not.toContain("nx-rust");
+      expect(output).not.toContain("targetDefaults");
+      expect(projects.api.targets?.build.cache).toBe(true);
+      expect(projects.api.targets?.fmt.cache).toBe(false);
     },
     HARNESS_TIMEOUT,
   );
@@ -629,23 +647,20 @@ describe("a target default that writes out the dependency on the lockfile task",
   // a plugin in its own process returns and writes them back only where the
   // list survives the merge, so a list that an entry replaces kept Nx's
   // placeholder in what the plugin had inferred (EVD-NX-24-PLUGIN-NODES).
-  const modes = pluginModes;
+  // A plugin in a worker hands Nx a copy, so only Nx's own process can show
+  // that.
+  const modes = nxProcessOnly;
 
   it.each(modes)(
     "creates the graph without a finding where the entry is exactly what the plugin declares, %s",
     async (_mode, env) => {
-      const { status, output, workspace } = await showProjectsWith(
+      const { output, projects } = await createdWith(
         env,
         targetDefaults({ test: { dependsOn: [lockfileTask] } }),
       );
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("targetDefaults");
-        const { projects } = await workspace.graph(env);
-        expect(projects.api.targets?.test.dependsOn).toEqual([lockfileTask]);
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).not.toContain("targetDefaults");
+      expect(projects.api.targets?.test.dependsOn).toEqual([lockfileTask]);
     },
     HARNESS_TIMEOUT,
   );
@@ -745,13 +760,13 @@ describe("a declared reference to a project that a file renames", () => {
     ["a projects string", 'dependsOn = ["...", { projects = "model", target = "check" }]'],
   ];
 
-  /** Each case in each of {@link pluginModes}, with the mode first and its variables last. */
-  const inEachMode = <T extends unknown[]>(cases: T[]): [string, ...T, Env][] =>
-    pluginModes.flatMap(([mode, env]) =>
+  /** Each case in Nx's own process alone, with the mode first and its variables last. */
+  const inNxProcess = <T extends unknown[]>(cases: T[]): [string, ...T, Env][] =>
+    nxProcessOnly.flatMap(([mode, env]) =>
       cases.map((item): [string, ...T, Env] => [mode, ...item, env]),
     );
 
-  it.each(inEachMode(references))(
+  it.each(inNxProcess(references))(
     "%s: an entry filtered to api that replaces the inputs of check is an error that names it, where the dependency is %s",
     async (_mode, _form, table, env) => {
       const output = await failed(
@@ -771,30 +786,25 @@ describe("a declared reference to a project that a file renames", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each(inEachMode(references))(
+  it.each(inNxProcess(references))(
     "%s: an entry that sets only options draws nothing, where the dependency is %s",
     async (_mode, _form, table, env) => {
-      const { status, output, workspace } = await showProjectsWith(
+      const { output, projects } = await createdWith(
         env,
         targetDefaults({ check: { options: { quiet: true } } }),
         apiCheck(table),
         modelRenamed,
       );
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        // Nx renamed the reference.
-        const { projects } = await workspace.graph(env);
-        expect(JSON.stringify(projects.api.targets?.check.dependsOn)).toContain("model-rs");
-        expect(JSON.stringify(projects.api.targets?.check.dependsOn)).not.toContain('"model"');
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).not.toContain("nx-rust");
+      // Nx renamed the reference.
+      expect(JSON.stringify(projects.api.targets?.check.dependsOn)).toContain("model-rs");
+      expect(JSON.stringify(projects.api.targets?.check.dependsOn)).not.toContain('"model"');
     },
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: an entry filtered to api that replaces the dependsOn of check is an error that names it, where api's inputs name model",
     async (_mode, env) => {
       const output = await failed(
@@ -817,7 +827,7 @@ describe("a declared reference to a project that a file renames", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: an entry filtered to app that replaces the outputs of its build is an error that names it, where that build depends on a renamed library",
     async (_mode, env) => {
       const workspace = FixtureWorkspace.create(
@@ -865,7 +875,7 @@ describe("a declared reference to a project that a file renames", () => {
   const dependsOnWeb = apiCheck('dependsOn = ["...", { projects = ["web"], target = "build" }]');
 
   it.each(
-    pluginModes.flatMap(([mode, env]): [string, string, FileChanges, Env][] => [
+    nxProcessOnly.flatMap(([mode, env]): [string, string, FileChanges, Env][] => [
       [mode, "an entry that sets only options", targetDefaults({ check: { options: {} } }), env],
       [mode, "no targetDefaults", {}, env],
     ]),
@@ -892,30 +902,25 @@ describe("a declared reference to a project that a file renames", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: creates the graph where the table names that project by its final name, which Nx leaves as it is",
     async (_mode, env) => {
-      const { status, output, workspace } = await showProjectsWith(
+      const { output, projects } = await createdWith(
         env,
         apiCheck('dependsOn = ["...", { projects = ["web-app"], target = "build" }]'),
         webRenamed,
       );
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        const { projects } = await workspace.graph(env);
-        expect(projects.api.targets?.check.dependsOn).toContainEqual({
-          projects: ["web-app"],
-          target: "build",
-        });
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).not.toContain("nx-rust");
+      expect(projects.api.targets?.check.dependsOn).toContainEqual({
+        projects: ["web-app"],
+        target: "build",
+      });
     },
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: stays a difference where an entry's own list names it, and that entry, which replaces the inputs of check, is an error",
     async (_mode, env) => {
       const output = await failed(
@@ -941,7 +946,7 @@ describe("a declared reference to a project that a file renames", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: is no reason to pass over an entry that replaces the inputs of a crate to which another plugin gives the tag that its filter selects",
     async (_mode, env) => {
       const output = await failed(
@@ -1345,20 +1350,13 @@ describe("a change that the plugin cannot attribute", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: is the same warning where another plugin turns on caching and targetDefaults is absent, since the executor refuses the task either way",
     async (_mode, env) => {
-      const { status, output, workspace } = await showProjectsWith(
-        env,
-        otherPlugin(true, undefined),
-      );
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).toContain(unattributedFmt);
-        expect((await workspace.graph(env)).projects.api.targets?.fmt.cache).toBe(true);
-      } finally {
-        workspace.remove();
-      }
+      const { output, projects } = await createdWith(env, otherPlugin(true, undefined));
+
+      expect(output).toContain(unattributedFmt);
+      expect(projects.api.targets?.fmt.cache).toBe(true);
     },
     HARNESS_TIMEOUT,
   );
@@ -1415,16 +1413,11 @@ describe("an entry that the check cannot prove does not apply", () => {
   ])(
     "draws nothing where the entry filtered to that plugin is one %s",
     async (_case, element) => {
-      const { status, output, workspace } = await showProjects(firstPlugin({ check: [element] }));
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        const { projects } = await workspace.graph();
-        expect(projects.api.targets?.check.inputs).toEqual(expect.arrayContaining(["default"]));
-        expect(projects.api.targets?.check.inputs).not.toEqual(["default"]);
-      } finally {
-        workspace.remove();
-      }
+      const { output, projects } = await createdWith({}, firstPlugin({ check: [element] }));
+
+      expect(output).not.toContain("nx-rust");
+      expect(projects.api.targets?.check.inputs).toEqual(expect.arrayContaining(["default"]));
+      expect(projects.api.targets?.check.inputs).not.toEqual(["default"]);
     },
     HARNESS_TIMEOUT,
   );
@@ -1461,23 +1454,19 @@ describe("an entry that the check cannot prove does not apply", () => {
   it(
     'draws nothing where that entry sets cache before an object-level "...", for which Nx keeps the value below',
     async () => {
-      const { status, output, workspace } = await showProjects(checkUncached, {
+      const { output, projects } = await createdWith({}, checkUncached, {
         ...otherPlugin(false, {
           check: [{ filter: { projects: ["tag:extra"] }, cache: true, "...": true }],
         }),
       });
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        expect((await workspace.graph()).projects.api.targets?.check.cache).toBe(false);
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).not.toContain("nx-rust");
+      expect(projects.api.targets?.check.cache).toBe(false);
     },
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: where another plugin turns on caching that api's Cargo metadata turns off and no entry can have done it, warns, and the task fails before cargo runs, also the second time",
     async (_mode, env) => {
       const { status, output, workspace } = await showProjectsWith(
@@ -1514,7 +1503,7 @@ describe("an entry that the check cannot prove does not apply", () => {
   // the key of its name where no element of the first matches. Which key
   // applies to api's check then depends on its source plugin, which graph
   // creation cannot see.
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: where an entry keyed by the executor and filtered to that plugin and one keyed check and filtered to api both replace the inputs in the same way, names both, since either may be the one that Nx applied",
     async (_mode, env) => {
       const output = await failed(
@@ -1540,7 +1529,7 @@ describe("an entry that the check cannot prove does not apply", () => {
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: where only the entry keyed by the executor gives the inputs that Nx merged, names it and not the one keyed check",
     async (_mode, env) => {
       const output = await failed(
@@ -1563,20 +1552,16 @@ describe("an entry that the check cannot prove does not apply", () => {
   it(
     'draws nothing where the entry keyed by the executor keeps the inputs with "...", which Nx applies in place of the one keyed check',
     async () => {
-      const { status, output, workspace } = await showProjects(
+      const { output, projects } = await createdWith(
+        {},
         firstPlugin({
           [cargoExecutor]: [{ filter: { plugin: "other" }, inputs: ["...", "default"] }],
           check: [{ filter: { projects: ["api"] }, inputs: ["default"] }],
         }),
       );
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        const { projects } = await workspace.graph();
-        expect(projects.api.targets?.check.inputs).not.toEqual(["default"]);
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).not.toContain("nx-rust");
+      expect(projects.api.targets?.check.inputs).not.toEqual(["default"]);
     },
     HARNESS_TIMEOUT,
   );
@@ -1627,49 +1612,41 @@ describe("an extra target that a targets table in Cargo metadata defines", () =>
       `${manifest}\n[package.metadata.nx.targets.e2e]\nexecutor = "nx:run-commands"\noptions = { command = "echo e2e" }\n${fields}`,
   });
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: draws nothing where an entry keyed by its name turns on caching, and Nx caches it",
     async (_mode, env) => {
-      const { status, output, workspace } = await showProjectsWith(
+      const { output, projects } = await createdWith(
         env,
         e2e(),
         targetDefaults({ e2e: { cache: true } }),
       );
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        expect((await workspace.graph(env)).projects.api.targets?.e2e.cache).toBe(true);
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).not.toContain("nx-rust");
+      expect(projects.api.targets?.e2e.cache).toBe(true);
     },
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: draws nothing where an entry replaces the inputs and outputs that the table sets, which Nx lays over the table",
     async (_mode, env) => {
-      const { status, output, workspace } = await showProjectsWith(
+      const { output, projects } = await createdWith(
         env,
         e2e('inputs = ["{projectRoot}/tests/**"]\noutputs = ["{projectRoot}/e2e-report"]\n'),
         targetDefaults({ e2e: { inputs: ["default"], outputs: [] } }),
       );
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        const target = (await workspace.graph(env)).projects.api.targets?.e2e;
-        expect({ inputs: target?.inputs, outputs: target?.outputs }).toEqual({
-          inputs: ["default"],
-          outputs: [],
-        });
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).not.toContain("nx-rust");
+      const target = projects.api.targets?.e2e;
+      expect({ inputs: target?.inputs, outputs: target?.outputs }).toEqual({
+        inputs: ["default"],
+        outputs: [],
+      });
     },
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: warns of nothing where another plugin turns on its caching and no entry applies",
     async (_mode, env) => {
       const { status, output, workspace } = await showProjectsWith(
@@ -1712,12 +1689,23 @@ describe("another layer that takes away what the plugin declares", () => {
   /** The error's line for api's check losing inputs, up to its first lost entry. */
   const lostInputs = `"check" of api (${crates.api}) lacks entries of its "inputs" that nx-rust declares: "^default"`;
 
-  it.each(
-    pluginModes.flatMap(([mode, env]): [string, string, object | undefined, Env][] => [
-      [mode, "no targetDefaults", undefined, env],
-      [mode, "the entries that nx add writes", addedEntries, env],
+  // In a worker as well without targetDefaults: the plugin listed after
+  // nx-rust, whose node Nx merges over the plugin's, reaches the check in the
+  // worker only through what Nx passes it.
+  it.each<[string, string, object | undefined, Env]>([
+    ...pluginModes.map(([mode, env]): [string, string, object | undefined, Env] => [
+      mode,
+      "no targetDefaults",
+      undefined,
+      env,
     ]),
-  )(
+    ...nxProcessOnly.map(([mode, env]): [string, string, object | undefined, Env] => [
+      mode,
+      "the entries that nx add writes",
+      addedEntries,
+      env,
+    ]),
+  ])(
     "%s: a plugin after nx-rust that replaces the inputs of check fails graph creation with %s, naming what was lost, the plugin and the fixes, so that no task runs",
     async (_mode, _case, defaults, env) => {
       const workspace = FixtureWorkspace.create(
@@ -1826,7 +1814,7 @@ exports.createNodes = [
   };
 
   it.each(
-    pluginModes.flatMap(([mode, env]): [string, string, FileChanges[], Env][] => [
+    nxProcessOnly.flatMap(([mode, env]): [string, string, FileChanges[], Env][] => [
       [
         mode,
         "an \"exclude\" of api's folder on the plugin's entry",
@@ -1862,7 +1850,7 @@ exports.createNodes = [
   );
 
   it.each(
-    pluginModes.flatMap(([mode, env]): [string, string, FileChanges, Env][] => [
+    nxProcessOnly.flatMap(([mode, env]): [string, string, FileChanges, Env][] => [
       [
         mode,
         "a project.json",
@@ -1889,43 +1877,30 @@ exports.createNodes = [
   )(
     "%s: the same inputs from %s in api's folder are the crate's own statement: the graph is created and nothing is printed",
     async (_mode, _file, files, env) => {
-      const { status, output, workspace } = await showProjectsWith(env, files);
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        expect((await workspace.graph(env)).projects.api.targets?.check.inputs).toEqual([
-          "default",
-        ]);
-      } finally {
-        workspace.remove();
-      }
+      const { output, projects } = await createdWith(env, files);
+
+      expect(output).not.toContain("nx-rust");
+      expect(projects.api.targets?.check.inputs).toEqual(["default"]);
     },
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: the same node from a plugin listed before nx-rust takes nothing away, and nothing is reported",
     async (_mode, env) => {
-      const { status, output, workspace } = await showProjectsWith(
-        env,
-        checkPlugin(narrowed, undefined, true),
-      );
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        const inputs = (await workspace.graph(env)).projects.api.targets?.check.inputs;
-        expect(inputs).toEqual(expect.arrayContaining(["default", "^default"]));
-      } finally {
-        workspace.remove();
-      }
+      const { output, projects } = await createdWith(env, checkPlugin(narrowed, undefined, true));
+
+      expect(output).not.toContain("nx-rust");
+      const inputs = projects.api.targets?.check.inputs;
+      expect(inputs).toEqual(expect.arrayContaining(["default", "^default"]));
     },
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: a plugin that gives test the command jest, as Nx's Jest plugin does, replaces the whole target, which runs no cargo, and nothing is reported",
     async (_mode, env) => {
-      const { status, output, workspace } = await showProjectsWith(env, {
+      const { output, projects } = await createdWith(env, {
         "rust/crates/api/jest.config.js": "module.exports = { testEnvironment: 'node' };\n",
         "jest-like.cjs": `const { dirname } = require("node:path");
 exports.name = "jest-like";
@@ -1958,22 +1933,18 @@ exports.createNodes = [
           return JSON.stringify({ ...config, plugins: [...config.plugins, "./jest-like.cjs"] });
         },
       });
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        const test = (await workspace.graph(env)).projects.api.targets?.test;
-        expect({
-          executor: test?.executor,
-          command: test?.options?.command,
-          inputs: test?.inputs,
-        }).toEqual({
-          executor: "nx:run-commands",
-          command: "jest",
-          inputs: ["default", "^default", { externalDependencies: ["jest"] }],
-        });
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).not.toContain("nx-rust");
+      const test = projects.api.targets?.test;
+      expect({
+        executor: test?.executor,
+        command: test?.options?.command,
+        inputs: test?.inputs,
+      }).toEqual({
+        executor: "nx:run-commands",
+        command: "jest",
+        inputs: ["default", "^default", { externalDependencies: ["jest"] }],
+      });
     },
     HARNESS_TIMEOUT,
   );
@@ -2030,7 +2001,7 @@ exports.createNodes = [
   ];
 
   it.each(
-    pluginModes.flatMap(([mode, env]) =>
+    nxProcessOnly.flatMap(([mode, env]) =>
       narrowings.map(([node, change, line]): [string, string, object, string, Env] => [
         mode,
         node,
@@ -2070,7 +2041,7 @@ exports.createNodes = [
   );
 
   it.each(
-    pluginModes.flatMap(([mode, env]) =>
+    nxProcessOnly.flatMap(([mode, env]) =>
       narrowings.flatMap(([node, change]): [string, string, string, FileChanges[], Env][] => [
         [
           mode,
@@ -2108,7 +2079,7 @@ exports.createNodes = [
   );
 
   it.each(
-    pluginModes.flatMap(([mode, env]): [string, string, object, Env][] => [
+    nxProcessOnly.flatMap(([mode, env]): [string, string, object, Env][] => [
       [
         mode,
         "a file added to check's inputs",
@@ -2134,7 +2105,7 @@ exports.createNodes = [
     HARNESS_TIMEOUT,
   );
 
-  it.each(pluginModes)(
+  it.each(nxProcessOnly)(
     "%s: the installed JS plugins of Nx sharing a crate's folder replace whole targets, define no named input for it and draw nothing",
     async (_mode, env) => {
       const plugins = [
@@ -2142,7 +2113,7 @@ exports.createNodes = [
         require.resolve("@nx/jest/plugin"),
         require.resolve("@nx/oxlint"),
       ];
-      const { status, output, workspace } = await showProjectsWith(env, {
+      const { output, projects } = await createdWith(env, {
         "package.json": JSON.stringify({
           name: "repo",
           private: true,
@@ -2165,24 +2136,20 @@ exports.createNodes = [
           return JSON.stringify({ ...config, plugins: [...config.plugins, ...plugins] });
         },
       });
-      try {
-        expect({ status, output }).toEqual({ status: 0, output: expect.any(String) });
-        expect(output).not.toContain("nx-rust");
-        const api = (await workspace.graph(env)).projects.api;
-        const executors = Object.fromEntries(
-          ["build", "check", "lint", "test"].map((name) => [name, api.targets?.[name]?.executor]),
-        );
-        expect(executors).toEqual({
-          build: cargoOutputsExecutor,
-          check: cargoExecutor,
-          lint: "@nx/oxlint:lint",
-          test: "nx:run-commands",
-        });
-        expect(Object.keys(api.namedInputs ?? {})).toEqual(["default"]);
-        expect(api.targets?.check.inputs).toEqual(expect.arrayContaining(["default", "^default"]));
-      } finally {
-        workspace.remove();
-      }
+
+      expect(output).not.toContain("nx-rust");
+      const api = projects.api;
+      const executors = Object.fromEntries(
+        ["build", "check", "lint", "test"].map((name) => [name, api.targets?.[name]?.executor]),
+      );
+      expect(executors).toEqual({
+        build: cargoOutputsExecutor,
+        check: cargoExecutor,
+        lint: "@nx/oxlint:lint",
+        test: "nx:run-commands",
+      });
+      expect(Object.keys(api.namedInputs ?? {})).toEqual(["default"]);
+      expect(api.targets?.check.inputs).toEqual(expect.arrayContaining(["default", "^default"]));
     },
     HARNESS_TIMEOUT,
   );

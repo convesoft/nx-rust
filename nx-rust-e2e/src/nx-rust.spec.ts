@@ -1095,6 +1095,10 @@ describe("@convesoft/nx-rust", () => {
   // init adds an empty target default for each of the plugin's executors
   // that nx.json lacks, so that entries keyed by a target name or by another
   // executor keep to the JS projects, and leaves every existing entry alone.
+  // A real nx add runs where its own part is what the test checks: the
+  // install, a second nx add that finds the plugin installed, and the
+  // failure of init. The other cases run the installed init generator, which
+  // nx add runs with the same options, none.
   describe("nx add in a repository with targetDefaults", () => {
     /** A JS project beside the crates, with a build that target defaults reach. */
     const web = {
@@ -1119,6 +1123,19 @@ describe("@convesoft/nx-rust", () => {
         env: cargo.environment(testEnvironment()),
         encoding: "utf8",
       });
+      return { status: result.status, output: withoutColours(`${result.stdout}${result.stderr}`) };
+    }
+
+    /**
+     * Runs the init generator of the plugin, which the first nx add of this
+     * suite installed and which installFixture keeps, as nx add runs it.
+     */
+    function nxInit(): { status: number | null; output: string } {
+      const result = spawnSync(
+        process.execPath,
+        [nxScript(projectDirectory), "g", "@convesoft/nx-rust:init"],
+        { cwd: projectDirectory, env: nxEnvironment(cargo), encoding: "utf8" },
+      );
       return { status: result.status, output: withoutColours(`${result.stdout}${result.stderr}`) };
     }
 
@@ -1157,7 +1174,7 @@ describe("@convesoft/nx-rust", () => {
       const defaults = { "@nx/js:tsc": { cache: true, dependsOn: ["^build"] } };
       prepare(defaults);
 
-      const { status, output } = nxAdd();
+      const { status, output } = nxInit();
 
       expect(status).toBe(0);
       expect(JSON.parse(readNxJson())).toEqual({
@@ -1173,7 +1190,7 @@ describe("@convesoft/nx-rust", () => {
       const defaults = { ...buildDefault, [cargoExecutor]: { dependsOn: ["...", "^build"] } };
       prepare(defaults);
 
-      const { status, output } = nxAdd();
+      const { status, output } = nxInit();
 
       expect(status).toBe(0);
       expect(JSON.parse(readNxJson())).toEqual({
