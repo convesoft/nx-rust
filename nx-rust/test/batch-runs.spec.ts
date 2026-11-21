@@ -299,7 +299,10 @@ describe("a batch of the plugin's tasks", () => {
           ].sort(),
         );
         expect(taskBlock(run.output, "breakable:check")).toMatch(/not_defined_anywhere/);
-        expect(taskBlock(run.output, "user:check")).toMatch(/cargo reported `breakable`/);
+        // In the order in which cargo reported them.
+        expect(taskBlock(run.output, "user:check")).toMatch(
+          /cargo reported (`breakable` and `scripted`|`scripted` and `breakable`) as failed/,
+        );
         expect(taskBlock(run.output, "scripted:check")).toMatch(
           /the build script of scripted fails/,
         );
@@ -421,9 +424,11 @@ function nxJsonWith(entries: object): (nxJson: string | undefined) => string {
 }
 
 // The variables that differ between any two nx commands, batched or not:
-// the process ids of the nx command, the plugin's id of the command and the
-// command's own arguments, which here differ in --batch.
-const perCommand = ["NX_INVOCATION_ANCESTOR_PIDS", "NX_RUST_COMMAND_ID", "NX_RUST_NX_COMMAND"];
+// the process ids of the nx command, the plugin's id of the command, the
+// command's own arguments, which here differ in --batch, and `_`, which the
+// shell behind `script -c` in `nxInTerminal` sets to the node executable while
+// a direct spawn leaves it as whatever executable started the test runner.
+const perCommand = ["NX_INVOCATION_ANCESTOR_PIDS", "NX_RUST_COMMAND_ID", "NX_RUST_NX_COMMAND", "_"];
 
 /**
  * An integration test and a build script of batch-groups' crate indep that
