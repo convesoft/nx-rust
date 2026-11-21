@@ -1,6 +1,6 @@
 ---
 title: Keep a cached task outside the plugin from storing what it made of the executable that a test batch linked in place of its build's
-status: todo
+status: in-progress
 type: bug
 parent: nxr-e2z8sz
 blocked_by:
