@@ -353,6 +353,9 @@ describe("a batch of the plugin's tasks", () => {
   );
 });
 
+/** The size of the terminal of the ways of running that open Nx's terminal UI. */
+const terminalSize = { columns: 120, rows: 35 };
+
 /**
  * The ways of running a task that can change what Nx gives its process
  * (`EVD-NX-24-BATCHES`, "Task environment"), each run alone and with
@@ -363,12 +366,17 @@ describe("a batch of the plugin's tasks", () => {
  * command a terminal through util-linux's `script`, which macOS lacks (its
  * own takes other arguments, and it has no `timeout`): the ways in a
  * terminal run on Linux only, which is where CI runs
- * (`RISK-TERMINAL-ENVIRONMENT-MACOS`).
+ * (`RISK-TERMINAL-ENVIRONMENT-MACOS`). The ways that open Nx's terminal UI
+ * give the terminal a `size`, without which Nx runs another output style.
+ * On Nx 24.0.6 `--output-style=dynamic` in a terminal with a size opens the
+ * terminal UI as `--tui` does, so these two ways differ in the flag and not
+ * in the renderer.
  */
 const waysOfRunning: {
   name: string;
   args: string[];
   terminal?: boolean;
+  size?: { columns: number; rows: number };
   daemon?: boolean;
   env?: Env;
 }[] = [
@@ -393,11 +401,13 @@ const waysOfRunning: {
           name: "dynamic in a terminal",
           args: ["--output-style=dynamic", "--tui-auto-exit"],
           terminal: true,
+          size: terminalSize,
         },
         {
           name: "the terminal UI",
           args: ["--tui", "--tui-auto-exit"],
           terminal: true,
+          size: terminalSize,
           daemon: true,
           env: { NX_TUI: "true" },
         },
@@ -442,7 +452,10 @@ function readDump(workspace: FixtureWorkspace, name: string): Record<string, str
 /**
  * Runs indep:test once for each way, alone and with `--batch`, each run
  * succeeding, and returns the environments that the test and the build script
- * wrote, by run.
+ * wrote, by run. Every way runs with the `TERM` that
+ * {@link FixtureWorkspace.nxInTerminal} gives a terminal, so that the tasks'
+ * environments do not differ in it, and a way in a terminal opens Nx's
+ * terminal UI exactly where it has a size.
  */
 async function dumpsOfRuns(
   workspace: FixtureWorkspace,
@@ -461,13 +474,23 @@ async function dumpsOfRuns(
         ...way.args,
       ];
       const name = `${way.name}${batch ? ", in a batch" : ""}${label}`;
+      const wayEnv = { TERM: "xterm-256color", ...env, ...way.env };
       const run = way.terminal
-        ? await workspace.nxInTerminal(args, { ...env, ...way.env })
-        : await workspace.nx(args, { ...env, ...way.env });
-      expect({ name, status: run.status, output: run.status === 0 ? "" : run.output }).toEqual({
+        ? await workspace.nxInTerminal(args, wayEnv, undefined, way.size)
+        : { ...(await workspace.nx(args, wayEnv)), terminalUi: false };
+      const output = withoutColours(run.output);
+      expect({
+        name,
+        status: run.status,
+        output: run.status === 0 ? "" : output,
+        terminalUi: run.terminalUi,
+        fallback: output.includes("Nx Terminal UI was not enabled"),
+      }).toEqual({
         name,
         status: 0,
         output: "",
+        terminalUi: way.size !== undefined,
+        fallback: false,
       });
       dumps[`${name}: test`] = readDump(workspace, "test-env.txt");
       dumps[`${name}: build script`] = readDump(workspace, "build-env.txt");

@@ -350,7 +350,7 @@ links to: the package in this repository names a built entry point that only
 the compiled copy has. The end-to-end tests cover graph creation with the
 installed package.
 
-**`nxInTerminal(args, env, seconds)`** runs Nx as `nx` does, but in a
+**`nxInTerminal(args, env, seconds, size)`** runs Nx as `nx` does, but in a
 pseudo-terminal of its own, through util-linux's `script -qfec`, so that Nx
 sees a terminal and runs the dynamic output styles, the terminal UI and its own
 pseudo-terminal for a single task as for a user; coreutils' `timeout` stops it
@@ -358,7 +358,13 @@ after `seconds`. It runs on Linux only, where CI runs, and throws elsewhere,
 since macOS's `script` takes other arguments
 (`RISK-TERMINAL-ENVIRONMENT-MACOS`). The copy's `nx.json` must set `analytics`,
 or Nx asks in the terminal whether to share usage data and waits; it throws
-there too. Give the terminal UI `--tui-auto-exit`, or it waits for a key.
+there too. The command gets `TERM=xterm-256color` unless `env` sets `TERM`:
+with `TERM` unset or `dumb`, as in some agents' shells, Nx's terminal UI never
+exits. `script`'s terminal has no size, so Nx runs another output style where
+`--tui` or the `dynamic` style asks for its terminal UI; pass `size` (columns
+and rows) for those. The terminal UI then closes by itself once every task has
+ended, at once with `--tui-auto-exit` and after 3 seconds without it. The
+result's `terminalUi` says whether Nx started the terminal UI.
 
 **`compilePlugin()`**, which the unit tests' global setup calls after
 `startTestRun()`, compiles the plugin's source into the test run's folder,

@@ -130,6 +130,67 @@ describe("builds of one batch whose commands differ", () => {
     HARNESS_TIMEOUT,
   );
 
+  // The same batch under Nx's terminal UI, in a terminal through util-linux's
+  // script, which macOS lacks (RISK-TERMINAL-ENVIRONMENT-MACOS). The terminal
+  // UI shows only its list of tasks until a key opens a pane, so the cargo
+  // lines that the batch writes under it (batchLiveOutput, DES-BATCH) do not
+  // reach the screen; the unit test of batchLiveOutput in
+  // workspace-build.spec.ts checks that choice.
+  (process.platform === "linux" ? describe : describe.skip)("under the terminal UI", () => {
+    it(
+      "run once each, in one batch process, and are stored as their own command builds them",
+      async () => {
+        const workspace = FixtureWorkspace.create(
+          "workspace-tests",
+          binaries("pa", "pb"),
+          otherFlags,
+          {
+            // No analytics prompt in a terminal.
+            "nx.json": (nxJson) =>
+              `${JSON.stringify({ ...JSON.parse(nxJson ?? "{}"), analytics: false }, null, 2)}\n`,
+          },
+        );
+        try {
+          const run = await workspace.nxInTerminal(
+            ["run-many", "-t", "build", "-p", "pa", "pb", "--tui", "--tui-auto-exit"],
+            {},
+            undefined,
+            { columns: 120, rows: 35 },
+          );
+          const output = withoutColours(run.output);
+          expect({
+            status: run.status,
+            output: run.status === 0 ? "" : output,
+            terminalUi: run.terminalUi,
+          }).toEqual({ status: 0, output: "", terminalUi: true });
+          // The summary that Nx prints once the terminal UI has closed.
+          expect(output).toMatch(/Successfully ran target build for 2 projects/);
+          // One batch process ran both groups: each stage is named after the
+          // process id of the process that builds in it.
+          const stageProcesses = workspace.cargo
+            .calls()
+            .flatMap((call) => call.args.join(" ").match(/\.nx-rust-stage\/(\d+)-\d+/)?.[1] ?? []);
+          expect({
+            builds: stageProcesses.length,
+            processes: new Set(stageProcesses).size,
+          }).toEqual({ builds: 2, processes: 1 });
+          expect(taskCalls(workspace).map((call) => call.args)).toEqual([
+            workspaceArgs("build"),
+            workspaceArgs("build"),
+          ]);
+          expect(stagesLeft(workspace)).toEqual([]);
+          expect(await restored(workspace, ["pa", "pb"])).toEqual({
+            pa: "plain",
+            pb: "plain flag",
+          });
+        } finally {
+          workspace.remove();
+        }
+      },
+      HARNESS_TIMEOUT,
+    );
+  });
+
   it(
     "run the tasks that depend on them in the same batch process",
     async () => {

@@ -74,6 +74,9 @@ const inspectScript = join(__dirname, "inspect-workspace.cjs");
 const nxPackage = dirname(require.resolve("nx/package.json"));
 const nxBin: string = JSON.parse(readFileSync(join(nxPackage, "package.json"), "utf8")).bin.nx;
 
+/** What a program writes to switch the terminal to its alternate screen, as Nx's terminal UI does. */
+const alternateScreen = "\x1b[?1049h";
+
 /** What inspect-workspace.cjs writes. */
 interface InspectResult {
   ok: boolean;
@@ -333,29 +336,38 @@ export class FixtureWorkspace {
    * its own, as in a terminal: through util-linux's `script -qfec <command>
    * /dev/null`, which needs no terminal around the test and no dependency.
    * Nx then sees a terminal on its standard streams, so that the dynamic
-   * output style and the terminal UI run as for a user; give the terminal UI
-   * `--tui-auto-exit`, or it waits for a key. coreutils' `timeout` stops the
-   * command after `seconds`, so that nothing waits forever.
+   * output style and the terminal UI run as for a user. coreutils' `timeout`
+   * stops the command after `seconds`, so that nothing waits forever.
    *
    * It runs on Linux only: macOS's `script` takes other arguments, and macOS
    * has no `timeout`. In a terminal, Nx 24 asks whether to share usage data
    * unless nx.json sets `analytics` (`ensureAnalyticsPreferenceSet`), and
    * then waits for an answer, so the fixture's nx.json has to set it.
    *
+   * The command gets `TERM=xterm-256color`, as from a terminal emulator,
+   * unless `env` sets `TERM`: with `TERM` unset or `dumb`, Nx 24.0.6's
+   * terminal UI shows every task done and stays open, whatever
+   * `--tui-auto-exit` says (`EVD-NX-24-BATCHES`, "Tasks left out").
    * `script` gives the terminal no size, with which Nx 24.0.6 does not start
-   * its terminal UI where `--tui` asks for it ("not supported in this
-   * environment"), and with `NX_TUI_SKIP_CAPABILITY_CHECK=true` its
-   * pseudo-terminal panics. Pass `size` to have `stty` give the terminal
-   * one before Nx starts.
+   * its terminal UI where `--tui` or the `dynamic` style asks for it and runs
+   * another output style: with `--tui` it warns that the terminal UI is "not
+   * supported in this environment", with `dynamic` it prints nothing, so
+   * that only the missing alternate screen shows it (`terminalUi`). With
+   * `NX_TUI_SKIP_CAPABILITY_CHECK=true` its pseudo-terminal panics. Pass
+   * `size` to have `stty` give the terminal one before Nx starts; the
+   * terminal UI then exits by itself once every task has ended, after the
+   * countdown of `--tui-auto-exit`, 3 seconds without it.
    *
+   * @returns The exit status, the output, and whether Nx started its
+   *   terminal UI, which switches to the terminal's alternate screen.
    * @throws {Error} On another system, or where nx.json does not set `analytics`.
    */
-  nxInTerminal(
+  async nxInTerminal(
     args: string[],
     env: Record<string, string | undefined> = {},
     seconds = 180,
     size?: { columns: number; rows: number },
-  ): Promise<{ status: number | null; output: string }> {
+  ): Promise<{ status: number | null; output: string; terminalUi: boolean }> {
     if (process.platform !== "linux") {
       throw new Error(`nxInTerminal runs on Linux only, through util-linux's script`);
     }
@@ -370,10 +382,20 @@ export class FixtureWorkspace {
       .join(" ");
     const sized =
       size === undefined ? command : `stty cols ${size.columns} rows ${size.rows} && ${command}`;
-    return run("timeout", ["-k", "5", String(seconds), "script", "-qfec", sized, "/dev/null"], {
-      cwd: this.root,
-      env: this.environment({ NX_TUI: "false", INIT_CWD: undefined, ...env }),
-    });
+    const { status, output } = await run(
+      "timeout",
+      ["-k", "5", String(seconds), "script", "-qfec", sized, "/dev/null"],
+      {
+        cwd: this.root,
+        env: this.environment({
+          NX_TUI: "false",
+          INIT_CWD: undefined,
+          TERM: "xterm-256color",
+          ...env,
+        }),
+      },
+    );
+    return { status, output, terminalUi: output.includes(alternateScreen) };
   }
 
   /**
