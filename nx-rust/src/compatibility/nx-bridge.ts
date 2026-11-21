@@ -164,22 +164,6 @@ export function loadNxDependency(nxModulePath: string, name: string): Record<str
   }
 }
 
-/**
- * Reads the version of a dependency of the installed `nx` package relative to
- * an already-resolved module file inside that `nx` package, or `undefined`.
- */
-export function readNxDependencyVersion(nxModulePath: string, name: string): string | undefined {
-  try {
-    const manifest: unknown = require(
-      require.resolve(`${name}/package.json`, { paths: [dirname(nxModulePath)] }),
-    );
-    const version = isRecord(manifest) ? manifest.version : undefined;
-    return typeof version === "string" ? version : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Private `nx/src/*` module contracts and loaders
 // ---------------------------------------------------------------------------

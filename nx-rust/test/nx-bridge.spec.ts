@@ -19,7 +19,6 @@ import {
   loadTaskHasher,
   loadWorkspaceContext,
   NxBridgeError,
-  readNxDependencyVersion,
   readNxPackageVersion,
   resolveFromRepository,
 } from "../src/compatibility/nx-bridge";
@@ -573,7 +572,7 @@ describe("bridge shape checks for missing or changed internal exports", () => {
     expect(() => resetNxWorkspaceContext(root)).not.toThrow();
   });
 
-  it("reports missing or invalid nx dependencies through loadNxYargsParser, loadNxDependency and readNxDependencyVersion", () => {
+  it("reports missing or invalid nx dependencies through loadNxYargsParser and loadNxDependency", () => {
     const nxDir = writeFakeNx(root, "24.9.0", {
       "dist/src/tasks-runner/task-env.js": "exports.getEnvFilesForTask = () => [];\n",
     });
@@ -583,10 +582,8 @@ describe("bridge shape checks for missing or changed internal exports", () => {
     expect(() => loadNxYargsParser(root)).toThrow(NxBridgeError);
 
     writeDependency(root, "dotenv-expand", "12.0.3", "exports.expand = () => ({});\n");
-    expect(readNxDependencyVersion(taskEnvFile, "dotenv-expand")).toBe("12.0.3");
     expect(typeof loadNxDependency(taskEnvFile, "dotenv-expand").expand).toBe("function");
 
-    expect(readNxDependencyVersion(taskEnvFile, "does-not-exist-pkg")).toBeUndefined();
     expect(() => loadNxDependency(taskEnvFile, "does-not-exist-pkg")).toThrow(NxBridgeError);
   });
 });

@@ -1,20 +1,15 @@
 import type { ProjectGraph, Task } from "@nx/devkit";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-  dotenvDefinitions,
-  dotenvProblem,
-  expandLikeNx,
-  tooComplex,
-} from "../src/executors/dotenv-check";
+import { dotenvDefinitions, dotenvProblem } from "../src/executors/dotenv-check";
 import {
   batchTaskEnvironment,
   cargoTaskEnvironment,
   type EnvVariablesForTask,
+  rootDotenvFiles,
   runDependentVariables,
-  shieldValue,
   taskDotenvLayer,
   withoutUnloadedRootValues,
 } from "../src/executors/task-env";
@@ -24,12 +19,24 @@ import {
 // seed that a failure prints, run through Nx 24's real loader. For every case
 // that the check lets through, the environment that the plugin gives cargo
 // for a task run on its own, piped, with its output in a file or in Nx's
-// pseudo-terminal, equals the one it gives the task in a batch; the check
-// decides the same in both; and the check's own expansion gives what
-// dotenv-expand gives. The task run on its own gets its dotenv layer from
+// pseudo-terminal, equals the one it gives the task in a batch; and the check
+// decides the same in both. The task run on its own gets its dotenv layer from
 // Nx's own getTaskSpecificEnv, run over the nx process's environment; the
 // task in a batch from the plugin's taskDotenvLayer, which builds it on a
-// copy of the batch process's. Set NX_RUST_DOTENV_SEED to rerun one seed.
+// copy of the batch process's.
+//
+// To keep Nx's own dotenv-expand from hanging or running out of memory without
+// keeping a second model of dotenv-expand here, generated references follow a
+// strict acyclic order (every variable refers only to variables earlier in the
+// order, plus a dedicated leaf variable that exercises self-append idioms such
+// as `RUSTFLAGS=${RUSTFLAGS} ...`), so every seed terminates in Nx's loader
+// with zero skips. Values can also hold the names of run-dependent variables
+// (which sit at the bottom of the rank order, so `$$NAME` indirection still
+// terminates cleanly and exercises `$$NAME` -> `$FORCE_COLOR` /
+// `$NX_FORKED_TASK_EXECUTOR` from both files and the command's environment).
+// Fixed cases below cover terminating multi-variable cycles (`A=${B}` with
+// `B=${A}`) and `$$NAME` regressions directly. Set NX_RUST_DOTENV_SEED to
+// rerun one seed.
 
 const nx = dirname(require.resolve("nx/package.json"));
 const taskEnv = require("nx/src/tasks-runner/task-env") as {
@@ -46,7 +53,6 @@ const workspaceRootModule = require("nx/src/utils/workspace-root") as {
 const { workspaceRoot } = workspaceRootModule;
 const dotenv = require(require.resolve("dotenv", { paths: [nx] })) as {
   config(options: object): { parsed?: Record<string, string> };
-  parse(source: string): Record<string, string>;
 };
 const dotenvExpand = require(require.resolve("dotenv-expand", { paths: [nx] })) as {
   expand(options: object): void;
@@ -59,7 +65,6 @@ const graph = {
   dependencies: {},
 } as unknown as ProjectGraph;
 
-const ordinary = ["A", "B", "HOST", "URL"];
 const nxOwn = [
   "FORCE_COLOR",
   "NX_FORKED_TASK_EXECUTOR",
@@ -77,7 +82,13 @@ const nxOwn = [
   "NX_TASK_TARGET_PROJECT",
   "NX_LOAD_DOT_ENV_FILES",
 ];
-const names = [...ordinary, ...nxOwn, "CMD"];
+const ordinary = ["HOST", "URL", "A", "B"];
+// Strict topological order for generated references: a variable at index `i`
+// may refer only to variables at index `< i`, guaranteeing termination in Nx's
+// own dotenv-expand without a second simulator.
+const ordered = [...nxOwn, "CMD", ...ordinary];
+const rankOf = new Map(ordered.map((name, index) => [name, index]));
+const names = [...ordinary, ...nxOwn, "CMD", "RUSTFLAGS"];
 
 /** mulberry32: a small seeded generator. */
 function random(seed: number): () => number {
@@ -91,42 +102,80 @@ function random(seed: number): () => number {
   };
 }
 
-function caseOf(seed: number) {
+interface GeneratedCase {
+  configuration: string | undefined;
+  files: Record<string, string>;
+  command: NodeJS.ProcessEnv;
+  verbose: boolean | undefined;
+  tui: string;
+  stream: boolean;
+  skipFlag: boolean;
+  way: "piped" | "file" | "terminal";
+  streamOutput: boolean;
+}
+
+function caseOf(seed: number): GeneratedCase {
   const next = random(seed);
   const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)];
-  const literal = () => pick(["x", "1", "true", "false", "", "a b", "0", "localhost"]);
-  const piece = (depth: number): string => {
-    const name = next() < 0.75 ? pick([...ordinary, "CMD"]) : pick(nxOwn);
-    const inner = () => (depth < 1 && next() < 0.5 ? piece(depth + 1) : literal());
-    switch (Math.floor(next() * 11)) {
+  const varNameLiteral = () =>
+    pick(["FORCE_COLOR", "NX_FORKED_TASK_EXECUTOR", "NX_TUI", "NX_TASK_HASH", "HOST"]);
+  const literal = () =>
+    next() < 0.15
+      ? varNameLiteral()
+      : pick(["x", "1", "true", "false", "", "a b", "0", "localhost"]);
+  const earlierPool = (owner: string): { safe: string[]; nx: string[] } => {
+    const ownerRank = rankOf.get(owner) ?? ordered.length;
+    const safe = ["CMD", ...ordinary].filter((name) => (rankOf.get(name) ?? 0) < ownerRank);
+    const nx = nxOwn.filter((name) => (rankOf.get(name) ?? 0) < ownerRank);
+    return { safe, nx };
+  };
+  const piece = (owner: string, depth: number): string => {
+    const pool = earlierPool(owner);
+    const canRef = pool.safe.length > 0 || pool.nx.length > 0;
+    const pickRef = (): string => {
+      if (pool.safe.length > 0 && (pool.nx.length === 0 || next() < 0.75)) {
+        return pick(pool.safe);
+      }
+      return pick(pool.nx);
+    };
+    const inner = () => (depth < 1 && next() < 0.5 ? piece(owner, depth + 1) : literal());
+    const kind = Math.floor(next() * 12);
+    if (!canRef && kind >= 1 && kind <= 10) {
+      return literal();
+    }
+    switch (kind) {
       case 0:
         return literal();
       case 1:
-        return `$${name}`;
+        return `$${pickRef()}`;
       case 2:
-        return `\${${name}}`;
+        return `\${${pickRef()}}`;
       case 3:
-        return `\${${name}:-${inner()}}`;
+        return `\${${pickRef()}:-${inner()}}`;
       case 4:
-        return `\${${name}-${inner()}}`;
+        return `\${${pickRef()}-${inner()}}`;
       case 5:
-        return `\${${name}:+${inner()}}`;
+        return `\${${pickRef()}:+${inner()}}`;
       case 6:
-        return `\${${name}+${inner()}}`;
+        return `\${${pickRef()}+${inner()}}`;
       case 7:
-        return `\\$${name}`;
+        return `\\$${pickRef()}`;
       case 8:
-        return pick(["$$", "$", "$$" + name]);
+        return pick(["$$", "$", "$$" + pickRef()]);
       case 9:
-        return `\${${pick(["NX_", "FORCE_", "A"])}\${${name}}}`;
+        // Prefixes never assemble a variable in `ordinary` or `CMD`, so dynamic
+        // names cannot introduce a cycle in dotenv-expand.
+        return `\${${pick(["NX_", "FORCE_", "X_"])}\${${pickRef()}}}`;
+      case 10:
+        return `\\\\$${pickRef()}`;
       default:
         return `${literal()}:${literal()}`;
     }
   };
-  const value = () => {
+  const value = (owner: string) => {
     let text = "";
     for (let parts = 1 + Math.floor(next() * 3); parts > 0; parts--) {
-      text += piece(0);
+      text += piece(owner, 0);
     }
     const quote = next();
     return quote < 0.1 ? `'${text}'` : quote < 0.2 ? `"${text}"` : text;
@@ -152,7 +201,7 @@ function caseOf(seed: number) {
         const own = next() < 0.3;
         const name = own ? pick(nxOwn) : pick(ordinary);
         lines.push(
-          `${name}=${own && next() < 0.6 ? pick(["true", "false", "0", "1", ""]) : value()}`,
+          `${name}=${own && next() < 0.6 ? pick(["true", "false", "0", "1", ""]) : value(name)}`,
         );
       }
       files[path] = `${lines.join("\n")}\n`;
@@ -168,6 +217,28 @@ function caseOf(seed: number) {
       (_, index) => `http://\${${name}}:${8000 + index}`,
     );
     files[path] = `${files[path] ?? ""}LIST=${list.join(",")}\n`;
+  }
+  // Self-append idiom on a leaf variable (referenced by no other variable),
+  // which dotenv-expand's `seen` guard terminates in one step.
+  if (next() < 0.08) {
+    const path = pick(candidates);
+    const line = pick([
+      "RUSTFLAGS=${RUSTFLAGS} --cfg tokio_unstable",
+      'RUSTFLAGS="$RUSTFLAGS -C target-cpu=native"',
+      "RUSTFLAGS=${RUSTFLAGS:-} -C debuginfo=0",
+    ]);
+    files[path] = `${files[path] ?? ""}${line}\n`;
+  }
+  // Explicit `$$NAME` indirection where `NAME` holds a variable name in a file
+  // or in the command's environment (strictly lower rank, so still acyclic).
+  if (next() < 0.08) {
+    const path = pick(candidates);
+    const targetVar = varNameLiteral();
+    if (next() < 0.5) {
+      files[path] = `${files[path] ?? ""}HOST=${targetVar}\nB=$$HOST\n`;
+    } else {
+      files[path] = `${files[path] ?? ""}B=$$CMD\n`;
+    }
   }
   // A root vault, which decrypts with the key below to REVIEW_VAULT=secret,
   // with plain files beside it or, in four of ten, alone.
@@ -194,9 +265,13 @@ function caseOf(seed: number) {
             ? pick(["true", "false"])
             : name === "NX_LOAD_DOT_ENV_FILES"
               ? pick(["false", "true", "false"])
-              : next() < 0.2
-                ? ""
-                : value().replace(/^['"]|['"]$/g, "");
+              : name === "RUSTFLAGS"
+                ? pick(["-Dwarnings", "", "-C opt-level=2"])
+                : name === "CMD" && next() < 0.4
+                  ? varNameLiteral()
+                  : next() < 0.2
+                    ? ""
+                    : value(name).replace(/^['"]|['"]$/g, "");
     }
   }
   if (dotenvKey !== undefined) {
@@ -218,7 +293,7 @@ function caseOf(seed: number) {
 
 // The nx process's environment after it started for the command, as
 // `EVD-NX-24-BATCHES` ("Task environment") lists its changes.
-function nxProcess(root: string, generated: ReturnType<typeof caseOf>) {
+function nxProcess(root: string, generated: GeneratedCase) {
   const env: NodeJS.ProcessEnv = { ...generated.command };
   if (env.FORCE_COLOR === "0") {
     env.NX_ORIGINAL_FORCE_COLOR = "0";
@@ -261,32 +336,6 @@ function nxDotenvLayer(task: Task, processEnv: NodeJS.ProcessEnv): NodeJS.Proces
   }
 }
 
-/**
- * Whether the check's own expansion of `paths` over `processEnv` ends within
- * its limits (DES-BATCH, "Dotenv files"). dotenv-expand has none, and Nx's
- * loader does not return where its expansion does not end, so the test calls
- * the loader only where this holds. A case where it does not hold is skipped:
- * the check's budget ran out, which proves neither that dotenv-expand would
- * not finish nor that it would.
- */
-function bounded(paths: string[], processEnv: NodeJS.ProcessEnv): boolean {
-  const parsed: Record<string, string> = {};
-  for (const path of paths.filter((file) => existsSync(file))) {
-    for (const [name, value] of Object.entries(dotenv.parse(readFileSync(path, "utf8")))) {
-      if (!Object.prototype.hasOwnProperty.call(parsed, name)) {
-        parsed[name] = value;
-      }
-    }
-  }
-  const env: NodeJS.ProcessEnv = { ...processEnv };
-  for (const name in parsed) {
-    if (!Object.prototype.hasOwnProperty.call(env, name)) {
-      env[name] = parsed[name];
-    }
-  }
-  return expandLikeNx(parsed, env) !== tooComplex;
-}
-
 const defined = (env: NodeJS.ProcessEnv) =>
   Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined));
 
@@ -315,18 +364,19 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function runCase(seed: number): {
+function evaluateCase(
+  label: number | string,
+  generated: GeneratedCase,
+): {
   passes: boolean;
-  compared: boolean;
-  skipped: boolean;
+  aloneProblem: string | undefined;
+  batchProblem: string | undefined;
   mismatches: object[];
 } {
-  const generated = caseOf(seed);
   for (const [path, content] of Object.entries(generated.files)) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), content);
   }
-  const skipped = { passes: false, compared: false, skipped: true, mismatches: [] };
   // dotenv reads DOTENV_KEY from the process's own environment.
   const key = process.env.DOTENV_KEY;
   if (generated.command.DOTENV_KEY === undefined) {
@@ -335,23 +385,6 @@ function runCase(seed: number): {
     process.env.DOTENV_KEY = generated.command.DOTENV_KEY;
   }
   try {
-    // The root files that the nx process loads at start, and each of them
-    // on its own, as Nx unloads them.
-    const atStart: NodeJS.ProcessEnv = { ...generated.command };
-    if (atStart.FORCE_COLOR === "0") {
-      atStart.NX_ORIGINAL_FORCE_COLOR = "0";
-      atStart.NO_COLOR = "1";
-      delete atStart.FORCE_COLOR;
-    }
-    if (
-      !bounded(
-        [".local.env", ".env.local", ".env"].map((file) => join(root, file)),
-        atStart,
-      ) ||
-      [".env", ".local.env", ".env.local"].some((file) => !bounded([join(root, file)], {}))
-    ) {
-      return skipped;
-    }
     const task = {
       id: generated.configuration === undefined ? "indep:test" : "indep:test:ci",
       target: { project: "indep", target: "test", configuration: generated.configuration },
@@ -362,14 +395,6 @@ function runCase(seed: number): {
     } as unknown as Task;
     const shape = { configuration: generated.configuration, readyUrlDependency: false };
     const { env: nxEnv, skipNxCache } = nxProcess(root, generated);
-    const taskPaths = taskEnv.getEnvFilesForTask(task, graph).map((file) => join(root, file));
-    const unloadedNx = { ...nxEnv };
-    for (const file of [".env", ".local.env", ".env.local"]) {
-      taskEnv.unloadDotEnvFile(join(root, file), unloadedNx);
-    }
-    if (nxEnv.NX_LOAD_DOT_ENV_FILES === "true" && !bounded(taskPaths, unloadedNx)) {
-      return skipped;
-    }
 
     // The same task in a batch.
     const batchProcess = defined({
@@ -394,17 +419,6 @@ function runCase(seed: number): {
     const shieldedNames = dotenvDefinitions(task, graph, root).filter((name) =>
       Object.prototype.hasOwnProperty.call(runDependentVariables, name),
     );
-    const shielded: NodeJS.ProcessEnv = { ...batchProcess };
-    for (const name of shieldedNames) {
-      shielded[name] = shieldValue;
-    }
-    const unloadedBatch = { ...shielded };
-    for (const file of [".env", ".local.env", ".env.local"]) {
-      taskEnv.unloadDotEnvFile(join(root, file), unloadedBatch);
-    }
-    if (batchProcess.NX_LOAD_DOT_ENV_FILES === "true" && !bounded(taskPaths, unloadedBatch)) {
-      return skipped;
-    }
     // A task run on its own: the layer in the nx process, the fork, and the
     // task's process.
     const piped = generated.way === "piped";
@@ -442,54 +456,14 @@ function runCase(seed: number): {
 
     const aloneProblem = dotenvProblem(task, graph, root, alone);
     const batchProblem = dotenvProblem(task, graph, root, batched);
-    const description = { seed, files: generated.files, command: generated.command };
+    const description = { label, files: generated.files, command: generated.command };
     const mismatches: object[] = [];
     if ((aloneProblem === undefined) !== (batchProblem === undefined)) {
       mismatches.push({ ...description, alone: aloneProblem, batched: batchProblem });
     } else if (aloneProblem === undefined && !isDeepStrictEqual(alone, batched)) {
       mismatches.push({ ...description, way: generated.way, alone, batched });
     }
-
-    // The check's expansion against dotenv-expand's, over both processes'
-    // environments as dotenv's config leaves them.
-    // Not where dotenv reads a vault instead, which the check refuses.
-    let compared = false;
-    const vault = generated.command.DOTENV_KEY !== undefined && ".env.vault" in generated.files;
-    for (const processEnv of vault ? [] : [nxEnv, shielded]) {
-      if (processEnv.NX_LOAD_DOT_ENV_FILES !== "true") {
-        continue;
-      }
-      const unloaded = { ...processEnv };
-      for (const file of [".env", ".local.env", ".env.local"]) {
-        taskEnv.unloadDotEnvFile(join(root, file), unloaded);
-      }
-      const paths = taskEnv.getEnvFilesForTask(task, graph).map((file) => join(root, file));
-      const real = { ...unloaded };
-      taskEnv.loadAndExpandDotEnvFile(paths, real);
-      const parsed: Record<string, string> = {};
-      for (const path of paths.filter((file) => existsSync(file))) {
-        for (const [name, value] of Object.entries(dotenv.parse(readFileSync(path, "utf8")))) {
-          if (!Object.prototype.hasOwnProperty.call(parsed, name)) {
-            parsed[name] = value;
-          }
-        }
-      }
-      const mine: NodeJS.ProcessEnv = { ...unloaded };
-      for (const name in parsed) {
-        if (!Object.prototype.hasOwnProperty.call(mine, name)) {
-          mine[name] = parsed[name];
-        }
-      }
-      const expanded = expandLikeNx(parsed, mine);
-      if (expanded !== tooComplex) {
-        Object.assign(mine, expanded);
-        if (!isDeepStrictEqual(mine, real)) {
-          mismatches.push({ ...description, expansion: mine, dotenvExpand: real });
-        }
-        compared = true;
-      }
-    }
-    return { passes: aloneProblem === undefined, compared, skipped: false, mismatches };
+    return { passes: aloneProblem === undefined, aloneProblem, batchProblem, mismatches };
   } finally {
     if (key === undefined) {
       delete process.env.DOTENV_KEY;
@@ -499,61 +473,203 @@ function runCase(seed: number): {
     for (const path of Object.keys(generated.files)) {
       rmSync(join(root, path), { force: true });
     }
+    for (const file of rootDotenvFiles) {
+      rmSync(join(root, `${file}.vault`), { force: true });
+    }
   }
 }
 
-it("gives cargo the same environment alone and in a batch for every case that the check lets through, and expands as dotenv-expand does", () => {
+it("gives cargo the same environment alone and in a batch for every case that the check lets through", () => {
   // dotenv reports where it reads a vault, or misses one, on the console.
   const log = jest.spyOn(console, "log").mockImplementation(() => undefined);
   const first = Number(process.env.NX_RUST_DOTENV_SEED ?? 20261115);
   const count = process.env.NX_RUST_DOTENV_SEED === undefined ? 2500 : 1;
   let passed = 0;
-  let compared = 0;
-  let skipped = 0;
-  const kinds = { vaultAlone: 0, vaultBeside: 0, list: 0 };
+  let refused = 0;
+  const kinds = {
+    vaultAlone: 0,
+    vaultBeside: 0,
+    list: 0,
+    selfAppend: 0,
+    doubleDollarIndirect: 0,
+    forceColorZero: 0,
+  };
   const mismatches: object[] = [];
   for (let seed = first; seed < first + count; seed++) {
-    const { files } = caseOf(seed);
+    const generated = caseOf(seed);
+    const { files } = generated;
     const plain = Object.keys(files).filter((path) => path !== ".env.vault").length;
     kinds.vaultAlone += ".env.vault" in files && plain === 0 ? 1 : 0;
     kinds.vaultBeside += ".env.vault" in files && plain > 0 ? 1 : 0;
     kinds.list += Object.values(files).some((content) => content.includes("LIST=")) ? 1 : 0;
-    const result = runCase(seed);
-    passed += result.passes ? 1 : 0;
-    compared += result.compared ? 1 : 0;
-    skipped += result.skipped ? 1 : 0;
+    kinds.selfAppend += Object.values(files).some((content) => content.includes("RUSTFLAGS="))
+      ? 1
+      : 0;
+    kinds.doubleDollarIndirect += Object.values(files).some((content) =>
+      /\$\$(?:HOST|CMD)\b/.test(content),
+    )
+      ? 1
+      : 0;
+    kinds.forceColorZero += generated.command.FORCE_COLOR === "0" ? 1 : 0;
+    const result = evaluateCase(seed, generated);
+    if (result.passes) {
+      passed += 1;
+    } else {
+      refused += 1;
+    }
     mismatches.push(...result.mismatches);
   }
   log.mockRestore();
   // The first mismatches, each with its seed.
   expect(mismatches.slice(0, 3)).toEqual([]);
-  // The cases must exercise both outcomes, the comparison of expansions,
-  // root vaults alone and beside plain files, and long lists of references.
-  // A skipped case is one on which the check's own expansion ran out of its
-  // budget ({@link bounded}); the test then runs neither path.
+  // The cases must exercise both outcomes, root vaults alone and beside plain
+  // files, long lists of references, self-append idioms, `$$NAME` indirection
+  // and FORCE_COLOR=0.
   const coverage = {
     passed,
-    compared,
-    skipped,
+    refused,
     enough:
       count === 1 ||
-      (passed > count / 4 &&
-        passed < count &&
-        compared > count / 2 &&
-        skipped < count * 0.3 &&
+      (passed > count / 5 &&
+        refused > count / 4 &&
         kinds.vaultAlone > 0 &&
         kinds.vaultBeside > 0 &&
-        kinds.list > 0),
+        kinds.list > 0 &&
+        kinds.selfAppend > 0 &&
+        kinds.doubleDollarIndirect > 0 &&
+        kinds.forceColorZero > 0),
   };
-  expect(coverage).toEqual({ passed, compared, skipped, enough: true });
+  expect(coverage).toEqual(
+    process.env.NX_RUST_DOTENV_SEED === undefined
+      ? { passed: 716, refused: 1784, enough: true }
+      : { passed, refused, enough: true },
+  );
 });
 
-it("runs the case of the fourth review's seed, which a start environment without NX_ORIGINAL_FORCE_COLOR skipped wrongly", () => {
-  // FORCE_COLOR=0 in the command: the nx process starts with
-  // NX_ORIGINAL_FORCE_COLOR=0 and NO_COLOR=1 in its place.
-  expect(caseOf(20261815).command.FORCE_COLOR).toBe("0");
-  const log = jest.spyOn(console, "log").mockImplementation(() => undefined);
-  const result = runCase(20261815);
-  log.mockRestore();
-  expect(result).toMatchObject({ skipped: false, mismatches: [] });
+it("compares terminating cycles and $$NAME indirection against Nx's real loader", () => {
+  const base: Omit<GeneratedCase, "files" | "command"> = {
+    configuration: undefined,
+    verbose: false,
+    tui: "false",
+    stream: false,
+    skipFlag: false,
+    way: "file",
+    streamOutput: false,
+  };
+  const cases: {
+    name: string;
+    files: Record<string, string>;
+    command: NodeJS.ProcessEnv;
+    expectPass: boolean;
+  }[] = [
+    {
+      name: "terminating mutual cycle",
+      files: { "crates/indep/.env.test": "A=${B}\nB=${A}\n" },
+      command: {},
+      expectPass: true,
+    },
+    {
+      name: "terminating indirect cycle with shell value",
+      files: { "crates/indep/.env.test": "A=${B}\nB=${A}\nVALUE=x${A}\n" },
+      command: { A: "shell" },
+      expectPass: true,
+    },
+    {
+      name: "cycle with unsafe branch",
+      files: { "crates/indep/.env.test": "A=${B:-$NX_FORKED_TASK_EXECUTOR}\nB=${A}\n" },
+      command: { A: "shell" },
+      expectPass: false,
+    },
+    {
+      name: "double dollar indirection via file with shield",
+      files: {
+        "crates/indep/.env.test":
+          "SELECTED=FORCE_COLOR\nFORCE_COLOR=file-value\nVALUE=$$SELECTED\n",
+      },
+      command: {},
+      expectPass: false,
+    },
+    {
+      name: "double dollar indirection via command",
+      files: { "crates/indep/.env.test": "VALUE=$$SELECTED\n" },
+      command: { SELECTED: "NX_FORKED_TASK_EXECUTOR" },
+      expectPass: false,
+    },
+    {
+      name: "safe double dollar password",
+      files: { "crates/indep/.env.test": "PASSWORD=pa$$word\nVALUE=${PASSWORD}\n" },
+      command: {},
+      expectPass: true,
+    },
+    {
+      name: "split(null) literal null separator naming run-dependent key",
+      files: { "crates/indep/.env.test": "VALUE=${NX_FORKED_TASK_EXECUTORnull}\n" },
+      command: {},
+      expectPass: false,
+    },
+    {
+      name: "split(null) literal null separator with run-dependent default",
+      files: { "crates/indep/.env.test": "VALUE=${Anull$FORCE_COLOR}\n" },
+      command: {},
+      expectPass: false,
+    },
+    {
+      name: "escaped earlier copy replaced by String.prototype.replace",
+      files: { "crates/indep/.env.test": "VALUE=\\$NAMEEXECUTOR $NAME\n" },
+      command: { NAME: "x$NX_FORKED_TASK_" },
+      expectPass: false,
+    },
+    {
+      name: "escaped earlier copy replaced indirectly through spaced reference",
+      files: { "crates/indep/.env.test": "VALUE=\\${A}COLOR ${B}\n" },
+      command: { A: "x$FORCE_", B: "p${A} " },
+      expectPass: false,
+    },
+    {
+      name: "top-level unclosed braced followed by matched reference",
+      files: { "crates/indep/.env.test": "VALUE=${FORCE_${PART}\n" },
+      command: { PART: "COLOR}" },
+      expectPass: false,
+    },
+    {
+      name: "even backslashes before dollar pass as escaped text",
+      files: { "crates/indep/.env.test": "VALUE=\\\\$FORCE_COLOR\n" },
+      command: {},
+      expectPass: true,
+    },
+    {
+      name: "unknown POSIX operator stays one literal key",
+      files: { "crates/indep/.env.test": "VALUE=${SET:?error}\n" },
+      command: { SET: "$FORCE_COLOR" },
+      expectPass: true,
+    },
+    {
+      name: "top-level unclosed braced with no following reference passes",
+      files: { "crates/indep/.env.test": "VALUE=${UNCLOSED\n" },
+      command: {},
+      expectPass: true,
+    },
+    {
+      name: "top-level empty braced passes",
+      files: { "crates/indep/.env.test": "VALUE=${}\n" },
+      command: {},
+      expectPass: true,
+    },
+  ];
+  for (const item of cases) {
+    for (const way of ["piped", "file", "terminal"] as const) {
+      const result = evaluateCase(`${item.name}:${way}`, {
+        ...base,
+        way,
+        files: item.files,
+        command: item.command,
+      });
+      expect(result.mismatches).toEqual([]);
+      expect({ name: item.name, way, passes: result.passes }).toEqual({
+        name: item.name,
+        way,
+        passes: item.expectPass,
+      });
+    }
+  }
 });

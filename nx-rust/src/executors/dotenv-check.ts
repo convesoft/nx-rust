@@ -1,49 +1,13 @@
 import type { ProjectGraph, Task } from "@nx/devkit";
 import { existsSync, readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { loadNxDependency, loadTaskEnv, NxBridgeError } from "../compatibility/nx-bridge";
 import {
-  loadNxDependency,
-  loadTaskEnv,
-  NxBridgeError,
-  readNxDependencyVersion,
-} from "../compatibility/nx-bridge";
-import { runDependentVariables, TaskEnvironmentError, toTaskEnvironmentError } from "./task-env";
-
-/**
- * The version of dotenv-expand whose expansion this module follows: the one
- * that Nx 24.0.6 pins, through which Nx expands a task's dotenv files.
- */
-export const followedDotenvExpand = "12.0.3";
-
-/**
- * The longest value that the expansion of this module lets a variable reach
- * at any step: 131,072 characters, the longest single environment string
- * with which Linux starts a process (`MAX_ARG_STRLEN`), so that a variable
- * of reasonable size, one that can reach cargo, never comes near it.
- * dotenv-expand has no limit. This also stops growth that puts in no value,
- * as through `$&` in a default, which `String.prototype.replace` reads as
- * the reference's text.
- */
-export const lengthLimit = 131_072;
-
-/**
- * How many steps the check takes at most over all the values that it cannot
- * tell apart for variables that the dotenv files define: a limit of its own
- * knowledge, not of Nx's expansion, which a single expansion reaches only by
- * following that many references.
- */
-export const searchLimit = 1_000_000;
-
-/** Why the expansion of this module stopped before it ended. */
-export type Stop =
-  | { stop: "cycle" }
-  | { stop: "nesting"; name: string }
-  | { stop: "length" }
-  | { stop: "search" };
-
-/** What {@link expandLikeNx} returns when its expansion stops before it ends. */
-export const tooComplex = Symbol("too complex");
+  rootDotenvFiles,
+  runDependentVariables,
+  TaskEnvironmentError,
+  toTaskEnvironmentError,
+} from "./task-env";
 
 /** The task that {@link dotenvProblem} checks, as Nx's `getEnvFilesForTask` reads it. */
 export type DotenvTask = Pick<Task, "id" | "projectRoot"> & {
@@ -101,7 +65,7 @@ export function readTaskDotenv(task: DotenvTask, graph: ProjectGraph, root: stri
   // the file exists, and for the task's files, beside the last one that
   // exists.
   const vaults = [
-    ...[".env", ".local.env", ".env.local"].map((name) => `${name}.vault`),
+    ...rootDotenvFiles.map((name) => `${name}.vault`),
     ...(existing.length === 0 ? [] : [`${existing[existing.length - 1]}.vault`]),
   ].filter((path, index, all) => all.indexOf(path) === index && existsSync(join(root, path)));
   const raw: Record<string, string> = {};
@@ -147,11 +111,11 @@ export function dotenvDefinitions(task: DotenvTask, graph: ProjectGraph, root: s
 }
 
 /**
- * Why a task's dotenv files cannot give cargo the same values in every way of
- * running the task, or `undefined` where they can (`DES-BATCH`, "Dotenv
- * files"). The same check runs for a task run on its own and for a task of a
- * batch, before any cargo command, and reads the files that Nx loads for the
- * task and nothing else; without any, it reads nothing.
+ * Why a task's dotenv files cannot be shown to give cargo the same values in
+ * every way of running the task, or `undefined` where they can (`DES-BATCH`,
+ * "Dotenv files"). The same check runs for a task run on its own and for a
+ * task of a batch, before any cargo command, and reads the files that Nx loads
+ * for the task and nothing else; without any, it reads nothing.
  *
  * A vault that dotenv would read because `DOTENV_KEY` is set fails the task
  * first, whether or not a plain file exists beside it and whether or not Nx
@@ -167,12 +131,18 @@ export function dotenvDefinitions(task: DotenvTask, graph: ProjectGraph, root: s
  * and a batch expands them in its own process, where the variables of
  * {@link runDependentVariables} can have other values; the plugin checks them
  * in the task's or the batch's process, where they can differ again. Every
- * other variable has the same value in all of these processes. So the
- * expansion gives the same values everywhere unless it looks one of those
- * variables up, which {@link expansionLookup} finds out by following
- * dotenv-expand through every name it looks up, those in the values it
- * substitutes included. A variable of the set that a file only defines
- * changes nothing that cargo sees (see {@link runDependentVariables}).
+ * other variable has the same value in all of these processes. From every
+ * variable that the files define and that is not in
+ * {@link runDependentVariables}, the check walks `$VAR`, `${VAR...}` and
+ * `$$VAR` references statically as the installed `dotenv-expand` matches,
+ * splits (including `split(null)` on `"null"`), escapes (`(?<!\\)`), and
+ * replaces them, through the raw definitions and the values in `env` of every
+ * variable reached, following both branches of every `:-`, `-`, `:+` and `+`
+ * with a visited set for cycles, and fails the task where a variable of
+ * {@link runDependentVariables} is reached or where a value holds a form from
+ * which a variable name could be assembled. A source-text tripwire test guards
+ * those `dotenv-expand` behaviours instead of a run-time version pin.
+ * Diagnostics never include text from any variable's value.
  *
  * @param env The environment that the plugin gives cargo for the task: the
  *   values that the files gave it, and every other variable as the process
@@ -203,634 +173,485 @@ export function dotenvProblem(
   if (!Object.values(raw).some((value) => value.includes("$"))) {
     return undefined;
   }
-  let taskEnvFile: string;
-  try {
-    taskEnvFile = loadTaskEnv(root, []).file;
-  } catch (error) {
-    if (error instanceof NxBridgeError) {
-      throw toTaskEnvironmentError(error);
-    }
-    throw error;
-  }
-  const version = readNxDependencyVersion(taskEnvFile, "dotenv-expand");
-  if (version !== followedDotenvExpand) {
-    const name = Object.keys(raw).find((key) => raw[key].includes("$")) as string;
-    return `${origin.get(name)} has a value with $, which the installed Nx expands with dotenv-expand ${version ?? "of an unknown version"}; @convesoft/nx-rust knows how dotenv-expand ${followedDotenvExpand} expands it, and cannot tell whether this expansion gives the same values in a batch as for the task run on its own (\`DES-BATCH\`, "Dotenv files"). The task does not run, so that Nx stores no result for it. Run the tasks with --batch=false and use an Nx version that @convesoft/nx-rust supports.`;
-  }
 
-  const unsafe = (name: string) =>
-    Object.prototype.hasOwnProperty.call(runDependentVariables, name);
-  // Where Nx expands, a variable that a file defines has the command's value
-  // where the command sets it, else the file's, and the plugin cannot tell
-  // which in a task's process: it follows every value the variable can have
-  // there, the file's, the empty one and the one it ended with.
-  const own = (record: NodeJS.ProcessEnv, name: string) =>
-    Object.prototype.hasOwnProperty.call(record, name) ? record[name] : undefined;
-  const values = (name: string): (string | undefined)[] =>
-    Object.prototype.hasOwnProperty.call(raw, name)
-      ? [raw[name], "", own(env, name)]
-      : [own(env, name)];
-  const longest = Math.max(
-    0,
-    ...[...Object.values(raw), ...Object.values(env)].map((value) => value?.length ?? 0),
-  );
-  for (const name in raw) {
+  for (const name of Object.keys(raw)) {
     // Its own value never reaches cargo as it is (see runDependentVariables).
-    if (unsafe(name)) {
+    if (isRunDependent(name) || !raw[name].includes("$")) {
       continue;
     }
-    const found = expansionLookup(raw[name], values, unsafe, longest);
-    if (typeof found === "object") {
-      return `${origin.get(name)}: ${stopMessage(name, found)} (\`DES-BATCH\`, "Dotenv files"). The task does not run, so that Nx stores no result for it.`;
+    const found = findUnsafeReference(raw[name], raw, env);
+    if (found === undefined) {
+      continue;
     }
-    if (found !== undefined) {
-      return `${origin.get(name)} makes Nx look up ${found} where it expands ${name}, and ${found} has a value there that depends on how the task runs: ${runDependentVariables[found]}. The task would get other values alone than in a batch, or in another output style, under one cache key (\`DES-BATCH\`, "Dotenv files"). The task does not run, so that Nx stores no result for it. Remove the reference to ${found} from ${name}.`;
+    if (found.kind === "run-dependent") {
+      return `${origin.get(name)} makes Nx look up ${found.lookup} where it expands ${name}, and ${found.lookup} has a value there that depends on how the task runs: ${runDependentVariables[found.lookup]}. The task would get other values alone than in a batch, or in another output style, under one cache key (\`DES-BATCH\`, "Dotenv files"). The task does not run, so that Nx stores no result for it. Remove the reference to ${found.lookup} from ${name}.`;
     }
+    const via = found.via !== undefined ? ` (via ${found.via})` : "";
+    return `${origin.get(name)} expands ${name}${via} through ${ambiguousReasonText[found.reason]}, from which @convesoft/nx-rust cannot tell statically which variables Nx looks up (\`DES-BATCH\`, "Dotenv files"). The task does not run, so that Nx stores no result for it. Use plain $NAME or \${NAME} references with static variable names, brace unbraced references before following text, or escape literal $ as \\$.`;
   }
   return undefined;
 }
 
-// Why the check stopped following `name`, and what to do.
-function stopMessage(name: string, stop: Stop): string {
-  switch (stop.stop) {
-    case "cycle":
-      return `Nx's expansion of ${name} does not end: it comes back to a value and set of earlier values that it had before, from which dotenv-expand repeats the same steps without end. Change the references in ${name}, or in the variables that it refers to, that refer back to themselves`;
-    case "nesting":
-      return `Nx's expansion of ${name} does not end: the value of ${stop.name} is put in again inside the text that putting it in gave, ${nestingLimit} times over, as where a variable refers to itself with text around the reference, and dotenv-expand goes on doing so without end. Change the references in ${name}, or in the variables that it refers to, that refer back to themselves`;
-    case "length":
-      return `Nx's expansion of ${name} grows beyond ${lengthLimit} characters, longer than one environment variable with which Linux starts a process, as a variable that refers to itself with text around the reference makes it grow without end. Change the references in ${name}, or in the variables that it refers to, that refer back to themselves`;
-    case "search":
-      return `@convesoft/nx-rust's check of the dotenv files gives up on ${name} after ${searchLimit} steps, its own limit for following the values that it cannot tell apart for the variables that the dotenv files define and that the command's environment could set, so it cannot tell whether Nx's expansion of ${name} gives the same value in every way of running the task. Refer in ${name} to fewer variables that the dotenv files define and that hold references themselves`;
-  }
+type AmbiguousReason =
+  | "unclosed-braced"
+  | "dynamic-braced"
+  | "assembled-dollar"
+  | "unbraced-join"
+  | "trailing-dollar"
+  | "replace-pattern";
+
+const ambiguousReasonText: Readonly<Record<AmbiguousReason, string>> = {
+  "unclosed-braced": "an unclosed ${...} reference",
+  "dynamic-braced": "a ${...} reference whose variable name is assembled dynamically",
+  "assembled-dollar": "a $$ reference that can assemble a variable name dynamically",
+  "unbraced-join": "an unbraced $ reference that can join adjacent text",
+  "trailing-dollar": "a trailing $ that can join adjacent text",
+  "replace-pattern": "a $ replacement pattern in a referenced value or default",
+};
+
+type StaticFinding =
+  | { kind: "run-dependent"; lookup: string }
+  | { kind: "ambiguous"; reason: AmbiguousReason; via?: string };
+
+interface SiteContext {
+  /** Whether text substituted here can immediately precede `[A-Za-z0-9_]`. */
+  followedByIdent: boolean;
+  /** Whether text substituted here can immediately precede `[A-Za-z_{$]`. */
+  followedByRefStart: boolean;
+  /**
+   * Whether an escaped `\$` appeared earlier in an enclosing value, so
+   * `String.prototype.replace` can substitute any matched reference into that
+   * earlier escaped site regardless of what follows it here.
+   */
+  afterEscapedDollar: boolean;
 }
 
-/** A reference that dotenv-expand 12.0.3 finds in a value (`expandValue`). */
-interface Reference {
-  /** The reference as it stands in the value. */
-  template: string;
-  /** Where it starts in the value. */
-  index: number;
-  /** The name it looks up. */
+interface ScannedReference {
   key: string;
-  /** Its operator, `:+`, `+`, `:-` or `-`, or `null`. */
-  splitter: string | null;
-  /** What follows the operator: the default or the alternative. */
+  op: string | null;
   rest: string;
+  /**
+   * True when the reference is preceded by a literal `$` (`$$NAME`), so
+   * `dotenv-expand` leaves that `$` in place and re-scans `$<value of key>`
+   * on the next pass.
+   */
+  doubleDollar: boolean;
+  /** Context immediately after the reference (or an earlier escaped copy). */
+  site: SiteContext;
 }
 
-// The leftmost reference in `result`, `${…}` or `$NAME` not preceded by a
-// backslash, with the name before the first operator. dotenv-expand splits
-// and joins with null where there is no operator, which JavaScript turns into
-// the separator "null"; so does this.
-function leftmostReference(result: string): Reference | undefined {
-  const match = /(?<!\\)\${([^{}]+)}|(?<!\\)\$([A-Za-z_][A-Za-z0-9_]*)/.exec(result);
-  if (match === null) {
-    return undefined;
-  }
-  const [template, braced, unbraced] = match;
-  const expression = braced || unbraced;
-  const splitter = expression.match(/(:\+|\+|:-|-)/)?.[0] ?? null;
-  const parts = expression.split(splitter as string);
-  const key = parts.shift() as string;
-  return { template, index: match.index, key, splitter, rest: parts.join(splitter as string) };
+const identStart = /[A-Za-z_]/;
+const identChar = /[A-Za-z0-9_]/;
+const identFull = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const refStartChar = /[A-Za-z_{$]/;
+const leadingIdent = /^([A-Za-z_][A-Za-z0-9_]*)/;
+// The exact token pattern of `dotenv-expand` (`lib/main.js`, `expandValue`).
+const dotenvExpandToken = /(?<!\\)\${([^{}]+)}|(?<!\\)\$([A-Za-z_][A-Za-z0-9_]*)/;
+
+function isRunDependent(name: string): boolean {
+  return Object.prototype.hasOwnProperty.call(runDependentVariables, name);
 }
 
-// What dotenv-expand puts in place of `reference` when its name has `value`:
-// for `:+` and `+` the alternative where the value is not empty; otherwise
-// the value, unless it is empty or a result already seen, and else the
-// default. The value goes to `String.prototype.replace` as dotenv-expand
-// gives it.
-function replacementOf(reference: Reference, value: unknown, blocked: boolean): string {
-  if (reference.splitter === ":+" || reference.splitter === "+") {
-    return value ? reference.rest : "";
-  }
-  return (value && !blocked ? value : reference.rest) as string;
+function ownValue(record: NodeJS.ProcessEnv, name: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(record, name) ? record[name] : undefined;
 }
 
-/**
- * Brent's detection of a cycle in the states of one expansion, with one
- * remembered state. dotenv-expand's next step depends only on the result and
- * the set of earlier results (with the environment, the values that it gave
- * earlier and, in the search, the values chosen, all fixed along a path); the
- * set only grows, so two states with the same result, the same number of
- * earlier results and the same choices are the same state, from which
- * dotenv-expand repeats the same steps without end. A finite expansion never
- * comes back to a state, so this stops none.
- */
-interface Brent {
-  saved: string;
-  power: number;
-  steps: number;
-}
-
-// A detector that has seen nothing yet.
-function fresh(): Brent {
-  return { saved: "\u0003", power: 1, steps: 0 };
-}
-
-// The detector after a step to `state`, or "cycle" where it came back.
-function brentStep(brent: Brent, state: string): Brent | "cycle" {
-  if (state === brent.saved) {
-    return "cycle";
-  }
-  const steps = brent.steps + 1;
-  return steps === brent.power
-    ? { saved: state, power: brent.power * 2, steps: 0 }
-    : { ...brent, steps };
+function candidateValues(
+  key: string,
+  raw: Record<string, string>,
+  env: NodeJS.ProcessEnv,
+): (string | undefined)[] {
+  return Object.prototype.hasOwnProperty.call(raw, key)
+    ? [raw[key], ownValue(env, key)]
+    : [ownValue(env, key)];
 }
 
 /**
- * How often one name's value may be put in inside the text that earlier
- * insertions of its own value gave, along one chain of nested
- * substitutions, before the check takes the expansion as one that does not
- * end. A repetition, as a list of references to one variable, nests nothing;
- * an expansion that does not end puts values in without end, along a chain
- * on which, with finitely many names, one name comes back each round, so it
- * reaches this in as many rounds. A finite expansion nests a name inside its
- * own value only where dotenv-expand's guards end it after a few rounds: a
- * value equal to an earlier whole result, or a result equal to a value it
- * gave earlier, which a value nested many times inside copies of itself
- * cannot equal.
+ * Walks all variable references reachable from `initial`, following both the
+ * raw definitions in `raw` and the ambient values in `env` of every reached
+ * variable (and both branches of `:-`, `-`, `:+` and `+`), with a visited set
+ * keyed by `(name, followedByIdent, followedByRefStart)` so cycles terminate
+ * without rejecting self-references such as `RUSTFLAGS=${RUSTFLAGS} ...`
+ * (`DES-BATCH`, "Dotenv files").
  */
-export const nestingLimit = 64;
+function findUnsafeReference(
+  initial: string,
+  raw: Record<string, string>,
+  env: NodeJS.ProcessEnv,
+): StaticFinding | undefined {
+  const visited = new Set<string>();
 
-/** A text that a value put in became, with the names that put in its chain. */
-interface Region {
-  start: number;
-  end: number;
-  names: readonly string[];
-}
-
-// The regions after [start, end) became `length` characters: those before
-// stay, those after move, those around grow or shrink, and those inside or
-// across go with the text replaced.
-function movedRegions(
-  regions: readonly Region[],
-  start: number,
-  end: number,
-  length: number,
-): Region[] {
-  const delta = length - (end - start);
-  const moved: Region[] = [];
-  for (const region of regions) {
-    if (region.end <= start) {
-      moved.push(region);
-    } else if (region.start >= end) {
-      moved.push({ ...region, start: region.start + delta, end: region.end + delta });
-    } else if (region.start <= start && region.end >= end) {
-      moved.push({ ...region, end: region.end + delta });
+  const walkKey = (
+    key: string,
+    site: SiteContext,
+    viaName: string | undefined,
+  ): StaticFinding | undefined => {
+    if (key === "") {
+      return undefined;
     }
-  }
-  return moved;
+    if (isRunDependent(key)) {
+      return { kind: "run-dependent", lookup: key };
+    }
+    const visitKey = `${key}\0${site.followedByIdent ? "1" : "0"}${site.followedByRefStart ? "1" : "0"}${site.afterEscapedDollar ? "1" : "0"}`;
+    if (visited.has(visitKey)) {
+      return undefined;
+    }
+    visited.add(visitKey);
+    for (const candidate of candidateValues(key, raw, env)) {
+      if (typeof candidate === "string" && candidate.includes("$")) {
+        const found = walk(candidate, true, site, viaName);
+        if (found !== undefined) {
+          return found;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  /**
+   * Checks what `$$key` can assemble when `dotenv-expand` leaves the first `$`
+   * in place and substitutes `key`'s value in place of `$key`, producing
+   * `$<value>` followed by `site`:
+   * - If `key` can hold `$`, or starts with `{`, it can assemble arbitrary
+   *   references: refuse statically.
+   * - If `key` can be empty/unset and `site.followedByRefStart` holds, the
+   *   surviving `$` meets the following text (e.g. `$$UNSET{FORCE_COLOR}`):
+   *   refuse statically.
+   * - If a candidate value starts with `[A-Za-z_]`, `$<value>` looks up the
+   *   leading identifier; refuse if it can join following identifier text, or
+   *   follow that target variable statically (refusing if run-dependent).
+   */
+  const checkDoubleDollarTarget = (
+    key: string,
+    site: SiteContext,
+    viaName: string | undefined,
+  ): StaticFinding | undefined => {
+    const inRaw = Object.prototype.hasOwnProperty.call(raw, key);
+    const values = inRaw ? [...candidateValues(key, raw, env), ""] : candidateValues(key, raw, env);
+    for (const candidate of values) {
+      if (candidate === undefined || candidate === "") {
+        if (site.followedByRefStart) {
+          return { kind: "ambiguous", reason: "assembled-dollar", via: viaName };
+        }
+        continue;
+      }
+      if (candidate.includes("$") || candidate.startsWith("{")) {
+        return { kind: "ambiguous", reason: "assembled-dollar", via: viaName };
+      }
+      const match = leadingIdent.exec(candidate);
+      if (match === null) {
+        continue;
+      }
+      const target = match[1];
+      if (target.length === candidate.length && site.followedByIdent) {
+        return { kind: "ambiguous", reason: "unbraced-join", via: viaName };
+      }
+      const afterTarget = candidate[target.length];
+      const targetSite: SiteContext =
+        afterTarget !== undefined
+          ? {
+              followedByIdent: false,
+              followedByRefStart: refStartChar.test(afterTarget),
+              afterEscapedDollar: site.afterEscapedDollar,
+            }
+          : site;
+      // Do not pass the assembled target name as `via` so a diagnostic never
+      // echoes text that came from a variable's value.
+      const found = walkKey(target, targetSite, viaName);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  };
+
+  const walk = (
+    value: string,
+    isSubstituted: boolean,
+    site: SiteContext,
+    viaName: string | undefined,
+  ): StaticFinding | undefined => {
+    const scanned = scanReferences(value, isSubstituted, site);
+    if (scanned.ambiguous !== undefined) {
+      return { kind: "ambiguous", reason: scanned.ambiguous, via: viaName };
+    }
+    for (const ref of scanned.references) {
+      if (ref.key !== "" && isRunDependent(ref.key)) {
+        return { kind: "run-dependent", lookup: ref.key };
+      }
+      // Only a clean identifier reference written directly in a dotenv file
+      // (never extracted from an ambient or substituted value) may appear as
+      // `via` in a diagnostic.
+      const nextVia = !isSubstituted && identFull.test(ref.key) ? ref.key : viaName;
+      if (ref.doubleDollar) {
+        // When `$$NAME` is expanded directly, the first `$` stays and
+        // `$<value of NAME>` is re-scanned; when substituted via
+        // `String.prototype.replace`, `$$` collapses to `$` and `$NAME` is
+        // looked up. Check both.
+        const assembled = checkDoubleDollarTarget(ref.key, ref.site, nextVia);
+        if (assembled !== undefined) {
+          return assembled;
+        }
+        const direct = walkKey(ref.key, ref.site, nextVia);
+        if (direct !== undefined) {
+          return direct;
+        }
+      } else if (ref.op !== ":+" && ref.op !== "+") {
+        // `:+` and `+` only test whether `ref.key` is set; they never
+        // substitute its value into the output.
+        const found = walkKey(ref.key, ref.site, nextVia);
+        if (found !== undefined) {
+          return found;
+        }
+      }
+      // The body of a default or alternative is substituted into the enclosing
+      // string at the same position as the reference itself.
+      if (ref.rest.includes("$")) {
+        const found = walk(ref.rest, true, ref.site, nextVia);
+        if (found !== undefined) {
+          return found;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  return walk(
+    initial,
+    false,
+    { followedByIdent: false, followedByRefStart: false, afterEscapedDollar: false },
+    undefined,
+  );
 }
 
 /**
- * One step of dotenv-expand: `text` put in for `reference` with
- * `String.prototype.replace`, which puts it at the first occurrence of the
- * reference's text, an earlier escaped copy included, and reads `$$`, `$&`
- * and the like in it; with the regions of values put in moved, the region of
- * this one added where it is the name's value and holds a `$`, and how often
- * the name now stands in its own chain.
+ * Whether `value` contains a JavaScript `String.prototype.replace` special
+ * pattern (`$&`, `$'` or `` $` ``) that `replace` interprets even after a
+ * backslash (`\$&`). An even run of `$`s (such as `$$&`) collapses to literal
+ * `$`s rather than a pattern; an odd run triggers the pattern.
  */
-function stepped(
-  result: string,
-  reference: Reference,
-  text: string,
-  inserted: boolean,
-  regions: readonly Region[],
-): { result: string; regions: Region[]; nesting: number } {
-  const start = result.indexOf(reference.template);
-  const end = start + reference.template.length;
-  const next = result.replace(reference.template, text);
-  const length = next.length - (result.length - reference.template.length);
-  const enclosing = regions
-    .filter((region) => region.start < end && region.end > start)
-    .flatMap((region) => region.names);
-  const moved = movedRegions(regions, start, end, length);
-  const holds = inserted && next.slice(start, start + length).includes("$");
-  const names = holds ? [...new Set(enclosing), reference.key] : [];
-  if (holds) {
-    moved.push({ start, end: start + length, names });
-  }
-  return {
-    result: next,
-    regions: moved,
-    nesting: holds ? enclosing.filter((name) => name === reference.key).length + 1 : 0,
-  };
-}
-
-// A placeholder for one of several texts without a reference, which the
-// search puts in where the choice changes no reference that it finds later.
-const placeholder = /\uE000(\d+)\uE001/g;
-
-// Whether text put in at `index` of `result` could become part of a
-// reference: right after an unescaped `$`, or inside a `${` that is not
-// closed and holds no brace.
-function joinsReference(result: string, index: number): boolean {
-  const before = result.slice(0, index);
-  if (before.endsWith("$") && !before.endsWith("\\$")) {
-    return true;
-  }
-  for (
-    let open = before.lastIndexOf("${");
-    open !== -1;
-    open = before.lastIndexOf("${", open - 1)
-  ) {
-    if (open > 0 && before[open - 1] === "\\") {
+function hasReplaceSpecialPattern(value: string): boolean {
+  let i = 0;
+  while (i < value.length) {
+    if (value[i] !== "$") {
+      i += 1;
       continue;
     }
-    return !/[{}]/.test(before.slice(open + 2));
+    let k = i;
+    while (k < value.length && value[k] === "$") {
+      k += 1;
+    }
+    const after = value[k];
+    if ((k - i) % 2 === 1 && (after === "&" || after === "'" || after === "`")) {
+      return true;
+    }
+    i = k;
   }
   return false;
 }
 
 /**
- * The first name for which `unsafe` holds that dotenv-expand 12.0.3
- * (`expandValue` of `lib/main.js`) looks up while it expands `raw`, a
- * {@link Stop} where the expansion comes back to a state it was in, grows
- * beyond {@link lengthLimit} characters or takes the check beyond
- * {@link searchLimit} steps, or `undefined` where it looks none up.
+ * Scans `value` as the installed `dotenv-expand` (`lib/main.js`, `expandValue`)
+ * matches, splits and replaces references:
  *
- * It follows dotenv-expand step by step, with the steps of
- * {@link expandLikeNx}: the leftmost reference, the value or the default put
- * in with `String.prototype.replace`, and the search again from the start,
- * so that a reference that a substituted value brings or that the
- * replacement assembles is looked up too. Where `values` gives a name several
- * possible values, it follows each, and keeps the one it took for that name
- * until the expansion ends, as a name has one value in dotenv-expand's
- * environment. Where every value would put in a text without `$`, at a place
- * where the text cannot become part of a reference and where the result has
- * no earlier escaped copy of the reference, it follows one path with a
- * placeholder for those texts, which it puts back with each text where a
- * later step could join it to a reference. Only a value with a reference can
- * equal an earlier whole result, which every reference that dotenv-expand
- * found holds, so a value is blocked exactly where it equals an earlier
- * result, and possibly where it equals an earlier result with a
- * placeholder, which the search then follows both ways. It never stops early
- * where dotenv-expand stops because the result equals a value it gave
- * earlier, which can only find more names.
- *
- * @param values Every value that a name can have where Nx expands the files,
- *   `undefined` for none.
- * @param longest The longest value that a name can have: a longer result can
- *   equal none, and is not kept.
+ * - Any `$` immediately preceded by `\` (`(?<!\\)`) is not matched by
+ *   `dotenv-expand`. However, `String.prototype.replace` replaces the first
+ *   literal occurrence of a matched reference template — an earlier escaped
+ *   copy included (`\$NAMEEXECUTOR $NAME`) — so any matched reference after an
+ *   earlier escaped `\$` conservatively inherits joinable site context.
+ * - Inside a referenced value or default (`isSubstituted`), JavaScript
+ *   `String.prototype.replace` interprets `$&`, `$'` and `` $` `` even after
+ *   `\`, so those patterns are rejected before skipping escaped dollars.
+ * - Braced `${...}` bodies are split with `dotenv-expand`'s own operator match
+ *   `/(:\+|\+|:-|-)/` and `expression.split(splitter)` (which splits on the
+ *   literal text `"null"` when no operator matches, matching
+ *   `${NX_FORKED_TASK_EXECUTORnull}` and `${SET:?error}`). A key containing
+ *   `$`, `{` or `}` is rejected as dynamic assembly.
+ * - Empty `${}` and unclosed `${` are plain text at top level unless a matched
+ *   reference follows an unclosed `${` (which could supply `}`, as in
+ *   `${FORCE_${PART}` with `PART=COLOR}`); inside a referenced value or
+ *   default they are rejected as stray `$` forms.
+ * - `$$` followed by `{` or a third `$` before an identifier is rejected as
+ *   dynamic assembly; `$$NAME` records a `doubleDollar` reference so the
+ *   walker checks what `$<value of NAME>` can assemble; trailing `$$` or `$`
+ *   in a substituted value is rejected only when the substitution site can
+ *   precede `[A-Za-z_{$]`; `$$!` or `$!` passes.
+ * - An unbraced `$IDENT` or `$$IDENT` at the end of a substituted value (or
+ *   default/alternative body) where the substitution site can precede
+ *   `[A-Za-z0-9_]` is rejected because substitution could extend the
+ *   identifier into another variable name.
  */
-export function expansionLookup(
-  raw: string,
-  values: (name: string) => readonly (string | undefined)[],
-  unsafe: (name: string) => boolean,
-  longest = lengthLimit,
-): string | Stop | undefined {
-  // The results seen on a path, newest first, with a digest of the chain.
-  interface Seen {
-    result: string;
-    parent: Seen | undefined;
-    size: number;
-    digest: string;
-    // For a result with a placeholder, its parts and the lengths it can
-    // have, worked out when first needed.
-    shape?: { parts: string[]; shortest: number; longest: number };
+function scanReferences(
+  value: string,
+  isSubstituted: boolean,
+  outerSite: SiteContext,
+): { references: ScannedReference[]; ambiguous?: AmbiguousReason } {
+  const references: ScannedReference[] = [];
+  if (isSubstituted && hasReplaceSpecialPattern(value)) {
+    return { references, ambiguous: "replace-pattern" };
   }
-  interface Pending {
-    result: string;
-    seen: Seen | undefined;
-    chosen: ReadonlyMap<string, string | undefined>;
-    choices: string;
-    brent: Brent;
-    regions: readonly Region[];
-  }
-  const texts = new Map<string, readonly string[]>();
-  const ids = new Map<string, string>();
-  const digest = (...parts: string[]) =>
-    createHash("sha1").update(parts.join("\0")).digest("base64");
-  // Whether `value` equals the result of `link` with each placeholder one
-  // of its texts: first by length, then part by part.
-  const matches = (link: Seen, value: string): boolean => {
-    if (link.shape === undefined) {
-      const parts = link.result.split(placeholder);
-      let least = 0;
-      let most = 0;
-      for (const [index, part] of parts.entries()) {
-        const options = index % 2 === 0 ? [part] : (texts.get(part) ?? []);
-        least += Math.min(...options.map((option) => option.length));
-        most += Math.max(...options.map((option) => option.length));
-      }
-      link.shape = { parts, shortest: least, longest: most };
-    }
-    const { parts } = link.shape;
-    if (value.length < link.shape.shortest || value.length > link.shape.longest) {
-      return false;
-    }
-    let positions = new Set([0]);
-    for (const [index, part] of parts.entries()) {
-      const options = index % 2 === 0 ? [part] : (texts.get(part) ?? []);
-      const next = new Set<number>();
-      for (const position of positions) {
-        for (const option of options) {
-          if (value.startsWith(option, position)) {
-            next.add(position + option.length);
-          }
-        }
-      }
-      if (next.size === 0) {
-        return false;
-      }
-      positions = next;
-    }
-    return positions.has(value.length);
-  };
-  // Whether `value` equals an earlier result: "yes", "no", or "maybe" where
-  // it equals one with a placeholder for one of its texts.
-  const blocked = (seen: Seen | undefined, value: unknown): "yes" | "no" | "maybe" => {
-    if (typeof value !== "string" || !value.includes("$")) {
-      return "no";
-    }
-    let maybe = false;
-    for (let link = seen; link !== undefined; link = link.parent) {
-      if (!link.result.includes("\uE000")) {
-        if (link.result === value) {
-          return "yes";
-        }
-      } else if (!maybe) {
-        maybe = matches(link, value);
-      }
-    }
-    return maybe ? "maybe" : "no";
-  };
-  // The length that a result can have at most, and at least, with each
-  // placeholder one of its texts.
-  const lengthWith = (result: string, pick: (lengths: number[]) => number) =>
-    result.replace(placeholder, (_, id: string) =>
-      "x".repeat(pick((texts.get(id) ?? [""]).map((text) => text.length))),
-    ).length;
-  const length = (result: string) => lengthWith(result, (lengths) => Math.max(0, ...lengths));
-  const shortest = (result: string) =>
-    lengthWith(result, (lengths) => Math.min(...lengths, Number.MAX_SAFE_INTEGER));
 
-  const pending: Pending[] = [
-    {
-      result: raw,
-      seen: undefined,
-      chosen: new Map(),
-      choices: "",
-      brent: fresh(),
-      regions: [],
-    },
-  ];
-  const visited = new Set<string>();
-  let steps = 0;
-  // A path alone cannot meet itself again, where Brent's detector watches
-  // it; only where several paths are open can two reach the same state.
-  const push = (state: Pending): Stop | undefined => {
-    const brent = brentStep(
-      state.brent,
-      `${state.result}\0${state.seen?.size ?? 0}\0${state.choices}`,
-    );
-    if (brent === "cycle") {
-      return { stop: "cycle" };
-    }
-    if (pending.length > 0) {
-      const key = digest(state.result, state.seen?.digest ?? "", state.choices);
-      if (visited.has(key)) {
-        return undefined;
-      }
-      visited.add(key);
-    }
-    pending.push({ ...state, brent });
-    return undefined;
-  };
-  while (pending.length > 0) {
-    const state = pending.pop() as Pending;
-    const { result, seen, chosen, choices } = state;
-    // A placeholder that a later step put where it could join a reference
-    // goes back to its texts first.
-    let joined: RegExpExecArray | undefined;
-    for (const found of result.matchAll(placeholder)) {
-      if (joinsReference(result, found.index)) {
-        joined = found as RegExpExecArray;
-        break;
-      }
-    }
-    if (joined !== undefined) {
-      if (++steps > searchLimit) {
-        return { stop: "search" };
-      }
-      for (const text of texts.get(joined[1]) ?? []) {
-        const next =
-          result.slice(0, joined.index) + text + result.slice(joined.index + joined[0].length);
-        const stop = push({
-          ...state,
-          result: next,
-          regions: movedRegions(
-            state.regions,
-            joined.index,
-            joined.index + joined[0].length,
-            text.length,
-          ),
-        });
-        if (stop !== undefined) {
-          return stop;
-        }
-      }
-      continue;
-    }
-    const reference = leftmostReference(result);
-    if (reference === undefined) {
-      continue;
-    }
-    if (++steps > searchLimit) {
-      return { stop: "search" };
-    }
-    if (unsafe(reference.key)) {
-      return reference.key;
-    }
-    // Hashed only where a state is kept for paths that may meet, and once.
-    // A result longer than every value can equal none, and is not kept; nor
-    // is one kept already, as dotenv-expand's `seen` is a set.
-    let chain: string | undefined;
-    let held = false;
-    for (let link = seen; link !== undefined && !held; link = link.parent) {
-      held = link.result === result;
-    }
-    const now: Seen | undefined =
-      held || shortest(result) > longest
-        ? seen
+  let hasEarlierEscapedDollar = outerSite.afterEscapedDollar;
+  const siteAt = (index: number): SiteContext => {
+    const after = value[index];
+    const local: SiteContext =
+      after !== undefined
+        ? {
+            followedByIdent: identChar.test(after),
+            followedByRefStart: refStartChar.test(after),
+            afterEscapedDollar: hasEarlierEscapedDollar,
+          }
         : {
-            result,
-            parent: seen,
-            size: (seen?.size ?? 0) + 1,
-            get digest(): string {
-              chain ??= digest(seen?.digest ?? "", result);
-              return chain;
-            },
+            followedByIdent: outerSite.followedByIdent,
+            followedByRefStart: outerSite.followedByRefStart,
+            afterEscapedDollar: hasEarlierEscapedDollar,
           };
-    const known = chosen.has(reference.key);
-    const candidates = known ? [chosen.get(reference.key)] : [...new Set(values(reference.key))];
-    // What each value of the name would put in.
-    const outcomes = candidates.flatMap((value) => {
-      const block = blocked(now, value);
-      const ways = block === "maybe" ? [false, true] : [block === "yes"];
-      return ways.map((way) => ({
-        value,
-        text: replacementOf(reference, value, way),
-        inserted:
-          reference.splitter !== ":+" && reference.splitter !== "+" && Boolean(value) && !way,
-      }));
-    });
-    const distinct = new Set(outcomes.map((outcome) => outcome.text));
-    const start = reference.index;
-    // A text without `$` goes in as it is, where the reference stands, where
-    // the result has no earlier escaped copy of the reference's text.
-    if (
-      distinct.size > 1 &&
-      result.indexOf(reference.template) === start &&
-      [...distinct].every((text) => !text.includes("$")) &&
-      !joinsReference(result, start)
-    ) {
-      const set = [...distinct].sort();
-      const id = ids.get(set.join("\0")) ?? String(texts.size);
-      ids.set(set.join("\0"), id);
-      texts.set(id, set);
-      const next =
-        result.slice(0, start) +
-        `\uE000${id}\uE001` +
-        result.slice(start + reference.template.length);
-      if (length(next) > lengthLimit) {
-        return { stop: "length" };
-      }
-      const stop = push({
-        ...state,
-        result: next,
-        seen: now,
-        regions: movedRegions(
-          state.regions,
-          start,
-          start + reference.template.length,
-          next.length - (result.length - reference.template.length),
-        ),
-      });
-      if (stop !== undefined) {
-        return stop;
-      }
+    // If an escaped `\$` appeared earlier in `value` (or an enclosing value),
+    // `String.prototype.replace` can substitute into that earlier escaped
+    // occurrence, where identifier or brace text may follow it.
+    return hasEarlierEscapedDollar
+      ? { followedByIdent: true, followedByRefStart: true, afterEscapedDollar: true }
+      : local;
+  };
+
+  let i = 0;
+  while (i < value.length) {
+    if (value[i] !== "$") {
+      i += 1;
       continue;
     }
-    const followed = new Set<string>();
-    for (const { value, text, inserted } of outcomes) {
-      if (followed.has(`${value}\0${text}\0${inserted}`)) {
+    // `dotenv-expand`'s regex uses `(?<!\\)`: any `$` immediately preceded by
+    // `\` is skipped by matching (including `\\$`).
+    if (i > 0 && value[i - 1] === "\\") {
+      hasEarlierEscapedDollar = true;
+      i += 1;
+      continue;
+    }
+    const next = value[i + 1];
+    if (next === "{") {
+      if (value[i + 2] === "}") {
+        if (isSubstituted) {
+          return { references, ambiguous: "dynamic-braced" };
+        }
+        // `dotenv-expand`'s `\${([^{}]+)}` requires at least one character; at
+        // top level `${}` is plain text.
+        i += 3;
         continue;
       }
-      followed.add(`${value}\0${text}\0${inserted}`);
-      const step = stepped(result, reference, text, inserted, state.regions);
-      if (step.nesting > nestingLimit) {
-        return { stop: "nesting", name: reference.key };
+      let depth = 1;
+      let j = i + 2;
+      while (j < value.length && depth > 0) {
+        if (value[j] === "{") {
+          depth += 1;
+        } else if (value[j] === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            break;
+          }
+        }
+        j += 1;
       }
-      if (length(step.result) > lengthLimit) {
-        return { stop: "length" };
+      if (depth !== 0) {
+        if (isSubstituted) {
+          return { references, ambiguous: "unclosed-braced" };
+        }
+        // At top level, an unclosed `${` is plain text unless a matched
+        // reference appears after it (which could supply `}` and close `${`,
+        // as in `${FORCE_${PART}` with `PART=COLOR}`).
+        if (dotenvExpandToken.test(value.slice(i + 2))) {
+          return { references, ambiguous: "dynamic-braced" };
+        }
+        i += 2;
+        continue;
       }
-      const branch = known || candidates.length === 1;
-      const stop = push({
-        result: step.result,
-        seen: now,
-        chosen: branch ? chosen : new Map(chosen).set(reference.key, value),
-        choices: branch ? choices : `${choices}\0${reference.key}=${value ?? "\u0001"}`,
-        brent: state.brent,
-        regions: step.regions,
-      });
-      if (stop !== undefined) {
-        return stop;
+      const expression = value.slice(i + 2, j);
+      // Match `dotenv-expand` (`lib/main.js`, `expandValue`) exactly: when no
+      // operator matches, `splitter` is `null`, which `String.prototype.split`
+      // and `Array.prototype.join` coerce to `"null"`.
+      const opMatch = /(:\+|\+|:-|-)/.exec(expression);
+      const splitter = opMatch ? opMatch[0] : null;
+      const parts = expression.split(splitter as unknown as string);
+      const key = parts.shift() as string;
+      const rest = parts.join(splitter as unknown as string);
+      if (/[${}]/.test(key)) {
+        return { references, ambiguous: "dynamic-braced" };
       }
+      const site = siteAt(j + 1);
+      references.push({ key, op: splitter, rest, doubleDollar: false, site });
+      i = j + 1;
+      continue;
     }
+    if (next !== undefined && identStart.test(next)) {
+      let j = i + 2;
+      while (j < value.length && identChar.test(value[j])) {
+        j += 1;
+      }
+      const key = value.slice(i + 1, j);
+      const site = siteAt(j);
+      if (
+        !isRunDependent(key) &&
+        isSubstituted &&
+        j === value.length &&
+        outerSite.followedByIdent
+      ) {
+        return { references, ambiguous: "unbraced-join" };
+      }
+      references.push({ key, op: null, rest: "", doubleDollar: false, site });
+      i = j;
+      continue;
+    }
+    if (next === "$") {
+      let k = i;
+      while (k < value.length && value[k] === "$") {
+        k += 1;
+      }
+      const dollars = k - i;
+      const afterDollars = value[k];
+      if (afterDollars === "{") {
+        return { references, ambiguous: "assembled-dollar" };
+      }
+      if (afterDollars !== undefined && identStart.test(afterDollars)) {
+        if (dollars >= 3) {
+          return { references, ambiguous: "assembled-dollar" };
+        }
+        let j = k + 1;
+        while (j < value.length && identChar.test(value[j])) {
+          j += 1;
+        }
+        const key = value.slice(k, j);
+        const site = siteAt(j);
+        if (
+          !isRunDependent(key) &&
+          isSubstituted &&
+          j === value.length &&
+          outerSite.followedByIdent
+        ) {
+          return { references, ambiguous: "unbraced-join" };
+        }
+        references.push({ key, op: null, rest: "", doubleDollar: true, site });
+        i = j;
+        continue;
+      }
+      if (afterDollars === undefined) {
+        if (isSubstituted && outerSite.followedByRefStart) {
+          return { references, ambiguous: "trailing-dollar" };
+        }
+        i = k;
+        continue;
+      }
+      i = k;
+      continue;
+    }
+    if (next === undefined) {
+      if (isSubstituted && outerSite.followedByRefStart) {
+        return { references, ambiguous: "trailing-dollar" };
+      }
+      i += 1;
+      continue;
+    }
+    i += 1;
   }
-  return undefined;
-}
-
-/**
- * The values that dotenv-expand 12.0.3's `expand` gives the variables of
- * `parsed` over `processEnv`, the environment that dotenv's `config` left,
- * exactly as Nx's loader takes them, or {@link tooComplex} where one
- * expansion comes back to a state it was in or grows beyond
- * {@link lengthLimit} characters, where dotenv-expand does not end or holds a
- * value longer than Linux starts a process with. It shares the steps of
- * {@link expansionLookup}, against which the tests compare it with the
- * library itself.
- */
-export function expandLikeNx(
-  parsed: Record<string, string>,
-  processEnv: NodeJS.ProcessEnv,
-): Record<string, string> | typeof tooComplex {
-  const runningParsed: Record<string, string> = {};
-  const expanded: Record<string, string> = {};
-  for (const key in parsed) {
-    let value: string | typeof tooComplex = parsed[key];
-    const current = processEnv[key];
-    if (current && current !== value) {
-      value = current;
-    } else {
-      value = expandValueLikeNx(value, processEnv, runningParsed);
-      if (value === tooComplex) {
-        return tooComplex;
-      }
-    }
-    expanded[key] = value.replace(/\\\$/g, "$");
-    runningParsed[key] = expanded[key];
-  }
-  return expanded;
-}
-
-// dotenv-expand 12.0.3's `expandValue`, step for step. Only a result with a
-// reference goes into `seen`, so only a value with a reference can equal
-// one; a result longer than every value equals none, and is not kept.
-function expandValueLikeNx(
-  value: string,
-  processEnv: NodeJS.ProcessEnv,
-  runningParsed: Record<string, string>,
-): string | typeof tooComplex {
-  const env: NodeJS.ProcessEnv = { ...runningParsed, ...processEnv };
-  const longest = Math.max(
-    0,
-    ...[...Object.values(processEnv), ...Object.values(runningParsed)].map((entry) =>
-      typeof entry === "string" ? entry.length : 0,
-    ),
-  );
-  const seen = new Set<string>();
-  let brent = fresh();
-  let regions: Region[] = [];
-  let result = value;
-  for (
-    let reference = leftmostReference(result);
-    reference !== undefined;
-    reference = leftmostReference(result)
-  ) {
-    if (result.length <= longest) {
-      seen.add(result);
-    }
-    const found = env[reference.key];
-    if (found !== undefined && typeof found !== "string") {
-      // A name of Object's prototype, whose function dotenv-expand hands
-      // String.prototype.replace, which then leaves the result as it was or
-      // throws.
-      return tooComplex;
-    }
-    const blockedValue = found !== undefined && seen.has(found);
-    const step = stepped(
-      result,
-      reference,
-      replacementOf(reference, found, blockedValue),
-      reference.splitter !== ":+" && reference.splitter !== "+" && Boolean(found) && !blockedValue,
-      regions,
-    );
-    result = step.result;
-    regions = step.regions;
-    const next = brentStep(brent, `${result}\0${seen.size}`);
-    if (next === "cycle" || step.nesting > nestingLimit || result.length > lengthLimit) {
-      return tooComplex;
-    }
-    brent = next;
-    if (result === runningParsed[reference.key]) {
-      break;
-    }
-  }
-  return result;
+  return { references };
 }
 
 // A dependency of the installed Nx, as Nx itself loads it.
