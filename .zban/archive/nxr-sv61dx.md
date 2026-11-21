@@ -1,17 +1,18 @@
 ---
 title: Review the decisions made in 0.3
-status: todo
+status: done
 type: task
 tags:
   - maintainer
 created_at: 2026-11-16T10:47:17Z
+closed_at: 2026-11-21T20:38:32Z
 ---
 
 Goal: the maintainer reads, once, the decisions that the control plane made on his behalf while milestone 0.3 (nextest, affected tests and the coverage baseline) was built, and overturns those he disagrees with. A decision he overturns becomes a new issue. This issue is never dispatched to a worker.
 
 Each line says what was decided, which Mara items it rests on, and how to undo it. "Provisional" marks a decision of a kind the maintainer reserved for himself that can still be undone and was therefore taken without stopping the work.
 
-- [ ] Read the list below and overturn what is wrong
+- [x] Read the list below and overturn what is wrong
 
 ## Decisions
 
@@ -94,3 +95,7 @@ From the coverage baseline target (nxr-d0t9vm, merged 19 November 2026 as 7c4400
 - Lines 10, 21, 44 and 45 stand.
 
 The marks of the confirmed lines are removed by nxr-qw96ne.
+
+## Summary of Changes
+
+Maintainer final review completed on 21 November 2026. All remaining lines stand; line 11 (`nxr-4bhgkd`, reporting the git subfolder bug upstream to `max-sixty/cargo-affected`) is explicitly deferred until after 1.0.

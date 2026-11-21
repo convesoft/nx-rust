@@ -1,17 +1,18 @@
 ---
 title: Review the decisions made in 0.5
-status: todo
+status: done
 type: task
 tags:
   - maintainer
 created_at: 2026-11-16T10:41:49Z
+closed_at: 2026-11-21T20:38:35Z
 ---
 
 Goal: the maintainer reads, once, the decisions that the control plane made on his behalf while milestone 0.5 (releasing with Nx release) was built, and overturns those he disagrees with. A decision he overturns becomes a new issue. This issue is never dispatched to a worker.
 
 Each line says what was decided, which Mara items it rests on, and how to undo it. "Provisional" marks a decision of a kind the maintainer reserved for himself (anything that cannot be undone, a capability users see) that can still be undone before 1.0 and was therefore taken without stopping the work. Decisions before 15 November 2026, 16:30, are in the Mara items themselves and in the maintainer's own answers; this list starts with the amendments of that day. The maintainer's own answer of 15 November 2026 on uncommitted changes (a documented limit, no check with git; `RISK-UNCOMMITTED-PUBLISH`) is not listed, since it is his.
 
-- [ ] Read the list below and overturn what is wrong
+- [x] Read the list below and overturn what is wrong
 
 ## Decisions
 
@@ -45,3 +46,7 @@ From the fix that the maintainer ordered for line 6 (nxr-4884vg, merged 20 Novem
 18. Provisional (it narrows what the maintainer asked for, and `REQ-RELEASE` says so now). The check covers one release group at a time: Nx publishes the groups one after another, so a group published earlier stays published, each crate where its own settings sent it, when a later group is refused. No crate is uploaded to a wrong registry or against a wrong copy, but the release is then half done. The guide, `REQ-RELEASE` and `DES-RELEASE` state this boundary. Undo: check the publish tasks of every release group before the first group uploads, which needs the plugin to read the release configuration ahead of Nx.
 
 The maintainer read lines 15 to 18 on 20 November 2026. Line 18 stands: nothing wrong is uploaded, running `nx release publish` again skips the versions that are already published, and resolving Nx Release's groups ahead of Nx is not worth the fragility in v1. Lines 15 to 17 stand as well. The pages carry no provisional mark for line 18, so nothing is left to remove.
+
+## Summary of Changes
+
+Maintainer final review completed on 21 November 2026. All remaining lines stand except line 8 (`nxr-c63t0r`), which is overturned: `@convesoft/nx-rust:release-publish` will run the dotenv check (`dotenvProblem`) as the cargo executors do. `nxr-c63t0r` is promoted out of the backlog and added as a blocker on `nxr-nm0jd6`.

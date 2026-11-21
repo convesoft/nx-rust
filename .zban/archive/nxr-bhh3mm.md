@@ -1,17 +1,18 @@
 ---
 title: Review the decisions made in 0.4
-status: todo
+status: done
 type: task
 tags:
   - maintainer
 created_at: 2026-11-16T10:47:20Z
+closed_at: 2026-11-21T20:38:34Z
 ---
 
 Goal: the maintainer reads, once, the decisions that the control plane made on his behalf while milestone 0.4 (napi and wasm artifacts) was built, and overturns those he disagrees with. A decision he overturns becomes a new issue. This issue is never dispatched to a worker.
 
 Each line says what was decided, which Mara items it rests on, and how to undo it. "Provisional" marks a decision of a kind the maintainer reserved for himself that can still be undone and was therefore taken without stopping the work.
 
-- [ ] Read the list below and overturn what is wrong
+- [x] Read the list below and overturn what is wrong
 
 ## Decisions
 
@@ -73,3 +74,7 @@ From the wasm target (nxr-0ap8n4, merged 16 November 2026; evidence `EVD-WASM-PO
 The marks of the confirmed lines are removed by nxr-qw96ne.
 
 Line 12 is provisional too (its mark stands in the middle of the line, and the list shown to the maintainer on 20 November 2026 missed it). Asked separately, he kept it the same day: it matches line 13 and `REQ-MIXED-PROJECTS`. So of the eight provisional lines of this list, lines 5, 6, 12, 13, 18, 30 and 32 stand and line 31 is overturned.
+
+## Summary of Changes
+
+Maintainer final review completed on 21 November 2026. All remaining lines stand (line 7 was closed in `nxr-f87kzs`), except line 38's `nxr-27zbta` (optional tools missing in CI vs `verification.mara.md`), which is promoted out of the backlog to install the optional tools in CI before 1.0 and added as a blocker on `nxr-nm0jd6`.

@@ -1,17 +1,18 @@
 ---
 title: Review the decisions made in 0.2
-status: todo
+status: done
 type: task
 tags:
   - maintainer
 created_at: 2026-11-16T10:41:38Z
+closed_at: 2026-11-21T20:38:31Z
 ---
 
 Goal: the maintainer reads, once, the decisions that the control plane made on his behalf while milestone 0.2 (batching and feature unification) was built, and overturns those he disagrees with. A decision he overturns becomes a new issue. This issue is never dispatched to a worker.
 
 Each line says what was decided, which Mara items it rests on, and how to undo it. "Provisional" marks a decision of a kind the maintainer reserved for himself (cache correctness, a capability users see) that can still be undone and was therefore taken without stopping the work. Decisions before 15 November 2026, 16:30, are in the Mara items themselves and in the maintainer's own answers; this list starts with the amendments of that day.
 
-- [ ] Read the list below and overturn what is wrong
+- [x] Read the list below and overturn what is wrong
 
 ## Decisions
 
@@ -59,3 +60,7 @@ From nxr-k64tm5 with the rest of nxr-pht7d6 (the `hakari` and `cargo` strategies
 The marks of the confirmed lines are removed by nxr-qw96ne.
 
 Outcome of line 8 (nxr-8paqsn, merged 20 November 2026 as ec5cfaa): the failure is a defect of Cargo 1.91.0, not of the plugin, Nx or the harness. With a build directory apart from the artifact directory, Cargo 1.91 names a file generated in `OUT_DIR` under the artifact directory in the dependency file beside the artifact; Cargo 1.92 fixed it (rust-lang/cargo#16092). The plugin needed no change, because the build input check skips both directories; the review confirmed that no input is lost on 1.91. The test now expects each version's path and fails on both without the skip (`EVD-CARGO-DEP-INFO`).
+
+## Summary of Changes
+
+Maintainer final review completed on 21 November 2026. All remaining non-provisional lines stand (line 15 is superseded by staged builds in 0.6). No further follow-up issues needed.

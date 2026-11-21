@@ -17,3 +17,5 @@ cargo-affected 0.4.1 selects nothing for a workspace in a subfolder of its git r
 - [ ] When a release fixes it, remove the workaround where the plugin's minimum cargo-affected allows it
 
 Checked upstream on 19 November 2026, at the maintainer's request: it is not reported. None of the 26 issues of max-sixty/cargo-affected (2 open, 24 closed) and none of its pull requests is about a workspace below the top of its git repository; the notes of v0.4.1, the latest release, do not mention it; and `src/project.rs` on its `main` still runs `git diff` in the project root without `--relative` and takes the paths as relative to the project root. Whether to report it is still the maintainer's call.
+
+Maintainer decision (21 November 2026, from review of `nxr-sv61dx` line 11): defer filing the upstream issue until after 1.0.

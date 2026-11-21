@@ -1,17 +1,18 @@
 ---
 title: Review the decisions made in 0.6
-status: todo
+status: done
 type: task
 tags:
   - maintainer
 created_at: 2026-11-20T12:37:55Z
+closed_at: 2026-11-21T20:38:36Z
 ---
 
 Goal: the maintainer reads, once, the decisions that the control plane made on his behalf while milestone 0.6 (architecture cleanup and hardening, nxr-e2z8sz) was built, and overturns those he disagrees with. A decision he overturns becomes a new issue. This issue is never dispatched to a worker.
 
 Each line says what was decided, which Mara items it rests on, and how to undo it. "Provisional" marks a decision of a kind the maintainer reserved for himself (anything that cannot be undone, a capability users see) that can still be undone before 1.0 and was therefore taken without stopping the work.
 
-- [ ] Read the list below and overturn what is wrong
+- [x] Read the list below and overturn what is wrong
 
 ## Decisions
 
@@ -88,3 +89,12 @@ Each line says what was decided, which Mara items it rests on, and how to undo i
 34. The environment-dump tests of `batch-runs.spec.ts` build one crate in place of seven (nxr-gabd3d, 6ab6feb; test only, checked by the control plane without a review run because the change is 14 lines). The control plane accepted two departures from the issue as written: one cargo call per dump is not possible, since a test of the whole workspace always makes three calls, and making the crate a binary would have needed a wider list of excluded variables, which changes an assertion; and `batch-groups` and `workspace-tests` get no pre-built `target/`, since neither has a third-party crate. All 11 ways of running and every assertion stay. The spec went from 89.2 s to 78.0 s, measured alone; the audit's estimate was larger and rested on an older commit. Undo: revert 6ab6feb.
 
 35. Summary of the test-runtime issues that the maintainer added on 20 November 2026, each measured alone by its worker: nxr-krddfp (the napi spec about 90 s to 39 s), nxr-11vr5k (about 9 s), nxr-v67m3s (nothing kept), nxr-ryhjf1 (2 to 4 s locally; the CI gain is a projection), nxr-yatbsx (`target-defaults.spec.ts` 80.0 s to 32.3 s, the end-to-end suite 37.3 s to 28.6 s), nxr-ffjvc9 (nothing kept), nxr-gabd3d (89.2 s to 78.0 s). The non-goals held throughout: the 11 ways of running, the 23 fixtures of the ordinary cases, no long-lived Nx sessions and `maxWorkers` 3.
+
+## Summary of Changes
+
+Maintainer final review completed on 21 November 2026:
+- Line 22 (`--nx-bail` under staged builds, provisional): stands as a documented Nx limitation; `nxr-hh3kwy` removes the provisional marks and documents it in the guide.
+- Line 25 (warm-cache limit on same-folder `build` refusal, provisional): stands for v1; `nxr-hh3kwy` documents it in the user-facing guide.
+- Line 27 (`e2e-stable` / `e2e-msrv` CI workflow verification): tracked in `nxr-vqe9kb` under milestone 1.0 (`nxr-nm0jd6`, tagged `maintainer`) to verify once pushed.
+- Line 30 (`kept/nxr-ffjvc9-shared-inspector` branch): deleted (`git branch -D kept/nxr-ffjvc9-shared-inspector`, was `14c0e87`).
+- All other lines stand. `nxr-hh3kwy` is added as a blocker on `nxr-nm0jd6`.
