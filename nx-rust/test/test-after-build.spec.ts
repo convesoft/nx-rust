@@ -134,14 +134,15 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
       try {
         const run = nx(
           workspace,
-          ["run-many", "-t", "build", "test", "-p", "app", ...flags],
+          ["run-many", "-t", "build", "test", "-p", "app", "--batch=false", ...flags],
           hold.env,
         );
         await hold.held();
-        // While the cargo call of app:build waits, no cargo test starts. Without
-        // the dependency, Nx's per-task scheduling (--batch=false) starts
-        // app:test before the first poll of held(), well within the hold; this
-        // batched run does not start it early either way (nxr-7v04ge).
+        // While the cargo call of app:build waits, no cargo test starts. The
+        // run schedules task by task (--batch=false): without the dependency,
+        // Nx then starts app:test before the first poll of held(), while a run
+        // that prefers batches holds app:test back either way, so that only
+        // this run shows the order (nxr-7v04ge).
         const early = await within(1000, () =>
           calls(workspace).some((call) => call.startsWith("test")),
         );
@@ -150,7 +151,14 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
 
         expect(early).toBe(false);
         expect(status).toBe(0);
-        expect(calls(workspace)).toEqual([buildCall, ...testCalls]);
+        // Task by task, each build that app:test waits for, app's among them,
+        // runs its own cargo call of the group's command, and all of them run
+        // before cargo test.
+        const log = calls(workspace);
+        const builds = log.slice(0, -testCalls.length);
+        expect(log.slice(builds.length)).toEqual(testCalls);
+        expect(builds).not.toHaveLength(0);
+        expect(builds).toEqual(builds.map(() => buildCall));
         expect(output).toMatch(/test runs_the_executable_that_cargo_test_built \.\.\. ok/);
         // The artifact directory holds what cargo test wrote last, as plain
         // cargo build and then cargo test leave it (VER-CARGO-UNCHANGED).
