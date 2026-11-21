@@ -1,12 +1,17 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  allOf,
+  type CargoCall,
+  cargoIn,
   git,
   HARNESS_TIMEOUT,
   isProbe,
   nxRelease,
+  plainCrate,
   publishCalls,
   type PublishCopy,
+  publishList,
   registryCalls,
   trackedFiles,
   withPublishCopy,
@@ -21,7 +26,29 @@ import {
 // by the registry, its proxy, which refuses every other host, and
 // `CARGO_REGISTRY_DEFAULT`, which chooses the target registry, so that the
 // executor runs no probe. No test reaches a real registry, and no cargo call
-// that the wrapper logs carries `--registry crates-io`.
+// that the wrapper logs carries `--registry crates-io`. The cases of a
+// crate's dotenv file leave `CARGO_REGISTRY_DEFAULT` unset, so that the
+// file's value reaches the task.
+
+/**
+ * The cargo calls that the wrapper logged in the copy other than those of
+ * graph creation, which name the manifest with `--manifest-path`. The
+ * version actions, which Nx loads in its own process for every release
+ * command, ask once for the report of each Cargo workspace in its root
+ * folder, as the executor asks for its own reports, without
+ * `--manifest-path`.
+ */
+function nonGraphCargoCalls(copy: PublishCopy): CargoCall[] {
+  return copy.workspace
+    .cargoCalls()
+    .filter((call) => !(call.args[0] === "metadata" && call.args.includes("--manifest-path")));
+}
+
+/** The report of each Cargo workspace of the fixture, as the version actions ask for it. */
+const versionActionReports: CargoCall[] = ["rust", "tools"].map((cwd) => ({
+  cwd,
+  args: ["metadata", "--format-version", "1", "--no-deps"],
+}));
 
 /** Bumps `pub-base` to 0.2.0, which bumps `pub-core` and `pub-tool` as its dependents, and commits and tags it. */
 async function bumpBase(copy: PublishCopy): Promise<void> {
@@ -147,4 +174,148 @@ describe("nx release publish --dry-run", () => {
     },
     HARNESS_TIMEOUT * 2,
   );
+  describe("a crate whose dotenv file builds its registry from another variable", () => {
+    // Nothing in the command's environment or Cargo's configuration chooses
+    // a registry, so the value of the crate's dotenv file reaches its task.
+    const noDefault = { registryDefault: null, home: "no-default" } as const;
+    const modes: Record<string, string>[] = [{}, { NX_BATCH_MODE: "false" }];
+    const dotenvFile = "rust/crates/base/.env.nx-release-publish";
+
+    it(
+      "fails the crate's task before any cargo command, alone and in a batch, where the variable's value depends on how the task runs",
+      async () => {
+        const files = allOf(publishList("rust/crates/base/Cargo.toml", ["official"]), {
+          [dotenvFile]: "CARGO_REGISTRY_DEFAULT=team-${NX_TASK_TARGET_CONFIGURATION}\n",
+        });
+        await withPublishCopy({ files, registryEnv: noDefault }, async (copy) => {
+          for (const mode of modes) {
+            copy.workspace.cargo.clear();
+
+            const { status, output } = await nxRelease(
+              copy,
+              ["publish", "--dry-run", "--projects", "pub-base"],
+              { NX_TASK_TARGET_CONFIGURATION: "release", ...mode },
+            );
+
+            expect({ mode, status, output }).toMatchObject({ mode, status: 1 });
+            expect(output).toContain(
+              `pub-base:nx-release-publish: ${dotenvFile} makes Nx look up NX_TASK_TARGET_CONFIGURATION where it expands CARGO_REGISTRY_DEFAULT, and NX_TASK_TARGET_CONFIGURATION has a value there that depends on how the task runs`,
+            );
+            // Neither the expanded value nor the placeholder of a batch
+            // reaches a diagnostic, and the executor runs no cargo command:
+            // the only calls besides graph creation's are the version
+            // actions' reports, one per workspace.
+            expect(output).not.toContain("team-");
+            expect(nonGraphCargoCalls(copy)).toEqual(versionActionReports);
+            expect(copy.registry.allUploads()).toEqual([]);
+          }
+        });
+      },
+      HARNESS_TIMEOUT * 2,
+    );
+
+    it(
+      "fails that crate and its dependents in a batch, where it depends on another crate of the repository, and verifies an unrelated crate beside it, which without a batch stops by the accepted rule for a crate of another run",
+      async () => {
+        const coreFile = "rust/crates/core/.env.nx-release-publish";
+        const refusal = `pub-core:nx-release-publish: ${coreFile} makes Nx look up NX_TASK_TARGET_CONFIGURATION where it expands CARGO_REGISTRY_DEFAULT`;
+        const files = allOf(
+          plainCrate,
+          withReleaseGroups({ crates: ["pub-base", "pub-core", "pub-tool", "pub-plain"] }),
+          {
+            [coreFile]: "CARGO_REGISTRY_DEFAULT=team-${NX_TASK_TARGET_CONFIGURATION}\n",
+          },
+        );
+        const relock = (copy: PublishCopy) => {
+          const { status, output } = cargoIn(copy, "rust", "generate-lockfile");
+          expect({ status, output }).toMatchObject({ status: 0 });
+        };
+        const run = (copy: PublishCopy, mode: Record<string, string>) =>
+          nxRelease(copy, ["publish", "--dry-run", "--projects", "pub-core,pub-plain,pub-tool"], {
+            NX_TASK_TARGET_CONFIGURATION: "release",
+            ...mode,
+          });
+        await withPublishCopy(
+          { files, registryEnv: { registryDefault: null, home: "default" }, prepare: relock },
+          async (copy) => {
+            // In a batch, pub-core is a task of this run that failed: it
+            // stops neither pub-plain nor the run, and pub-tool, which needs
+            // it, fails before its call.
+            const batch = await run(copy, {});
+
+            expect(batch).toMatchObject({ status: 1 });
+            expect(batch.output).toContain(refusal);
+            expect(batch.output).toContain(
+              "pub-tool:nx-release-publish: pub-tool needs pub-core 0.1.0, which pub-core:nx-release-publish would publish, and that task failed in this run, so @convesoft/nx-rust can tell neither where pub-core goes nor whether it is there",
+            );
+            expect(batch.output).not.toContain("team-");
+            expect(batch.output).not.toContain("uploads nothing of this run");
+            expect(publishCalls(copy)).toEqual([
+              {
+                cwd: "rust",
+                flags: ["publish", "--dry-run", "--locked", "--registry", "nx-rust-test"],
+                crates: ["pub-plain"],
+              },
+            ]);
+            expect(batch.output).toContain("Uploading pub-plain v0.1.0");
+
+            // Without a batch, pub-core's task is one of another run, whose
+            // environment the task of pub-plain cannot rebuild, so the checks
+            // before the first call stop every task, as for any crate of
+            // another run that depends on a crate of the repository and whose
+            // dotenv files give other Cargo settings (`DES-RELEASE`, "Checks
+            // before the first call"). This pins that accepted rule; it is not
+            // a defect.
+            copy.workspace.cargo.clear();
+            const alone = await run(copy, { NX_BATCH_MODE: "false" });
+
+            expect(alone).toMatchObject({ status: 1 });
+            expect(alone.output).toContain(refusal);
+            expect(alone.output).not.toContain("team-");
+            expect(alone.output).toContain(
+              "pub-plain:nx-release-publish: @convesoft/nx-rust uploads nothing of this run",
+            );
+            expect(alone.output).toContain(
+              "pub-core:nx-release-publish: pub-core depends on pub-base, and Nx runs pub-core:nx-release-publish on its own, so @convesoft/nx-rust cannot rebuild its environment",
+            );
+            expect(publishCalls(copy)).toEqual([]);
+            expect(copy.registry.allUploads()).toEqual([]);
+          },
+        );
+      },
+      HARNESS_TIMEOUT * 2,
+    );
+
+    it(
+      "verifies the crate, alone and in a batch, where no variable that the file refers to depends on how the task runs",
+      async () => {
+        const files = {
+          [dotenvFile]: "CARGO_REGISTRY_DEFAULT=${NX_RUST_TEST_TEAM:-nx-rust-test}\n",
+        };
+        await withPublishCopy({ files, registryEnv: noDefault }, async (copy) => {
+          for (const mode of modes) {
+            copy.workspace.cargo.clear();
+
+            const { status, output } = await nxRelease(
+              copy,
+              ["publish", "--dry-run", "--projects", "pub-base"],
+              { NX_TASK_TARGET_CONFIGURATION: "release", ...mode },
+            );
+
+            expect({ mode, status, output }).toMatchObject({ mode, status: 0 });
+            expect(registryCalls(copy).filter(isProbe)).toEqual([]);
+            expect(publishCalls(copy)).toEqual([
+              {
+                cwd: "rust",
+                flags: ["publish", "--dry-run", "--locked", "--registry", "nx-rust-test"],
+                crates: ["pub-base"],
+              },
+            ]);
+            expect(copy.registry.allUploads()).toEqual([]);
+          }
+        });
+      },
+      HARNESS_TIMEOUT * 2,
+    );
+  });
 });

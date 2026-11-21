@@ -36,7 +36,9 @@ export function createDotenvStore(context: ExecutorContext): DotenvStore {
 /**
  * The other `nx-release-publish` tasks of the run's task graph, those of
  * crates whose tasks the executor did not receive, as when Nx runs each
- * task on its own (`DES-RELEASE`, "Checks before the first call"). Each
+ * task on its own (`DES-RELEASE`, "Checks before the first call"): never
+ * one of `received`, the tasks that it received, also those that failed
+ * before they were prepared. Each
  * gets the environment of a received task whose dotenv files give the
  * same Cargo settings (**A dependency's environment**), or, where none
  * does, the first one's, and says why it is foreign.
@@ -45,10 +47,10 @@ export function otherRunTasks(
   dotenvStore: DotenvStore,
   crateStore: CrateStore,
   tasks: readonly Prepared[],
+  received: ReadonlySet<string>,
   othersByFolder: Map<string, Other>,
 ): Other[] {
   const [first] = tasks;
-  const received = new Set(tasks.map((task) => task.id));
   const others: Other[] = [];
   if (first === undefined) {
     return others;

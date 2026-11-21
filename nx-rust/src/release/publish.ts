@@ -59,6 +59,7 @@ import {
   npmOptions,
   publishedElsewhere,
   publishFirstMessage,
+  refusedDependencyMessage,
   registryOptionMessage,
   unpublishedMessage,
 } from "./publish-messages";
@@ -179,12 +180,13 @@ export async function* publishTasks(
     };
   };
   try {
-    const publisher = new Publisher(run);
+    const publisher = new Publisher(run, inputs);
     const prepared: Prepared[] = [];
     for (const input of inputs) {
       const start = Date.now();
       const outcome = publisher.prepare(input, start);
       if ("failed" in outcome) {
+        publisher.refuse(input);
         yield report(input.id, start, false, outcome.failed);
       } else {
         prepared.push(outcome);
@@ -215,8 +217,20 @@ class Publisher {
   private byFolder = new Map<string, Prepared>();
   /** The other tasks of the run, by the real path of their crate's folder (`otherRunTasks`). */
   private othersByFolder = new Map<string, Other>();
+  /** The ids of every task that the executor received, prepared or refused. */
+  private readonly received: ReadonlySet<string>;
+  /**
+   * The tasks that the executor received and that failed before their
+   * crate was read ({@link prepare}), by their label, under the real path of
+   * their crate's folder as the project graph names it.
+   */
+  private readonly refused = new Map<string, string>();
 
-  constructor(private readonly run: PublishRun) {
+  constructor(
+    private readonly run: PublishRun,
+    inputs: readonly PublishInput[],
+  ) {
+    this.received = new Set(inputs.map((input) => input.id));
     this.root = run.context.root;
     this.executor = {
       name: releasePublishExecutor,
@@ -226,6 +240,20 @@ class Publisher {
     this.crates = createCrateStore(run.context);
     this.dotenv = createDotenvStore(run.context);
     this.registry = createRegistryStore(run.context.root, run.announce);
+  }
+
+  /**
+   * Records a task that failed {@link prepare}: it stays a task that this
+   * executor received and failed, never one of another run
+   * (`otherRunTasks`), and a crate that depends on its crate fails before
+   * its call (`DES-RELEASE`, "Dotenv files").
+   */
+  refuse(input: PublishInput): void {
+    const project = this.run.context.projectsConfigurations?.projects?.[input.task.target.project];
+    const cargo = project === undefined ? undefined : cargoMetadataOf(project);
+    if (cargo?.packageName !== undefined) {
+      this.refused.set(realPath(join(this.root, dirname(cargo.manifest))), labelOf(input.task));
+    }
   }
 
   /**
@@ -348,7 +376,7 @@ class Publisher {
     // a crate of the run cannot be established, nothing is uploaded.
     const disagreements = await this.disagreements(
       targeted,
-      otherRunTasks(this.dotenv, this.crates, tasks, this.othersByFolder),
+      otherRunTasks(this.dotenv, this.crates, tasks, this.received, this.othersByFolder),
     );
     if (disagreements.length > 0) {
       for (const task of targeted) {
@@ -423,9 +451,11 @@ class Publisher {
     for (const link of links) {
       if (
         unpublishedMessage(task, link, relativePath(this.root, link.dependency.manifest)) !==
-        undefined
+          undefined ||
+        this.refused.has(link.dependency.folder)
       ) {
-        // Failed by the check _Unpublished dependencies_ before the crate's call.
+        // Failed by the check _Unpublished dependencies_, or for a dependency
+        // whose task failed in this run, before the crate's call.
         continue;
       }
       const established = await this.dependencyTarget(task, link.dependency);
@@ -659,6 +689,12 @@ class Publisher {
       );
       if (unpublished !== undefined) {
         return { kind: "failed", lines: [unpublished] };
+      }
+    }
+    for (const { dependency } of links) {
+      const refused = this.refused.get(dependency.folder);
+      if (refused !== undefined) {
+        return { kind: "failed", lines: [refusedDependencyMessage(task, dependency, refused)] };
       }
     }
     let notVerified: Outcome | undefined;

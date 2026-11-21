@@ -121,6 +121,20 @@ export function notVerifiedMessage(
   return `${task.label}: ${task.crate.name} ${task.crate.version} was not verified, because it needs ${dependency.name} ${dependency.version}, which ${dependencyTask} would publish in another cargo call, and a dry run of one cargo call cannot verify a crate against a version that another call would publish. Nothing was uploaded. The real nx release publish checks before the upload that ${dependency.name} ${dependency.version} is in the registry.`;
 }
 
+/**
+ * A crate of the run that depends on a crate whose task the executor
+ * received and failed before it read that crate, as by the dotenv check
+ * (`DES-RELEASE`, "Dotenv files"): the dependency's registry and version cannot be
+ * told without that task's environment, so the crate is not published.
+ */
+export function refusedDependencyMessage(
+  task: Prepared,
+  dependency: Crate,
+  refused: string,
+): string {
+  return `${task.label}: ${task.crate.name} needs ${dependency.name} ${dependency.version}, which ${refused} would publish, and that task failed in this run, so @convesoft/nx-rust can tell neither where ${dependency.name} goes nor whether it is there, does not publish ${task.crate.name}, and nothing was uploaded for it. Correct what ${refused} reports and run nx release publish again.`;
+}
+
 export function publishFirstMessage(
   task: Prepared,
   dependency: Crate,
