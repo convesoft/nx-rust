@@ -19,6 +19,6 @@ Context: `nxr-vk19v5` line 27 notes that `.github/workflows/ci.yml` cannot be ve
 - [ ] Confirm `e2e-stable` and `e2e-msrv` start in parallel, `./.github/actions/e2e` resolves after checkout, and each job prints its expected `cargo --version`
 - [ ] Confirm the required check `End-to-end tests` reports both results and satisfies branch protection on `main`
 - [ ] Cancel one toolchain job (`e2e-stable` or `e2e-msrv`) once on a test PR/push and confirm `End-to-end tests` fails
-- [ ] Confirm the `Build, lint, test and format` job runs the real-tool tests (`cargo-nextest`, `cargo-hakari`, `wasm-bindgen`, `wasm32-unknown-unknown`) added in `nxr-27zbta` without skipping them
+- [ ] Confirm the `Build, lint, test and format` job runs the real-tool tests (`cargo-nextest`, `cargo-hakari`, `wasm-bindgen`, `wasm32-unknown-unknown`) added in `nxr-27zbta` without skipping them, including the cases of `affected-coverage.spec.ts` (cargo-affected with the `llvm-tools` component, which `nxr-27zbta` also installs) and the hakari drift cases of `hakari-runs.spec.ts`, which ran nowhere before; note how long the job takes against its 35-minute limit and whether the cargo-affected build was restored from the cache on the second run
 
 Done when: all four checks above are observed on a real GitHub Actions run and recorded in `## Summary of Changes`.
