@@ -1,6 +1,6 @@
 ---
 title: Make the harness's terminal runs reach Nx's terminal UI
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:
@@ -19,6 +19,6 @@ Context: `FixtureWorkspace.nxInTerminal` runs Nx through util-linux's `script`, 
 - [ ] Find why the terminal UI does not exit under `script` with a size (input on the pseudo-terminal, the countdown, Nx's own handling) and make `nxInTerminal` drive it to the end without waiting for the timeout
 - [ ] Give the terminal-UI and `dynamic` ways of running in `batch-runs.spec.ts` (and `dotenv-equivalence.spec.ts` if it has them) a size, and assert that Nx did not print the fallback warning
 - [ ] Rerun the environment comparison of `EVD-NX-24-BATCHES`, "Task environment", through the real terminal UI and correct that item where the result differs
-- [ ] Add a terminal-UI case to the tasks-left-for-a-following-batch tests in `nx-rust/test/batch-deferral.spec.ts` once the terminal UI exits on its own
+- [ ] Once the terminal UI exits on its own, add one terminal-UI case to `nx-rust/test/batch-builds.spec.ts` (formerly `batch-deferral.spec.ts`) for a batch with two `build` groups. nxr-yfh7zh removed the leaving of tasks for a following batch, so the case this item first named no longer exists; say in the summary if the new case would show nothing that the other cases do not, and leave it out then
 
 Lead from the review of nxr-k63csj: the terminal UI ran a batch that left tasks out, showed both builds complete and exited with status 0 with `analytics: false` in `nx.json`, `TERM=xterm-256color`, a terminal of 120 by 35 columns and rows, and `--tui-auto-exit=true`. Compare that setup with `nxInTerminal`, `TERM` first.

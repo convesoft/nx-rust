@@ -1,6 +1,6 @@
 ---
 title: Cut the startup overhead of the end-to-end suite and run its two toolchains in parallel in CI
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:

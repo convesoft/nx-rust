@@ -3,6 +3,8 @@ title: Keep a cached task outside the plugin from storing what it made of the ex
 status: todo
 type: bug
 parent: nxr-e2z8sz
+blocked_by:
+  - nxr-h411yj
 discovered_from: nxr-yfh7zh
 created_at: 2026-11-20T16:32:35Z
 ---

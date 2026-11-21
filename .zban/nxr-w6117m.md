@@ -1,6 +1,6 @@
 ---
 title: Split monolithic modules (target-defaults, task, publish, version-actions) by concern
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:
