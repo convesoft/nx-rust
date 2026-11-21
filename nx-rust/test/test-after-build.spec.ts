@@ -1,6 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { join, sep } from "node:path";
 import {
   Env,
   FixtureWorkspace,
@@ -160,8 +160,10 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
         expect(builds).not.toHaveLength(0);
         expect(builds).toEqual(builds.map(() => buildCall));
         expect(output).toMatch(/test runs_the_executable_that_cargo_test_built \.\.\. ok/);
-        // The artifact directory holds what cargo test wrote last, as plain
-        // cargo build and then cargo test leave it (VER-CARGO-UNCHANGED).
+        // Task by task, the artifact directory holds what cargo test wrote
+        // last, as plain cargo build and then cargo test leave it; a test
+        // run on its own puts back nothing (DES-BATCH, "Files that a test
+        // batch puts back").
         expect(prints(workspace)).toBe("extra");
 
         // The entry stored for app:build holds what cargo build writes. A run
@@ -354,6 +356,219 @@ describe("a crate whose cargo test replaces the executable of its build", () => 
         // app:build, which may or may not have reached its cargo call by then.
         expect(calls(workspace).filter((call) => call.startsWith("test"))).toEqual([]);
       } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+});
+
+/**
+ * A cached JS target `pack` that depends on app's build, and on its test so
+ * that it runs after the test batch, with app as an implicit dependency and
+ * the inputs `default` and `^default`, and writes what app's executable
+ * prints to `dist/out.txt` (EVD-BATCH-FILES-ON-DISK).
+ */
+const pack = {
+  "tools/pack/project.json": `${JSON.stringify({
+    name: "pack",
+    implicitDependencies: ["app"],
+    targets: {
+      pack: {
+        command: "mkdir -p dist && ./rust/target/debug/app > dist/out.txt",
+        options: { cwd: "{workspaceRoot}" },
+        cache: true,
+        inputs: ["default", "^default"],
+        outputs: ["{workspaceRoot}/dist"],
+        dependsOn: [
+          { target: "build", projects: ["app"] },
+          { target: "test", projects: ["app"] },
+        ],
+      },
+    },
+  })}\n`,
+};
+
+/** What `pack` wrote, or `missing`. */
+function packed(workspace: FixtureWorkspace): string {
+  const file = join(workspace.root, "dist", "out.txt");
+  return existsSync(file) ? readFileSync(file, "utf8").trim() : "missing";
+}
+
+/** The stages left in the artifact directory, in which a test group keeps files. */
+function stagesLeft(workspace: FixtureWorkspace): string[] {
+  const folder = join(workspace.root, "rust", "target", ".nx-rust-stage");
+  return existsSync(folder) ? readdirSync(folder) : [];
+}
+
+/** The files that a running test group keeps in its stage, relative to the stage. */
+function keptFiles(workspace: FixtureWorkspace): string[] {
+  return stagesLeft(workspace).flatMap((stage) => {
+    const folder = join(workspace.root, "rust", "target", ".nx-rust-stage", stage);
+    return readdirSync(folder, { recursive: true, encoding: "utf8" })
+      .filter((name) => !name.startsWith(".") && statSync(join(folder, name)).isFile())
+      .map((name) => name.split(sep).join("/"))
+      .sort();
+  });
+}
+
+/** The tasks that Nx lists as failed at the end of a run. */
+function failedTasks(output: string): string[] {
+  const list = /Failed tasks:\n\n((?:- \S+\n?)+)/.exec(output)?.[1] ?? "";
+  return [...list.matchAll(/^- (\S+)$/gm)].map((match) => match[1]).sort();
+}
+
+/** The lines in which plain cargo, run in the Cargo workspace, says that it compiles a crate. */
+function plainCompiles(workspace: FixtureWorkspace, ...args: string[]): string[] {
+  const run = spawnSync("cargo", args, {
+    cwd: join(workspace.root, "rust"),
+    env: testEnvironment(),
+    encoding: "utf8",
+  });
+  expect({ status: run.status, stderr: run.status === 0 ? "" : run.stderr }).toEqual({
+    status: 0,
+    stderr: "",
+  });
+  return run.stderr.split("\n").filter((line) => /^\s*Compiling /.test(line));
+}
+
+// VER-BATCHING, "Files that a test batch puts back" of DES-BATCH: a test
+// batch puts back the executables of the command's builds when it ends, so
+// that a cached task outside the plugin that depends on such a build and
+// starts after the batch reads what the build stored (ADR-TEST-AFTER-BUILD,
+// nxr-5hzxra).
+describe("a test batch after the builds of its command", () => {
+  it(
+    "puts back the executable of build, which a cached task outside the plugin then reads and stores, and leaves plain cargo nothing more to compile",
+    async () => {
+      const workspace = FixtureWorkspace.create("binary-tests", pack);
+      try {
+        const run = await nx(workspace, ["run-many", "-t", "build", "test", "pack"]);
+        expect({ status: run.status, output: run.status === 0 ? "" : run.output }).toEqual({
+          status: 0,
+          output: "",
+        });
+        // The integration test ran the executable of cargo test.
+        expect(run.output).toMatch(/test runs_the_executable_that_cargo_test_built \.\.\. ok/);
+        expect({
+          app: prints(workspace),
+          pack: packed(workspace),
+          stages: stagesLeft(workspace),
+        }).toEqual({ app: "plain", pack: "plain", stages: [] });
+
+        // The stored pack matches the stored build of app, which Nx restores
+        // with it.
+        rmSync(join(workspace.root, "dist"), { recursive: true, force: true });
+        rmSync(join(workspace.root, executable));
+        const again = await nx(workspace, ["run", "pack:pack"]);
+        expect(again.status).toBe(0);
+        expect(again.output).toMatch(/nx run pack:pack\s+\[local cache\]/);
+        expect(restored(again.output, "app:build")).toBe(true);
+        expect({ app: prints(workspace), pack: packed(workspace) }).toEqual({
+          app: "plain",
+          pack: "plain",
+        });
+
+        // Plain cargo compiles nothing, and links the executable of each
+        // command again, as after plain cargo build and cargo test
+        // (REQ-CARGO-UNCHANGED).
+        expect(plainCompiles(workspace, "test", "--workspace", "--no-run")).toEqual([]);
+        expect(prints(workspace)).toBe("extra");
+        expect(plainCompiles(workspace, "build", "--workspace")).toEqual([]);
+        expect(prints(workspace)).toBe("plain");
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  // Cargo builds for the host's triple where its configuration says
+  // host-tuple, into that triple's folder, which a build that names the
+  // triple stores (DES-BATCH, "Files that a test batch puts back").
+  it(
+    "puts back the executable of a build that names the host's triple where Cargo's configuration says host-tuple",
+    async () => {
+      const host = /^host: (\S+)$/m.exec(
+        execFileSync("rustc", ["-vV"], { encoding: "utf8" }),
+      )?.[1] as string;
+      const workspace = FixtureWorkspace.create("binary-tests", {
+        "rust/.cargo/config.toml": '[build]\ntarget = "host-tuple"\n',
+        "rust/crates/app/Cargo.toml": (manifest: string) =>
+          `${manifest}\n[package.metadata.nx.targets.build.options]\ntargetTriple = "${host}"\n`,
+      });
+      try {
+        const run = await nx(workspace, ["run-many", "-t", "build", "test", "-p", "app"]);
+        expect({ status: run.status, output: run.status === 0 ? "" : run.output }).toEqual({
+          status: 0,
+          output: "",
+        });
+        expect(run.output).toMatch(/test runs_the_executable_that_cargo_test_built \.\.\. ok/);
+        expect(prints(workspace, `rust/target/${host}/debug/app`)).toBe("plain");
+        expect(stagesLeft(workspace)).toEqual([]);
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it.each<[string, (workspace: FixtureWorkspace) => void, RegExp]>([
+    [
+      "the kept executable changed while the tests ran",
+      (workspace) => appendFileSync(join(workspace.root, executable), "written in place"),
+      /found that \S*rust\/target\/debug\/app, which app:build stores, was written in place or had its permissions changed while the group's cargo commands ran, so that it could not keep the file as app:build left it\./,
+    ],
+    [
+      "the executable cannot be put back",
+      (workspace) => {
+        for (const stage of stagesLeft(workspace)) {
+          rmSync(join(workspace.root, "rust", "target", ".nx-rust-stage", stage, "debug", "app"));
+        }
+      },
+      /could not put back \S*rust\/target\/debug\/app, which app:build stores, from \S*\/\.nx-rust-stage\/\d+-\d+\/debug\/app: ENOENT/,
+    ],
+  ])(
+    "fails every task of its group where %s",
+    async (_case, meddle, problem) => {
+      const workspace = FixtureWorkspace.create("binary-tests", pack);
+      const hold = holdCargo("test");
+      try {
+        const run = nx(workspace, ["run-many", "-t", "build", "test", "pack"], hold.env);
+        // The group, which selects the whole workspace, has kept in its stage
+        // the executables of the builds whose crates its cargo test builds
+        // for their tests, before its first cargo test; gated's binary needs
+        // a feature that no run turns on.
+        await hold.held();
+        expect(keptFiles(workspace)).toEqual(["debug/app", "debug/benched", "debug/harnessless"]);
+        meddle(workspace);
+        hold.release();
+        const { status, output } = await run;
+        expect(status).toBe(1);
+        expect(output).toMatch(problem);
+        expect(output).toContain(
+          "The cargo commands of this task's group link again the files that builds of this command store, and the plugin keeps those files in a stage of the artifact directory and puts them back when the group ends, so that tasks that depend on the builds read what Nx stored for them; where it cannot, the tasks of the group fail. Check that the artifact directory can be written to and has space, and run the command again.",
+        );
+        // Every test of the workspace shares the group, and every one fails
+        // with the message; pack, which depends on app:test, does not run.
+        const tests = readdirSync(join(workspace.root, "rust", "crates"))
+          .map((name) => `${name}:test`)
+          .sort();
+        expect(failedTasks(output)).toEqual(tests);
+        for (const test of tests) {
+          expect(output).toMatch(new RegExp(`${test}: @convesoft/nx-rust ${problem.source}`));
+        }
+        expect(packed(workspace)).toBe("missing");
+        expect(stagesLeft(workspace)).toEqual([]);
+        // Nx stored no result for app:test, with NX_CACHE_FAILURES unset: it
+        // runs again.
+        workspace.cargo.clear();
+        const again = await nx(workspace, ["run", "app:test"]);
+        expect(again.status).toBe(0);
+        expect(restored(again.output, "app:test")).toBe(false);
+      } finally {
+        hold.release();
+        hold.remove();
         workspace.remove();
       }
     },

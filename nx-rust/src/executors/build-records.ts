@@ -121,18 +121,26 @@ function turnedOnFeature(entry: string, optional: ReadonlySet<string>): string |
  * the task's own triple, or else those that `build.target` in the
  * configuration files that cargo reads in `workspaceRoot` and
  * `CARGO_BUILD_TARGET` in the task's environment pick, read as for the
- * outputs of `build` ({@link pickedTriples}, `DES-OUTPUTS`).
+ * outputs of `build` ({@link pickedTriples}, `DES-OUTPUTS`). Where `host`
+ * is given, `host-tuple`, in the option or the configuration, stands for
+ * it, as cargo replaces it.
  */
 export function callTriples(
   selection: BuildSelection,
   env: Readonly<Record<string, string | undefined>>,
   workspaceRoot: string,
+  host?: string,
 ): PickedTriples {
   const triple = selection.targetTriple;
   if (typeof triple === "string" && triple !== "") {
-    return { kind: "triples", triples: [triple], files: [], fromEnv: false };
+    return {
+      kind: "triples",
+      triples: [triple === "host-tuple" && host !== undefined ? host : triple],
+      files: [],
+      fromEnv: false,
+    };
   }
-  return pickedTriples(workspaceRoot, env);
+  return pickedTriples(workspaceRoot, env, host);
 }
 
 /**

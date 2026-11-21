@@ -154,6 +154,18 @@ export function targetOutputs(
   if (target !== "build" || pkg === undefined) {
     return [];
   }
+  const files = finalFileNames(pkg);
+  return folders.flatMap((folder) => files.map((file) => `${folder}/${profileFolder}/${file}`));
+}
+
+/**
+ * The names of a crate's final artifacts in a profile folder, which the
+ * outputs of its `build` name ({@link targetOutputs}, `DES-OUTPUTS`): the
+ * executable of each binary target, and the `cdylib` and `staticlib` files
+ * of the library, a `cdylib` named for both Linux and macOS.
+ */
+// @mara implements DES-OUTPUTS
+export function finalFileNames(pkg: CargoPackage): string[] {
   const files: string[] = [];
   for (const cargoTarget of pkg.targets) {
     if (cargoTarget.kind.includes("bin")) {
@@ -167,5 +179,5 @@ export function targetOutputs(
       files.push(`lib${library}.a`);
     }
   }
-  return folders.flatMap((folder) => files.map((file) => `${folder}/${profileFolder}/${file}`));
+  return files;
 }

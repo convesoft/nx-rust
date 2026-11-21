@@ -30,7 +30,12 @@ const ownerFileName = ".nx-rust-owner";
 /** A stage's folder name: the owning process's id and its counter. */
 const stageNamePattern = /^(\d+)-(\d+)$/;
 
-/** Where a staged command links its final artifacts, and the directories it moves them to. */
+/**
+ * Where a staged command links its final artifacts, and the directories it
+ * moves them to; or where a `test` or `bench` group keeps the files of the
+ * command's builds while its commands run (`DES-BATCH`, "Files that a test
+ * batch puts back").
+ */
 export interface Stage {
   /** The stage, `<artifact directory>/.nx-rust-stage/<process id>-<counter>`. */
   path: string;
@@ -89,7 +94,8 @@ let counter = 0;
 
 /**
  * Makes a new, empty stage in the artifact directory of `directories` for
- * this process (`DES-BATCH`, "Staged builds"), after removing the stages
+ * this process (`DES-BATCH`, "Staged builds", and "Files that a test batch
+ * puts back" for a test group's kept files), after removing the stages
  * that processes which no longer run left there ({@link removeStaleStages}).
  * A folder of this process's id that this process did not make is the
  * leftover of an earlier process with the same id, and is removed too.
@@ -267,7 +273,8 @@ export function stagedFinalFiles(
 }
 
 /**
- * Moves each staged file to its place in the artifact directory, by rename,
+ * Moves each staged file to its place in the artifact directory, a staged
+ * build's file or a test group's kept one (`DES-BATCH`), by rename,
  * which replaces a file there in one step, or, where the two lie on
  * different file systems, by a copy beside the place that is then renamed
  * onto it. Nothing outside the stage is taken and nothing outside the
@@ -361,6 +368,20 @@ export function processStart(pid: number): string | undefined {
   });
   const started = run.status === 0 ? run.stdout.trim() : "";
   return started === "" ? undefined : `lstart:${started}`;
+}
+
+/**
+ * Where `file`, a path inside the stage's artifact directory, lies in the
+ * stage: at the same path relative to the artifact directory, as a staged
+ * command's files lie relative to the stage. `undefined` for a file
+ * outside the artifact directory, or in its folder of stages.
+ */
+export function pathInStage(stage: Stage, file: string): string | undefined {
+  const inside = withinFolder(stage.directories.artifact, file);
+  return inside === undefined ||
+    withinFolder(join(stage.directories.artifact, stageFolderName), file) !== undefined
+    ? undefined
+    : join(stage.path, inside);
 }
 
 /** Whether `path` is a stage of `artifactDirectory`. */

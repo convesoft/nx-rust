@@ -62,15 +62,22 @@ type Configured =
  *
  * Files that do not exist or cannot be parsed are skipped: graph creation
  * reports the latter, and cargo fails on them.
+ *
+ * @param host The host's triple, where the caller knows it: `host-tuple`
+ *   then stands for it, as cargo replaces it, and is named.
  */
 // @mara implements DES-OUTPUTS
-export function pickedTriples(workspaceRoot: string, env: NodeJS.ProcessEnv): PickedTriples {
+export function pickedTriples(
+  workspaceRoot: string,
+  env: NodeJS.ProcessEnv,
+  host?: string,
+): PickedTriples {
   const settings: TripleSetting[] = buildSettings(workspaceRoot, env, "target").map(
     ({ file, value, included }) => ({ file, value: tripleValue(value), included }),
   );
   const variable = env.CARGO_BUILD_TARGET;
-  const applied = pick(merge(settings, true), variable);
-  const ignored = pick(merge(settings, false), variable);
+  const applied = pick(merge(settings, true), variable, host);
+  const ignored = pick(merge(settings, false), variable, host);
   if (samePick(applied, ignored)) {
     return applied;
   }
@@ -228,7 +235,11 @@ function merge(all: readonly TripleSetting[], applyIncludes: boolean): Configure
 
 // Applies `CARGO_BUILD_TARGET` to the merged configuration and checks that
 // each triple names a folder.
-function pick(configured: Configured, variable: string | undefined): PickedTriples {
+function pick(
+  configured: Configured,
+  variable: string | undefined,
+  host: string | undefined,
+): PickedTriples {
   const fromEnv = variable !== undefined;
   let triples: string[];
   let files: string[];
@@ -256,6 +267,9 @@ function pick(configured: Configured, variable: string | undefined): PickedTripl
       triples = [variable];
       files = [];
       break;
+  }
+  if (host !== undefined) {
+    triples = triples.map((triple) => (triple === "host-tuple" ? host : triple));
   }
   for (const triple of triples) {
     const reason = unnamedReason(triple);

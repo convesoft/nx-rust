@@ -3,6 +3,7 @@ import { batchRunsVerbosely } from "./cargo-invocation";
 import type { CargoTargetOptions } from "./command";
 import { formGroups, type GroupSelection, planGroups } from "./groups";
 import { batchLiveOutput, type GroupMember, type LiveOutput } from "./group-run";
+import { filesToKeep, keepFiles, putBack } from "./kept-files";
 import { sharedBuildFolders } from "./stage";
 import { runTargetGroup } from "./staged-run";
 import {
@@ -342,26 +343,70 @@ async function runReadyGroup(
         members.push({ task, member: { prepared: task, invocation, context: task.context } });
       }
     });
+    // The files that the command's builds store, which the cargo commands
+    // of a `test` or `bench` group link again, kept so that they are as the
+    // builds left them afterwards (`DES-BATCH`, "Files that a test batch
+    // puts back").
+    const candidates = filesToKeep(
+      members.map(({ member }) => member),
+      members.map(({ task }) => task.id),
+      selection,
+      // Any task's context: its task graph is the command's.
+      group[0].context,
+    );
+    const keeping =
+      "problem" in candidates ? candidates : keepFiles(candidates.files, candidates.directories);
+    if ("problem" in keeping) {
+      const end = Date.now();
+      for (const { task } of members) {
+        reports.push({
+          task: task.id,
+          result: {
+            success: false,
+            status: "failure",
+            terminalOutput: [...head(task), keptFileMessage(task.task, [keeping.problem])].join(
+              "\n",
+            ),
+            startTime: start,
+            endTime: end,
+          },
+        });
+      }
+      return reports;
+    }
     // `napi-build` runs its compile with variables of its own and its
     // post-processing after it, and `wasm-build` the wasm-bindgen CLI after
     // its compile (`DES-NAPI`, `DES-WASM`); a whole-workspace `build` and
     // every such compile build in a stage of their own (`DES-BATCH`,
     // "Staged builds").
-    const results = await runTargetGroup(
-      members.map(({ member }) => member),
-      selection,
-      verbose,
-      live,
-    );
+    let results: Awaited<ReturnType<typeof runTargetGroup>>;
+    let restored: ReturnType<typeof putBack>;
+    try {
+      results = await runTargetGroup(
+        members.map(({ member }) => member),
+        selection,
+        verbose,
+        live,
+      );
+    } finally {
+      restored = putBack(keeping.keeping);
+    }
     const end = Date.now();
+    const { problems, warning } = restored;
+    const failed = problems.length > 0;
     members.forEach(({ task }, index) => {
       const { success, output } = results[index];
       reports.push({
         task: task.id,
         result: {
-          success,
-          status: success ? "success" : "failure",
-          terminalOutput: [...head(task), ...(output === "" ? [] : [output])].join("\n"),
+          success: success && !failed,
+          status: success && !failed ? "success" : "failure",
+          terminalOutput: [
+            ...head(task),
+            ...(output === "" ? [] : [output]),
+            ...(failed ? [keptFileMessage(task.task, problems)] : []),
+            ...(warning === undefined ? [] : [`${task.task}: warning: ${warning}.`]),
+          ].join("\n"),
           startTime: start,
           endTime: end,
         },
@@ -386,6 +431,16 @@ async function runReadyGroup(
       },
     }));
   }
+}
+
+/**
+ * The message of a task whose `test` or `bench` group could not keep, or
+ * put back, the files that the command's builds store (`DES-BATCH`, "Files
+ * that a test batch puts back"; `DES-DIAGNOSTICS`).
+ */
+// @mara implements DES-DIAGNOSTICS
+function keptFileMessage(task: string, problems: readonly string[]): string {
+  return `${task}: @convesoft/nx-rust ${problems.join("; ")}. The cargo commands of this task's group link again the files that builds of this command store, and the plugin keeps those files in a stage of the artifact directory and puts them back when the group ends, so that tasks that depend on the builds read what Nx stored for them; where it cannot, the tasks of the group fail. Check that the artifact directory can be written to and has space, and run the command again.`;
 }
 
 /**

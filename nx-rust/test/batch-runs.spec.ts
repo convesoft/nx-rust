@@ -1007,7 +1007,8 @@ if (chosenToolchain !== undefined && fallbackToolchain !== undefined) {
 
 // binary-tests: every binary prints "plain" as cargo build writes it, and
 // "extra" as cargo test rewrites it in the crates whose test waits for their
-// build (DES-TARGETS); gated's binary needs a feature that no run turns on.
+// build (DES-TARGETS), until a test batch puts back what build stored;
+// gated's binary needs a feature that no run turns on.
 const binaries = ["app", "benched", "harnessless", "showcase", "timed", "unit", "untested"];
 
 /** Runs cargo in binary-tests' Cargo workspace, with nothing logged. */
@@ -1053,8 +1054,10 @@ describe("the two batch executors", () => {
         const { status } = await run;
         expect(status).toBe(0);
         expect(whileHeld.length).toBeGreaterThanOrEqual(waitedBuilds.length);
-        // The artifact directory holds what cargo test wrote last.
-        expect(printed(workspace).app).toBe("extra");
+        // Batched, the test batch puts back what build stored; task by task,
+        // the artifact directory holds what cargo test wrote last (DES-BATCH,
+        // "Files that a test batch puts back").
+        expect(printed(workspace).app).toBe(flags.length > 0 ? "extra" : "plain");
         // Each build entry restores the executable of cargo build.
         for (const name of binaries) {
           rmSync(join(workspace.root, "rust", "target", "debug", name), { force: true });
@@ -1084,9 +1087,9 @@ describe("the two batch executors", () => {
         expect(run.output).toMatch(/Running 11 tasks with @convesoft\/nx-rust:cargo-outputs/);
         expect(run.output).toMatch(/Running \d+ tasks with @convesoft\/nx-rust:cargo\b/);
         expect(run.output).toMatch(/test runs_the_executable_that_cargo_test_built \.\.\. ok/);
-        // The artifact directory holds what cargo test wrote last, as plain
-        // cargo build and then cargo test leave it.
-        expect(printed(workspace).app).toBe("extra");
+        // The test batch put back what build stored (DES-BATCH, "Files that
+        // a test batch puts back").
+        expect(printed(workspace).app).toBe("plain");
 
         for (const name of binaries) {
           rmSync(join(workspace.root, "rust", "target", "debug", name), { force: true });
@@ -1136,7 +1139,9 @@ describe("the two batch executors", () => {
           targets.includes("--exclude-task-dependencies") ? 1 : waitedBuilds.length,
         );
         expect(output).toMatch(/test runs_the_executable_that_cargo_test_built \.\.\. ok/);
-        expect(printed(workspace).app).toBe("extra");
+        // The test batch put back what the command's build stored, also
+        // where the command names test alone or excludes task dependencies.
+        expect(printed(workspace).app).toBe("plain");
         if (targets.includes("--exclude-task-dependencies")) {
           // A run that excludes task dependencies stores what no later run
           // restores (DES-LOCKFILE-HASHING); there is nothing more to compare.
