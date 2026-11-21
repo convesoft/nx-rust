@@ -32,10 +32,18 @@ its `cargo metadata` report, as every stable Cargo before 1.91 does
 
 Checks that need an optional tool (nextest, cargo-affected, cargo-hakari,
 `wasm-bindgen`) run only where that tool is installed, and CI installs all of
-them. The napi CLI is a dev dependency of this repository, which the tests
-link into a fixture's `node_modules`, and the napi crates of the fixtures come
-from a local Cargo registry in the fixture, so those checks need no network
-and always run.
+them, with the `wasm32-unknown-unknown` target and the `llvm-tools` component
+of the toolchain the tests' cargo uses. CI pins each tool to the version that
+the evidence in the docs was gathered with, and `wasm-bindgen` to the version
+that the `wasm-packages` fixture locks; it takes prebuilt releases, and builds
+only cargo-affected, which publishes none, where the cache of GitHub Actions
+has no entry for that version, and restores it otherwise. Each tool sits in a
+folder of its own outside the Cargo home, so that the cases about a missing
+tool can hide it by dropping its folder from `PATH` while `cargo`, `rustc` and
+`sh` stay reachable. The napi CLI is a dev dependency of this repository, which
+the tests link into a fixture's `node_modules`, and the napi crates of the
+fixtures come from a local Cargo registry in the fixture, so those checks need
+no network and always run.
 
 CI runs on Linux only for the moment. The macOS runs are deferred until
 GitHub's macOS runners are usable again ([[ADR-CI-LINUX-ONLY]]), so no check on

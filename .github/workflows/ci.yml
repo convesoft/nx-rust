@@ -25,7 +25,12 @@ jobs:
   check:
     name: Build, lint, test and format
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The tests that need an optional tool, and building cargo-affected on a
+    # cache miss, add to the 10 minutes or so that the rest takes.
+    timeout-minutes: 35
+    env:
+      # The cargo-affected that the steps below build and cache.
+      CARGO_AFFECTED_VERSION: 0.4.1
     steps:
       - uses: actions/checkout@v7
       # Installs the pnpm version that `packageManager` in package.json names.
@@ -36,13 +41,89 @@ jobs:
           cache: pnpm
       # The fixture tests run cargo, and the `lint`, `fmt` and `fmt-check`
       # targets run clippy and rustfmt. `1.91.0` is the toolchain that the
-      # `different-toolchains` fixture pins (nx-rust/test/README.md).
+      # `different-toolchains` fixture pins (nx-rust/test/README.md). The
+      # tests' cargo uses rustup's default, `stable`, so that toolchain gets
+      # the `wasm32-unknown-unknown` target, which the cases that build a wasm
+      # package need, and the `llvm-tools` component, whose llvm-cov and
+      # llvm-profdata cargo-affected runs to collect coverage.
       - name: Install the Rust toolchains
         run: |
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup toolchain install stable --profile minimal \
+            --component clippy,rustfmt,llvm-tools --target wasm32-unknown-unknown
           rustup toolchain install 1.91.0 --profile minimal
           rustup default stable
           cargo --version
+      # CI installs every optional tool, so that the tests that need one run
+      # here instead of skipping (verification.mara.md, "How the plugin is
+      # tested"; nx-rust/test/README.md). Each one is a prebuilt release at a
+      # pinned version: the versions that the docs' evidence was gathered
+      # with, and for wasm-bindgen the version that the `wasm-packages`
+      # fixture locks, the only one its tests accept. Every tool gets a folder
+      # of its own outside the Cargo home, so that the cases about a missing
+      # tool hide it without hiding cargo or rustc. cargo-nextest, which the
+      # tests find only through `cargo nextest`, goes on PATH; the harness
+      # takes the others from the folders that its variables name.
+      - name: Install cargo-nextest, cargo-hakari and wasm-bindgen
+        env:
+          NEXTEST_VERSION: 0.9.152
+          NEXTEST_SHA256: d039b43c3e0958441b6ad0a39c8884d018b3d2e8fb9928f209074b1100b5e17a
+          HAKARI_VERSION: 0.9.39
+          HAKARI_SHA256: 699a3193a9bd1a8d914b970d3f50f3385f24fbd8b1294d0c0ff31fbe7c2c9f48
+          WASM_BINDGEN_VERSION: 0.2.130
+          WASM_BINDGEN_SHA256: 9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f
+        run: |
+          # fetch <url> <sha256>: downloads the archive into RUNNER_TEMP and checks it.
+          fetch() {
+            curl -fsSL -o "$RUNNER_TEMP/${1##*/}" "$1"
+            echo "$2  $RUNNER_TEMP/${1##*/}" | sha256sum -c -
+          }
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools/nextest" "$tools/cargo-hakari" "$tools/wasm-bindgen"
+
+          archive=cargo-nextest-$NEXTEST_VERSION-x86_64-unknown-linux-gnu.tar.gz
+          fetch "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$NEXTEST_VERSION/$archive" "$NEXTEST_SHA256"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$tools/nextest" cargo-nextest
+
+          archive=cargo-hakari-$HAKARI_VERSION-x86_64-unknown-linux-gnu.tar.gz
+          fetch "https://github.com/guppy-rs/guppy/releases/download/cargo-hakari-$HAKARI_VERSION/$archive" "$HAKARI_SHA256"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$tools/cargo-hakari" cargo-hakari
+
+          name=wasm-bindgen-$WASM_BINDGEN_VERSION-x86_64-unknown-linux-musl
+          fetch "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$WASM_BINDGEN_VERSION/$name.tar.gz" "$WASM_BINDGEN_SHA256"
+          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$tools/wasm-bindgen" --strip-components=1 "$name/wasm-bindgen"
+
+          PATH="$tools/nextest:$PATH" cargo nextest --version
+          "$tools/cargo-hakari/cargo-hakari" hakari --version
+          "$tools/wasm-bindgen/wasm-bindgen" --version
+          echo "$tools/nextest" >> "$GITHUB_PATH"
+          echo "NX_RUST_TEST_CARGO_HAKARI=$tools/cargo-hakari" >> "$GITHUB_ENV"
+          echo "NX_RUST_TEST_WASM_BINDGEN=$tools/wasm-bindgen" >> "$GITHUB_ENV"
+      # cargo-affected publishes no prebuilt binaries, so it is built from
+      # crates.io with its own lockfile where the cache of GitHub Actions,
+      # which is scoped by branch and evicts entries, has none for that
+      # version, and restored otherwise. It is saved right after the build,
+      # so that a run whose tests fail keeps it too.
+      - name: Restore cargo-affected
+        id: cargo-affected
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/cargo-affected
+          key: cargo-affected-${{ env.CARGO_AFFECTED_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Build cargo-affected
+        if: steps.cargo-affected.outputs.cache-hit != 'true'
+        run: |
+          cargo install --locked cargo-affected --version "$CARGO_AFFECTED_VERSION" \
+            --root "$RUNNER_TEMP/cargo-affected"
+      - name: Save cargo-affected
+        if: steps.cargo-affected.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/cargo-affected
+          key: ${{ steps.cargo-affected.outputs.cache-primary-key }}
+      - name: Name cargo-affected to the tests
+        run: |
+          "$RUNNER_TEMP/cargo-affected/bin/cargo-affected" affected --version
+          echo "NX_RUST_TEST_CARGO_AFFECTED=$RUNNER_TEMP/cargo-affected/bin" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
       - run: pnpm nx run-many -t build lint test
       # Without `--all`, Nx checks only the files changed against the base.
