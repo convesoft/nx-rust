@@ -1,6 +1,6 @@
 ---
 title: Run target-defaults cases once and in plugin workers only at process boundaries, and use nx add only where it is what the end-to-end test checks
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:

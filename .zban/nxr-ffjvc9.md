@@ -1,6 +1,6 @@
 ---
 title: Share one initialized HashPlanInspector per batch group in the build input check
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:
