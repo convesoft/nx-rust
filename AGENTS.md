@@ -212,6 +212,9 @@ single line: GitHub wraps the squash commit body itself, and manual line breaks
 leave it ragged.
 
 GitHub enforces this on `main`, for administrators too: it takes only squash
-merges of pull requests on which both CI jobs passed, and no direct push. The
-required checks are the job names in `.github/workflows/ci.yml`, so renaming or
-adding a job means changing the branch protection as well.
+merges of pull requests on which both required checks passed, and no direct
+push. The required checks are the jobs named `Build, lint, test and format` and
+`End-to-end tests` in `.github/workflows/ci.yml`, so renaming either, or adding
+a job that must pass, means changing the branch protection as well. The
+end-to-end jobs for each toolchain run behind `End-to-end tests` and are not
+required checks themselves.

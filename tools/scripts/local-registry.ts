@@ -24,6 +24,13 @@ import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { get } from "http";
 import { join, resolve } from "path";
 
+/**
+ * The variable in which the global setup tells the tests the version under
+ * which it published the plugin. It starts with `NX_`, so that
+ * `testEnvironment` keeps it from the commands that the tests run.
+ */
+export const pluginVersionVariable = "NX_RUST_E2E_PLUGIN_VERSION";
+
 /** How long `nx run` may take to print the address of the registry. */
 const startTimeoutMs = 2 * 60 * 1000;
 /** How long the registry may take to answer once it printed its address. */

@@ -1,0 +1,34 @@
+name: End-to-end tests on one toolchain
+description: >-
+  Installs pnpm, Node, the dependencies and one Rust toolchain, makes that
+  toolchain the default and runs the end-to-end suite. The jobs `e2e-stable`
+  and `e2e-msrv` of `.github/workflows/ci.yml` use it after the checkout, so
+  that both run the same steps.
+inputs:
+  toolchain:
+    description: The Rust toolchain to install and run the suite with, such as `stable` or `1.91.0`.
+    required: true
+runs:
+  using: composite
+  steps:
+    # Installs the pnpm version that `packageManager` in package.json names.
+    - uses: pnpm/action-setup@v6
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 26
+        cache: pnpm
+    # The `lint`, `fmt` and `fmt-check` targets run clippy and rustfmt. The
+    # harness drops `RUSTUP_TOOLCHAIN` from the commands it runs, so `rustup
+    # default` chooses the toolchain of the run.
+    - name: Install the Rust toolchain
+      shell: bash
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
+      run: |
+        rustup toolchain install "$TOOLCHAIN" --profile minimal --component clippy,rustfmt
+        rustup default "$TOOLCHAIN"
+        cargo --version
+    - shell: bash
+      run: pnpm install --frozen-lockfile
+    - shell: bash
+      run: pnpm nx e2e nx-rust-e2e

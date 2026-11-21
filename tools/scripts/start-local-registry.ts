@@ -5,11 +5,10 @@
  */
 
 import { workspaceRoot } from "@nx/devkit";
-import { rmSync } from "fs";
 import { join } from "path";
 import { releasePublish, releaseVersion } from "nx/release";
 import { startTestRun } from "../../nx-rust/test/harness/test-run";
-import { startLocalRegistry } from "./local-registry";
+import { pluginVersionVariable, startLocalRegistry } from "./local-registry";
 
 export default async () => {
   // local registry target to run
@@ -17,21 +16,24 @@ export default async () => {
   // storage folder for the local registry
   const storage = "./tmp/local-registry/storage";
 
-  // Every run publishes the plugin under the same version, and pnpm's own
-  // metadata cache, shared by all checkouts of a user, may still describe
-  // the package of an earlier run. Installing from it would test that
-  // package. pnpm gets a cache of its own instead, emptied together with the
-  // registry's storage, so that it knows only what this run published.
-  const pnpmCache = join(workspaceRoot, "tmp", "local-registry", "pnpm-cache");
-  rmSync(pnpmCache, { recursive: true, force: true });
-  process.env.pnpm_config_cache_dir = pnpmCache;
+  // Each run publishes the plugin under a version of its own, which the
+  // tests install by that exact version. A cache that still describes the
+  // package of an earlier run, in pnpm's metadata or in its store, knows no
+  // package of this version, so pnpm cannot install an older build from it.
+  // That is why pnpm's cache can outlive a run: it keeps the metadata of the
+  // packages from npmjs.org, such as nx, which the next run's installs then
+  // do not fetch again. It is this checkout's own, so that the registries of
+  // other checkouts, which can have run on the same port, add nothing to it.
+  const version = `0.0.0-e2e.${Date.now()}-${process.pid}`;
+  process.env[pluginVersionVariable] = version;
+  process.env.pnpm_config_cache_dir = join(workspaceRoot, "tmp", "local-registry", "pnpm-cache");
 
   const stopLocalRegistry = await startLocalRegistry(localRegistryTarget, storage);
   global.stopLocalRegistry = stopLocalRegistry;
 
   try {
     await releaseVersion({
-      specifier: "0.0.0-e2e",
+      specifier: version,
       stageChanges: false,
       gitCommit: false,
       gitTag: false,

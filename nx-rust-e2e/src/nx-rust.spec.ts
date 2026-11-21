@@ -27,6 +27,7 @@ import {
   workspaceArgs,
   workspaceTestSteps,
 } from "../../nx-rust/test/harness";
+import { pluginVersionVariable } from "../../tools/scripts/local-registry";
 
 const cargoExecutor = "@convesoft/nx-rust:cargo";
 const cargoOutputsExecutor = "@convesoft/nx-rust:cargo-outputs";
@@ -42,6 +43,18 @@ const executorEntries = {
   [lockfileExecutor]: {},
   [releasePublishExecutor]: {},
 };
+
+/**
+ * The package to install, by the version under which the global setup
+ * published this run's build of the plugin, which no earlier run used.
+ */
+function pluginPackage(): string {
+  const version = process.env[pluginVersionVariable];
+  if (!version) {
+    throw new Error(`${pluginVersionVariable} is not set: the global setup has not run.`);
+  }
+  return `@convesoft/nx-rust@${version}`;
+}
 
 /** The line with which init says which target defaults it added. */
 function addedLine(executors: string[]): string {
@@ -114,7 +127,7 @@ describe("@convesoft/nx-rust", () => {
 
     // The plugin has been built and published to a local registry in the
     // globalSetup. `nx add` installs it from there and runs its init generator.
-    const result = spawnSync("pnpm", ["exec", "nx", "add", "@convesoft/nx-rust@e2e"], {
+    const result = spawnSync("pnpm", ["exec", "nx", "add", pluginPackage()], {
       cwd: projectDirectory,
       env: cargo.environment(testEnvironment()),
       encoding: "utf8",
@@ -165,8 +178,8 @@ describe("@convesoft/nx-rust", () => {
     expect(added.output).toContain('build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"');
   });
 
-  // Every run publishes the same version, so a package that an earlier run
-  // published, still known to a cache, would install without an error.
+  // A package that an earlier run published, still known to pnpm's cache,
+  // would install without an error, were it the version that the tests ask for.
   it("installs the plugin that the global setup built", () => {
     const installed = join(projectDirectory, "node_modules", "@convesoft", "nx-rust");
     const built = join(workspaceRoot, "dist", "nx-rust");
@@ -842,11 +855,11 @@ describe("@convesoft/nx-rust", () => {
       it(
         "prints graph creation's warning again in a task's output with the Nx daemon on",
         () => {
-          const env = { ...cargo.environment(testEnvironment()), NX_DAEMON: "true" };
+          const env = nxEnvironment(cargo, { NX_DAEMON: "true" });
           try {
             const result = spawnSync(
-              "pnpm",
-              ["exec", "nx", "run", "api:fmt-check", "--output-style=static"],
+              process.execPath,
+              [nxScript(projectDirectory), "run", "api:fmt-check", "--output-style=static"],
               { cwd: projectDirectory, env, encoding: "utf8" },
             );
             const output = withoutColours(`${result.stdout}${result.stderr}`);
@@ -861,7 +874,10 @@ describe("@convesoft/nx-rust", () => {
               "Add the line /rust/target/ to the .gitignore at the repository root.",
             );
           } finally {
-            spawnSync("pnpm", ["exec", "nx", "daemon", "--stop"], { cwd: projectDirectory, env });
+            spawnSync(process.execPath, [nxScript(projectDirectory), "daemon", "--stop"], {
+              cwd: projectDirectory,
+              env,
+            });
           }
         },
         HARNESS_TIMEOUT,
@@ -961,17 +977,15 @@ describe("@convesoft/nx-rust", () => {
       "versions a crate and its dependents with the installed version actions, and Nx commits and tags them",
       () => {
         const result = spawnSync(
-          "pnpm",
-          ["exec", "nx", "release", "version", "patch", "--projects", "base"],
+          process.execPath,
+          [nxScript(projectDirectory), "release", "version", "patch", "--projects", "base"],
           {
             cwd: projectDirectory,
-            env: cargo.environment(
-              testEnvironment({
-                ...gitVariables,
-                CARGO_HOME: cargoHome,
-                CARGO_NET_OFFLINE: "true",
-              }),
-            ),
+            env: nxEnvironment(cargo, {
+              ...gitVariables,
+              CARGO_HOME: cargoHome,
+              CARGO_NET_OFFLINE: "true",
+            }),
             encoding: "utf8",
           },
         );
@@ -1062,11 +1076,11 @@ describe("@convesoft/nx-rust", () => {
           })}\n`,
         );
 
-        const { status, stdout, stderr } = spawnSync("pnpm", ["exec", "nx", "show", "projects"], {
-          cwd: projectDirectory,
-          env: cargo.environment(testEnvironment()),
-          encoding: "utf8",
-        });
+        const { status, stdout, stderr } = spawnSync(
+          process.execPath,
+          [nxScript(projectDirectory), "show", "projects"],
+          { cwd: projectDirectory, env: nxEnvironment(cargo), encoding: "utf8" },
+        );
 
         expect(status).toBe(1);
         // Each workspace belongs to one entry (DES-PLUGIN-OPTIONS, "Several entries").
@@ -1100,7 +1114,7 @@ describe("@convesoft/nx-rust", () => {
     }
 
     function nxAdd(): { status: number | null; output: string } {
-      const result = spawnSync("pnpm", ["exec", "nx", "add", "@convesoft/nx-rust@e2e"], {
+      const result = spawnSync("pnpm", ["exec", "nx", "add", pluginPackage()], {
         cwd: projectDirectory,
         env: cargo.environment(testEnvironment()),
         encoding: "utf8",
@@ -1202,9 +1216,9 @@ describe("@convesoft/nx-rust", () => {
  * returns its standard output.
  */
 function nx(projectDirectory: string, cargo: CargoWrapper, args: string[]): string {
-  return execFileSync("pnpm", ["exec", "nx", ...args], {
+  return execFileSync(process.execPath, [nxScript(projectDirectory), ...args], {
     cwd: projectDirectory,
-    env: cargo.environment(testEnvironment()),
+    env: nxEnvironment(cargo),
     encoding: "utf8",
   });
 }
@@ -1220,12 +1234,37 @@ function nxResult(
   args: string[],
   env: Record<string, string> = {},
 ): { status: number | null; output: string } {
-  const result = spawnSync("pnpm", ["exec", "nx", "--output-style=static", ...args], {
-    cwd: projectDirectory,
-    env: cargo.environment(testEnvironment(env)),
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    process.execPath,
+    [nxScript(projectDirectory), "--output-style=static", ...args],
+    { cwd: projectDirectory, env: nxEnvironment(cargo, env), encoding: "utf8" },
+  );
   return { status: result.status, output: withoutColours(`${result.stdout}${result.stderr}`) };
+}
+
+/**
+ * The script of the test project's Nx command line, which the tests run with
+ * this Node rather than through `pnpm exec nx`: each of those calls would
+ * start pnpm first, and only `nx add` needs pnpm around it.
+ */
+function nxScript(projectDirectory: string): string {
+  const nxPackage = join(projectDirectory, "node_modules", "nx");
+  const bin: string = JSON.parse(readFileSync(join(nxPackage, "package.json"), "utf8")).bin.nx;
+  return join(nxPackage, bin);
+}
+
+/**
+ * The environment of the test project's Nx, with the cargo wrapper first on
+ * `PATH` and the variables of `env` added. Without `pnpm exec`, `INIT_CWD`
+ * would be the one that the package manager of the outer run set, which
+ * overrides the folder of Nx's generators, so it is left out and Nx takes
+ * its own folder instead, as under `pnpm exec`.
+ */
+function nxEnvironment(
+  cargo: CargoWrapper,
+  env: Record<string, string | undefined> = {},
+): NodeJS.ProcessEnv {
+  return cargo.environment(testEnvironment({ NX_TUI: "false", INIT_CWD: undefined, ...env }));
 }
 
 /**
