@@ -175,7 +175,9 @@ delay or file that cargo or `seed` left in the Cargo homes, at the same port
 and with the same tokens. A reset that fails fails the test that asked for
 it, and the next test gets a new server, as does a test after one that
 stopped the server; a test that runs while another uses the server, as with
-`it.concurrent`, gets a server of its own. The file removes the server with
+`it.concurrent`, gets a server of its own. The server closes the connection
+after every answer, so that no request goes out on a connection that a reset
+closed. The file removes the server with
 `afterAll(removeSharedRegistry)`. `withPublishCopy` and the release specs
 use it.
 

@@ -562,7 +562,9 @@ function main(): void {
       if (generation === state.generation) {
         log(request, status);
       }
-      response.writeHead(status, { "content-type": type });
+      // No connection is kept for a next request: one that a reset or the
+      // keep-alive timeout closes could otherwise carry it (nxr-04ezzm).
+      response.writeHead(status, { "content-type": type, connection: "close" });
       response.end(body);
     });
   });
