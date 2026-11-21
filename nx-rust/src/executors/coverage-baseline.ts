@@ -43,15 +43,9 @@ import { type CargoInvocation, printCommand, taskRunsVerbosely } from "./cargo-i
 import type { CargoTargetOptions } from "./command";
 import { declaredOptionsOf } from "./declared-options";
 import { NxTaskFilesError } from "./nx-task-files";
-import {
-  type PluginExecutor,
-  type PreparedTask,
-  prepareTask,
-  projectWarnings,
-  runCargo,
-  singleTaskShape,
-  TaskError,
-} from "./task";
+import { type PreparedTask, prepareTask } from "./task";
+import { runCargo } from "./task-execution";
+import { type PluginExecutor, projectWarnings, singleTaskShape, TaskError } from "./task-guards";
 import { cargoTaskEnvironment, TaskEnvironmentError, withoutUnloadedRootValues } from "./task-env";
 import { baselineDatabase } from "./test-mode";
 

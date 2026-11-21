@@ -2,7 +2,7 @@ import type { ExecutorContext, Task, TaskGraph } from "@nx/devkit";
 import { type PublishInput, type PublishReport, publishTasks } from "../../release/publish";
 import { batchRunsVerbosely, printCommand, taskRunsVerbosely } from "../cargo-invocation";
 import { dotenvDefinitions } from "../dotenv-check";
-import { graphTaskOf, singleTaskShape } from "../task";
+import { graphTaskOf, singleTaskShape } from "../task-guards";
 import {
   cargoTaskEnvironment,
   runDependentVariables,

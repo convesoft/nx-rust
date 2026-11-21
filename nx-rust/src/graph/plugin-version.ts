@@ -3,7 +3,6 @@ import { isDeepStrictEqual } from "node:util";
 import { pluginVersionOption } from "../executors/command";
 import type { CargoGraph } from "./projects";
 import {
-  entryName,
   loadTargetDefaultsInternals,
   type OptionOrigin,
   type OptionPlace,
@@ -11,7 +10,8 @@ import {
   pluginEntryName,
   type TargetDefaultsContext,
   type TargetDefaultsInternals,
-} from "./target-defaults";
+} from "./target-defaults-layers";
+import { entryName } from "./target-defaults-report";
 import { targetCargoMetadataKey } from "./targets";
 
 /** A `pluginVersion` on an inferred target that the plugin did not give it. */

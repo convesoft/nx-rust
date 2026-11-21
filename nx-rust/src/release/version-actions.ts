@@ -1,13 +1,7 @@
 import { readCachedProjectGraph } from "@nx/devkit";
 import type { ProjectGraph, ProjectGraphDependency, Tree } from "@nx/devkit";
-import { spawnSync } from "node:child_process";
-import { accessSync, constants, readFileSync } from "node:fs";
-import { dirname, join, posix } from "node:path";
-import { parse } from "smol-toml";
+import { join } from "node:path";
 import { VersionActions } from "nx/release";
-import type { CargoDependency } from "../cargo/metadata";
-import { shellWord } from "../executors/cargo-invocation";
-import { realPath } from "../graph/real-path";
 import {
   crateVersion,
   packageVersionPath,
@@ -19,26 +13,35 @@ import {
 } from "./manifests";
 import {
   blockers,
-  errorMessage,
-  isAbsence,
   memberEntries,
   outsideDestination,
   readDocument,
   readTreeText,
-  Requirement,
+  type Requirement,
   requirementsOn,
   treePath,
 } from "./places";
 import {
   cargoMetadataOf,
-  ReleaseCrate,
+  type ReleaseCrate,
   releaseRepository,
-  ReleaseRepository,
-  ReleaseWorkspace,
-  repositoryPath,
+  type ReleaseRepository,
 } from "./repository";
 import { requirementChange } from "./requirements";
-import { replaceStrings, StringEdit, TomlEditError } from "./toml-edit";
+import type { StringEdit } from "./toml-edit";
+import {
+  checkDependentsVersioned,
+  checkVersionedTogether,
+  editedFile,
+  graphBumpLines,
+  inheritingCrates,
+  isOn,
+  type Rewrite,
+  sentenceList,
+  writable,
+  writesRequirement,
+} from "./version-checks";
+import { type LockfileRun, staleLockfiles, updateVersionedLockfiles } from "./version-lockfiles";
 
 /**
  * The version actions of every project configured for release, by project
@@ -46,16 +49,8 @@ import { replaceStrings, StringEdit, TomlEditError } from "./toml-edit";
  */
 const configured = new Map<string, CargoVersionActions>();
 
-/** A requirement on a dependent's entry that a run rewrites. */
-interface Rewrite {
-  requirement: Requirement;
-  /** The crate whose version changes. */
-  crate: ReleaseCrate;
-  to: string;
-}
-
 /** What the version actions record about one `nx release version`. */
-interface Run {
+interface Run extends LockfileRun {
   /** The projects of the run, which are those that Nx validates. */
   projects: Set<string>;
   /** The projects whose new version the run writes. */
@@ -66,18 +61,6 @@ interface Run {
   named: Set<string>;
   /** Whether the dependents have been checked, once every version is decided. */
   dependentsChecked: boolean;
-  /**
-   * The lockfiles that `afterAllProjectsVersioned` brings up to date, relative
-   * to the repository root, with their workspaces.
-   */
-  lockfiles: Map<string, ReleaseWorkspace>;
-  /**
-   * The files that the run writes through Nx's tree, by their
-   * {@link treePath}: where they lie once symbolic links are followed.
-   */
-  written: Set<string>;
-  /** The lockfiles that the run has read, by their absolute path, as they were before it. */
-  lockfileStates: Map<string, LockfileState>;
 }
 
 /** The runs, by the tree that Nx hands to each method that writes. */
@@ -116,7 +99,7 @@ let runRepository: ReleaseRepository | undefined;
  *   `[workspace.package]`, and every requirement on the crate that names it
  *   by path is updated at the same time, as {@link requirementChange} says,
  *   wherever cargo reads one ({@link requirementsOn}). Only the version
- *   strings change ({@link replaceStrings}).
+ *   strings change (`replaceStrings`).
  * - Every check runs before Nx writes any file: Nx keeps the changes in its
  *   tree until every release group is processed, and writes nothing when an
  *   action throws (`EVD-NX-24-VERSION-ACTIONS`).
@@ -312,7 +295,14 @@ export default class CargoVersionActions extends VersionActions {
       !run.named.has(this.projectGraphNode.name)
     ) {
       run.named.add(this.projectGraphNode.name);
-      this.pendingLines = this.graphBumpLines(run, runGraph);
+      this.pendingLines = graphBumpLines(
+        this.projectGraphNode.name,
+        this.releaseGroup.name,
+        run.versioned,
+        runGraph,
+        runRepository,
+        groupOf,
+      );
     }
     return result;
   }
@@ -335,7 +325,7 @@ export default class CargoVersionActions extends VersionActions {
     if (crateVersion(readDocument(tree, repository, crate.manifest)).kind === "inherited") {
       const rootManifest = crate.workspace.rootManifest;
       const sharing = inheritingCrates(tree, repository, crate);
-      this.checkVersionedTogether(run, crate, sharing);
+      checkVersionedTogether(run.projects, crate, sharing);
       // Nx may bump a crate twice in a run (EVD-NX-24-VERSION-ACTIONS); the
       // last version stays, as for a version of the crate's own.
       if (workspaceVersion(readDocument(tree, repository, rootManifest)) === newVersion) {
@@ -476,7 +466,7 @@ export default class CargoVersionActions extends VersionActions {
     const run = runOf(tree);
     if (!run.dependentsChecked) {
       run.dependentsChecked = true;
-      checkDependentsVersioned(tree, this.repository(tree), run);
+      checkDependentsVersioned(tree, this.repository(tree), run.rewrites, run.versioned, groupOf);
     }
     return [];
   }
@@ -540,46 +530,6 @@ export default class CargoVersionActions extends VersionActions {
     return crate;
   }
 
-  // Fails where the run versions only some of the crates that share the inherited version.
-  private checkVersionedTogether(
-    run: Run,
-    crate: ReleaseCrate,
-    sharing: readonly ReleaseCrate[],
-  ): void {
-    const left = sharing.filter(
-      (other) => other.project === undefined || !run.projects.has(other.project),
-    );
-    if (left.length > 0) {
-      const versioned = sharing.filter((other) => !left.includes(other));
-      throw new ReleaseError(
-        `nx release version would version ${sentenceList(versioned.map((other) => other.name))} but not ${sentenceList(left.map((other) => other.name))}, although they inherit version.workspace = true from ${crate.workspace.rootManifest} and share one version. Nx adds a crate to a run as a dependent of a crate in another release group without the rest of its group: run the command for their whole release group as well, such as with --groups naming it, or without --projects and --groups.`,
-      );
-    }
-  }
-
-  // The lines that name the edges of the project graph through which Nx
-  // bumps this project's fixed group: those into a project of another
-  // release group in which the run has written a new version.
-  private graphBumpLines(run: Run, graph: ProjectGraph): string[] {
-    const project = this.projectGraphNode.name;
-    const group = this.releaseGroup.name;
-    const bumpedGroups = new Set([...run.versioned].map(groupOf));
-    const edges = (graph.dependencies[project] ?? []).filter((edge) => {
-      const target = groupOf(edge.target);
-      return target !== undefined && target !== group && bumpedGroups.has(target);
-    });
-    const repository = runRepository;
-    if (edges.length === 0) {
-      return [
-        `⚠️  Nx bumps the fixed release group "${group}" as a whole, because ${project} has an edge in the project graph to a project of a release group that it bumped before; nx-rust's guide lists this as a known limit of Nx release.`,
-      ];
-    }
-    return [...new Set(edges.map((edge) => edge.target))].map(
-      (target) =>
-        `⚠️  Nx bumps the fixed release group "${group}" as a whole, because the project graph has an edge from ${project} to ${target}, whose release group "${groupOf(target)}" it bumped before. ${edgeInCargo(repository, project, target)} nx-rust's guide lists this as a known limit of Nx release.`,
-    );
-  }
-
   // Whether Nx's `preserveMatchingDependencyRanges` is on for a
   // requirement: that of the crate whose manifest holds it where that crate
   // is configured for release, and otherwise, as in
@@ -620,163 +570,6 @@ function groupOf(project: string | undefined): string | undefined {
   return project === undefined ? undefined : configured.get(project)?.releaseGroup.name;
 }
 
-// What the edge between two crates' projects is in Cargo, as a sentence.
-function edgeInCargo(
-  repository: ReleaseRepository | undefined,
-  source: string,
-  target: string,
-): string {
-  const from = repository?.crateOfProject(source);
-  const to = repository?.crateOfProject(target);
-  if (from === undefined || to === undefined) {
-    return "";
-  }
-  const uses = from.dependencies.filter(
-    (dependency) => dependency.path !== undefined && realPath(dependency.path) === to.folder,
-  );
-  if (uses.length === 0) {
-    return `In Cargo, ${from.name} names ${to.name} in no dependency: nx-rust adds the edge for the cache key, as through a crate without a project or a [patch].`;
-  }
-  const kinds = [
-    ...new Set(
-      uses.map((dependency) =>
-        dependency.kind === "dev"
-          ? "a dev-dependency"
-          : `a ${dependency.kind === "build" ? "build" : "normal"} dependency`,
-      ),
-    ),
-  ];
-  return `In Cargo, ${from.name} depends on ${to.name} through ${sentenceList(kinds)}.`;
-}
-
-// Stops the run where a crate of the release would get a rewritten
-// requirement on a bumped crate without a new version (nxr-5a9w1y, part 2).
-function checkDependentsVersioned(tree: Tree, repository: ReleaseRepository, run: Run): void {
-  const lines = new Set<string>();
-  for (const { requirement, crate, to } of run.rewrites) {
-    if (
-      requirement.kind !== "normal" &&
-      requirement.kind !== "build" &&
-      requirement.kind !== "workspace"
-    ) {
-      continue;
-    }
-    // A [workspace.dependencies] entry is the requirement of each member
-    // that inherits it in a normal or build table.
-    const holders =
-      requirement.kind === "workspace"
-        ? requirement.workspace.crates.filter((member) =>
-            memberEntries(tree, repository, member).some(
-              (entry) =>
-                (entry.kind === "normal" || entry.kind === "build") &&
-                entry.entry.workspace === true &&
-                entry.key === requirement.key,
-            ),
-          )
-        : requirement.holder === undefined
-          ? []
-          : [requirement.holder];
-    for (const holder of holders) {
-      const group = groupOf(holder.project);
-      if (
-        holder.project === undefined ||
-        group === undefined ||
-        run.versioned.has(holder.project)
-      ) {
-        continue;
-      }
-      lines.add(
-        `- ${holder.name}, in the release group "${group}": its requirement on ${crate.name} in ${requirement.file} [${requirement.table}] becomes "${to}", but Nx gives ${holder.name} no new version`,
-      );
-    }
-  }
-  if (lines.size > 0) {
-    throw new ReleaseError(
-      [
-        "nx release version would rewrite requirements of crates in the release on crates that it bumps, without bumping those crates:",
-        ...lines,
-        "Release each of them in the same run: give it a bump of its own, through a version plan or a conventional commit, or name a version on the command line, which applies to every crate of the run. Nx bumps no crate of an independent group for a dependency in a fixed group. No file has been changed.",
-      ].join("\n"),
-    );
-  }
-}
-
-// The setting is on as `true`, and as a list, which names npm's dependency
-// collections and so means nothing more specific for a crate, while it is
-// not empty.
-function isOn(setting: boolean | readonly string[]): boolean {
-  return Array.isArray(setting) ? setting.length > 0 : setting === true;
-}
-
-// Whether the manifest's entries for a dependency whose report gives the
-// requirement `*` write a version: the entries of its kind and key that
-// name its folder, in any target table, however the table's header spells
-// the platform. Fails where the manifest has no such entry.
-function writesRequirement(
-  tree: Tree,
-  repository: ReleaseRepository,
-  crate: ReleaseCrate,
-  dependency: CargoDependency,
-): boolean {
-  const kind = dependency.kind === "build" ? "build" : "normal";
-  const key = dependency.rename ?? dependency.name;
-  const folder = realPath(dependency.path ?? "");
-  const entries = memberEntries(tree, repository, crate).filter(
-    (entry) => entry.kind === kind && entry.key === key && entry.folder === folder,
-  );
-  if (entries.length === 0) {
-    throw new ReleaseError(
-      `cargo reports that ${crate.name} depends on the crate in ${dependency.path} as ${key}, but nx release version finds no such entry in ${crate.manifest} to tell whether it writes a version requirement. Run nx reset and the command again; if this stays, report the manifest to nx-rust.`,
-    );
-  }
-  return entries.some((entry) => entry.requirement !== undefined);
-}
-
-// The members of the crate's workspace that inherit their version, the crate among them.
-function inheritingCrates(
-  tree: Tree,
-  repository: ReleaseRepository,
-  crate: ReleaseCrate,
-): ReleaseCrate[] {
-  return crate.workspace.crates.filter(
-    (other) =>
-      other === crate ||
-      crateVersion(readDocument(tree, repository, other.manifest)).kind === "inherited",
-  );
-}
-
-// Whether the file at `path` exists and the run may write it.
-function writable(path: string): boolean {
-  try {
-    accessSync(path, constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// The file with the edits made, read at its tree path ({@link treePath}).
-function editedFile(tree: Tree, file: string, edits: readonly StringEdit[]): string {
-  const text = readTreeText(tree, file);
-  try {
-    return replaceStrings(text, edits);
-  } catch (error) {
-    if (!(error instanceof TomlEditError)) {
-      throw error;
-    }
-    throw new ReleaseError(
-      `nx release version could not change the version strings in ${file} without changing anything else of it: ${error.message}. No file has been changed; change the versions by hand, and report the file to nx-rust.`,
-    );
-  }
-}
-
-// "a", "a and b", "a, b and c".
-function sentenceList(items: readonly string[]): string {
-  return items.length <= 1
-    ? (items[0] ?? "")
-    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
-}
-
 /**
  * Brings the `Cargo.lock` of each Cargo workspace that the run changed up to
  * date (`DES-RELEASE`, "Lockfile"). Nx calls it once, after it has written
@@ -803,271 +596,5 @@ export async function afterAllProjectsVersioned(
   cwd: string,
   options: { dryRun?: boolean },
 ): Promise<{ changedFiles: string[]; deletedFiles: string[] }> {
-  const run = latestRun;
-  if (options.dryRun || run === undefined || run.lockfiles.size === 0) {
-    return { changedFiles: [], deletedFiles: [] };
-  }
-  const changed: string[] = [];
-  const failures: {
-    workspace: ReleaseWorkspace;
-    reason: string;
-    output: string;
-    cargoFailed: boolean;
-  }[] = [];
-  for (const [lockfile, workspace] of [...run.lockfiles].sort(([a], [b]) => a.localeCompare(b))) {
-    const file = join(cwd, lockfile);
-    const before = readLockfile(file);
-    if (before.kind === "absent") {
-      continue;
-    }
-    if (before.kind === "unreadable") {
-      failures.push({
-        workspace,
-        reason: `nx release version cannot read ${lockfile}: ${before.reason}`,
-        output: "",
-        cargoFailed: false,
-      });
-      continue;
-    }
-    const update = spawnSync("cargo", ["update", "--workspace"], {
-      cwd: dirname(file),
-      env: process.env,
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (update.error !== undefined || update.status !== 0) {
-      const code = (update.error as NodeJS.ErrnoException | undefined)?.code;
-      failures.push({
-        workspace,
-        reason:
-          code === "ENOENT"
-            ? "cargo was not found on PATH"
-            : update.error !== undefined
-              ? update.error.message
-              : update.signal
-                ? `cargo was stopped by ${update.signal}`
-                : `cargo exited with status ${update.status}`,
-        output: (update.stderr ?? "").trim(),
-        cargoFailed: true,
-      });
-      continue;
-    }
-    const after = readLockfile(file);
-    if (after.kind !== "read") {
-      failures.push({
-        workspace,
-        reason: `nx release version cannot read ${lockfile} after cargo update --workspace: ${after.kind === "absent" ? "it does not exist" : after.reason}`,
-        output: "",
-        cargoFailed: false,
-      });
-      continue;
-    }
-    if (after.text !== before.text) {
-      const path = treePath(cwd, lockfile);
-      changed.push(path);
-      console.log(
-        path === lockfile
-          ? `Updated ${lockfile} with cargo update --workspace`
-          : `Updated ${path}, to which ${lockfile} leads, with cargo update --workspace`,
-      );
-    }
-  }
-  const staged = changed.filter((path) => !gitIgnores(cwd, path));
-  if (failures.length > 0) {
-    throw new ReleaseError(recoveryMessage(cwd, run, failures, changed, staged));
-  }
-  return { changedFiles: staged, deletedFiles: [] };
-}
-
-/**
- * The message for a lockfile step that failed: each failure, and the
- * commands, quoted for a POSIX shell, that take back what Nx and cargo
- * wrote or bring the lockfiles up to date by hand.
- */
-function recoveryMessage(
-  cwd: string,
-  run: Run,
-  failures: readonly {
-    workspace: ReleaseWorkspace;
-    reason: string;
-    output: string;
-    cargoFailed: boolean;
-  }[],
-  changed: readonly string[],
-  staged: readonly string[],
-): string {
-  const one = failures.length === 1;
-  const workspaces = `${one ? "the Cargo workspace" : "the Cargo workspaces"} ${sentenceList(failures.map(({ workspace }) => workspace.rootManifest))}`;
-  const written = [...new Set([...run.written, ...staged])].sort();
-  const untracked = untrackedFiles(cwd, written);
-  const restorable = written.filter((file) => !untracked.includes(file));
-  const folders = failures.map(({ workspace }) => posix.dirname(workspace.rootManifest));
-  const byHand =
-    untracked.length === 0
-      ? ""
-      : `take back ${sentenceList(untracked)}, which git does not track, by hand`;
-  return [
-    failures.every(({ cargoFailed }) => cargoFailed)
-      ? `cargo update --workspace failed in ${workspaces}, so nx release version cannot bring ${one ? "its" : "their"} Cargo.lock up to date:`
-      : `nx release version cannot bring the Cargo.lock of ${workspaces} up to date:`,
-    ...failures.flatMap(({ workspace, reason, output }) => [
-      `- ${workspace.rootManifest}: ${reason}`,
-      ...(output === "" ? [] : output.split("\n").map((line) => `    ${line}`)),
-    ]),
-    `Nx has written the new versions${changed.length > 0 ? ` and cargo has updated ${sentenceList(changed)}` : ""}, and made no commit or tag.`,
-    ...(restorable.length === 0
-      ? [`To go back, ${byHand}, and run nx release version again once cargo works.`]
-      : [
-          `To go back, run this in the root of the Nx workspace,${byHand === "" ? "" : ` ${byHand},`} and run nx release version again once cargo works:`,
-          // git reads a path in `*`, `?`, `[` or `\` as a pattern otherwise.
-          `    git ${restorable.some((file) => /[*?[\\]/.test(file)) ? "--literal-pathspecs " : ""}checkout -- ${restorable.map(shellWord).join(" ")}`,
-        ]),
-    `To go on instead, correct what cargo reports, run ${folders.length === 1 ? "this" : "these"} in the root of the Nx workspace, and commit and tag the release yourself:`,
-    // cd would read a folder that starts with `-` as an option.
-    ...folders.map(
-      (folder) =>
-        `    (cd ${shellWord(folder.startsWith("-") ? `./${folder}` : folder)} && cargo update --workspace)`,
-    ),
-  ].join("\n");
-}
-
-/** The lockfile of a workspace, relative to the repository root with `/`. */
-function lockfileOf(workspace: ReleaseWorkspace): string {
-  return posix.join(posix.dirname(workspace.rootManifest), "Cargo.lock");
-}
-
-/** A package that a lockfile locks. */
-interface LockedPackage {
-  name?: unknown;
-  version?: unknown;
-  source?: unknown;
-}
-
-/** A lockfile as the run read it before it changed anything. */
-type LockfileState =
-  | { kind: "absent" }
-  | { kind: "unreadable"; reason: string }
-  | { kind: "read"; packages: LockedPackage[] };
-
-/**
- * The lockfiles, by their path relative to the repository root, that the new
- * version of `crate` makes stale, with their workspaces: those of the
- * workspaces whose root manifest, member manifests or Cargo configuration
- * files are among `files`, and those that lock the crate as a path package
- * at its old version, as the lockfile of a workspace does whose member
- * depends on the crate by path without a version requirement, whose
- * manifests stay as they are (`EVD-CARGO-LOCKFILE-UPDATE`). A workspace
- * without a `Cargo.lock` has none. A lockfile that cannot be read or parsed
- * is among `unreadable`, with the reason, because then nx-rust can tell
- * neither whether it is stale nor bring it up to date; only a lockfile that
- * does not exist is absent.
- */
-function staleLockfiles(
-  tree: Tree,
-  repository: ReleaseRepository,
-  run: Run,
-  crate: ReleaseCrate,
-  files: readonly string[],
-): { lockfiles: Map<string, ReleaseWorkspace>; unreadable: string[] } {
-  const lockfiles = new Map<string, ReleaseWorkspace>();
-  const unreadable: string[] = [];
-  for (const workspace of repository.workspaces) {
-    const lockfile = lockfileOf(workspace);
-    const file = join(tree.root, lockfile);
-    let state = run.lockfileStates.get(file);
-    if (state === undefined) {
-      state = lockfileState(file);
-      run.lockfileStates.set(file, state);
-    }
-    if (state.kind === "unreadable") {
-      unreadable.push(`- ${lockfile}: ${state.reason}`);
-    } else if (
-      state.kind === "read" &&
-      (changesWorkspace(repository, workspace, files) ||
-        // A lockfile names no path, and another path crate of that name and
-        // version only costs an update that changes nothing.
-        state.packages.some(
-          (pkg) =>
-            pkg.name === crate.name && pkg.version === crate.version && pkg.source === undefined,
-        ))
-    ) {
-      lockfiles.set(lockfile, workspace);
-    }
-  }
-  return { lockfiles, unreadable };
-}
-
-// Whether `files` holds the workspace's root manifest, a member's manifest
-// or one of its Cargo configuration files.
-function changesWorkspace(
-  repository: ReleaseRepository,
-  workspace: ReleaseWorkspace,
-  files: readonly string[],
-): boolean {
-  return files.some(
-    (file) =>
-      file === workspace.rootManifest ||
-      workspace.crates.some((member) => member.manifest === file) ||
-      workspace.configFiles.some(
-        (configFile) => repositoryPath(repository.root, configFile) === file,
-      ),
-  );
-}
-
-// The packages that the lockfile at `file` locks.
-function lockfileState(file: string): LockfileState {
-  const read = readLockfile(file);
-  if (read.kind !== "read") {
-    return read;
-  }
-  try {
-    const lock = parse(read.text) as { package?: unknown };
-    return {
-      kind: "read",
-      packages: Array.isArray(lock.package) ? (lock.package as LockedPackage[]) : [],
-    };
-  } catch (error) {
-    return { kind: "unreadable", reason: `no valid TOML: ${errorMessage(error).split("\n")[0]}` };
-  }
-}
-
-// The text of the lockfile at `file`; absent only where it does not exist.
-function readLockfile(
-  file: string,
-): { kind: "absent" } | { kind: "unreadable"; reason: string } | { kind: "read"; text: string } {
-  try {
-    return { kind: "read", text: readFileSync(file, "utf8") };
-  } catch (error) {
-    return isAbsence(error)
-      ? { kind: "absent" }
-      : { kind: "unreadable", reason: errorMessage(error) };
-  }
-}
-
-// Whether git ignores a path of the repository; outside a git repository nothing is.
-function gitIgnores(cwd: string, path: string): boolean {
-  return (
-    spawnSync("git", ["check-ignore", "--quiet", "--", path], { cwd, stdio: "ignore" }).status === 0
-  );
-}
-
-// The files among `files` that git does not track, which `git checkout`
-// cannot take back and refuses to take back anything beside; none where git
-// cannot tell, as outside a git repository.
-function untrackedFiles(cwd: string, files: readonly string[]): string[] {
-  if (files.length === 0) {
-    return [];
-  }
-  const listed = spawnSync("git", ["--literal-pathspecs", "ls-files", "-z", "--", ...files], {
-    cwd,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (listed.status !== 0) {
-    return [];
-  }
-  const tracked = new Set(listed.stdout.split("\0"));
-  return files.filter((file) => !tracked.has(file));
+  return updateVersionedLockfiles(latestRun, cwd, options);
 }

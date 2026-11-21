@@ -8,7 +8,8 @@ import {
 import { type BatchReport, runBatch } from "../batch";
 import type { CargoTargetOptions } from "../command";
 import { declaredOptionsOf } from "../declared-options";
-import { type PluginExecutor, runTask } from "../task";
+import { runTask } from "../task";
+import type { PluginExecutor } from "../task-guards";
 
 // The two executors, with the options of their schema, read where graph
 // creation reads them (`declaredExecutorOptions`).

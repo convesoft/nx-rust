@@ -3,7 +3,8 @@ import { lockfileExecutor, targetCargoMetadataKey } from "../../graph/targets";
 import type { CargoTargetOptions } from "../command";
 import { declaredOptionsOf } from "../declared-options";
 import { collectBaseline } from "../coverage-baseline";
-import { type PluginExecutor, runTask } from "../task";
+import { runTask } from "../task";
+import type { PluginExecutor } from "../task-guards";
 
 // The executor, with the options of its schema, read where graph creation
 // reads them (`declaredExecutorOptions`).

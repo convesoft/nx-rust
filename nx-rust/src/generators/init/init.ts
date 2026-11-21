@@ -7,7 +7,7 @@ import {
   writeJson,
   type NxJsonConfiguration,
 } from "@nx/devkit";
-import { targetDefaultsGuide } from "../../graph/target-defaults";
+import { targetDefaultsGuide } from "../../graph/target-defaults-report";
 import {
   cargoExecutor,
   cargoOutputsExecutor,

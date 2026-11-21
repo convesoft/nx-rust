@@ -1,7 +1,8 @@
 import type { ExecutorContext } from "@nx/devkit";
 import { runExecutor } from "../../graph/targets";
 import type { CargoTargetOptions } from "../command";
-import { type PluginExecutor, runTask } from "../task";
+import { runTask } from "../task";
+import type { PluginExecutor } from "../task-guards";
 import { declaredOptionsOf } from "../declared-options";
 
 // The executor, with the options of its schema, read where graph creation

@@ -7,7 +7,8 @@ import { checkEntries, manifestPattern } from "./entries";
 import type { TargetWarning } from "./collisions";
 import { CargoGraph, inferProjects, projectNodes, withWarningsInputs } from "./projects";
 import { readPluginOptions, readSettings } from "./settings";
-import { type PlacedWarning, targetDefaultCauses } from "./target-defaults";
+import { targetDefaultCauses } from "./target-defaults-causes";
+import type { PlacedWarning } from "./target-defaults-report";
 import { workspaceStrategies } from "./unification";
 
 /** What the `createNodes` call that started last found. */
