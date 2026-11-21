@@ -1,6 +1,6 @@
 ---
 title: Run one cargo call per environment dump in batch-runs and pre-warm the workspace-tests and batch-groups builds
-status: todo
+status: in-progress
 type: task
 parent: nxr-e2z8sz
 blocked_by:
