@@ -1,6 +1,6 @@
 ---
 title: Run the dotenv check in the publish executor
-status: todo
+status: in-progress
 type: task
 priority: high
 discovered_from: nxr-m8evx2

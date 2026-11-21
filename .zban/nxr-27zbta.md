@@ -1,6 +1,6 @@
 ---
 title: Install the optional tools in CI so real-tool tests run there
-status: todo
+status: in-progress
 type: task
 discovered_from: nxr-0ap8n4
 created_at: 2026-11-16T20:48:18Z

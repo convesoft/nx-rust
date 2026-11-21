@@ -1,6 +1,6 @@
 ---
 title: Remove 0.6 provisional marks and document staged-build limits in the guide
-status: todo
+status: in-progress
 type: task
 tags:
   - docs
