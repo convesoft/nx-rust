@@ -84,11 +84,28 @@ runtimeInputs = ["protoc --version"]
 
 `envInputs` and `runtimeInputs` work in the plugin options for every crate, in
 `[workspace.metadata.nx]` for the members of a workspace and in
-`[package.metadata.nx]` for one crate. The three add up, and what a crate adds
-also reaches the keys of the crates that depend on it, because they compile it
-too. That holds for a path dependency without an Nx project and for a crate
-whose edge the graph leaves out, as long as Cargo reports the crate. An input that you add to one target's `inputs` stays with that target
-([Configuration](configuration.mara.md#changing-an-inferred-target)).
+`[package.metadata.nx]` for one crate. The three add up. What they add joins
+the crate's `default` named input, so it counts for every cached target of the
+crate, and it also reaches the keys of the crates that depend on it, because
+they compile it too. That holds for a path dependency without an Nx project
+and for a crate whose edge the graph leaves out, as long as Cargo reports the
+crate.
+
+A variable or program that only the tests read, such as a test database's
+address or a tool that a test starts from `PATH`, needs none of that reach.
+Add it to the `inputs` of the crate's `test` target instead, after `"..."`,
+and only that target's key holds it
+([Configuration](configuration.mara.md#changing-an-inferred-target)):
+
+```toml
+# rust/crates/api/Cargo.toml
+[package.metadata.nx.targets.test]
+inputs = ["...", { env = "TEST_DATABASE_URL" }, { runtime = "tar --version" }]
+```
+
+A new `TEST_DATABASE_URL`, or a `tar` of another version earlier on `PATH`,
+then runs `api:test` again, while `api:build` and the crates that depend on
+`api` are restored from the cache.
 
 `nx affected` selects tasks by changed files only. A change that reaches a
 task only through an environment variable or a command's output, such as a new
@@ -142,6 +159,20 @@ fileInputs = ["../../../proto/**/*.proto", "../../../README.md"]
   repository; cover those with a command under `runtimeInputs`. A pattern
   whose folder holds Cargo's build or artifact directory, such as
   `../../**`, leaves that directory out, so that a build changes no key.
+
+Cargo writes everything in its build and artifact directories, `target/` by
+default. A key over those files would change with every build, and the
+sources they are made from count already. So keep test data that Cargo does
+not make, such as fixtures, golden files or downloaded samples, outside
+`target/`: in the crate's folder, which counts whole, or in a folder that
+`fileInputs` lists. Where a test needs such files inside `target/`, for
+example because another step puts them there or the test looks for them
+beside the executable that `CARGO_BIN_EXE_<name>` names, nothing hashes them.
+Key what decides their content with a `runtime` input on the crate's `test`
+target ([above](#what-is-in-a-cache-key)), such as the version of the tool
+that writes them. A path that is relative to `CARGO_BIN_EXE_<name>` lies in
+the artifact directory that `CARGO_TARGET_DIR` or `build.target-dir` sets, so
+it moves with them; a path relative to `env!("CARGO_MANIFEST_DIR")` does not.
 
 Whenever `build` runs cargo, also when nothing needs compiling, the plugin
 reads the dependency files that Cargo writes beside the crate's library and
@@ -542,6 +573,54 @@ option, so a result from Linux is never restored on macOS. Two machines with
 the same triple can still differ in system libraries or linkers. If your crates
 link against system libraries and you share the cache between unlike machines,
 add an input that tells them apart ([[RISK-HOST-ENVIRONMENT]]).
+
+## Sharing the cache between checkouts
+
+Unless `nx.json` or the environment names a cache directory, Nx 24 keeps its
+local cache in your home folder, under `~/.nx`, one per repository rather
+than one per checkout. Every checkout of the repository uses it: linked git
+worktrees, and also separate clones with the same remote, or the same first
+commit where there is none. No key holds the folder of the
+checkout, so a result stored in one checkout is restored in another, and
+`nx reset` empties the cache of them all.
+
+What a hit restores follows [What is stored](#what-is-stored):
+
+- `check`, `lint`, `fmt-check` and `test` restore a result and the terminal
+  output, which can name the other checkout's folders, as cargo's
+  `Compiling` lines do.
+- `build` restores the final artifacts only: executables, `cdylib` and
+  `staticlib` files. Never the `.d` files beside them, nor anything of Cargo's
+  build directory. Cargo in this checkout still compiles whatever it needs.
+- A restored executable or library is the one that the other checkout built,
+  so the absolute paths compiled into it name that checkout: a value of
+  `env!("CARGO_MANIFEST_DIR")`, the folders in its debug information, and
+  `file!()` in a crate that cargo compiles by absolute path, such as a path
+  dependency outside the workspace. `--remap-path-prefix` in `RUSTFLAGS`
+  rewrites the source paths, but not what `env!` returns, and `RUSTFLAGS` is
+  part of the key, so a value that names the checkout gives each checkout
+  keys of its own.
+
+Where artifacts have to come from the checkout they run in, give each checkout
+a cache of its own. In `nx.json`, a relative `cacheDirectory` is read against
+each checkout's folder:
+
+```json
+{
+  "cacheDirectory": ".nx/cache"
+}
+```
+
+An absolute path is shared again by every checkout that names it. Nx hashes
+`nx.json` into every key, so each task runs once more after the change. For
+one shell or one command, `NX_CACHE_DIRECTORY` does the same and wins over
+`cacheDirectory`. The Nx daemon keeps the directories that it chose when it
+started, so set the variable for every command in that checkout, or set
+`NX_DAEMON=false` with it:
+
+```sh
+NX_CACHE_DIRECTORY=.nx/cache NX_DAEMON=false nx run-many -t build test
+```
 
 ## Requirements
 

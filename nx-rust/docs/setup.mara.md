@@ -132,6 +132,17 @@ adds:
 }
 ```
 
+### Several checkouts of one repository
+
+Nx 24 shares one local cache, in your home folder, between every checkout of
+a repository, git worktrees included, unless `nx.json` sets `cacheDirectory`.
+A Rust result stored in one checkout is then restored in the others. For
+`check`, `lint`, `fmt-check` and `test` that is only the result. A restored
+`build` brings the other checkout's executables, whose compiled-in paths, such
+as `env!("CARGO_MANIFEST_DIR")`, name that checkout.
+[Sharing the cache between checkouts](caching.mara.md#sharing-the-cache-between-checkouts)
+says what is restored and how to give each checkout a cache of its own.
+
 ## Creating crates
 
 ```sh
