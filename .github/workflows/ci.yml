@@ -16,11 +16,11 @@ concurrency:
 #
 # The branch protection of `main` requires two status checks, the jobs named
 # `Build, lint, test and format` (`check`) and `End-to-end tests` (`e2e`).
-# `check` gathers the results of `build-lint-format` and the four sharded unit
-# test jobs `test-1`..`test-4`; `e2e` gathers `e2e-stable` and `e2e-msrv`.
-# None of the underlying jobs is a required check itself. Renaming a required
-# job, or adding a job that must pass, means changing the branch protection
-# too, or pull requests wait for a check that never reports.
+# `check` gathers the results of `build-lint-format`, `plan-shards` and the
+# four sharded unit test jobs `test-1`..`test-4`; `e2e` gathers `e2e-stable`
+# and `e2e-msrv`. None of the underlying jobs is a required check itself.
+# Renaming a required job, or adding a job that must pass, means changing the
+# branch protection too, or pull requests wait for a check that never reports.
 jobs:
   build-lint-format:
     name: Build, lint and format
@@ -55,55 +55,117 @@ jobs:
       # the knowledge base needs a Mara version that is not published
       # (nxr-0x99we). Until then they are run locally.
 
-  # The unit test suite runs across four shards at the same time, balanced by
-  # `nx-rust/jest.sequencer.cjs`. They are four explicit jobs rather than a
-  # matrix for the same reason as `e2e-stable` and `e2e-msrv` below: `check`
-  # verifies that each shard's result is literally `success`.
+  # Restores the latest CI per-suite timing profile once per workflow run and
+  # passes that exact snapshot to every shard, so all four shards compute the
+  # same LPT partition even if another push updates the cache mid-run.
+  plan-shards:
+    name: Plan test shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      timings: ${{ steps.load.outputs.timings }}
+    steps:
+      - name: Restore test timings
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/jest-timings.json
+          key: jest-timings-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}
+          restore-keys: |
+            jest-timings-${{ runner.os }}-${{ runner.arch }}-
+      - name: Emit pinned timings snapshot
+        id: load
+        env:
+          TIMINGS_FILE: ${{ runner.temp }}/jest-timings.json
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const file = process.env.TIMINGS_FILE;
+            let clean = {};
+            if (fs.existsSync(file)) {
+              try {
+                const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+                if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                  for (const [k, v] of Object.entries(parsed)) {
+                    if (typeof v === "number" && Number.isFinite(v) && v >= 0) clean[k] = Math.round(v);
+                  }
+                }
+              } catch {}
+            }
+            console.log(`Loaded ${Object.keys(clean).length} cached suite timings`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `timings=${JSON.stringify(clean)}\n`);
+          '
+
+  # The unit test suite runs across four shards at the same time, LPT-packed by
+  # `nx-rust/jest.sequencer.cjs` from the pinned timing profile. They are four
+  # explicit jobs rather than a matrix for the same reason as `e2e-stable` and
+  # `e2e-msrv` below: `check` verifies that each shard's result is literally
+  # `success`.
   test-1:
     name: Unit tests (shard 1/4)
+    needs: [plan-shards]
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      timings: ${{ steps.run.outputs.timings }}
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/unit-tests
+      - id: run
+        uses: ./.github/actions/unit-tests
         with:
           shard: 1/4
+          timings: ${{ needs.plan-shards.outputs.timings }}
 
   test-2:
     name: Unit tests (shard 2/4)
+    needs: [plan-shards]
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      timings: ${{ steps.run.outputs.timings }}
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/unit-tests
+      - id: run
+        uses: ./.github/actions/unit-tests
         with:
           shard: 2/4
+          timings: ${{ needs.plan-shards.outputs.timings }}
 
   test-3:
     name: Unit tests (shard 3/4)
+    needs: [plan-shards]
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      timings: ${{ steps.run.outputs.timings }}
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/unit-tests
+      - id: run
+        uses: ./.github/actions/unit-tests
         with:
           shard: 3/4
+          timings: ${{ needs.plan-shards.outputs.timings }}
 
   test-4:
     name: Unit tests (shard 4/4)
+    needs: [plan-shards]
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      timings: ${{ steps.run.outputs.timings }}
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/unit-tests
+      - id: run
+        uses: ./.github/actions/unit-tests
         with:
           shard: 4/4
+          timings: ${{ needs.plan-shards.outputs.timings }}
 
   # The required check `Build, lint, test and format`: it passes only when
-  # build/lint/format and every unit test shard succeeded.
+  # build/lint/format, shard planning and every unit test shard succeeded, and
+  # then saves the merged suite timings to cache for future runs.
   check:
     name: Build, lint, test and format
-    needs: [build-lint-format, test-1, test-2, test-3, test-4]
+    needs: [build-lint-format, plan-shards, test-1, test-2, test-3, test-4]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -111,21 +173,57 @@ jobs:
       - name: Check that build, lint, format and all test shards passed
         env:
           BUILD_LINT_FORMAT: ${{ needs.build-lint-format.result }}
+          PLAN_SHARDS: ${{ needs.plan-shards.result }}
           TEST_1: ${{ needs.test-1.result }}
           TEST_2: ${{ needs.test-2.result }}
           TEST_3: ${{ needs.test-3.result }}
           TEST_4: ${{ needs.test-4.result }}
         run: |
           echo "Build, lint and format: $BUILD_LINT_FORMAT"
+          echo "Plan test shards: $PLAN_SHARDS"
           echo "Unit tests (shard 1/4): $TEST_1"
           echo "Unit tests (shard 2/4): $TEST_2"
           echo "Unit tests (shard 3/4): $TEST_3"
           echo "Unit tests (shard 4/4): $TEST_4"
           test "$BUILD_LINT_FORMAT" = success
+          test "$PLAN_SHARDS" = success
           test "$TEST_1" = success
           test "$TEST_2" = success
           test "$TEST_3" = success
           test "$TEST_4" = success
+      - name: Merge shard timings
+        env:
+          T1: ${{ needs.test-1.outputs.timings }}
+          T2: ${{ needs.test-2.outputs.timings }}
+          T3: ${{ needs.test-3.outputs.timings }}
+          T4: ${{ needs.test-4.outputs.timings }}
+          TIMINGS_FILE: ${{ runner.temp }}/jest-timings.json
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const merged = {};
+            for (const raw of [process.env.T1, process.env.T2, process.env.T3, process.env.T4]) {
+              if (!raw) continue;
+              const parsed = JSON.parse(raw);
+              for (const [k, v] of Object.entries(parsed)) {
+                if (typeof v === "number" && Number.isFinite(v) && v >= 0) merged[k] = Math.round(v);
+              }
+            }
+            const sorted = Object.fromEntries(Object.entries(merged).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+            fs.writeFileSync(process.env.TIMINGS_FILE, JSON.stringify(sorted));
+            const totals = [process.env.T1, process.env.T2, process.env.T3, process.env.T4].map((raw, i) => {
+              const obj = raw ? JSON.parse(raw) : {};
+              const ms = Object.values(obj).reduce((s, n) => s + (typeof n === "number" ? n : 0), 0);
+              return `shard ${i + 1}: ${Object.keys(obj).length} suites, ${(ms / 1000).toFixed(1)}s`;
+            });
+            console.log(`Merged ${Object.keys(sorted).length} suite timings (${totals.join(" | ")})`);
+          '
+      - name: Save test timings
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/jest-timings.json
+          key: jest-timings-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}
 
   # The suite runs against the latest stable Cargo and against 1.91.0, the
   # oldest Cargo the plugin supports (REQ-COMPATIBILITY, VER-SETUP), in two

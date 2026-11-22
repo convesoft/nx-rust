@@ -35,3 +35,14 @@ Checks run locally:
 - YAML syntax validation on `.github/workflows/ci.yml` and `.github/actions/unit-tests/action.yml`: passed.
 - `pnpm nx format:check --all` and `zban check`: passed.
 - Full sharded test runs and end-to-end runs are covered by CI on this pull request.
+
+
+### Follow-up on the pull request: real CI timing profile + LPT bin-packing
+
+- Replaced the 25-file static snake-draft list with real CI per-suite timing profiling and Longest Processing Time first (LPT) greedy bin-packing:
+  - `nx-rust/jest.timings-reporter.cjs` (enabled in `nx-rust/jest.config.cts` only when `NX_RUST_JEST_TIMINGS_OUTPUT` is set) writes `{ "<relative posix path>": durationMs }` without altering Jest's default output.
+  - `nx-rust/jest.sequencer.cjs` reads `NX_RUST_JEST_TIMINGS_FILE` and runs LPT bin-packing in `shard()` (falling back to median duration for newly added specs, and to the original 9-file `heaviest` list + file size on a cold cache) and orders recorded specs longest-first in `sort()`.
+  - `.github/workflows/ci.yml` adds a lightweight `plan-shards` job that restores `jest-timings.json` once from `actions/cache` and passes the exact pinned JSON snapshot to `test-1`..`test-4` (preventing split-brain across shards); `check` merges the four shards' measured durations and saves the updated profile back to `actions/cache` with `continue-on-error: true`.
+  - `.github/actions/unit-tests/action.yml` accepts the pinned `timings` input and emits the shard's measured `timings` output.
+  - `nx-rust/test/jest-sequencer.spec.ts` expanded to 12 tests covering LPT bin-packing, median fallback for new specs, malformed-file fallback, timing-guided `sort()` and `TimingsReporter`.
+- Re-verified locally: `pnpm nx run-many -t build lint --output-style=static`, `NX_RUST_JEST_TIMINGS_OUTPUT=... pnpm nx test @convesoft/nx-rust --skip-nx-cache --testPathPatterns=jest-sequencer` (12/12 passed, wrote `{"test/jest-sequencer.spec.ts":86}`), real Jest CLI `--shard=1/4`..`4/4 --listTests` with `NX_RUST_JEST_TIMINGS_FILE` (81 unique specs, loads 831s / 830s / 830s / 830s), YAML validation, `pnpm nx format:check --all` and `zban check`.

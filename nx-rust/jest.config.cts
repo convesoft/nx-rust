@@ -17,6 +17,9 @@ module.exports = {
   globalSetup: "<rootDir>/test/harness/global-setup.ts",
   globalTeardown: "<rootDir>/test/harness/global-teardown.ts",
   testSequencer: "<rootDir>/jest.sequencer.cjs",
+  ...(process.env.NX_RUST_JEST_TIMINGS_OUTPUT
+    ? { reporters: ["default", "<rootDir>/jest.timings-reporter.cjs"] }
+    : {}),
   transform: {
     "^.+\\.[tj]s$": ["ts-jest", { tsconfig: "<rootDir>/tsconfig.spec.json" }],
   },

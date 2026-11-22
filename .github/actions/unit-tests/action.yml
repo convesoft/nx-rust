@@ -1,17 +1,26 @@
 name: Unit tests shard
 description: >-
   Installs pnpm, Node, the Rust toolchains, the optional Rust tools and the
-  dependencies, and runs one shard of the `@convesoft/nx-rust` unit test suite.
-  The `test-*` jobs of `.github/workflows/ci.yml` use it after the checkout, so
-  that every shard runs identical setup steps.
+  dependencies, runs one shard of the `@convesoft/nx-rust` unit test suite
+  using the pinned CI timing profile, and outputs this shard's measured suite
+  durations. The `test-*` jobs of `.github/workflows/ci.yml` use it after the
+  checkout, so that every shard runs identical setup steps.
 inputs:
   shard:
     description: Jest shard specification passed to `--shard`, such as `1/4`.
     required: true
+  timings:
+    description: JSON object mapping spec paths to measured durations in milliseconds.
+    required: false
+    default: "{}"
   cargo-affected-version:
     description: Version of `cargo-affected` to restore from cache or build.
     required: false
     default: "0.4.1"
+outputs:
+  timings:
+    description: JSON object of measured spec durations from this shard.
+    value: ${{ steps.emit-timings.outputs.timings }}
 runs:
   using: composite
   steps:
@@ -118,4 +127,20 @@ runs:
       shell: bash
       env:
         SHARD: ${{ inputs.shard }}
-      run: pnpm nx test @convesoft/nx-rust --skip-nx-cache --shard="$SHARD"
+        TIMINGS: ${{ inputs.timings }}
+        NX_RUST_JEST_TIMINGS_FILE: ${{ runner.temp }}/jest-timings-input.json
+        NX_RUST_JEST_TIMINGS_OUTPUT: ${{ runner.temp }}/jest-timings-shard.json
+      run: |
+        printf '%s' "$TIMINGS" > "$NX_RUST_JEST_TIMINGS_FILE"
+        pnpm nx test @convesoft/nx-rust --skip-nx-cache --shard="$SHARD"
+    - name: Emit measured timings
+      id: emit-timings
+      shell: bash
+      env:
+        TIMINGS_OUTPUT: ${{ runner.temp }}/jest-timings-shard.json
+      run: |
+        if [ -f "$TIMINGS_OUTPUT" ]; then
+          printf 'timings=%s\n' "$(tr -d '\r\n' < "$TIMINGS_OUTPUT")" >> "$GITHUB_OUTPUT"
+        else
+          echo 'timings={}' >> "$GITHUB_OUTPUT"
+        fi
