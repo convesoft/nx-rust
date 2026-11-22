@@ -162,6 +162,13 @@ jobs:
           npm --version
           (cd dist/nx-rust && npm publish --dry-run --access public --tag "$DIST_TAG")
 
+      - name: Preview GitHub Release notes (dry run)
+        if: ${{ inputs.dry_run }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: pnpm nx release changelog "$VERSION" --dry-run
+
       - name: Publish to npm via OIDC Trusted Publishing
         if: ${{ !inputs.dry_run }}
         env:
@@ -173,12 +180,9 @@ jobs:
       - name: Create git tag and GitHub Release
         if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-          TARGET_SHA: ${{ github.sha }}
         run: |
-          args=(--target "$TARGET_SHA" --title "v$VERSION" --generate-notes)
-          if [[ "$VERSION" == *-* ]]; then
-            args+=(--prerelease)
-          fi
-          gh release create "v$VERSION" "${args[@]}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          pnpm nx release changelog "$VERSION" --git-push-args="refs/tags/v$VERSION"
