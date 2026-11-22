@@ -210,19 +210,27 @@ describe("a group of several crates", () => {
         expect(passed(results)).toEqual(["base", "dep", "indep"]);
         expect(results.breakable.output).toMatch(/not_defined_anywhere/);
         const failed =
-          "cargo reported `breakable` and `scripted` as failed: a task fails when its own crate fails or when it needs a crate that failed.";
-        expect(results.breakable.output).toContain(
-          `breakable:check: cargo reported errors in breakable, and cargo did not report these targets of breakable as built: the library, the library compiled as a test. ${failed}`,
+          "cargo reported (`breakable` and `scripted`|`scripted` and `breakable`) as failed: a task fails when its own crate fails or when it needs a crate that failed\\.";
+        expect(results.breakable.output).toMatch(
+          new RegExp(
+            `breakable:check: cargo reported errors in breakable, and cargo did not report these targets of breakable as built: the library, the library compiled as a test\\. ${failed}`,
+          ),
         );
-        expect(results.user.output).toContain(
-          `user:check: cargo did not report these targets of user as built: the library, the library compiled as a test. ${failed}`,
+        expect(results.user.output).toMatch(
+          new RegExp(
+            `user:check: cargo did not report these targets of user as built: the library, the library compiled as a test\\. ${failed}`,
+          ),
         );
-        expect(results.devuser.output).toContain(
-          `devuser:check: cargo did not report this target of devuser as built: the library compiled as a test. ${failed}`,
+        expect(results.devuser.output).toMatch(
+          new RegExp(
+            `devuser:check: cargo did not report this target of devuser as built: the library compiled as a test\\. ${failed}`,
+          ),
         );
         expect(results.scripted.output).toMatch(/the build script of scripted fails/);
-        expect(results.scripted.output).toContain(
-          `scripted:check: cargo did not report these targets of scripted as built: the library, the library compiled as a test. ${failed}`,
+        expect(results.scripted.output).toMatch(
+          new RegExp(
+            `scripted:check: cargo did not report these targets of scripted as built: the library, the library compiled as a test\\. ${failed}`,
+          ),
         );
         // An unrelated crate passes with a warning, and without the error
         // of the broken crate in its output.
