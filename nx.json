@@ -32,8 +32,28 @@
     }
   },
   "release": {
+    "projects": ["@convesoft/nx-rust"],
     "version": {
       "preVersionCommand": "pnpm nx run-many -t build"
+    },
+    "conventionalCommits": {
+      "useCommitScope": false
+    },
+    "releaseTag": {
+      "pattern": "v{version}"
+    },
+    "changelog": {
+      "automaticFromRef": true,
+      "workspaceChangelog": {
+        "createRelease": "github",
+        "file": false
+      },
+      "projectChangelogs": false,
+      "git": {
+        "commit": false,
+        "tag": true,
+        "push": true
+      }
     }
   },
   "plugins": [
