@@ -124,7 +124,10 @@ export async function readRedirections(
  * descending precedence, as pairs of the older and the current name, of
  * which cargo reads the older where it exists: those of the folder and each
  * one above it, then those of the Cargo home, which cargo reads once where
- * it is also one of the folders.
+ * it is also one of the folders. The Cargo home is the folder that
+ * `CARGO_HOME` in `env` names, or else `.cargo` in the home folder that
+ * `HOME` in `env` names, as cargo started with `env` finds it, or else in
+ * this process's home folder.
  */
 export function configFiles(
   folder: string,
@@ -140,7 +143,9 @@ export function configFiles(
     }
     current = parent;
   }
-  const cargoHome = env.CARGO_HOME ? resolve(folder, env.CARGO_HOME) : join(homedir(), ".cargo");
+  const cargoHome = env.CARGO_HOME
+    ? resolve(folder, env.CARGO_HOME)
+    : join(env.HOME || homedir(), ".cargo");
   files.push([join(cargoHome, "config"), join(cargoHome, "config.toml")]);
   return files;
 }
