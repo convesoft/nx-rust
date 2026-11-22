@@ -235,6 +235,22 @@ describe("a group that selects its crates with -p, with warnings denied", () => 
           false,
         );
         expect(passed(warn)).toEqual(["dep", "indep"]);
+
+        // cargo test applies the setting itself and stops on the warning;
+        // every task names it (DES-TEST-RUN, "Denied warnings in a test step").
+        const tests = await runShared(
+          workspace,
+          await prepare(workspace, "test", ["dep", "indep"], env),
+          false,
+        );
+        expect(passed(tests)).toEqual(honours ? [] : ["dep", "indep"]);
+        for (const crate of ["dep", "indep"]) {
+          expect(
+            tests[crate].output.includes(
+              `${crate}:test: the tests of ${crate} were not run: cargo test stopped before running any test, because cargo reported warnings in \`base\`, which is outside the selection of this run (cargo compiles it for a crate that this run selects), and warnings are denied: ${join(workspace.root, "rust", ".cargo", "config.toml")} sets build.warnings = "deny".`,
+            ),
+          ).toBe(honours);
+        }
       } finally {
         workspace.remove();
       }
