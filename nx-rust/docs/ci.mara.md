@@ -269,6 +269,7 @@ For a workspace with `affectedTests` enabled, a workspace-level task brings the 
 :title: Baseline on main
 :status: accepted
 :satisfies: REQ-BASELINE
+:mitigates: RISK-BASELINE-DRIFT
 
 The main pipeline runs four steps per workspace:
 
