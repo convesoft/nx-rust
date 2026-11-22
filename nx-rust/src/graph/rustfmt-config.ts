@@ -145,7 +145,7 @@ export function rustfmtConfigurationWarnings(
   const message = [
     shown === undefined
       ? `nx-rust: rustfmt takes its configuration from ${file} for the crates of ${subject} that no rustfmt.toml or .rustfmt.toml in the repository covers, but the file lies outside the repository, so Nx does not hash it, and a fmt-check result cached before a change to it can be restored afterwards.`
-      : `nx-rust: rustfmt takes its configuration from ${shown}, a per-user folder that HOME or XDG_CONFIG_HOME places in the repository, for the crates of ${subject} that no other rustfmt.toml or .rustfmt.toml covers, but the file lies outside the folders of those crates, so their keys do not hold it, and a fmt-check result cached before a change to it can be restored afterwards.`,
+      : `nx-rust: rustfmt takes its configuration from ${shown}, a per-user file that HOME or XDG_CONFIG_HOME places in the repository, for the crates of ${subject} that no other rustfmt.toml or .rustfmt.toml covers, but the file lies outside the folders of those crates, so their keys do not hold it, and a fmt-check result cached before a change to it can be restored afterwards.`,
     `Add a rustfmt.toml to the repository root to have every machine format alike and Nx hash it, or run \`nx reset\` after each change to the file; --skip-nx-cache covers only the command it is given to (${guide}).`,
   ].join("\n");
   for (const { workspace, crates } of concerned) {

@@ -171,7 +171,7 @@ describe("the warning about a rustfmt configuration outside the repository", () 
             const model = await runNx(workspace, ["run", "model:fmt-check"], env);
             const api = await runNx(workspace, ["run", "api:fmt-check"], env);
             const inside =
-              "nx-rust: rustfmt takes its configuration from rust/crates/api/config/rustfmt/rustfmt.toml, a per-user folder that HOME or XDG_CONFIG_HOME places in the repository, for the crates of the Cargo workspace in rust that no other rustfmt.toml or .rustfmt.toml covers, but the file lies outside the folders of those crates, so their keys do not hold it, and a fmt-check result cached before a change to it can be restored afterwards.";
+              "nx-rust: rustfmt takes its configuration from rust/crates/api/config/rustfmt/rustfmt.toml, a per-user file that HOME or XDG_CONFIG_HOME places in the repository, for the crates of the Cargo workspace in rust that no other rustfmt.toml or .rustfmt.toml covers, but the file lies outside the folders of those crates, so their keys do not hold it, and a fmt-check result cached before a change to it can be restored afterwards.";
 
             expect({
               shown: shown.output.includes(inside),

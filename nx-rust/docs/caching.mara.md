@@ -435,7 +435,7 @@ file it formats up to the file system's root. Where no folder between a
 crate's source files and the repository root holds one, it takes one from a
 folder above the repository, from your home folder (`~/.rustfmt.toml` or
 `~/rustfmt.toml`) or from `$XDG_CONFIG_HOME/rustfmt/` (by default
-`~/.config/rustfmt/`). Nx hashes none of these, so the `fmt-check` and `fmt`
+`~/.config/rustfmt/`). Nx hashes none of these where they lie outside the repository, so the `fmt-check` and `fmt`
 tasks of such crates start with a warning that names the file.
 
 - A `fmt-check` result that Nx cached before you change the file can be
