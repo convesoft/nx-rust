@@ -246,12 +246,22 @@ export function invalidTestModeMessage(task: string, value: string): string {
  *
  * @param optedOut Whether the task's `affectedTests` option is `false`, as a
  *   crate's table or `--affectedTests=false` sets it.
+ * @param testTarget The test target that the task's `test` option names,
+ *   which it runs whole in either mode (`DES-TEST-RUN`, "One test target").
  */
-export function testModeNote(task: string, mode: TestMode, optedOut: boolean): string | undefined {
+export function testModeNote(
+  task: string,
+  mode: TestMode,
+  optedOut: boolean,
+  testTarget?: string,
+): string | undefined {
   if (mode.kind === "invalid") {
     return undefined;
   }
   const text = testModeText(mode);
+  if (testTarget !== undefined) {
+    return `${task}: runs every test of the test target ${JSON.stringify(testTarget)}, which its option test names, and selects no affected tests; the test mode is ${text}.`;
+  }
   if (optedOut) {
     return `${task}: runs the full suite, because its option affectedTests is false; the test mode is ${text}.`;
   }

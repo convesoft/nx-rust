@@ -892,7 +892,7 @@ On 14 November 2026 the maintainer kept this risk for Cargo configuration that N
 :threatens: REQ-TEST-MODE-KEY
 :threatens: GOAL-TRUSTED-CACHE
 
-If the result of running selected tests were stored under the key of the full suite, the main branch could show green for tests that never ran. [[DES-TEST-MODE]] prevents it by putting the mode and the baseline commit into the key, and by letting a task select only where every evaluation of the mode command in its `nx` command printed the mode that its executor reads, with a value that is never restored for an evaluation after a subset ran in another mode ([[EVD-TEST-MODE-GUARD]]). The remaining exposure is the mode command reporting another mode than the one the task runs in, for example when Nx reuses an old evaluation or runs the command in another environment than the task ([[RISK-NX-INPUT-SEMANTICS]]).
+If the result of running selected tests were stored under the key of the full suite, the main branch could show green for tests that never ran. [[DES-TEST-MODE]] prevents it by putting the mode and the baseline commit into the key, and by letting a task select only where every evaluation of the mode command in its `nx` command printed the mode that its executor reads, with a value that is never restored for an evaluation after a subset ran in another mode ([[EVD-TEST-MODE-GUARD]]). The remaining exposure is the mode command reporting another mode than the one the task runs in, for example when Nx reuses an old evaluation or runs the command in another environment than the task ([[RISK-NX-INPUT-SEMANTICS]]). A run of the test target that the `test` option names is a subset as well: the option is in its key, the task runs in a cargo command of its own, and it never selects affected tests, so its result is neither stored under the key of the whole suite nor counted for another crate ([[DES-TEST-RUN]], "One test target"; [[DES-BATCH]], "Groups of one crate").
 :::
 
 :::mara risk RISK-NX-INPUT-SEMANTICS
@@ -2013,6 +2013,23 @@ An experiment on 13 November 2026 with cargo-nextest 0.9.151, the prebuilt binar
 - `cargo nextest run --cargo-profile custom` built with Cargo's profile `custom`, into `target/custom`, and ran the test under nextest's profile `default`.
 - `cargo test --doc --profile custom` built with the profile `custom` and ran the doctest.
 - `cargo nextest run` accepted `--features`, `--all-features`, `--no-default-features` and `--target` as cargo does; its help lists them beside `--cargo-profile`.
+:::
+
+:::mara evidence EVD-CARGO-TEST-TARGET-SELECTOR
+:mid: 01M81Q6JXEKKG19E0HAXAW0Q6W
+:title: What cargo and nextest do with --test <name>
+:status: accepted
+:supports: DES-TEST-RUN
+:supports: DES-BATCH
+:supports: DES-PLUGIN-OPTIONS
+
+Experiments on 22 November 2026 with cargo 1.100.0 (3acc79c0c 2026-11-05) and cargo 1.91.0 (ea2d97820 2025-10-10), each with its rustc, and cargo-nextest 0.9.152, in a throwaway virtual workspace outside this repository, for nxr-k5y74e. Its members were `a`, a library with a unit test and a doctest, a binary `a` with a test of its own and the integration tests `performance`, which asserts that `CARGO_BIN_EXE_a` exists, and `other`; `b`, a library with a unit test and a doctest and the integration tests `bonly` and `performance`; and `c`, a library without tests. No `.config/nextest.toml` existed. Both versions gave the same results, apart from the case of one word in an error message.
+
+- **One crate.** `cargo test -p a --test performance` built the library and the binary `a` in normal mode and the test executable `performance`, as its JSON messages with `--no-run` showed, and ran `performance` alone: no unit test, no test of the binary, no other integration test and no doctest. With `--profile release` it built with that profile and ran the same test.
+- **Unknown names.** `cargo test -p a --test nosuch` failed with exit code 101 and ``no test target named `nosuch` in `a` package``, and the empty name failed the same way, with the list of the package's test targets. A glob pattern selected what it matched: `--test 'perf*'` ran `performance`, and `--test 'zz*'` failed with 101 and ``no test target matches pattern `zz*` in `a` package``.
+- **Several crates.** `cargo test -p a -p c --test performance` ran `a`'s `performance` and exited with 0, although `c` has no such target, and `cargo test -p a -p b --test bonly` ran `b`'s `bonly` and exited with 0; with `-p a -p b --test performance` it ran the target of both. Under `--workspace`, `--test bonly` ran `b`'s target and exited with 0, and a name that no member has failed with 101 and ``no test target named `nosuch` in default-run packages``. Cargo fails only where no selected package has the target, so whether a crate's selection fails depends on what else the command selects.
+- **Doctests.** `cargo test -p a --test performance --doc` failed with 101 and `can't mix --doc with other target selecting options`, while `cargo test -p a --doc` ran the doctest.
+- **nextest.** `cargo nextest run -p a --test performance --no-tests=pass` passed `--test=performance` to the `cargo test --no-run` that it builds with and ran the one test of that binary, also with `--cargo-profile release`. An unknown name, the empty one included, failed with 101 and cargo's error. With `-p a -p c` it ran `a`'s test and exited with 0, and with `--workspace --test bonly` it ran `b`'s, as cargo does. `cargo nextest run` rejected `--doc` as an unexpected argument; nextest runs no doctests.
 :::
 
 :::mara evidence EVD-TEST-MODE-READING

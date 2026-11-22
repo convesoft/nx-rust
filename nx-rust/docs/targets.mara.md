@@ -42,6 +42,7 @@ nx test api                     # one crate
 nx run-many -t lint test        # every project, JS and Rust
 nx affected -t lint test build  # only what the change affects
 nx run api:run -- --port 3000   # run a binary with arguments
+nx test api --test=performance  # one integration test target
 ```
 
 Names can be changed in the plugin options, and options of a target can be set

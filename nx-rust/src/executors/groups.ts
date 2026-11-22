@@ -3,7 +3,7 @@ import { type ConfiguredRunner, configuredRunner } from "../cargo/configured-run
 import { hostTriple } from "../cargo/host-triple";
 import { pickedTriples } from "../cargo/target-triples";
 import { wasmTriple } from "../graph/wasm";
-import { cargoArguments, selectsWorkspace } from "./command";
+import { cargoArguments, selectedTestTarget, selectsWorkspace } from "./command";
 import type { PreparedTask } from "./task";
 
 /**
@@ -36,7 +36,9 @@ export const groupsShareCommands = true;
  * cargo command runs with the environment that its tasks were keyed with.
  * A task of `build`, `check`, `lint` or `test` whose own options give it a
  * feature set shares no group, even with tasks to which a configuration or
- * the command line gives the same flags (`DES-FEATURE-SETS`).
+ * the command line gives the same flags (`DES-FEATURE-SETS`), and neither
+ * does a `test` task whose `test` option names a test target (`DES-TEST-RUN`,
+ * "One test target").
  *
  * @param shareCommands Whether tasks share a group at all
  *   ({@link groupsShareCommands}); without it every task is a group of its own.
@@ -90,8 +92,17 @@ interface GroupKey {
 // options give it a feature set shares no group, so that it forms a group of
 // one crate whatever else the batch holds ("Groups of one crate" in
 // `DES-BATCH`).
+//
+// A `test` task whose `test` option names a test target shares no group
+// either: cargo fails `--test <name>` only where no selected crate has that
+// target, so a crate without it would pass beside one that has it
+// (`DES-TEST-RUN`, "One test target"; `EVD-CARGO-TEST-TARGET-SELECTOR`).
 function groupKey(task: PreparedTask): GroupKey {
-  if (task.crate === undefined || (task.ownFeatureSet === true && selectsWorkspace(task.target))) {
+  if (
+    task.crate === undefined ||
+    (task.ownFeatureSet === true && selectsWorkspace(task.target)) ||
+    selectedTestTarget(task.target, task.options) !== undefined
+  ) {
     return { shares: false, cwd: task.cwd, command: [], env: task.env };
   }
   return {
@@ -180,7 +191,10 @@ export interface PlannedGroup<T extends PreparedTask> {
  * - a task whose own options give it a feature set, which {@link formGroups}
  *   puts in a group of its own, so that its command writes only its crate's
  *   files and its result does not depend on what else the batch holds
- *   (`DES-FEATURE-SETS`).
+ *   (`DES-FEATURE-SETS`);
+ * - under every strategy, a `test` task with the `test` option, which
+ *   {@link formGroups} also puts in a group of its own (`DES-TEST-RUN`,
+ *   "One test target").
  *
  * The host's triple is the one that `rustc -vV` names in the workspace root
  * with the group's environment; where it names none, the group's tasks form
@@ -303,6 +317,13 @@ export function groupSelection(task: PreparedTask, host: () => string | undefine
   // whatever else the batch holds, so that its command writes no other
   // crate's files and its result depends on nothing else that runs.
   if (task.ownFeatureSet === true) {
+    return { kind: "alone" };
+  }
+  // A `test` task with the `test` option runs the command that a developer
+  // types for that test target of its crate, under every strategy, because
+  // the flag's effect on a crate depends on what else the command selects
+  // ("Groups of one crate" in `DES-BATCH`).
+  if (selectedTestTarget(task.target, task.options) !== undefined) {
     return { kind: "alone" };
   }
   // `wasm-build` always builds for the wasm triple, a triple other than the

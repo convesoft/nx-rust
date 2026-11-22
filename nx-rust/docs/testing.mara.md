@@ -78,6 +78,41 @@ whole workspace, of which it keeps its own results; a runner that you
 configured for your host makes each crate's tests run on their own instead
 ([Tests under `workspace-build`](execution.mara.md#tests-under-workspace-build)).
 
+## One test target
+
+The `test` option runs one test target of the crate, such as the integration
+test in `tests/performance.rs`, as cargo's `--test` does. It works with both
+runners and with the other options of `test`, such as `profile`:
+
+```sh
+nx test api --test=performance                   # cargo test -p api --test performance
+nx test api --test=performance --profile=release
+```
+
+Only that target runs: no unit tests, no other test targets and no doctests,
+also with nextest, where the doctest step is left out. The value goes to cargo
+as it is, so a glob pattern such as `perf*` runs every test target it matches,
+and a name of which the crate has no test target fails the task with cargo's
+error. To give a target a short command, set the option in a configuration of
+`test` in the crate's table:
+
+```toml
+# rust/crates/api/Cargo.toml
+[package.metadata.nx.targets.test.configurations.performance]
+test = "performance"
+profile = "release"
+```
+
+```sh
+nx test api -c performance
+```
+
+The option is part of the task's cache key, so the result of one test target
+is never restored for the whole suite, nor for another target. A task with the
+option runs its crate in a cargo command of its own, also in a batch, and never
+selects affected tests: in a workspace with `affectedTests` it runs every test
+of the named target.
+
 ## Affected tests
 
 `affectedTests` says that a workspace is set up for selection. It puts the test
@@ -201,7 +236,7 @@ against the same baseline can reuse it. Falling back to the full suite under an
 :status: accepted
 :satisfies: NEED-FAST-TESTS
 
-Each crate has one `test` target. The `testRunner` option selects the runner: `cargo` (the default) runs `cargo test`, and `nextest` runs cargo-nextest. No other target is added for either runner.
+Each crate has one `test` target. The `testRunner` option selects the runner: `cargo` (the default) runs `cargo test`, and `nextest` runs cargo-nextest. No other target is added for either runner. The target's `test` option runs only the test target that it names, as cargo's `--test` does, with either runner, and the result of such a run is never restored for a run without the option or with another value of it.
 :::
 
 :::mara requirement REQ-DOCTESTS
@@ -259,7 +294,7 @@ The command and the test executor decide the mode by the same rule, from the env
 
 The plugin does not look at branches. A pipeline for main that sets nothing is in mode `full`, so the full suite runs once per code state. A pull request pipeline sets `NX_RUST_TEST_MODE=affected`.
 
-`--affectedTests=false` makes the executor run the full suite whatever the mode is. The mode command cannot see the command line, but Nx hashes the options passed there, so that run has a key of its own.
+`--affectedTests=false` makes the executor run the full suite whatever the mode is. The mode command cannot see the command line, but Nx hashes the options passed there, so that run has a key of its own. A task whose `test` option names a test target does not select either: it runs every test of that target in either mode, under a key that holds the option, and adds nothing to the record of subsets below, because what it runs is all that its key promises ([[DES-TEST-RUN]], "One test target").
 
 A task in affected mode may run more than its selection, up to the full suite, and still store its result under the affected key. The reverse never happens.
 
@@ -352,6 +387,8 @@ A record that ends with another status or a signal is a failed test binary: libt
 - such a file exists and cannot be read or parsed, so that whether it sets a runner is unknown.
 
 A task's own command passes cargo no `--config`, since no option of `test` adds arguments to cargo ([[DES-TARGET-COMMANDS]]). Each task that runs alone for this reason says so at the top of its terminal output and names the variable or file. The files inside the repository and the `CARGO_TARGET_` variables are inputs of every key ([[DES-INPUTS]]), so adding or removing such a runner changes the keys; a runner in a file outside the repository is in no key, as nothing of such a file is, and the warning for a configuration file that Nx does not hash names that file ([[RISK-HOST-ENVIRONMENT]]).
+
+**One test target.** A task whose `test` option names a test target ([[DES-PLUGIN-OPTIONS]]) runs, under every strategy and with either runner, the command that a developer types for that target of its crate, as a group of one crate ([[DES-BATCH]], "Groups of one crate"): `cargo test -p <spec> --test <name>`, or `cargo nextest run --no-tests=pass -p <spec> --test <name>`, each with the task's flags, and the task passes where it exits with 0. Cargo then builds the crate's library and binaries and the named test executable, and runs that target alone: no unit test, no test of a binary, no other test target and no doctest ([[EVD-CARGO-TEST-TARGET-SELECTOR]]). With nextest, step 5 is left out, because a plain `cargo test --test <name>` runs no doctest and `cargo test --doc` rejects `--test` beside it. A name of which the crate has no test target, the empty one included, and a pattern that matches none, fail the task with cargo's error before any test runs. Such a task never selects affected tests: in mode `affected` it runs every test of the named target, which is all that its key promises, says so at the top of its output, and records no subset ([[DES-TEST-MODE]]). Nx hashes a task's options, those of the target and of its configuration and those given on the command line, so the key of a `test` task with the option differs from its key without it and from its key with another value, and a result of the named target alone is never restored for the whole suite ([[RISK-SUBSET-AS-FULL]]). The command builds the binaries that the target's tests start through `CARGO_BIN_EXE_<name>` as a full `cargo test` does, so the crate's `test` waits for its `build` as before ([[DES-TARGETS]]), and the batch puts back the files of that `build` as for every `test` group ([[DES-BATCH]], "Files that a test batch puts back"). Under `workspace-build` the command selects the crate with `-p`, so cargo resolves features for that crate and what it depends on, as for every group of one crate, whose result the keys of the strategy cover ([[DES-BATCH]]).
 
 cargo-affected only selects. nextest runs the tests, and the selector is a replaceable step ([[ADR-TEST-SELECTOR]]). A crate that opts out of selection, with `affectedTests = false` among the options of its `test` target ([[DES-PLUGIN-OPTIONS]]), always contributes all its tests. Rules for non-Rust inputs such as SQL files, snapshots and templates can be added per repository; there are none by default.
 

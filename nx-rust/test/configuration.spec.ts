@@ -897,9 +897,9 @@ describe("graph-creation errors", () => {
 // or configurations that the target does not take fails graph creation.
 describe("options in the target tables", () => {
   const testOptions =
-    'The options that "test" takes are "features", "allFeatures", "noDefaultFeatures", "profile" and "affectedTests".';
+    'The options that "test" takes are "features", "allFeatures", "noDefaultFeatures", "profile", "test" and "affectedTests".';
   const cargoOptions =
-    'The options that @convesoft/nx-rust:cargo knows are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple", "allTargets", "noDeps", "wasmTarget" and "affectedTests".';
+    'The options that @convesoft/nx-rust:cargo knows are "features", "allFeatures", "noDefaultFeatures", "profile", "targetTriple", "allTargets", "noDeps", "wasmTarget", "test" and "affectedTests".';
 
   it.each<[string, FixtureName, FileChanges, string[]]>([
     [
