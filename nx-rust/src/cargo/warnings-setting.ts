@@ -24,7 +24,7 @@ export interface DeniedWarnings {
  * sets it, so nothing else does.
  */
 // @mara implements DES-BATCH
-export function configuredWarnings(
+function configuredWarnings(
   folder: string,
   env: Readonly<Record<string, string | undefined>>,
 ): { value: string; source: string } | undefined {

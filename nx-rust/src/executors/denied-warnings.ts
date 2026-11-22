@@ -1,7 +1,5 @@
-import { dirname, resolve } from "node:path";
-import type { CargoPackage } from "../cargo/metadata";
 import type { DeniedWarnings } from "../cargo/warnings-setting";
-import { type CrateOutcome, describeList, type OutputCrate, packageName } from "./cargo-output";
+import { type CrateOutcome, describeList, packageName } from "./cargo-output";
 
 /**
  * The packages for which a command's JSON messages report a warning: a
@@ -26,110 +24,45 @@ export function warnedPackages(output: string): Set<string> {
   return warned;
 }
 
-/** The packages whose warnings a plain cargo command of one crate would show. */
-interface Reach {
-  /** The members that the crate reaches through path dependencies, itself included, by ID. */
-  members: Set<string>;
-  /**
-   * Whether the crate may reach a package outside the workspace that cargo
-   * reports warnings for: it reaches a path dependency outside the
-   * workspace, whose own dependencies the plugin does not know, or the
-   * plugin does not know its dependencies at all.
-   */
-  outside: boolean;
-}
-
-// The members that `crate` reaches through path dependencies: normal and
-// build dependencies, and its own dev-dependencies where the command
-// compiles its tests. Cargo shows warnings for path packages only and caps
-// the lints of registry and git dependencies (`EVD-CARGO-TARGET-COMMANDS`).
-function reach(
-  crate: OutputCrate,
-  members: readonly CargoPackage[] | undefined,
-  withDevDependencies: boolean,
-): Reach {
-  if (crate.package === undefined || members === undefined) {
-    return { members: new Set([crate.spec]), outside: true };
-  }
-  const byFolder = new Map(
-    members.map((member) => [resolve(dirname(member.manifest_path)), member] as const),
-  );
-  const reached = new Set<string>([crate.package.id]);
-  let outside = false;
-  const pending: { pkg: CargoPackage; root: boolean }[] = [{ pkg: crate.package, root: true }];
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    for (const dependency of next.pkg.dependencies) {
-      if (
-        dependency.path === undefined ||
-        (dependency.kind === "dev" && !(next.root && withDevDependencies))
-      ) {
-        continue;
-      }
-      const member = byFolder.get(resolve(dependency.path));
-      if (member === undefined) {
-        outside = true;
-      } else if (!reached.has(member.id)) {
-        reached.add(member.id);
-        pending.push({ pkg: member, root: false });
-      }
-    }
-  }
-  return { members: reached, outside };
-}
-
 /**
- * Fails each crate that passed a step of `build`, `check`, `lint`,
- * `napi-build` or `wasm-build` with JSON messages where Cargo denies
- * warnings and the messages report a warning that a plain cargo command of
- * the crate alone would fail on (`DES-BATCH`, "Denied warnings"): in the
- * crate itself, in a member that it reaches through path dependencies, or
- * in a package outside the workspace where it may reach one. Under
- * `--message-format=json` cargo itself does not fail on them
- * (`EVD-CARGO-TARGET-COMMANDS`).
+ * Fails every task that passed a step of `build`, `check`, `lint`,
+ * `napi-build` or `wasm-build` with JSON messages where the messages report
+ * a warning and Cargo denies warnings for the command (`DES-BATCH`, "Denied
+ * warnings"). Under `--message-format=json` cargo neither fails on them nor
+ * says which crates a warning would fail (`EVD-CARGO-TARGET-COMMANDS`); had
+ * it applied the setting, the step's command would have failed as a whole.
  *
- * @param members Every member of the workspace, as the group's report of
- *   the members gives them; where they are unknown, every warning counts.
- * @param withDevDependencies Whether the command compiles the crates'
- *   tests, as with `--all-targets`, so that their dev-dependencies count.
+ * @param tasks The step's tasks, as `<project>:<target>`, in the order of
+ *   `outcomes`.
  * @param denied Whether Cargo denies warnings for the command, asked only
- *   where a crate that passed may fail on a warning.
- * @returns The outcomes, with each crate that fails on warnings failed.
+ *   where the messages report a warning and a task passed.
+ * @returns The outcomes, with each task that passed failed where warnings
+ *   are denied.
  */
 // @mara implements DES-BATCH
 export function withDeniedWarnings(
   outcomes: readonly CrateOutcome[],
   output: string,
-  crates: readonly OutputCrate[],
-  members: readonly CargoPackage[] | undefined,
-  withDevDependencies: boolean,
+  tasks: readonly string[],
   denied: () => DeniedWarnings | undefined,
 ): CrateOutcome[] {
+  if (outcomes.every((outcome) => !outcome.passed)) {
+    return [...outcomes];
+  }
   const warned = warnedPackages(output);
-  const memberIds = new Set((members ?? []).map((member) => member.id));
-  const failing = crates.map((crate, index) => {
-    if (!outcomes[index].passed || warned.size === 0) {
-      return [];
-    }
-    const reached = reach(crate, members, withDevDependencies);
-    return [...warned].filter(
-      (id) => reached.members.has(id) || (reached.outside && !memberIds.has(id)),
-    );
-  });
-  if (failing.every((ids) => ids.length === 0)) {
+  if (warned.size === 0) {
     return [...outcomes];
   }
   const denial = denied();
   if (denial === undefined) {
     return [...outcomes];
   }
+  const names = [...new Set([...warned].map((id) => `\`${packageName(id)}\``))].sort();
   return outcomes.map((outcome, index) => {
-    const ids = failing[index];
-    if (ids.length === 0) {
+    if (!outcome.passed) {
       return outcome;
     }
-    const crate = crates[index];
-    const names = [...new Set(ids.map((id) => `\`${packageName(id)}\``))].sort();
-    const message = `${crate.task}: cargo reported warnings in ${describeList(names)}, and warnings are denied: ${denial.source}. cargo does not fail on warnings under the JSON messages that this command reads to tell its crates apart, so the task fails as a cargo command of ${crate.name} alone would.`;
+    const message = `${tasks[index]}: cargo reported warnings in ${describeList(names)}, and warnings are denied: ${denial.source}. Under the JSON messages that this command reads, cargo does not fail on them and does not say which crates they would fail, while the command would have failed as a whole without those messages, so every task of the command that passed fails.`;
     return {
       passed: false,
       output: outcome.output,

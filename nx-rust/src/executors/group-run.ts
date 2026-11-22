@@ -512,7 +512,8 @@ function readStep(
 
 // What the output of a command for several crates, or for the whole
 // workspace, shows for each crate. A command with JSON messages also fails
-// the crates with warnings that Cargo denies (`DES-BATCH`, "Denied warnings").
+// every task that passed where its messages report a warning and Cargo
+// denies warnings (`DES-BATCH`, "Denied warnings").
 function sharedOutcomes(
   members: readonly GroupMember[],
   crates: readonly OutputCrate[],
@@ -521,19 +522,31 @@ function sharedOutcomes(
   scope: OutputScope | undefined,
   denied: () => DeniedWarnings | undefined,
 ): CrateOutcome[] {
-  const allTargets = members[0].prepared.options.allTargets === true;
-  const withWarnings = (outcomes: CrateOutcome[], tests: boolean) =>
-    withDeniedWarnings(outcomes, output, crates, members[0].invocation.members, tests, denied);
+  const withWarnings = (outcomes: CrateOutcome[]) =>
+    withDeniedWarnings(
+      outcomes,
+      output,
+      crates.map((crate) => crate.task),
+      denied,
+    );
   switch (members[0].prepared.target) {
     case "build":
     case "napi-build":
-      return withWarnings(readJsonStep(output, end, crates, false, scope), false);
+      return withWarnings(readJsonStep(output, end, crates, false, scope));
     case "wasm-build":
       // Its compile builds the libraries alone, with `--lib` (`DES-WASM`).
-      return withWarnings(readJsonStep(output, end, crates, false, scope, true), false);
+      return withWarnings(readJsonStep(output, end, crates, false, scope, true));
     case "check":
     case "lint":
-      return withWarnings(readJsonStep(output, end, crates, allTargets, scope), allTargets);
+      return withWarnings(
+        readJsonStep(
+          output,
+          end,
+          crates,
+          members[0].prepared.options.allTargets === true,
+          scope,
+        ),
+      );
     case "test":
       return readTestStep(output, end, crates);
     default:

@@ -46,14 +46,6 @@ export interface GroupInvocation extends CargoInvocation {
   workspaceMembers?: CargoPackage[];
   /**
    * Every member of the workspace, as the group's report of the members
-   * gives them, where the command selects crates by their specifications:
-   * where Cargo denies warnings, the reading of a command with JSON messages
-   * follows the crates' path dependencies through them (`DES-BATCH`,
-   * "Denied warnings").
-   */
-  members?: CargoPackage[];
-  /**
-   * Every member of the workspace, as the group's report of the members
    * gives them, where a task of the `test` group selects affected tests
    * (`DES-TEST-RUN`, step 2).
    */
@@ -184,13 +176,13 @@ export function groupInvocations(
   if (runner !== undefined && runner.host === "") {
     throw new Error("A test group that selects the whole workspace needs the host's triple.");
   }
-  const members = specs instanceof Map ? [...specs.values()] : undefined;
-  const workspaceMembers = workspace ? members : undefined;
+  const workspaceMembers = workspace && specs instanceof Map ? [...specs.values()] : undefined;
   // A group that selects affected tests places changed files among every
   // member (`DES-TEST-RUN`, step 2).
-  const affectedMembers = tasks.some((task) => task.testMode?.selects === true)
-    ? members
-    : undefined;
+  const affectedMembers =
+    tasks.some((task) => task.testMode?.selects === true) && specs instanceof Map
+      ? [...specs.values()]
+      : undefined;
   return tasks.map((task, index) => {
     const entry = finished[index];
     if (typeof entry === "string") {
@@ -238,7 +230,6 @@ export function groupInvocations(
       steps,
       cwd,
       ...(workspaceMembers === undefined ? {} : { workspaceMembers }),
-      ...(members === undefined ? {} : { members }),
       ...(affectedMembers === undefined ? {} : { affectedMembers }),
       ...(runner === undefined ? {} : { runner: [...runner.command] }),
       ...(entry.crate === undefined ? {} : { crate: entry.crate }),
