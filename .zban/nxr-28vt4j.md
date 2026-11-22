@@ -33,3 +33,10 @@ Two things to keep: the test sequencer of nxr-krddfp names the heavy specs by fi
 - [ ] Give the time of the unit suite before and after, measured alone: a split can change how the three workers are filled
 
 Done when: the test counts are equal, and `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e` and `pnpm nx format:check --all` pass.
+
+Added by the architecture audit after 1.0.0-rc.2 (22 November 2026, at 66964f3, finding 12):
+
+- `nx-rust/test/targets.spec.ts` is 889 lines in six top-level `describe` blocks; `task dependencies` and `targetNames` hold about 520 of them. Split those two into specs of their own.
+- `nx-rust-e2e/src/nx-rust.spec.ts` is about 1,370 lines since PR #87 added the package test. The cut suggested by that issue's worker: the package-shape tests (install, peer range, README and licences, `PLUGIN.md` and the docs folder) into `package.spec.ts`, the `nx add` with `targetDefaults` tests into `init.spec.ts`, with `createTestProject` and `fileDigests` in a helpers module.
+- In that package test, `fileDigests(docs)` is called twice on consecutive lines, so the source docs tree is read and hashed twice in each end-to-end run. Bind it once.
+- `nx-rust/test/batch-runs.spec.ts` is now about 1,215 lines.

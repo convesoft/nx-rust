@@ -10,6 +10,8 @@ blocked_by:
   - nxr-aa287j
   - nxr-mdpha2
   - nxr-f2j7ec
+  - nxr-e4wynf
+  - nxr-pydcgt
 discovered_from: nxr-e2z8sz
 created_at: 2026-11-21T18:46:42Z
 ---
@@ -28,3 +30,5 @@ Context: finding 11 of the architecture audit after 0.6 (21 November 2026, at 54
 - [ ] Change no test file except import lines
 
 Done when: the four are split, the Mara links are the same, and `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e`, `pnpm nx format:check --all` and the Mara validation pass.
+
+Added by the architecture audit after 1.0.0-rc.2 (22 November 2026, at 66964f3): `nx-rust/src/executors/cargo-output.ts` is about 850 lines and `nx-rust/src/graph/discovery.ts` about 870 after that milestone. Concrete cuts suggested by its workers: `readTestStep` and its helpers into `test-steps.ts`, or the JSON step readers into `json-steps.ts`; and `unhashedConfigurationWarnings` with `tableList` out of `discovery.ts` into `cargo-config-warnings.ts`. nxr-e4wynf (shared matchers and messages of the step readers) and nxr-pydcgt (one loader for Cargo's configuration) change the same files first and now block this issue.
