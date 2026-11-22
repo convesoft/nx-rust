@@ -181,7 +181,7 @@ importers:
         version: 30.3.0
       '@napi-rs/cli':
         specifier: ^3.10.12
-        version: 3.10.12(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.20.5)(supports-color@8.1.1)
+        version: 3.10.12(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@22.20.5)(supports-color@8.1.1)
       '@nx/jest':
         specifier: 24.0.6
         version: 24.0.6(ca8e3f6a40771f58d78c76ca3d94b2e6)
@@ -7421,7 +7421,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@napi-rs/cli@3.10.12(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.20.5)(supports-color@8.1.1)':
+  '@napi-rs/cli@3.10.12(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@22.20.5)(supports-color@8.1.1)':
     dependencies:
       '@inquirer/prompts': 8.8.0(@types/node@22.20.5)
       '@napi-rs/cross-toolchain': 1.0.5(supports-color@8.1.1)
@@ -7436,8 +7436,8 @@ snapshots:
       typanion: 3.14.0
       typescript: 6.0.3
     optionalDependencies:
-      '@emnapi/core': 1.11.2
-      '@emnapi/runtime': 1.11.2
+      '@emnapi/core': 2.0.0-beta.3
+      '@emnapi/runtime': 2.0.0-beta.3
     transitivePeerDependencies:
       - '@napi-rs/cross-toolchain-arm64-target-aarch64'
       - '@napi-rs/cross-toolchain-arm64-target-armv7'
