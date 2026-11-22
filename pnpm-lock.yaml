@@ -173,12 +173,15 @@ importers:
         specifier: 1.9.0
         version: 1.9.0
     devDependencies:
+      '@convesoft/zban':
+        specifier: 1.0.0-rc.1
+        version: 1.0.0-rc.1
       '@jest/test-sequencer':
         specifier: ~30.3.0
         version: 30.3.0
       '@napi-rs/cli':
         specifier: ^3.10.12
-        version: 3.10.12(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@22.20.5)(supports-color@8.1.1)
+        version: 3.10.12(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.20.5)(supports-color@8.1.1)
       '@nx/jest':
         specifier: 24.0.6
         version: 24.0.6(ca8e3f6a40771f58d78c76ca3d94b2e6)
@@ -895,6 +898,31 @@ packages:
   '@clack/prompts@1.7.0':
     resolution: {integrity: sha512-y7/yvZ2TPAnR9+jnc00klvNNLkJiXFFrQA/hlLCcxA9a2A4zQIOimyFQ9XfwYKiGD1fb5GY8vbKIIgO8d5Tb2A==}
     engines: {node: '>= 20.12.0'}
+
+  '@convesoft/zban-darwin-arm64@1.0.0-rc.1':
+    resolution: {integrity: sha512-COEGic4h0an4Pl0Ga79grgHKZb/PM95aPwrgbVBbss9S7cMKRuKdve9WjDoPfBOOzyGoGZLD9zEgGeKFyM9FaA==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@convesoft/zban-darwin-x64@1.0.0-rc.1':
+    resolution: {integrity: sha512-kiLMUgWSlXMQh6EhoD7dszqwGBjk7WHvkhbb5iW5FwIHweMGeRe4FPKmIr2DyxAZJR6o3w1tn6/3SDdOtz8B1Q==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@convesoft/zban-linux-arm64@1.0.0-rc.1':
+    resolution: {integrity: sha512-/T+LgG8Xvfag6K99ONR75HnVOP+mhDSd/vdaz71zLPVq5Pr5ZQbk9hGhUb2t9R8C0C3WqAis53I62t4ETQ7+5Q==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@convesoft/zban-linux-x64@1.0.0-rc.1':
+    resolution: {integrity: sha512-8xVSTykyOi4LDroq2ZIVnUFdeftGWHCuFZyuHqU0mATymhKBRIHFTVRgv5M82w8j8E9lN6fLrDTXDo7FYGucVQ==}
+    cpu: [x64]
+    os: [linux]
+
+  '@convesoft/zban@1.0.0-rc.1':
+    resolution: {integrity: sha512-dCBjcL0/HToiPJkoQUlAPjrLmU56hhLcicGo5jULKWjDVr63xZkrBQxd3RZvtUEW8r4RUf4XTk7wG/u3opzC+g==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -6764,6 +6792,25 @@ snapshots:
       fast-wrap-ansi: 0.2.0
       sisteransi: 1.0.5
 
+  '@convesoft/zban-darwin-arm64@1.0.0-rc.1':
+    optional: true
+
+  '@convesoft/zban-darwin-x64@1.0.0-rc.1':
+    optional: true
+
+  '@convesoft/zban-linux-arm64@1.0.0-rc.1':
+    optional: true
+
+  '@convesoft/zban-linux-x64@1.0.0-rc.1':
+    optional: true
+
+  '@convesoft/zban@1.0.0-rc.1':
+    optionalDependencies:
+      '@convesoft/zban-darwin-arm64': 1.0.0-rc.1
+      '@convesoft/zban-darwin-x64': 1.0.0-rc.1
+      '@convesoft/zban-linux-arm64': 1.0.0-rc.1
+      '@convesoft/zban-linux-x64': 1.0.0-rc.1
+
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
@@ -7374,7 +7421,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@napi-rs/cli@3.10.12(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@22.20.5)(supports-color@8.1.1)':
+  '@napi-rs/cli@3.10.12(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.20.5)(supports-color@8.1.1)':
     dependencies:
       '@inquirer/prompts': 8.8.0(@types/node@22.20.5)
       '@napi-rs/cross-toolchain': 1.0.5(supports-color@8.1.1)
@@ -7389,8 +7436,8 @@ snapshots:
       typanion: 3.14.0
       typescript: 6.0.3
     optionalDependencies:
-      '@emnapi/core': 2.0.0-beta.3
-      '@emnapi/runtime': 2.0.0-beta.3
+      '@emnapi/core': 1.11.2
+      '@emnapi/runtime': 1.11.2
     transitivePeerDependencies:
       - '@napi-rs/cross-toolchain-arm64-target-aarch64'
       - '@napi-rs/cross-toolchain-arm64-target-armv7'

@@ -5,3 +5,9 @@ allowBuilds:
   "@parcel/watcher": false
   unrs-resolver: false
   "@swc/core": false
+minimumReleaseAgeExclude:
+  - "@convesoft/zban-darwin-arm64@1.0.0-rc.1"
+  - "@convesoft/zban-darwin-x64@1.0.0-rc.1"
+  - "@convesoft/zban-linux-arm64@1.0.0-rc.1"
+  - "@convesoft/zban-linux-x64@1.0.0-rc.1"
+  - "@convesoft/zban@1.0.0-rc.1"

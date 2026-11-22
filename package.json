@@ -11,6 +11,7 @@
     "smol-toml": "1.9.0"
   },
   "devDependencies": {
+    "@convesoft/zban": "1.0.0-rc.1",
     "@jest/test-sequencer": "~30.3.0",
     "@napi-rs/cli": "^3.10.12",
     "@nx/jest": "24.0.6",
