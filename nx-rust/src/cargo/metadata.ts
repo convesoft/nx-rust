@@ -66,6 +66,8 @@ export interface CargoTarget {
    * benches. Cargo 1.91 and later report it for every target.
    */
   test?: boolean;
+  /** The absolute path of the target's root source file, which cargo always reports. */
+  src_path?: string;
 }
 
 /** A declared dependency of a {@link CargoPackage}. */

@@ -2,6 +2,7 @@ import type { TargetConfiguration } from "@nx/devkit";
 import { join, posix, relative } from "node:path";
 import { ConfiguredTools, noConfiguredTools } from "../cargo/configured-tools";
 import type { CargoPackage } from "../cargo/metadata";
+import { clippyConfigurationCommand } from "./clippy-input";
 import type { CargoWorkspace } from "./discovery";
 import { digestFile, digestFolder, runIdVariable } from "./lockfile-task";
 import { napiAddon, napiOutputFiles, producesNodeAddon } from "./napi";
@@ -428,6 +429,13 @@ export function targetInputs(
       ? []
       : externalDependencyInputs(target, subject, workspaceRoot, readsDigest, settings)),
     ...environmentInputs(target),
+    ...(target === "lint"
+      ? [
+          {
+            runtime: clippyConfigurationCommand(workspaceRoot, subject.workspace.clippyFolders),
+          },
+        ]
+      : []),
     {
       runtime: toolchainCommand(
         workspaceRoot,
@@ -664,7 +672,9 @@ export function lockfileInputs(subject: InputSubject, context: InputContext): In
 /**
  * One `env` input per variable of `DES-INPUTS` that applies to the target:
  * the fixed list, `CARGO_BUILD_WARNINGS` on the targets that compile, and
- * `CLIPPY_CONF_DIR` on `lint`. The variables whose names start with
+ * `CLIPPY_CONF_DIR` on `lint`, whose value alone this hashes: the
+ * configuration file in its folder, and in each folder that Cargo's `[env]`
+ * names for it, reaches the key through {@link clippyConfigurationCommand}. The variables whose names start with
  * `CARGO_PROFILE_` or `CARGO_TARGET_` are in the toolchain command instead
  * ({@link toolchainCommand}).
  */
