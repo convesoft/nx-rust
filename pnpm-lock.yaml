@@ -173,6 +173,9 @@ importers:
         specifier: 1.9.0
         version: 1.9.0
     devDependencies:
+      '@convesoft/zban':
+        specifier: 1.0.0-rc.1
+        version: 1.0.0-rc.1
       '@jest/test-sequencer':
         specifier: ~30.3.0
         version: 30.3.0
@@ -895,6 +898,31 @@ packages:
   '@clack/prompts@1.7.0':
     resolution: {integrity: sha512-y7/yvZ2TPAnR9+jnc00klvNNLkJiXFFrQA/hlLCcxA9a2A4zQIOimyFQ9XfwYKiGD1fb5GY8vbKIIgO8d5Tb2A==}
     engines: {node: '>= 20.12.0'}
+
+  '@convesoft/zban-darwin-arm64@1.0.0-rc.1':
+    resolution: {integrity: sha512-COEGic4h0an4Pl0Ga79grgHKZb/PM95aPwrgbVBbss9S7cMKRuKdve9WjDoPfBOOzyGoGZLD9zEgGeKFyM9FaA==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@convesoft/zban-darwin-x64@1.0.0-rc.1':
+    resolution: {integrity: sha512-kiLMUgWSlXMQh6EhoD7dszqwGBjk7WHvkhbb5iW5FwIHweMGeRe4FPKmIr2DyxAZJR6o3w1tn6/3SDdOtz8B1Q==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@convesoft/zban-linux-arm64@1.0.0-rc.1':
+    resolution: {integrity: sha512-/T+LgG8Xvfag6K99ONR75HnVOP+mhDSd/vdaz71zLPVq5Pr5ZQbk9hGhUb2t9R8C0C3WqAis53I62t4ETQ7+5Q==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@convesoft/zban-linux-x64@1.0.0-rc.1':
+    resolution: {integrity: sha512-8xVSTykyOi4LDroq2ZIVnUFdeftGWHCuFZyuHqU0mATymhKBRIHFTVRgv5M82w8j8E9lN6fLrDTXDo7FYGucVQ==}
+    cpu: [x64]
+    os: [linux]
+
+  '@convesoft/zban@1.0.0-rc.1':
+    resolution: {integrity: sha512-dCBjcL0/HToiPJkoQUlAPjrLmU56hhLcicGo5jULKWjDVr63xZkrBQxd3RZvtUEW8r4RUf4XTk7wG/u3opzC+g==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -6763,6 +6791,25 @@ snapshots:
       fast-string-width: 3.0.2
       fast-wrap-ansi: 0.2.0
       sisteransi: 1.0.5
+
+  '@convesoft/zban-darwin-arm64@1.0.0-rc.1':
+    optional: true
+
+  '@convesoft/zban-darwin-x64@1.0.0-rc.1':
+    optional: true
+
+  '@convesoft/zban-linux-arm64@1.0.0-rc.1':
+    optional: true
+
+  '@convesoft/zban-linux-x64@1.0.0-rc.1':
+    optional: true
+
+  '@convesoft/zban@1.0.0-rc.1':
+    optionalDependencies:
+      '@convesoft/zban-darwin-arm64': 1.0.0-rc.1
+      '@convesoft/zban-darwin-x64': 1.0.0-rc.1
+      '@convesoft/zban-linux-arm64': 1.0.0-rc.1
+      '@convesoft/zban-linux-x64': 1.0.0-rc.1
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
