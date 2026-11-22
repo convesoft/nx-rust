@@ -6,9 +6,9 @@ JS and TS projects.
 
 > **Status:** milestones 0.1 to 0.5 of the
 > [roadmap](https://github.com/convesoft/nx-rust/blob/main/nx-rust/docs/product.mara.md#roadmap)
-> are implemented on the [`main` branch](https://github.com/convesoft/nx-rust).
-> What is left of v1 is 1.0. It is not published to npm yet; publishing is
-> decided at 1.0.
+> are implemented on the [`main` branch](https://github.com/convesoft/nx-rust),
+> and 1.0 release candidates are published on npm under the `next` dist-tag.
+> What is left of v1 is real-repository validation.
 
 - **Nothing to describe twice.** Projects, targets and dependencies come from
   `cargo metadata`. No crate needs a `project.json`.
@@ -28,7 +28,7 @@ CI yet.
 ## Usage
 
 ```sh
-nx add @convesoft/nx-rust        # once the package is on npm
+nx add @convesoft/nx-rust@next   # 1.0 release candidate
 nx affected -t lint test build
 ```
 

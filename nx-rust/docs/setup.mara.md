@@ -1,8 +1,8 @@
 # Setup and compatibility
 
-> **Status:** milestones 0.1 to 0.5 are implemented on `main` but not
-> published to npm yet, so `nx add @convesoft/nx-rust` cannot install it until
-> the package is published.
+> **Status:** milestones 0.1 to 0.5 are implemented on `main`, and 1.0 release
+> candidates are published on npm under the `next` dist-tag
+> (`nx add @convesoft/nx-rust@next`).
 
 ## What you need
 

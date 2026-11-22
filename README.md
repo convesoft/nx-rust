@@ -5,11 +5,11 @@ Nx projects while Cargo stays the build tool.** It is written for monorepos
 where Rust crates sit beside JS and TS projects.
 
 > **Status:** milestones 0.1 to 0.5 of the [roadmap](#roadmap) are implemented
-> on `main`. What is left of v1 is 1.0, which checks the open assumptions and
-> validates the plugin on a real repository. It is not published to npm yet;
-> publishing is decided at 1.0. The
-> specification is in [`nx-rust/docs/`](nx-rust/docs/index.mara.md), and
-> progress is tracked in [`.zban/`](.zban/).
+> on `main`, and 1.0 release candidates are published on npm under the `next`
+> dist-tag (`nx add @convesoft/nx-rust@next`). What is left of v1 is
+> real-repository validation. The specification is in
+> [`nx-rust/docs/`](nx-rust/docs/index.mara.md), and progress is tracked in
+> [`.zban/`](.zban/).
 
 ## Why
 
@@ -37,11 +37,8 @@ See what nx-rust [deliberately does not do](nx-rust/docs/product.mara.md#what-nx
 
 ## What it looks like
 
-`nx add` installs the package from npm, so the first line works only once the
-package is published there.
-
 ```sh
-nx add @convesoft/nx-rust        # register the plugin; nothing is written into crates
+nx add @convesoft/nx-rust@next   # register the plugin (1.0 RC); nothing is written into crates
 
 nx show projects                 # every crate is a project
 nx graph                         # with normal, build and dev-dependency edges

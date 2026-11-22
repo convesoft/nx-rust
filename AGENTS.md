@@ -15,9 +15,10 @@ command lines on your `PATH`. The rules below add to the guide.
 nx-rust (`@convesoft/nx-rust`) is an Nx plugin that makes Cargo workspaces
 first-class Nx projects while Cargo stays the build tool. It is written first
 for Nx monorepos that mix JS/TS and Rust. The design is specified in Mara.
-Milestones 0.1 to 0.5 are implemented on `main` and not published to npm yet;
-what is left of v1 is 1.0. v1 is delivered in 0.x milestones, each of them an epic in zban; none is published
-on its own, and publishing is decided at 1.0 (`ADR-PUBLISHING-AT-1-0`).
+Milestones 0.1 to 0.5 are implemented on `main`, and 1.0 release candidates are
+published on npm under the `next` dist-tag (`ADR-PUBLISHING-AT-1-0`); what is
+left of v1 is real-repository validation in 1.0. v1 was delivered in 0.x
+milestones, each of them an epic in zban, none published on its own.
 
 The principles every change has to respect:
 

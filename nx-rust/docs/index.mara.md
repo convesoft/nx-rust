@@ -6,8 +6,8 @@ projects while Cargo stays the build tool. Each topic page opens with guidance
 for users, followed by the requirements and design that govern that topic.
 
 > **Status:** milestones 0.1 to 0.5 of the [roadmap](product.mara.md#roadmap)
-> are implemented on `main` and not published to npm yet. A page whose feature
-> is not implemented, or only in part, says so at the top.
+> are implemented on `main`, and 1.0 release candidates are published on npm
+> under the `next` dist-tag (`nx add @convesoft/nx-rust@next`).
 
 ## For users
 
