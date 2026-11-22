@@ -13,6 +13,8 @@ import {
 } from "./cargo-output";
 import {
   describeStoppedByWarnings,
+  describeWarnedPackages,
+  fixOfStoppedByWarnings,
   type StoppedByWarnings,
   stoppedByWarnings,
 } from "./denied-warnings";
@@ -52,9 +54,11 @@ export interface RunnerSetup {
  * location line (` --> path:line:col`) names a crate of the group goes to that
  * crate; one that concerns only a member outside the group is left out,
  * unless it is an error, which can explain a failure and goes to every
- * crate, or a warning where `warningsDenied` is set, since cargo then fails
- * on it (`DES-TEST-RUN`, "Denied warnings in a test step"); every other
- * block goes to every crate.
+ * crate; every other block goes to every crate. Where `warningsDenied` is
+ * set, every warning goes to every crate before any of these rules, since
+ * each fails the whole step and its location need not be in the folder of
+ * the crate that cargo compiled it for (`DES-TEST-RUN`, "Denied warnings in
+ * a test step").
  */
 export function attributeText(
   lines: readonly string[],
@@ -77,6 +81,12 @@ export function attributeText(
   );
   for (const block of blocks) {
     const [header] = block;
+    if (warningsDenied && plainLine(header).startsWith("warning")) {
+      for (const part of parts) {
+        part.push(...block);
+      }
+      continue;
+    }
     const owner = blockOwner(block, crates, folders, scope);
     if (owner !== undefined) {
       parts[owner].push(...block);
@@ -88,10 +98,7 @@ export function attributeText(
     const outsideOnly =
       outside.ownsLine(header) ||
       (location !== undefined && outside.atPath(location) !== undefined);
-    const explains =
-      plainLine(header).startsWith("error") ||
-      (warningsDenied && plainLine(header).startsWith("warning"));
-    if (outsideOnly && !explains) {
+    if (outsideOnly && !plainLine(header).startsWith("error")) {
       continue;
     }
     for (const part of parts) {
@@ -187,8 +194,10 @@ function describeNotCompiled(names: readonly string[], outsideNames: ReadonlySet
  * message that names the crates that did not compile, `what` being the
  * command, and says which of them are outside the group (`DES-BATCH`, "Test
  * runs"); where cargo says that it denies warnings (`stopped`), the message
- * also names the packages with warnings and what denies them
- * (`DES-TEST-RUN`, "Denied warnings in a test step").
+ * also names the packages with warnings, those that are no crate of the
+ * group as outside the selection of a step that selects the whole workspace
+ * (`selectsWorkspace`) or its crates, and what denies them (`DES-TEST-RUN`,
+ * "Denied warnings in a test step").
  */
 export function failStopped(
   crates: readonly OutputCrate[],
@@ -197,6 +206,7 @@ export function failStopped(
   outsideNames: ReadonlySet<string>,
   what: string,
   stopped?: StoppedByWarnings,
+  selectsWorkspace = true,
 ): CrateOutcome[] {
   const causes = [
     ...(names.length === 0 ? [] : [`${describeNotCompiled(names, outsideNames)} did not compile`]),
@@ -204,13 +214,13 @@ export function failStopped(
       ? []
       : [
           describeStoppedByWarnings(stopped, (packages) =>
-            describeNotCompiled(packages, outsideNames),
+            describeWarnedPackages(packages, crates, selectsWorkspace ? outsideNames : undefined),
           ),
         ]),
   ];
   const fix = [
     ...(names.length === 0 ? [] : ["the crate that does not compile"]),
-    ...(stopped === undefined ? [] : ["the warnings"]),
+    ...(stopped === undefined ? [] : [fixOfStoppedByWarnings(stopped)]),
   ].join(" and ");
   return crates.map((crate, index) => ({
     passed: false,

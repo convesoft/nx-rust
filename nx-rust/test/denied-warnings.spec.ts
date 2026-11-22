@@ -244,11 +244,13 @@ describe("a group that selects its crates with -p, with warnings denied", () => 
           false,
         );
         expect(passed(tests)).toEqual(honours ? [] : ["dep", "indep"]);
-        expect(
-          tests.indep.output.includes(
-            `indep:test: the tests of indep were not run: cargo test stopped before running any test, because cargo reported warnings in \`base\`, and warnings are denied: ${join(workspace.root, "rust", ".cargo", "config.toml")} sets build.warnings = "deny".`,
-          ),
-        ).toBe(honours);
+        for (const crate of ["dep", "indep"]) {
+          expect(
+            tests[crate].output.includes(
+              `${crate}:test: the tests of ${crate} were not run: cargo test stopped before running any test, because cargo reported warnings in \`base\`, which is outside the selection of this run (cargo compiles it for a crate that this run selects), and warnings are denied: ${join(workspace.root, "rust", ".cargo", "config.toml")} sets build.warnings = "deny".`,
+            ),
+          ).toBe(honours);
+        }
       } finally {
         workspace.remove();
       }

@@ -32,13 +32,19 @@ const escapeSequences = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:
 
 /**
  * A line of cargo's human-readable output without terminal escape
- * sequences, which the reading matches, while a task's output keeps the
- * line as cargo wrote it: cargo colours its status lines, errors and lists
- * where `CARGO_TERM_COLOR=always` asks it to, as CI configurations set it.
- * JSON messages are written without them.
+ * sequences and without the progress text before its last carriage return,
+ * which the reading matches, while a task's output keeps the line as cargo
+ * wrote it: cargo colours its status lines, errors and lists where
+ * `CARGO_TERM_COLOR=always` asks it to, as CI configurations set it, and
+ * where `CARGO_TERM_PROGRESS_WHEN=always` asks it to, writes its progress
+ * bar and a carriage return before the next line on the same line
+ * (`EVD-CARGO-TARGET-COMMANDS`, "build.warnings in the test steps"). JSON
+ * messages are written without them.
  */
 export function plainLine(line: string): string {
-  return line.includes("\u001b") ? line.replace(escapeSequences, "") : line;
+  const plain = line.includes("\u001b") ? line.replace(escapeSequences, "") : line;
+  const end = plain.replace(/\r+$/, "");
+  return end.includes("\r") ? end.slice(end.lastIndexOf("\r") + 1) : end;
 }
 
 /** What a step's output shows for one crate. */
@@ -515,9 +521,10 @@ export function readJsonStep(
  * then cannot tell which crate it belongs to. When it failed without the
  * list, as after a compile error, which stops the run before any test runs,
  * every crate failed, and the message names the crates that did not compile
- * and says that the tests of the others were not run, and, where cargo says
- * that it denies warnings, gives `warningsCause`, the packages with warnings
- * and what denies them (`DES-TEST-RUN`, "Denied warnings in a test step").
+ * or whose build script failed, and says that the tests of the others were
+ * not run, and, where cargo says that it denies warnings, gives `warnings`:
+ * the packages with warnings and what denies them as a cause, and what to
+ * fix (`DES-TEST-RUN`, "Denied warnings in a test step").
  *
  * Each block of the output, from a `Running` or `Doc-tests` line to the next,
  * goes to the crates that have a target of the name in its header, or to
@@ -532,7 +539,7 @@ export function readTestStep(
   output: string,
   end: CommandEnd,
   crates: readonly OutputCrate[],
-  warningsCause?: string,
+  warnings?: { cause: string; fix: string },
 ): CrateOutcome[] {
   // Test output is text: a test may print anything, a line of JSON included.
   const lines = output.split("\n");
@@ -609,7 +616,10 @@ export function readTestStep(
   const notCompiled = [
     ...new Set(
       lines.flatMap((line) => {
-        const name = /^error: could not compile `([^`]+)`/.exec(plainLine(line))?.[1];
+        const plain = plainLine(line);
+        const name =
+          /^error: could not compile `([^`]+)`/.exec(plain)?.[1] ??
+          /^error: failed to run custom build command for `(\S+) v/.exec(plain)?.[1];
         return name === undefined ? [] : [name];
       }),
     ),
@@ -625,11 +635,11 @@ export function readTestStep(
         ...(notCompiled.length === 0
           ? []
           : [`${describeList(notCompiled.map((name) => `\`${name}\``))} did not compile`]),
-        ...(warningsCause === undefined ? [] : [warningsCause]),
+        ...(warnings === undefined ? [] : [warnings.cause]),
       ];
       const fix = [
         ...(notCompiled.length === 0 ? [] : ["the crate that does not compile"]),
-        ...(warningsCause === undefined ? [] : ["the warnings"]),
+        ...(warnings === undefined ? [] : [warnings.fix]),
       ].join(" and ");
       return {
         passed: false,

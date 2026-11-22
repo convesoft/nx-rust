@@ -453,6 +453,7 @@ export function readNextestStep(
       outsideMembers(crates, scope).names,
       "cargo nextest run",
       stopped,
+      scope !== undefined,
     );
   }
   const names = new Set(crates.map((crate) => crate.name));

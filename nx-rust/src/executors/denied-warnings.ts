@@ -108,9 +108,12 @@ export function readTestStepWithWarnings(
     crates,
     stopped === undefined
       ? undefined
-      : describeStoppedByWarnings(stopped, (names) =>
-          describeList(names.map((name) => `\`${name}\``)),
-        ),
+      : {
+          cause: describeStoppedByWarnings(stopped, (names) =>
+            describeWarnedPackages(names, crates, undefined),
+          ),
+          fix: fixOfStoppedByWarnings(stopped),
+        },
   );
 }
 
@@ -123,6 +126,11 @@ export interface StoppedByWarnings {
   packages: string[];
   /** What denies them, as `denyingSetting` names it, if anything that the plugin reads does. */
   source: string | undefined;
+  /**
+   * Whether cargo reported errors besides the denial and its summaries while
+   * it named no crate that did not compile, whose errors those would be.
+   */
+  furtherErrors: boolean;
 }
 
 // Cargo's line after the summary of a unit whose warnings it denies.
@@ -130,6 +138,8 @@ const deniedLine = /^error: warnings are denied by `build\.warnings` configurati
 // Cargo's summary of a unit's warnings, which starts with `error:` where it
 // denies them and with `warning:` otherwise.
 const deniedSummary = /^error: `([^`]+)` \([^)]*\) generated \d+ warnings?\b/;
+// Cargo's lines that name a crate that did not compile.
+const notCompiledLine = /^error: (?:could not compile `|failed to run custom build command for `)/;
 
 /**
  * Reads from a test step's text, which cargo prints without JSON messages
@@ -138,8 +148,9 @@ const deniedSummary = /^error: `([^`]+)` \([^)]*\) generated \d+ warnings?\b/;
  * configuration`. The packages are those of cargo's summaries that start
  * with `error:`, as `` error: `d` (lib) generated 1 warning ``; cargo starts
  * no new job after the first, so it names only the packages that it compiled
- * before it stopped. The plugin decides nothing itself: it reads cargo's
- * verdict, and `setting` only names what denies the warnings.
+ * before it stopped. Lines are read as {@link plainLine} gives them, without
+ * escape sequences and progress text. The plugin decides nothing itself: it
+ * reads cargo's verdict, and `setting` only names what denies the warnings.
  *
  * @returns `undefined` where cargo does not say that warnings are denied.
  */
@@ -153,14 +164,50 @@ export function stoppedByWarnings(
     return undefined;
   }
   const packages = [...new Set(plain.flatMap((line) => deniedSummary.exec(line)?.[1] ?? []))];
-  return { packages, source: setting() };
+  const furtherErrors =
+    !plain.some((line) => notCompiledLine.test(line)) &&
+    plain.some(
+      (line) => /^error(?:\[|:)/.test(line) && !deniedLine.test(line) && !deniedSummary.test(line),
+    );
+  return { packages, source: setting(), furtherErrors };
+}
+
+/**
+ * The packages with warnings, as a test step's message names them: each in
+ * backquotes, and each that is no crate of the group marked as outside the
+ * selection of the run, with why cargo compiled it. In a step that selects
+ * the whole workspace, `outsideMembers` holds the names of the members
+ * outside the group, which the step compiles as members, while it compiles
+ * any other package for a crate of the workspace; in a step that selects its
+ * crates (`outsideMembers` undefined), cargo compiles it for one of those.
+ */
+export function describeWarnedPackages(
+  names: readonly string[],
+  crates: readonly OutputCrate[],
+  outsideMembers: ReadonlySet<string> | undefined,
+): string {
+  const inGroup = new Set(crates.map((crate) => crate.name));
+  const why = (name: string) =>
+    outsideMembers === undefined
+      ? "cargo compiles it for a crate that this run selects"
+      : outsideMembers.has(name)
+        ? "under workspace-build, cargo test compiles the tests and libraries of every crate of the workspace"
+        : "cargo compiles it for a crate of the workspace";
+  return describeList(
+    names.map((name) =>
+      inGroup.has(name)
+        ? `\`${name}\``
+        : `\`${name}\`, which is outside the selection of this run (${why(name)})`,
+    ),
+  );
 }
 
 /**
  * The cause of a test step's stop by denied warnings, as a message names
  * it: the packages with warnings, as `describe` names them, and what denies
  * them, worded as the JSON compile steps' message words it
- * ({@link withDeniedWarnings}).
+ * ({@link withDeniedWarnings}), and, where cargo reported further errors,
+ * that it did.
  */
 export function describeStoppedByWarnings(
   stopped: StoppedByWarnings,
@@ -170,7 +217,16 @@ export function describeStoppedByWarnings(
     stopped.source === undefined
       ? "warnings are denied by Cargo's build.warnings setting, as cargo says"
       : `warnings are denied: ${stopped.source}`;
-  return stopped.packages.length === 0
-    ? `${setting}, and cargo's output names no package with warnings; its diagnostics above show them`
-    : `cargo reported warnings in ${describe(stopped.packages)}, and ${setting}`;
+  const cause =
+    stopped.packages.length === 0
+      ? `${setting}, and cargo's output names no package with warnings; its diagnostics above show them`
+      : `cargo reported warnings in ${describe(stopped.packages)}, and ${setting}`;
+  return stopped.furtherErrors
+    ? `${cause}, and because cargo reported further errors above`
+    : cause;
+}
+
+/** What a message about a stop by denied warnings asks to fix. */
+export function fixOfStoppedByWarnings(stopped: StoppedByWarnings): string {
+  return stopped.furtherErrors ? "the warnings and the errors above" : "the warnings";
 }

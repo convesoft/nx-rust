@@ -76,6 +76,45 @@ describe("the reading of a test step that denied warnings stopped", () => {
     }
   });
 
+  it("reads cargo's lines after the progress text that it writes before a carriage return", () => {
+    // What cargo 1.100.0 printed with CARGO_TERM_PROGRESS_WHEN=always,
+    // CARGO_TERM_PROGRESS_WIDTH=80 and CARGO_TERM_COLOR=always: the progress
+    // bar and a carriage return before the next line, on the same line.
+    const bar = (text: string) => `\u001b[1m\u001b[36m    Building\u001b[0m [${text}]`;
+    const red = (text: string) => `\u001b[1m\u001b[91m${text}\u001b[0m`;
+    const output = [
+      "\u001b[1m\u001b[92m   Compiling\u001b[0m d v0.1.0 (/w/crates/d)",
+      `${bar("                             ] 0/3: d, d(test)                  ")}\r\u001b[1m\u001b[33mwarning\u001b[0m\u001b[1m: unused variable: \`unused\`\u001b[0m`,
+      " \u001b[1m\u001b[94m--> \u001b[0mcrates/d/src/lib.rs:14:23",
+      "",
+      `${red("error")}: \`d\` (lib) generated 1 warning (1 duplicate)`,
+      `${red("error")}: warnings are denied by \`build.warnings\` configuration`,
+      `${bar("========>                    ] 1/3: d(test)                     ")}\r${red("error")}: \`d\` (lib test) generated 1 warning (run \`cargo fix --lib -p d --tests\` to apply 1 suggestion)`,
+      `${red("error")}: warnings are denied by \`build.warnings\` configuration`,
+    ].join("\n");
+    const outcomes = readTestsBuildStep(output, commandEnd(101, null), group, scope, variable);
+    for (const outcome of outcomes) {
+      expect(outcome.passed).toBe(false);
+      expect(outcome.message).toContain(
+        `because cargo reported warnings in ${outsideD}, and warnings are denied: CARGO_BUILD_WARNINGS is deny.`,
+      );
+      expect(outcome.output).toContain("unused variable: `unused`");
+    }
+  });
+
+  it("gives every task a denied warning whose location is in a crate of the group, though cargo compiled it for another", () => {
+    // d compiles a module stored in a's folder with #[path].
+    const output = deniedInD.replace(
+      "crates/d/src/lib.rs:1:23",
+      "crates/a/src/shared_warning.rs:1:23",
+    );
+    const outcomes = readTestsBuildStep(output, commandEnd(101, null), group, scope, variable);
+    for (const outcome of outcomes) {
+      expect(outcome.output).toContain("warning: unused variable: `unused`");
+      expect(outcome.message).toContain(`because cargo reported warnings in ${outsideD}`);
+    }
+  });
+
   it("reads a nextest build that failed in the same way, from the lines that cargo prints under json-render-diagnostics", () => {
     const outcomes = readNextestStep(
       deniedInD,
@@ -92,23 +131,69 @@ describe("the reading of a test step that denied warnings stopped", () => {
       `cargo nextest run stopped before running any test, because cargo reported warnings in ${outsideD}, and warnings are denied: CARGO_BUILD_WARNINGS is deny.`,
     );
     expect(outcomes[0].output).toContain("warning: unused variable: `unused`");
+    // A group that selects its crates with -p has no scope of the workspace.
+    const [selected] = readNextestStep(
+      deniedInD,
+      nextestEnd(101, null),
+      group,
+      undefined,
+      { missing: "/r.xml" },
+      undefined,
+      false,
+      variable,
+    );
+    expect(selected.message).toContain(
+      "because cargo reported warnings in `d`, which is outside the selection of this run (cargo compiles it for a crate that this run selects), and warnings are denied",
+    );
   });
 
-  it("names the packages of a cargo test that selects its crates with -p, and gives both causes where a crate did not compile as well", () => {
+  it("names the packages of a cargo test that selects its crates with -p, and gives both causes where a build script failed as well", () => {
+    // What cargo 1.100.0 printed for `cargo test -p a -p b --no-fail-fast`
+    // with CARGO_BUILD_WARNINGS=deny, b's build script failing and an unused
+    // variable in a.
     const output = [
-      "error: could not compile `b` (lib test) due to 1 previous error",
-      "error: `a` (lib) generated 1 warning",
+      "   Compiling b v0.1.0 (/w/crates/b)",
+      "   Compiling a v0.1.0 (/w/crates/a)",
+      "error: failed to run custom build command for `b v0.1.0 (/w/crates/b)`",
+      "",
+      "Caused by:",
+      "  process didn't exit successfully: `/w/target/debug/build/b/b1515faa04a45918/out/build_script_build` (exit status: 101)",
+      "warning: build failed, waiting for other jobs to finish...",
+      "warning: unused variable: `unused`",
+      "  --> crates/a/src/lib.rs:19:23",
+      "",
+      "error: `a` (lib) generated 1 warning (run `cargo fix --lib -p a` to apply 1 suggestion)",
+      "error: warnings are denied by `build.warnings` configuration",
+      "error: `a` (lib test) generated 1 warning (1 duplicate)",
       "error: warnings are denied by `build.warnings` configuration",
     ].join("\n");
-    const [a] = readTestStepWithWarnings(
+    const outcomes = readTestStepWithWarnings(
       output,
       commandEnd(101, null),
       group,
       () => '/w/.cargo/config.toml sets build.warnings = "deny"',
     );
-    expect(a.passed).toBe(false);
-    expect(a.message).toBe(
-      'a:test: the tests of a were not run: cargo test stopped before running any test, because `b` did not compile, and because cargo reported warnings in `a`, and warnings are denied: /w/.cargo/config.toml sets build.warnings = "deny". The tests of every crate of this cargo command were not run. Fix the crate that does not compile and the warnings and run the tasks again.',
+    for (const [index, name] of ["a", "b"].entries()) {
+      expect(outcomes[index].passed).toBe(false);
+      expect(outcomes[index].message).toBe(
+        `${name}:test: the tests of ${name} were not run: cargo test stopped before running any test, because \`b\` did not compile, and because cargo reported warnings in \`a\`, and warnings are denied: /w/.cargo/config.toml sets build.warnings = "deny". The tests of every crate of this cargo command were not run. Fix the crate that does not compile and the warnings and run the tasks again.`,
+      );
+    }
+  });
+
+  it("says that cargo reported further errors where an error names no crate that did not compile", () => {
+    const output = [
+      "error: `a` (lib) generated 1 warning",
+      "error: warnings are denied by `build.warnings` configuration",
+      "error: linking with `cc` failed: exit status: 1",
+    ].join("\n");
+    const [a] = readTestStepWithWarnings(output, commandEnd(101, null), group, variable);
+    expect(a.message).toContain(
+      "because cargo reported warnings in `a`, and warnings are denied: CARGO_BUILD_WARNINGS is deny, and because cargo reported further errors above. The tests of every crate of this cargo command were not run. Fix the warnings and the errors above and run the tasks again.",
+    );
+    const [b] = readTestsBuildStep(output, commandEnd(101, null), group, scope, variable);
+    expect(b.message).toContain(
+      "and because cargo reported further errors above. The tests of every crate of this run's group were not run. Fix the warnings and the errors above and run the tasks again.",
     );
   });
 
@@ -169,7 +254,13 @@ describe("test under workspace-build with warnings denied, through Nx", () => {
         const run = await runNx(
           workspace,
           ["run-many", "-t", "test", "-p", "a,b", "--skip-nx-cache"],
-          { CARGO_BUILD_WARNINGS: "deny" },
+          {
+            CARGO_BUILD_WARNINGS: "deny",
+            // Cargo then writes progress text before its lines.
+            CARGO_TERM_PROGRESS_WHEN: "always",
+            CARGO_TERM_PROGRESS_WIDTH: "80",
+            CARGO_TERM_COLOR: "always",
+          },
         );
         expect(run.status).toBe(honours ? 1 : 0);
         for (const task of ["a:test", "b:test"]) {
@@ -195,11 +286,13 @@ describe("test under workspace-build with warnings denied, through Nx", () => {
           "--skip-nx-cache",
         ]);
         expect(configured.status).toBe(honours ? 1 : 0);
-        expect(
-          taskOutput(configured.output, "b:test").includes(
-            `because cargo reported warnings in \`a\`, and warnings are denied: ${join(workspace.root, "rust", ".cargo", "config.toml")} sets build.warnings = "deny".`,
-          ),
-        ).toBe(honours);
+        for (const task of ["a:test", "b:test"]) {
+          expect(
+            taskOutput(configured.output, task).includes(
+              `${task}: the tests of ${task[0]} were not run: cargo test --no-run stopped before running any test, because cargo reported warnings in \`a\`, and warnings are denied: ${join(workspace.root, "rust", ".cargo", "config.toml")} sets build.warnings = "deny".`,
+            ),
+          ).toBe(honours);
+        }
       } finally {
         workspace.remove();
       }
