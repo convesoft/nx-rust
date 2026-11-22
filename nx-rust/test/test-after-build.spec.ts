@@ -540,7 +540,12 @@ describe("a test batch after the builds of its command", () => {
         // for their tests, before its first cargo test; gated's binary needs
         // a feature that no run turns on.
         await hold.held();
-        expect(keptFiles(workspace)).toEqual(["debug/app", "debug/benched", "debug/harnessless"]);
+        expect(keptFiles(workspace)).toEqual([
+          "debug/app",
+          "debug/benched",
+          "debug/harnessless",
+          "debug/untested",
+        ]);
         meddle(workspace);
         hold.release();
         const { status, output } = await run;

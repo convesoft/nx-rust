@@ -37,7 +37,8 @@ Both go into the plugin options for every workspace, or into
 that says so.
 
 A crate can opt out of selection with the option of its `test` target that
-`--affectedTests=false` sets for one run, and then always runs its full suite:
+`--affectedTests=false` sets for one run, and then always runs its full suite,
+or the test target that its `test` option names:
 
 ```toml
 # rust/crates/legacy/Cargo.toml
@@ -49,8 +50,9 @@ Setting the option to `true` in a workspace without `affectedTests` fails when
 the graph is created, and `--affectedTests=true` on the command line fails the
 task before cargo runs: the workspace setting turns selection on.
 
-Doctests always run when nextest is the runner: nextest does not run them, so
-the plugin runs `cargo test --doc` as a second step. A group of `test` tasks
+Doctests run when nextest is the runner, except for a task whose `test` option
+names one test target ([One test target](#one-test-target)): nextest does not
+run them, so the plugin runs `cargo test --doc` as a second step. A group of `test` tasks
 ([Batching and features](execution.mara.md)) therefore takes two cargo calls
 with nextest, one for the tests and one for the doctests, and three in affected
 mode, where the selection of tests comes first. With `cargo test` it takes one.
@@ -77,6 +79,51 @@ through a small runner that the plugin passes to cargo, and the doctests of the
 whole workspace, of which it keeps its own results; a runner that you
 configured for your host makes each crate's tests run on their own instead
 ([Tests under `workspace-build`](execution.mara.md#tests-under-workspace-build)).
+
+## One test target
+
+The `test` option runs one test target of the crate, such as the integration
+test in `tests/performance.rs`, as cargo's `--test` does. It works with both
+runners and with the other options of `test`, such as `profile`:
+
+```sh
+nx test api --test=performance                   # cargo test -p api --test performance
+nx test api --test=performance --profile=release
+```
+
+Only that target runs: no unit tests, no other test targets and no doctests,
+also with nextest, where the doctest step is left out. The value goes to cargo
+as it is, so a glob pattern such as `perf*` runs every test target it matches,
+and a name of which the crate has no test target fails the task with cargo's
+error. To give a target a short command, set the option in a configuration of
+`test` in the crate's table:
+
+```toml
+# rust/crates/api/Cargo.toml
+[package.metadata.nx.targets.test.configurations.performance]
+test = "performance"
+profile = "release"
+```
+
+```sh
+nx test api -c performance
+```
+
+The option is part of the task's cache key, so the result of one test target
+is never restored for the whole suite, nor for another target. A task with the
+option runs its crate in a cargo command of its own, also in a batch, and never
+selects affected tests: in a workspace with `affectedTests` it runs the named
+target as a full run does. With nextest, your configuration still applies to
+it, so its default filter can leave out tests of the target, and a target
+without tests passes.
+
+A crate whose `build` you cache and that has a binary waits for that `build`
+before its tests, also where its only test target has `test = false`, because
+the option can run that target and cargo then rebuilds the binary for it.
+
+Nx reads a value of digits only on the command line as a number, which the
+option refuses before cargo runs, so `--test=123` fails: set such a name as a
+string in a configuration or in the crate's table, as `test = "123"`.
 
 ## Affected tests
 
@@ -201,7 +248,7 @@ against the same baseline can reuse it. Falling back to the full suite under an
 :status: accepted
 :satisfies: NEED-FAST-TESTS
 
-Each crate has one `test` target. The `testRunner` option selects the runner: `cargo` (the default) runs `cargo test`, and `nextest` runs cargo-nextest. No other target is added for either runner.
+Each crate has one `test` target. The `testRunner` option selects the runner: `cargo` (the default) runs `cargo test`, and `nextest` runs cargo-nextest. No other target is added for either runner. The target's `test` option runs only the test target that it names, as cargo's `--test` does, with either runner, and the result of such a run is never restored for a run without the option or with another value of it.
 :::
 
 :::mara requirement REQ-DOCTESTS
@@ -210,7 +257,7 @@ Each crate has one `test` target. The `testRunner` option selects the runner: `c
 :status: accepted
 :satisfies: NEED-CORRECT-CACHE
 
-When the runner is nextest, a crate's `test` task also runs the crate's doctests, and the task succeeds only if both the nextest run and the doctests succeed. This cannot be switched off, so a `test` result means the same thing with either runner.
+When the runner is nextest, a crate's `test` task also runs the crate's doctests, and the task succeeds only if both the nextest run and the doctests succeed. This cannot be switched off, so a `test` result means the same thing with either runner. The one exception is a task whose `test` option names a test target: with either runner it runs that target alone, without doctests, as `cargo test --test <name>` does, so its result too means the same with either runner.
 :::
 
 :::mara requirement REQ-AFFECTED-TESTS
@@ -259,11 +306,11 @@ The command and the test executor decide the mode by the same rule, from the env
 
 The plugin does not look at branches. A pipeline for main that sets nothing is in mode `full`, so the full suite runs once per code state. A pull request pipeline sets `NX_RUST_TEST_MODE=affected`.
 
-`--affectedTests=false` makes the executor run the full suite whatever the mode is. The mode command cannot see the command line, but Nx hashes the options passed there, so that run has a key of its own.
+`--affectedTests=false` makes the executor run the full suite whatever the mode is. The mode command cannot see the command line, but Nx hashes the options passed there, so that run has a key of its own. With the `test` option as well, it runs the named target, not the full suite. A task whose `test` option names a test target does not select either: it runs that target in either mode as in mode `full`, with nextest under the repository's configuration and `--no-tests=pass`, under a key that holds the option, and adds nothing to the record of subsets below, because what it runs is all that its key promises ([[DES-TEST-RUN]], "One test target"). Where cargo-affected is missing, such a task runs as it does with it and says only that the tool is missing.
 
 A task in affected mode may run more than its selection, up to the full suite, and still store its result under the affected key. The reverse never happens.
 
-**The command.** The mode command is a Node script in the plugin's package, which Nx runs in the repository root with the workspace root, relative to it, as its argument. In a run, it adds what it prints to the command's record (**Between hashing and the run**, below), and it writes nothing else. As for the artifact folder input of [[DES-INPUTS]], its command names Node, the script and the folder by paths that reach no key, and where the script cannot run, as for a plugin that Nx loads from its TypeScript source, it prints the line of a failure and a random value, new at each evaluation, so that no stored result is restored, and the executor of a `test` that runs says why ([[DES-INPUTS]], "Failing runtime inputs"). It reads the database with Node's `node:sqlite` and never opens it in a way that can write: only as immutable and read-only, because an ordinary read-only connection to a database in WAL mode created `-wal` and `-shm` files beside it and left them there ([[EVD-TEST-MODE-READING]]). An immutable read ignores a `-wal` file and takes no lock, so the command prints `full` wherever it cannot be sure that it read the whole, settled database: where a `-wal` file lies beside the database before the read or after it, as while a collection runs, after one was interrupted, or for a baseline restored with its `-wal` file, and where the database file's size, modification time or inode differs between the look before and the look after. Such a baseline gives `full` until a collection has closed the database cleanly, which removes the `-wal` file. It reads `SELECT DISTINCT collect_sha FROM test_regions`, the commits of every fingerprint that the database keeps, because telling the current one would mean hashing what cargo-affected hashes, and a commit too many only splits keys. A Node without `node:sqlite`, a database that cannot be read or is of another schema, one without coverage and a commit that is not lower-case hexadecimal give `full` as well. Where `NX_RUST_TEST_MODE` has another value than `full` or `affected`, the empty value included, the command prints `invalid NX_RUST_TEST_MODE=` and the value as JSON, so that a failure that Nx stores with `NX_CACHE_FAILURES=true` is never restored for a valid mode. CI is what a copy of `isCI` of Nx 24.0.6 detects, which a test compares with the installed Nx's: loading Nx in the command would cost more than the rest of it, a start of Node and one query of about 40 ms on a database of 200 MB. The input lies on the `test` of every crate of a workspace with `affectedTests`, also of one that opts out: such a crate runs its full suite under the affected key, which this design allows, at the cost of a key per mode. Each `test` task of such a workspace says at the top of its output which suite it runs and why, and fails before cargo runs where the variable is invalid. The control plane decided these points on 16 November 2026 in nxr-539qtw, from [[GOAL-TRUSTED-CACHE]] and [[EVD-CARGO-AFFECTED-COST]]. The immutable read alone, with `full` for a `-wal` file, was decided by the control plane on 16 November 2026 in the review of nxr-539qtw, in place of a read-only connection where a `-wal` file lay beside the database, which a collection closing in between left with new `-wal` and `-shm` files; it rests on "without writing to it" above, [[REQ-CARGO-UNCHANGED]] in spirit, since the plugin leaves another tool's files alone when Nx hashes, and [[GOAL-TRUSTED-CACHE]], since `full` is always safe. To undo it, read through an ordinary read-only connection where a `-wal` file exists and accept the files it leaves; to undo the input on a crate that opts out, leave it out where the crate's own table sets `affectedTests = false`; to undo the strict reading of the variable, count the empty value as not set.
+**The command.** The mode command is a Node script in the plugin's package, which Nx runs in the repository root with the workspace root, relative to it, as its argument. In a run, it adds what it prints to the command's record (**Between hashing and the run**, below), and it writes nothing else. As for the artifact folder input of [[DES-INPUTS]], its command names Node, the script and the folder by paths that reach no key, and where the script cannot run, as for a plugin that Nx loads from its TypeScript source, it prints the line of a failure and a random value, new at each evaluation, so that no stored result is restored, and the executor of a `test` that runs says why ([[DES-INPUTS]], "Failing runtime inputs"). It reads the database with Node's `node:sqlite` and never opens it in a way that can write: only as immutable and read-only, because an ordinary read-only connection to a database in WAL mode created `-wal` and `-shm` files beside it and left them there ([[EVD-TEST-MODE-READING]]). An immutable read ignores a `-wal` file and takes no lock, so the command prints `full` wherever it cannot be sure that it read the whole, settled database: where a `-wal` file lies beside the database before the read or after it, as while a collection runs, after one was interrupted, or for a baseline restored with its `-wal` file, and where the database file's size, modification time or inode differs between the look before and the look after. Such a baseline gives `full` until a collection has closed the database cleanly, which removes the `-wal` file. It reads `SELECT DISTINCT collect_sha FROM test_regions`, the commits of every fingerprint that the database keeps, because telling the current one would mean hashing what cargo-affected hashes, and a commit too many only splits keys. A Node without `node:sqlite`, a database that cannot be read or is of another schema, one without coverage and a commit that is not lower-case hexadecimal give `full` as well. Where `NX_RUST_TEST_MODE` has another value than `full` or `affected`, the empty value included, the command prints `invalid NX_RUST_TEST_MODE=` and the value as JSON, so that a failure that Nx stores with `NX_CACHE_FAILURES=true` is never restored for a valid mode. CI is what a copy of `isCI` of Nx 24.0.6 detects, which a test compares with the installed Nx's: loading Nx in the command would cost more than the rest of it, a start of Node and one query of about 40 ms on a database of 200 MB. The input lies on the `test` of every crate of a workspace with `affectedTests`, also of one that opts out: such a crate runs its full suite, or the test target that its `test` option names, under the affected key, which this design allows, at the cost of a key per mode. Each `test` task of such a workspace says at the top of its output which suite it runs and why, and fails before cargo runs where the variable is invalid. The control plane decided these points on 16 November 2026 in nxr-539qtw, from [[GOAL-TRUSTED-CACHE]] and [[EVD-CARGO-AFFECTED-COST]]. The immutable read alone, with `full` for a `-wal` file, was decided by the control plane on 16 November 2026 in the review of nxr-539qtw, in place of a read-only connection where a `-wal` file lay beside the database, which a collection closing in between left with new `-wal` and `-shm` files; it rests on "without writing to it" above, [[REQ-CARGO-UNCHANGED]] in spirit, since the plugin leaves another tool's files alone when Nx hashes, and [[GOAL-TRUSTED-CACHE]], since `full` is always safe. To undo it, read through an ordinary read-only connection where a `-wal` file exists and accept the files it leaves; to undo the input on a crate that opts out, leave it out where the crate's own table sets `affectedTests = false`; to undo the strict reading of the variable, count the empty value as not set.
 
 **Between hashing and the run.** Nx evaluates the command afresh for every task of every run, also under the Nx daemon, in the repository root and with the task's environment: that of the `nx` command and the dotenv files Nx loads for the task ([[EVD-NX-24-INPUT-SEMANTICS]]). The executor decides the mode from the same environment. A batch process lacks the task's own dotenv files, so the batch implementation rebuilds each task's environment before it decides ([[DES-BATCH]]). The executor reads the baseline again for itself, and a collection can create or change the baseline between the hashing of a task and its run; Nx 24 also hashes a batch task whose dependency missed the cache again after the task has run, and stores the result under that later key. Nx hands an executor neither a task's hash details nor the output of its runtime inputs: it removes `hash` and `hashDetails` from the task graph that it passes to an executor and to a batch, and gives a task run on its own only its final hash, in `NX_TASK_HASH` ([[EVD-TEST-MODE-GUARD]]). The mode command therefore keeps a record of each `nx` command, in `.nx/workspace-data/nx-rust/test-mode/<command id>/<workspace>`, by the id that the plugin's `preTasksExecution` hook gives the command and that hook runs before Nx hashes any task of it:
 
@@ -353,7 +400,9 @@ A record that ends with another status or a signal is a failed test binary: libt
 
 A task's own command passes cargo no `--config`, since no option of `test` adds arguments to cargo ([[DES-TARGET-COMMANDS]]). Each task that runs alone for this reason says so at the top of its terminal output and names the variable or file. The files inside the repository and the `CARGO_TARGET_` variables are inputs of every key ([[DES-INPUTS]]), so adding or removing such a runner changes the keys; a runner in a file outside the repository is in no key, as nothing of such a file is, and the warning for a configuration file that Nx does not hash names that file ([[RISK-HOST-ENVIRONMENT]]).
 
-cargo-affected only selects. nextest runs the tests, and the selector is a replaceable step ([[ADR-TEST-SELECTOR]]). A crate that opts out of selection, with `affectedTests = false` among the options of its `test` target ([[DES-PLUGIN-OPTIONS]]), always contributes all its tests. Rules for non-Rust inputs such as SQL files, snapshots and templates can be added per repository; there are none by default.
+**One test target.** A task whose `test` option names a test target ([[DES-PLUGIN-OPTIONS]]) runs, under every strategy and with either runner, the command that a developer types for that target of its crate, as a group of one crate ([[DES-BATCH]], "Groups of one crate"): `cargo test -p <spec> --test <name>`, or `cargo nextest run --no-tests=pass -p <spec> --test <name>`, each with the task's flags, and the task passes where it exits with 0. Cargo then builds the crate's library and binaries and the named test executable, and runs that target alone: no unit test, no test of a binary, no other test target and no doctest ([[EVD-CARGO-TEST-TARGET-SELECTOR]]). With nextest, step 5 is left out, because a plain `cargo test --test <name>` runs no doctest and `cargo test --doc` rejects `--test` beside it. A name of which the crate has no test target, the empty one included, and a pattern that matches none, fail the task with cargo's error before any test runs. Such a task never selects affected tests: in mode `affected` it runs the named target as in mode `full`, which is all that its key promises, says so at the top of its output, and records no subset ([[DES-TEST-MODE]]); with nextest, the repository's configuration still applies to that target, its default filter among them, and a target whose tests the filter leaves out, or that has none, passes, as `--no-tests=pass` lets it (**nextest's configuration**, above). Nx hashes a task's options, those of the target and of its configuration and those given on the command line, so the key of a `test` task with the option differs from its key without it and from its key with another value, and a result of the named target alone is never restored for the whole suite ([[RISK-SUBSET-AS-FULL]]). The command builds the binaries that the target's tests start through `CARGO_BIN_EXE_<name>` as a full `cargo test` does, also for a target with `test = false`, which a plain `cargo test` leaves out and `--test` builds and runs ([[EVD-CARGO-TEST-TARGET-SELECTOR]]). So the rule of [[DES-TARGETS]] counts every target of kind `test`, whatever its `test` flag: the crate's `test` waits for its `build`, and the batch puts back the files of that `build` as for every `test` group ([[DES-BATCH]], "Files that a test batch puts back"). Under `workspace-build` the command selects the crate with `-p`, so cargo resolves features for that crate and what it depends on, as for every group of one crate, whose result the keys of the strategy cover ([[DES-BATCH]]).
+
+cargo-affected only selects. nextest runs the tests, and the selector is a replaceable step ([[ADR-TEST-SELECTOR]]). A crate that opts out of selection, with `affectedTests = false` among the options of its `test` target ([[DES-PLUGIN-OPTIONS]]), always contributes all its tests; a task whose `test` option names a test target selects nothing, runs that target and records no subset ([[DES-TEST-MODE]]). Rules for non-Rust inputs such as SQL files, snapshots and templates can be added per repository; there are none by default.
 
 The report gave what steps 1, 3 and 4 need on ripgrep, tokio and a fixture: nextest ran exactly the selected tests and every result mapped to its crate ([[EVD-CARGO-AFFECTED-REPORT]]). Step 1 builds the test binaries that step 3 then uses, because cargo-affected lists the tests through `cargo nextest list` with the same arguments, so its own cost is the listing and the database: 0.14 to 0.16 s on ripgrep and 0.6 to 1.4 s on tokio with a warm build directory, against full suites of 1 s and 15 s ([[EVD-CARGO-AFFECTED-COST]]). Code that another crate evaluates while it compiles, such as a `const fn` used in a `const` or a macro by example, leaves no coverage for that crate's tests; this is the one change that step 2 does not widen, and it stays a stated limit ([[ADR-AFFECTED-TESTS-WIDENING]], [[RISK-CARGO-AFFECTED]]).
 :::

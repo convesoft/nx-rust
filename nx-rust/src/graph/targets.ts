@@ -310,13 +310,17 @@ export interface TargetCargoMetadata {
  * Whether `cargo test` for the crate replaces the executables in the
  * artifact directory that its `build` declares as outputs (`DES-OUTPUTS`),
  * read from the crate's report: the crate has a target of kind `bin`, and a
- * target of kind `test` or `bench` whose `test` flag is on. Cargo builds the
- * crate's binaries for such a target, with what dev-dependencies turn on and
- * with the `test` profile, and replaces the uplifted files even when their
- * units are fresh (`EVD-CARGO-ARTIFACT-WRITERS`). The `required-features` of
- * either target do not count: whether cargo builds them depends on the
- * features of the run, and a crate counted without need only orders two
- * tasks. A flag that the report lacks counts as on. Examples, unit tests,
+ * target of kind `test`, whatever its `test` flag, or of kind `bench` whose
+ * `test` flag is on. Cargo builds the crate's binaries for such a target,
+ * with what dev-dependencies turn on and with the `test` profile, and
+ * replaces the uplifted files even when their units are fresh
+ * (`EVD-CARGO-ARTIFACT-WRITERS`). A test target with `test = false` counts
+ * because the `test` option, which can come from the command line where the
+ * graph never sees it, makes cargo build and run it with `--test`
+ * (`DES-TEST-RUN`, "One test target"; `EVD-CARGO-TEST-TARGET-SELECTOR`).
+ * The `required-features` of either target do not count: whether cargo
+ * builds them depends on the features of the run, and a crate counted
+ * without need only orders two tasks. A flag that the report lacks counts as on. Examples, unit tests,
  * doctests and `cdylib` and `staticlib` files never make cargo replace them.
  */
 // @mara implements DES-TARGETS
@@ -326,7 +330,7 @@ export function testReplacesExecutables(pkg: CargoPackage): boolean {
     pkg.targets.some((target) => target.kind.includes("bin")) &&
     pkg.targets.some(
       (target) =>
-        (target.kind.includes("test") || target.kind.includes("bench")) && target.test !== false,
+        target.kind.includes("test") || (target.kind.includes("bench") && target.test !== false),
     )
   );
 }

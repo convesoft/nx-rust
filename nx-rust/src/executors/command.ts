@@ -27,6 +27,11 @@ export interface CargoTargetOptions {
   bin?: string;
   /** The binary's arguments on `run`, split into words (`splitWords` in `run-arguments.ts`). */
   args?: string;
+  /**
+   * `--test` on `test`, for `cargo test` and `cargo nextest run` alike: the
+   * test target that the task runs alone (`DES-TEST-RUN`, "One test target").
+   */
+  test?: string;
   /** Selection of affected tests on `test`; no flag (nxr-tabkjx). */
   affectedTests?: boolean;
   /** The wasm target of `wasm-build`, the `--target` of the `wasm-bindgen` CLI; no flag of cargo. */
@@ -93,6 +98,7 @@ export const optionTargets: Readonly<Record<TargetOptionName, ReadonlySet<Inferr
   noDeps: new Set(["doc"]),
   bin: new Set(["run"]),
   args: new Set(["run"]),
+  test: new Set(["test"]),
   affectedTests: new Set(["test"]),
   wasmTarget: new Set(["wasm-build"]),
   fullCollect: new Set(["coverage-baseline"]),
@@ -108,6 +114,22 @@ export const optionTargets: Readonly<Record<TargetOptionName, ReadonlySet<Inferr
  * target table in Cargo metadata may not set it.
  */
 export const pluginVersionOption = "pluginVersion" satisfies TargetOptionName;
+
+/**
+ * The test target that a task of `test` runs alone, from its `test` option
+ * (`DES-TEST-RUN`, "One test target"); `undefined` for every other target
+ * and where the option is not set. Such a task forms a group of one crate
+ * under every strategy ("Groups of one crate" in `DES-BATCH`), never selects
+ * affected tests (`DES-TEST-MODE`), and with nextest runs no doctest step.
+ */
+// @mara implements DES-TEST-RUN
+// @mara implements DES-BATCH
+export function selectedTestTarget(
+  target: InferredTargetName,
+  options: CargoTargetOptions,
+): string | undefined {
+  return target === "test" ? options.test : undefined;
+}
 
 /** Whether the target with this default name takes the option `name`. */
 export function targetTakes(target: InferredTargetName, name: string): boolean {
@@ -258,6 +280,7 @@ export function cargoArguments(subject: CommandSubject, options: CargoTargetOpti
         ? sharedCommandFlags(target)
         : []),
       ...(workspace ? ["--workspace"] : crateSelection(target, crates)),
+      ...(taken.test !== undefined ? ["--test", taken.test] : []),
       ...compilingFlags(taken),
       ...(target === "wasm-build" ? ["--target", wasmTriple] : []),
       ...(formatting ? [] : unificationFlags(subject)),
@@ -412,6 +435,8 @@ export function crateSelection(
  * - `--no-tests=pass`, because a crate without tests, or whose tests the
  *   repository's default filter leaves out, passes as it does under `cargo
  *   test`, where nextest would fail with exit code 4;
+ * - `--test` for the `test` option, which nextest passes on to the `cargo
+ *   test --no-run` that it builds with (`EVD-CARGO-TEST-TARGET-SELECTOR`);
  * - the feature flags, `--cargo-profile` for the `profile` option, because
  *   nextest's own `--profile` names a profile of its configuration
  *   (`EVD-NEXTEST-CARGO-FLAGS`), the flags of the `cargo` strategy
@@ -439,6 +464,7 @@ function nextestArguments(subject: CommandSubject, taken: CargoTargetOptions): s
     ...(workspace
       ? nextestFiltersets(crates.map((crate) => crate.name))
       : crateSelection("test", crates)),
+    ...(taken.test !== undefined ? ["--test", taken.test] : []),
     ...compilingFlags(taken, "--cargo-profile"),
     ...unificationFlags(subject),
     ...flag(subject.locked, "--locked"),
@@ -631,14 +657,25 @@ export function cargoSteps(
     );
     const crates = subject.crates ?? [];
     const shared = subject.workspace === true || crates.length > 1;
+    if (taken.test !== undefined && shared) {
+      throw new Error(
+        "A test task with the test option runs in a group of one crate, which selects that crate alone.",
+      );
+    }
+    const run: CargoStep = shared
+      ? {
+          kind: "nextest",
+          args: cargoArguments(subject, options),
+          listArgs: nextestListArguments(cargoArguments(subject, options)),
+        }
+      : { kind: "command", args: cargoArguments(subject, options) };
+    // A plain `cargo test --test <name>` runs no doctest, and `cargo test
+    // --doc` rejects `--test` beside it (`DES-TEST-RUN`, "One test target").
+    if (taken.test !== undefined) {
+      return [run];
+    }
     return [
-      shared
-        ? {
-            kind: "nextest",
-            args: cargoArguments(subject, options),
-            listArgs: nextestListArguments(cargoArguments(subject, options)),
-          }
-        : { kind: "command", args: cargoArguments(subject, options) },
+      run,
       {
         kind: "doctests",
         args: [
@@ -655,6 +692,11 @@ export function cargoSteps(
   }
   if (!(subject.target === "test" && subject.workspace === true)) {
     return [{ kind: "command", args: cargoArguments(subject, options) }];
+  }
+  if (selectedTestTarget("test", options) !== undefined) {
+    throw new Error(
+      "A test task with the test option runs in a group of one crate, which selects that crate alone.",
+    );
   }
   if (runner === undefined) {
     throw new Error("A test group that selects the whole workspace needs the selecting runner.");

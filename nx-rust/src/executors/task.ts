@@ -19,7 +19,7 @@ import {
   requireTool,
 } from "../tools/optional-tools";
 import { taskRunsVerbosely } from "./cargo-invocation";
-import { type CargoTargetOptions, pluginVersionOption } from "./command";
+import { type CargoTargetOptions, pluginVersionOption, selectedTestTarget } from "./command";
 import { heldMembers } from "./digests";
 import { dotenvProblem } from "./dotenv-check";
 import { type GroupInvocation, groupInvocations } from "./group-invocations";
@@ -615,7 +615,11 @@ export function prepareTask(
       throw new TaskError(invalidTestModeMessage(task, mode.value));
     }
     const optedOut = examined.options.affectedTests === false;
-    const selects = mode.kind === "affected" && !optedOut;
+    // A task that runs one test target never selects: what it runs is all
+    // that its key, which holds the option, promises (`DES-TEST-MODE`,
+    // `DES-TEST-RUN`, "One test target").
+    const selectedTarget = selectedTestTarget("test", examined.options);
+    const selects = mode.kind === "affected" && !optedOut && selectedTarget === undefined;
     const neededBy = `the selection of affected tests of the ${targetName} target of ${cargo.packageName ?? projectName}, whose Cargo workspace in ${describeFolder(workspaceRoot)} turns it on (affectedTests), in test mode ${testModeText(mode)}`;
     let missing: string | undefined;
     try {
@@ -635,9 +639,12 @@ export function prepareTask(
       if (selects) {
         throw new TaskError(`${task}: ${error.message}`);
       }
-      missing = `${task}: warning: cargo-affected is not installed, which the selection of affected tests in this workspace needs in test mode affected; this run is in test mode ${testModeText(mode)} and runs the full suite without it. ${error.tool.install}`;
+      missing =
+        selectedTarget === undefined
+          ? `${task}: warning: cargo-affected is not installed, which the selection of affected tests in this workspace needs in test mode affected; this run is in test mode ${testModeText(mode)} and runs the full suite without it. ${error.tool.install}`
+          : `${task}: warning: cargo-affected is not installed, which the selection of affected tests in this workspace needs in test mode affected; this task runs the test target ${JSON.stringify(selectedTarget)} that its option test names, which needs no selection. ${error.tool.install}`;
     }
-    const note = [testModeNote(task, mode, optedOut), missing]
+    const note = [testModeNote(task, mode, optedOut, selectedTarget), missing]
       .filter((line) => line !== undefined)
       .join("\n");
     testModeDecision = { mode, selects, ...(note === "" ? {} : { note }) };

@@ -414,16 +414,20 @@ describe("task dependencies", () => {
 
   describe("of a test whose cargo test replaces the executables of a build", () => {
     // One crate per shape of the rule in DES-TARGETS: these have a binary and
-    // a test or bench that cargo test builds, the others do not. Under
+    // a test or bench that cargo test builds, untested's `test = false`
+    // target through the `test` option, the others do not. Under
     // workspace-build, every test of the workspace builds them all
     // (ADR-WORKSPACE-TEST-EXECUTABLES).
-    const waiting = ["app", "benched", "gated", "harnessless"];
-    const others = ["addon", "flavour", "library", "showcase", "timed", "unit", "untested"];
+    const waiting = ["app", "benched", "gated", "harnessless", "untested"];
+    const others = ["addon", "flavour", "library", "showcase", "timed", "unit"];
     /** The builds that every test waits for, with the lockfile task. */
-    const waited = (build = "build", own?: string) => [
-      ...waiting.map((crate) => (crate === "app" && own !== undefined ? own : `${crate}:${build}`)),
-      "rust:lockfile",
-    ];
+    const waited = (build = "build", own?: string) =>
+      [
+        ...waiting.map((crate) =>
+          crate === "app" && own !== undefined ? own : `${crate}:${build}`,
+        ),
+        "rust:lockfile",
+      ].sort();
     /** The builds of the crates that every test waits for, as tasks of the graph. */
     const builds = (build = "build", own?: string) =>
       Object.fromEntries(
