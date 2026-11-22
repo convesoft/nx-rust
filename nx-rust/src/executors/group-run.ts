@@ -23,7 +23,6 @@ import {
   type OutputCrate,
   type OutputScope,
   readJsonStep,
-  readTestStep,
 } from "./cargo-output";
 import type { CrateSelection } from "./affected";
 import { affectedSelection } from "./affected-run";
@@ -43,8 +42,8 @@ import {
   removeToolConfiguration,
   writeToolConfiguration,
 } from "./nextest";
-import { type DeniedWarnings, deniedWarnings } from "../cargo/warnings-setting";
-import { withDeniedWarnings } from "./denied-warnings";
+import { deniedWarnings, denyingSetting } from "../cargo/warnings-setting";
+import { readTestStepWithWarnings, type StepWarnings, withDeniedWarnings } from "./denied-warnings";
 import { resetNxWorkspaceContext } from "./nx-task-files";
 import { checksAfterCargo, type GroupInvocation, type PreparedTask } from "./task";
 import { packagesVariable, type RecordEntry, recordVariable } from "./test-runner";
@@ -121,7 +120,7 @@ export function batchLiveOutput(batchEnv: NodeJS.ProcessEnv): LiveOutput {
  * passes where cargo exits with status 0, with the whole output as its own.
  * A group that selects the whole workspace, and a group of several crates,
  * reads which crates passed from cargo's output ({@link readJsonStep},
- * {@link readTestStep} and the steps of `test-steps.ts`); a step whose
+ * {@link readTestStepWithWarnings} and the steps of `test-steps.ts`); a step whose
  * output shows no result per crate, such as that of `cargo fmt`, fails
  * every task of the group when cargo fails. A task passes only where cargo's
  * output shows that its crate passed.
@@ -227,6 +226,11 @@ export async function runGroup(
       observe?.(step, run.output);
       let unexplained: string | undefined;
       let outcomes: CrateOutcome[];
+      const stepEnv = () => cargoEnvironment(invocation, first.prepared.env);
+      const warnings: StepWarnings = {
+        denied: () => deniedWarnings(cwd, stepEnv()),
+        setting: () => denyingSetting(cwd, stepEnv()),
+      };
       if (toolConfiguration !== undefined) {
         const end = nextestEnd(run.code, run.signal, run.failure);
         unexplained = end.kind === "unexplained" ? end.reason : undefined;
@@ -249,6 +253,7 @@ export async function runGroup(
           report,
           listed,
           selected === "some",
+          warnings.setting,
         );
       } else {
         const end = commandEnd(run.code, run.signal, run.failure);
@@ -263,7 +268,7 @@ export async function runGroup(
           record,
           packages,
           first.invocation.runner,
-          () => deniedWarnings(cwd, cargoEnvironment(invocation, first.prepared.env)),
+          warnings,
         );
       }
       outcomes.forEach((outcome, at) => {
@@ -476,7 +481,7 @@ function readStep(
   record: string | undefined,
   packages: string,
   runner: readonly string[] | undefined,
-  denied: () => DeniedWarnings | undefined,
+  warnings: StepWarnings,
 ): CrateOutcome[] {
   // A group of one crate that selects it runs the command that its task runs
   // on its own, and passes each step where cargo exits with status 0. The
@@ -487,7 +492,7 @@ function readStep(
   }
   switch (step.kind) {
     case "tests-build":
-      return readTestsBuildStep(output, end, crates, scope as OutputScope);
+      return readTestsBuildStep(output, end, crates, scope as OutputScope, warnings.setting);
     case "test-binaries":
       return readTestBinariesStep(
         output,
@@ -501,12 +506,12 @@ function readStep(
       // Crates selected with `-p` show their failed doctest targets in
       // cargo's list as a `cargo test` of those crates does.
       return scope === undefined
-        ? readTestStep(output, end, crates)
+        ? readTestStepWithWarnings(output, end, crates, warnings.setting)
         : readDoctestStep(output, end, crates, scope);
     case "nextest":
       throw new Error("A nextest step is read from its JUnit report (readNextestStep).");
     case "command":
-      return sharedOutcomes(members, crates, output, end, scope, denied);
+      return sharedOutcomes(members, crates, output, end, scope, warnings);
   }
 }
 
@@ -520,14 +525,14 @@ function sharedOutcomes(
   output: string,
   end: CommandEnd,
   scope: OutputScope | undefined,
-  denied: () => DeniedWarnings | undefined,
+  warnings: StepWarnings,
 ): CrateOutcome[] {
   const withWarnings = (outcomes: CrateOutcome[]) =>
     withDeniedWarnings(
       outcomes,
       output,
       crates.map((crate) => crate.task),
-      denied,
+      warnings.denied,
     );
   switch (members[0].prepared.target) {
     case "build":
@@ -542,7 +547,7 @@ function sharedOutcomes(
         readJsonStep(output, end, crates, members[0].prepared.options.allTargets === true, scope),
       );
     case "test":
-      return readTestStep(output, end, crates);
+      return readTestStepWithWarnings(output, end, crates, warnings.setting);
     default:
       return crates.map((crate) =>
         end.kind === "succeeded"

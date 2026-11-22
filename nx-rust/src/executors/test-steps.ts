@@ -11,6 +11,14 @@ import {
   plainLine,
   startsBlock,
 } from "./cargo-output";
+import {
+  deniedWarningsLine,
+  describeStoppedByWarnings,
+  describeWarnedPackages,
+  fixOfStoppedByWarnings,
+  type StoppedByWarnings,
+  stoppedByWarnings,
+} from "./denied-warnings";
 import type { RecordEntry } from "./test-runner";
 
 /**
@@ -47,12 +55,18 @@ export interface RunnerSetup {
  * location line (` --> path:line:col`) names a crate of the group goes to that
  * crate; one that concerns only a member outside the group is left out,
  * unless it is an error, which can explain a failure and goes to every
- * crate; every other block goes to every crate.
+ * crate; every other block goes to every crate. Where `warningsDenied` is
+ * set, every warning, as {@link deniedWarningsLine} reads its first line,
+ * goes to every crate before any of these rules, since
+ * each fails the whole step and its location need not be in the folder of
+ * the crate that cargo compiled it for (`DES-TEST-RUN`, "Denied warnings in
+ * a test step").
  */
 export function attributeText(
   lines: readonly string[],
   crates: readonly OutputCrate[],
   scope: OutputScope | undefined,
+  warningsDenied = false,
 ): string[][] {
   const outside = outsideMembers(crates, scope);
   const parts = crates.map(() => [] as string[]);
@@ -69,6 +83,12 @@ export function attributeText(
   );
   for (const block of blocks) {
     const [header] = block;
+    if (warningsDenied && deniedWarningsLine(header).startsWith("warning")) {
+      for (const part of parts) {
+        part.push(...block);
+      }
+      continue;
+    }
     const owner = blockOwner(block, crates, folders, scope);
     if (owner !== undefined) {
       parts[owner].push(...block);
@@ -175,7 +195,11 @@ function describeNotCompiled(names: readonly string[], outsideNames: ReadonlySet
  * Fails every crate because a test step stopped before any test ran, with a
  * message that names the crates that did not compile, `what` being the
  * command, and says which of them are outside the group (`DES-BATCH`, "Test
- * runs").
+ * runs"); where cargo says that it denies warnings (`stopped`), the message
+ * also names the packages with warnings, those that are no crate of the
+ * group as outside the selection of a step that selects the whole workspace
+ * (`selectsWorkspace`) or its crates, and what denies them (`DES-TEST-RUN`,
+ * "Denied warnings in a test step").
  */
 export function failStopped(
   crates: readonly OutputCrate[],
@@ -183,14 +207,30 @@ export function failStopped(
   names: readonly string[],
   outsideNames: ReadonlySet<string>,
   what: string,
+  stopped?: StoppedByWarnings,
+  selectsWorkspace = true,
 ): CrateOutcome[] {
+  const causes = [
+    ...(names.length === 0 ? [] : [`${describeNotCompiled(names, outsideNames)} did not compile`]),
+    ...(stopped === undefined
+      ? []
+      : [
+          describeStoppedByWarnings(stopped, (packages) =>
+            describeWarnedPackages(packages, crates, selectsWorkspace ? outsideNames : undefined),
+          ),
+        ]),
+  ];
+  const fix = [
+    ...(names.length === 0 ? [] : ["the crate that does not compile"]),
+    ...(stopped === undefined ? [] : [fixOfStoppedByWarnings(stopped)]),
+  ].join(" and ");
   return crates.map((crate, index) => ({
     passed: false,
     output: parts[index] ?? "",
     message:
-      names.length === 0
+      causes.length === 0
         ? `${crate.task}: ${what} failed before any test ran, and its output names no crate that did not compile, so it does not show that the tests of ${crate.name} passed.`
-        : `${crate.task}: the tests of ${crate.name} were not run: ${what} stopped before running any test, because ${describeNotCompiled(names, outsideNames)} did not compile. The tests of every crate of this run's group were not run. Fix the crate that does not compile and run the tasks again.`,
+        : `${crate.task}: the tests of ${crate.name} were not run: ${what} stopped before running any test, because ${causes.join(", and because ")}. The tests of every crate of this run's group were not run. Fix ${fix} and run the tasks again.`,
   }));
 }
 
@@ -201,9 +241,11 @@ export function failStopped(
  * fails otherwise, since a compile error stops the step and no test can run;
  * the message names the crates that did not compile, says which of them are
  * outside the selection, and that the tests of the others were not run
- * (`DES-BATCH`, "Test runs"). Each crate's output holds the compiler's
- * messages about it and those that the output does not attribute to one
- * crate ({@link attributeText}).
+ * (`DES-BATCH`, "Test runs"). Where cargo says that it denies warnings,
+ * the message also names the packages with warnings and what denies them,
+ * as `setting` names it (`DES-TEST-RUN`, "Denied warnings in a test step").
+ * Each crate's output holds the compiler's messages about it and those that
+ * the output does not attribute to one crate ({@link attributeText}).
  */
 // @mara implements DES-TEST-RUN
 // @mara implements DES-BATCH
@@ -212,12 +254,15 @@ export function readTestsBuildStep(
   end: CommandEnd,
   crates: readonly OutputCrate[],
   scope: OutputScope,
+  setting: () => string | undefined = () => undefined,
 ): CrateOutcome[] {
   const lines = splitLines(output);
+  const stopped = end.kind === "failed" ? stoppedByWarnings(lines, setting) : undefined;
   const parts = attributeText(
     lines.filter((line) => !/^\s+Executable /.test(plainLine(line))),
     crates,
     scope,
+    stopped !== undefined,
   );
   // Cargo names each test executable that it built: a crate's output keeps
   // the lines of the executables that its targets could have built.
@@ -239,7 +284,7 @@ export function readTestsBuildStep(
     }
   }
   const texts = parts.map((part) => part.join("\n"));
-  return testsBuildOutcomes(texts, lines, end, crates, scope);
+  return testsBuildOutcomes(texts, lines, end, crates, scope, stopped);
 }
 
 // What the build step's end shows for each crate, with its output.
@@ -249,6 +294,7 @@ function testsBuildOutcomes(
   end: CommandEnd,
   crates: readonly OutputCrate[],
   scope: OutputScope,
+  stopped: StoppedByWarnings | undefined,
 ): CrateOutcome[] {
   if (end.kind === "succeeded") {
     return crates.map((_, index) => ({ passed: true, output: parts[index] }));
@@ -262,6 +308,7 @@ function testsBuildOutcomes(
     notCompiled(lines),
     outsideMembers(crates, scope).names,
     "cargo test --no-run",
+    stopped,
   );
 }
 

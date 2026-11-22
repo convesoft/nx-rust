@@ -515,7 +515,10 @@ export function readJsonStep(
  * then cannot tell which crate it belongs to. When it failed without the
  * list, as after a compile error, which stops the run before any test runs,
  * every crate failed, and the message names the crates that did not compile
- * and says that the tests of the others were not run.
+ * or whose build script failed, and says that the tests of the others were
+ * not run, and, where cargo says that it denies warnings, gives `warnings`:
+ * the packages with warnings and what denies them as a cause, and what to
+ * fix (`DES-TEST-RUN`, "Denied warnings in a test step").
  *
  * Each block of the output, from a `Running` or `Doc-tests` line to the next,
  * goes to the crates that have a target of the name in its header, or to
@@ -530,6 +533,7 @@ export function readTestStep(
   output: string,
   end: CommandEnd,
   crates: readonly OutputCrate[],
+  warnings?: { cause: string; fix: string },
 ): CrateOutcome[] {
   // Test output is text: a test may print anything, a line of JSON included.
   const lines = output.split("\n");
@@ -606,7 +610,10 @@ export function readTestStep(
   const notCompiled = [
     ...new Set(
       lines.flatMap((line) => {
-        const name = /^error: could not compile `([^`]+)`/.exec(plainLine(line))?.[1];
+        const plain = plainLine(line);
+        const name =
+          /^error: could not compile `([^`]+)`/.exec(plain)?.[1] ??
+          /^error: failed to run custom build command for `(\S+) v/.exec(plain)?.[1];
         return name === undefined ? [] : [name];
       }),
     ),
@@ -618,13 +625,23 @@ export function readTestStep(
       return { passed: true, output: text };
     }
     if (listStart === -1) {
+      const causes = [
+        ...(notCompiled.length === 0
+          ? []
+          : [`${describeList(notCompiled.map((name) => `\`${name}\``))} did not compile`]),
+        ...(warnings === undefined ? [] : [warnings.cause]),
+      ];
+      const fix = [
+        ...(notCompiled.length === 0 ? [] : ["the crate that does not compile"]),
+        ...(warnings === undefined ? [] : [warnings.fix]),
+      ].join(" and ");
       return {
         passed: false,
         output: text,
         message:
-          notCompiled.length === 0
+          causes.length === 0
             ? `${crate.task}: cargo test failed before it printed which test targets failed, so its output does not show whether the tests of ${crate.name} passed.`
-            : `${crate.task}: the tests of ${crate.name} were not run: cargo test stopped before running any test, because ${describeList(notCompiled.map((name) => `\`${name}\``))} did not compile. The tests of every crate of this cargo command were not run. Fix the crate that does not compile and run the tasks again.`,
+            : `${crate.task}: the tests of ${crate.name} were not run: cargo test stopped before running any test, because ${causes.join(", and because ")}. The tests of every crate of this cargo command were not run. Fix ${fix} and run the tasks again.`,
       };
     }
     if (unknown.length > 0) {
