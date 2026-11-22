@@ -3170,6 +3170,26 @@ Experiments on 20 November 2026 on Linux x86-64 with Nx 24.0.6, dotenv 16.4.7, d
 - **Seed counts.** Over the original 2,500 default seeds of `dotenv-equivalence.spec.ts` (468 skipped as non-terminating), the former follower passed 878 with 0 mismatches, the cycle-rejecting static check passed 567 (311 narrowed, 0 mismatches), and the cycle-allowing static check passed 597 and refused 1,435 with 0 mismatches. Over the updated 2,500-seed suite (where references written in the generated files follow a strict acyclic order plus leaf `RUSTFLAGS` self-append cases, while references that only come into being by substitution — through variable-name literals, explicit `$$HOST`/`$$CMD` indirection, dynamic `${...}` assembly or adjacent text joining — are not restricted by that order; all 2,500 default seeds terminate in Nx's loader with no second simulator, alongside fixed cases for terminating multi-variable cycles, `split(null)`, earlier-escaped `replace` targets, unclosed `${`, `${}`, `\\$FORCE_COLOR`, and `${SET:?error}`), 716 passed, 1,784 were refused, 0 were skipped, and 0 mismatched.
 :::
 
+:::mara evidence EVD-NX-24-ULTRACACHE
+:mid: 01M81ARX6H8G4E0GJX0GX03D7K
+:title: What Nx 24.0.6 Ultracache replaces in a task's hash plan and tracks at run time
+:status: accepted
+:supports: DES-INPUTS
+:supports: RISK-UNDECLARED-INPUTS
+
+A reading of `nx` 24.0.6 (`dist/src/ultracache/`, `dist/src/tasks-runner/task-io-service.js`, `dist/src/tasks-runner/forked-process-task-runner.js`, `dist/src/hasher/hash-task.js`, `dist/src/native/index.d.ts`) and direct probes of its native `HashPlanner`, `UltracacheConfigurationStore` and `getUltracacheReport` on 22 November 2026 on Linux x86-64 with Node 26.13.1 (nxr-j25xwy).
+
+- **What `mode: "on"` (the default) keeps vs. replaces.** Importing an Ultracache recording (`{ commit, inputs: ["crates/app/src/main.rs"], outputs: ["target/debug/app", "target/debug/deps/app.o"] }`) into `UltracacheConfigurationStore` and calling `HashPlanner.getPlans` for a target with `{ fileset: "{projectRoot}/**/*" }`, `{ fileset: "{workspaceRoot}/Cargo.lock", always: true }`, `{ fileset: "{workspaceRoot}/rust-toolchain.toml" }`, `{ env: "RUSTFLAGS" }`, `{ runtime: "rustc -Vv" }`, `{ externalDependencies: ["nx"] }` and `"^default"` showed:
+  - Kept unchanged: `runtime:rustc -Vv`, `env:RUSTFLAGS`, `env:NX_CLOUD_ENCRYPTION_KEY`, `npm:nx`, `ProjectConfiguration`, `nx.json`/`.gitignore`/`.nxignore`, and `{workspaceRoot}/Cargo.lock` (because it set `always: true`).
+  - Dropped and replaced: `{projectRoot}/**/*`, `^default` (`lib:crates/lib/**/*`) and `{workspaceRoot}/rust-toolchain.toml` (without `always: true`) were dropped and replaced by `files:[crates/app/src/main.rs]` and `io-snapshot:<hash>`.
+  - `UltracacheMode.On` documents that the recording stands in for the target's declared inputs and outputs; `TaskUltracacheSettings.collectStats` defaults to `false`.
+- **What `mode: "warn"` and `mode: "off"` do.** In `HashPlanner.getPlans`, both `mode: "warn"` (`getUltracacheReport` diagnostic `autofix-disabled`) and `mode: "off"` (`disabled`) kept every declared input intact. At run time, `registerTaskProcessStart` (`task-io-service.js`) notifies `TaskIOService` of the task's PID unless `task.ultracache?.mode === "off"` (so `warn` still traces IO and reports undeclared reads/writes, including Cargo's intermediate writes inside `target/` and sibling reads under `workspace-build`, while `off` suppresses tracing altogether).
+- **Batched vs. single tasks.** `forkProcessForBatch` (`forked-process-task-runner.js`) registers the batch worker with `ProcessMetricsService` only and does not call `registerTaskProcessStart`; only single-task runs (`nx run`, `--batch=false`, `NX_BATCH_MODE=false`) register their PID with `TaskIOService`.
+- **Consequence for Rust targets.** Leaving `ultracache.mode` at `"on"` risks stale cache hits whenever an unbatched Rust task is recorded on a warm Cargo build (where unchanged files are only `stat`'d while `collectStats` is `false`), under `NX_RUST_TEST_MODE=affected`, or across platform/feature `#[cfg(...)]` branches, and conflicts with [[ADR-RESULTS-ONLY-CACHE]] because Cargo writes intermediate files to `target/` outside declared outputs. Setting `ultracache: { mode: "off" }` keeps declared inputs and outputs authoritative and avoids noisy warnings and tracing overhead on `cargo`/`rustc` process trees.
+
+Not run: a live Nx Cloud workspace with a recording worker; only Nx 24.0.6's local native `HashPlanner`, `UltracacheConfigurationStore` and JavaScript task-runner sources were exercised.
+:::
+
 ## Sources
 
 Pages and repositories read for the design discussion, on 12 November 2026.

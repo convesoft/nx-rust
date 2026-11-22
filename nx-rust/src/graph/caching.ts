@@ -428,6 +428,11 @@ export function configureCaching(
             : undefined))
         : (uncachedByDesign[name] ?? "the plugin does not cache this target");
     target.cache = reason === undefined;
+    // Keep declared inputs and outputs authoritative under Nx Cloud and skip
+    // IO-tracing PID registration on cargo/rustc process trees (`DES-INPUTS`,
+    // `EVD-NX-24-ULTRACACHE`). Users can still opt in via manifest target
+    // tables, `project.json` or `targetDefaults`.
+    target.ultracache = { mode: "off" };
     const metadata = target.metadata?.[targetCargoMetadataKey] as TargetCargoMetadata | undefined;
     if (metadata !== undefined && reason !== undefined) {
       metadata.uncached = reason;

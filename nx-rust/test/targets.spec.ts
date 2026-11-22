@@ -854,3 +854,32 @@ describe("targetNames", () => {
     HARNESS_TIMEOUT,
   );
 });
+
+describe("ultracache settings on inferred targets", () => {
+  it(
+    "sets ultracache.mode to off on every inferred target and lets manifest target tables override it",
+    async () => {
+      const graph = await loadFixtureGraph("subfolder-workspace", {
+        files: {
+          "rust/crates/api/Cargo.toml": (toml) =>
+            `${toml}\n[package.metadata.nx.targets.build.ultracache]\nmode = "warn"\n`,
+        },
+      });
+
+      const actual = Object.entries(graph.projects).flatMap(([projectName, project]) =>
+        Object.entries(project.targets ?? {}).map(([targetName, target]) => ({
+          target: `${projectName}:${targetName}`,
+          ultracache: target.ultracache,
+        })),
+      );
+      expect(actual).toContainEqual({ target: "api:build", ultracache: { mode: "warn" } });
+      expect(actual).toEqual(
+        actual.map(({ target }) => ({
+          target,
+          ultracache: target === "api:build" ? { mode: "warn" } : { mode: "off" },
+        })),
+      );
+    },
+    HARNESS_TIMEOUT,
+  );
+});
