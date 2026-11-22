@@ -484,7 +484,9 @@ The maintainer's decision of 22 November 2026. The published `@convesoft/nx-rust
 
 `PLUGIN.md` sits at the package root because that is the path Nx 24 names. In the `nx` 24.0.6 package that this repository installs, `dist/src/ai/set-up-ai-agents/get-agent-rules.js` writes into the agent rules it generates: "For Nx plugin best practices, check `node_modules/@nx/<plugin>/PLUGIN.md`. Not all plugins have this file - proceed without it if unavailable." The rule names only `@nx/*` plugins, sets no format, and no code of `nx` reads the file. Of the `@nx/*` 24.0.6 plugins installed here, only `@nx/jest` ships one, at `dist/PLUGIN.md`, not at the path that the rule names; its sections (detection, commands, a quick reference) are the shape that the plugin's `PLUGIN.md` follows. Read on 22 November 2026, not run.
 
-Two consequences are accepted. The pages ship as they are, so a relative link that leaves `docs/`, such as the links to `.zban/` in the documentation index and in the product page, does not resolve inside the package. And the package grows by the size of the pages, about 1.9 MB unpacked when this was decided, most of it this page.
+The build copies the folder whole, so a new page ships without a change to the build. `PLUGIN.md` links into `docs/` with paths relative to the package root, which resolve both in the repository, where `nx-rust/` holds both, and in the installed package.
+
+Two consequences are accepted. The pages ship as they are, so a relative link that leaves `docs/`, such as the links to `.zban/` in the documentation index and in the product page, does not resolve inside the package. And the package grows by the size of the pages, about 1.9 MB unpacked when this was decided, of which this page is about 0.77 MB, some 40%.
 :::
 
 :::mara decision ADR-UNKNOWN-OPTIONS
