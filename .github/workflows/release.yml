@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver version to publish (for example 1.0.0-rc.1 or 1.0.0)
+        required: true
+        type: string
+      dist_tag:
+        description: npm dist-tag (for example next for release candidates, latest for stable, nx-24 for backports)
+        required: true
+        default: next
+        type: string
+      dry_run:
+        description: Validate, build, pack and run npm publish --dry-run without publishing or creating a tag
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# Publishes `@convesoft/nx-rust` from `dist/nx-rust` via npm Trusted Publishing
+# (OIDC) bound to this workflow and the `npm` GitHub Environment
+# (ADR-PUBLISHING-AT-1-0). Relies on branch protection on `main` (which
+# requires both CI checks before merge and forbids direct pushes), so CI is not
+# duplicated here; versioning lives in git tags (`v<version>`) rather than
+# version-bump commits, matching `nx-rust/project.json`.
+jobs:
+  verify:
+    name: Verify release inputs and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check branch and inputs
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+        run: |
+          case "$GITHUB_REF" in
+            refs/heads/main | refs/heads/release/*) ;;
+            *)
+              echo "::error::Release must run from main or a release/* branch (got $GITHUB_REF)."
+              exit 1
+              ;;
+          esac
+
+          semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?$'
+          if ! [[ "$VERSION" =~ $semver_re ]]; then
+            echo "::error::Invalid semver version: $VERSION"
+            exit 1
+          fi
+
+          if ! [[ "$DIST_TAG" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "::error::Invalid npm dist-tag: $DIST_TAG"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check that tag and npm version do not exist yet
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$VERSION" > /dev/null; then
+            echo "::error::Git tag v$VERSION already exists."
+            exit 1
+          fi
+
+          if npm view "@convesoft/nx-rust@$VERSION" version > /dev/null 2>&1; then
+            echo "::error::@convesoft/nx-rust@$VERSION is already published on npm."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm nx build @convesoft/nx-rust --skip-nx-cache
+
+      - name: Stamp version and inspect packed tarball
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "dist/nx-rust/package.json";
+            const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+            if (pkg.name !== "@convesoft/nx-rust") {
+              throw new Error("Unexpected package name: " + pkg.name);
+            }
+            pkg.version = process.env.VERSION;
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
+          '
+          for required in package.json README.md LICENSE-APACHE LICENSE-MIT executors.json generators.json src/index.js src/index.d.ts; do
+            test -f "dist/nx-rust/$required"
+          done
+          (cd dist/nx-rust && npm pack --dry-run)
+
+  publish:
+    name: Publish @convesoft/nx-rust to npm
+    needs: [verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@convesoft/nx-rust/v/${{ inputs.version }}
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: pnpm/action-setup@v6
+      # Omit `registry-url` so setup-node does not write a NODE_AUTH_TOKEN line
+      # into `.npmrc`, which would interfere with npm OIDC Trusted Publishing.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm nx build @convesoft/nx-rust --skip-nx-cache
+
+      - name: Stamp version in dist/nx-rust/package.json
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "dist/nx-rust/package.json";
+            const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+            if (pkg.name !== "@convesoft/nx-rust") {
+              throw new Error("Unexpected package name: " + pkg.name);
+            }
+            pkg.version = process.env.VERSION;
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
+          '
+
+      - name: Publish to npm (dry run)
+        if: ${{ inputs.dry_run }}
+        env:
+          DIST_TAG: ${{ inputs.dist_tag }}
+        run: |
+          npm --version
+          (cd dist/nx-rust && npm publish --dry-run --access public --tag "$DIST_TAG")
+
+      - name: Publish to npm via OIDC Trusted Publishing
+        if: ${{ !inputs.dry_run }}
+        env:
+          DIST_TAG: ${{ inputs.dist_tag }}
+        run: |
+          npm --version
+          (cd dist/nx-rust && npm publish --access public --provenance --tag "$DIST_TAG")
+
+      - name: Create git tag and GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          args=(--target "$TARGET_SHA" --title "v$VERSION" --generate-notes)
+          if [[ "$VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "v$VERSION" "${args[@]}"

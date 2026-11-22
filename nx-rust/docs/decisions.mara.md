@@ -469,6 +469,8 @@ GitHub's hosted macOS runners are in short supply in November 2026, so jobs on t
 :status: accepted
 
 The maintainer's decision of 14 November 2026. The milestones of the [roadmap](product.mara.md#roadmap) are completed on `main` one after another, and no 0.x milestone is published to npm on its own: whether and when `@convesoft/nx-rust` is published is decided at 1.0. A 0.x milestone is complete when its own checks pass on `main`, and publishing is not one of them; whether publishing is a check of 1.0 is part of what is decided there. Until a version is published, `nx add @convesoft/nx-rust` cannot install the plugin, and the status notes say so. Publishing each 0.x milestone once it is complete, as the milestones were first planned, was rejected.
+
+Amended by the maintainer on 21 November 2026: `@convesoft/nx-rust` uses its own independent semantic versioning (rather than matching Nx's major version, since private Nx internals can change in minor releases while one plugin version can span multiple Nx majors; [[REQ-COMPATIBILITY]]). Ahead of `1.0.0`, 1.0 release candidates (starting with `1.0.0-rc.1`) may be published to npm through `.github/workflows/release.yml` via npm Trusted Publishing (OIDC, bound to the `npm` GitHub Environment) so real-repository validation ([[VAL-MIXED-REPO]], [[VAL-CARGO-PARITY]], [[VAL-CACHE-TRUST]]) can install the plugin from npm.
 :::
 
 :::mara decision ADR-UNKNOWN-OPTIONS
