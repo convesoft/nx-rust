@@ -7,8 +7,10 @@ import { ConfigFile, readRedirections, Redirection } from "../cargo/redirections
 import { configuredTriples, PickedTriples, pickedTriples } from "../cargo/target-triples";
 import { CargoError } from "../cargo/run-cargo";
 import { UnsupportedCargoError } from "../compatibility/cargo-version";
+import { configuredClippyFolders } from "./clippy-input";
 import { ComputationReports } from "./computation-reports";
 import { realPath } from "./real-path";
+import { rustfmtConfigurationWarnings } from "./rustfmt-config";
 import { filesNxSees } from "./visibility";
 
 /** A Cargo workspace, which may be a standalone crate: a workspace of one. */
@@ -100,6 +102,21 @@ export interface CargoWorkspace {
    * repeat them at the start of their tasks, and no key holds them.
    */
   configurationWarnings: string[];
+  /**
+   * The warning, also in {@link CargoDiscovery.warnings}, about a rustfmt
+   * configuration file outside the repository that rustfmt takes for a
+   * crate, by the crate's manifest path (`rustfmtConfigurationWarnings` in
+   * `rustfmt-config.ts`). The crate's `fmt-check` and `fmt` tasks print it
+   * at their start, and no key holds it.
+   */
+  formattingWarnings: Map<string, string>;
+  /**
+   * The folders that `CLIPPY_CONF_DIR` under `[env]` names in the Cargo
+   * configuration that cargo reads in the workspace root, which the runtime
+   * input of `lint` looks in (`configuredClippyFolders` in `clippy-input.ts`);
+   * absent where none does.
+   */
+  clippyFolders?: string[];
 }
 
 /** The report of a crate without a project that a member may use. */
@@ -199,10 +216,12 @@ export async function discoverWorkspaces(
       triples: pickedTriples(report.workspace_root, process.env),
       configuredTriples: configuredTriples(report.workspace_root, process.env),
       configuredTools: configuredTools(report.workspace_root, process.env),
+      clippyFolders: configuredClippyFolders(report.workspace_root, process.env),
       configIncludes: found.includedFiles,
       configFiles: found.configFiles,
       warnings: [...new Set(found.warnings)],
       configurationWarnings: [],
+      formattingWarnings: new Map(),
     });
   }
   const unreportedPathDependencies = new Map<string, string>();
@@ -224,6 +243,7 @@ export async function discoverWorkspaces(
     }
   }
   warnings.push(...(await unhashedConfigurationWarnings(workspaces, workspaceRoot)));
+  warnings.push(...rustfmtConfigurationWarnings(workspaces, workspaceRoot));
   return {
     workspaceRoot,
     workspaces,

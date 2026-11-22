@@ -56,7 +56,22 @@ export function buildSettings(
   env: Readonly<Record<string, string | undefined>>,
   key: string,
 ): BuildSetting[] {
-  return buildSettingsAndUnreadable(folder, env, key).filter(
+  return tableSettings(folder, env, "build", key);
+}
+
+/**
+ * The values of `<table>.<key>` in the configuration files that cargo reads
+ * for a command started in `folder`, found and ordered as
+ * {@link buildSettings} finds those of `build.<key>`, such as the values of
+ * `env.CLIPPY_CONF_DIR`.
+ */
+export function tableSettings(
+  folder: string,
+  env: Readonly<Record<string, string | undefined>>,
+  table: string,
+  key: string,
+): BuildSetting[] {
+  return buildSettingsAndUnreadable(folder, env, key, table).filter(
     (entry): entry is BuildSetting => !("unreadable" in entry),
   );
 }
@@ -71,6 +86,7 @@ export function buildSettingsAndUnreadable(
   folder: string,
   env: Readonly<Record<string, string | undefined>>,
   key: string,
+  table = "build",
 ): (BuildSetting | UnreadableFile)[] {
   const entries: (BuildSetting | UnreadableFile)[] = [];
   const walked = new Set<string>();
@@ -80,17 +96,18 @@ export function buildSettingsAndUnreadable(
       walked.add(file);
       // A record of its own, so that a file that a deeper file includes
       // still counts here, where Cargo 1.91 reads it.
-      collect(file, key, false, new Set(), entries);
+      collect(file, table, key, false, new Set(), entries);
     }
   }
   return entries;
 }
 
-// Adds the value of `file` and of the files it includes, in descending
-// precedence: the file's own value, then its includes from the last to the
-// first, each with its own includes after it.
+// Adds the value of `<tableName>.<key>` in `file` and in the files it
+// includes, in descending precedence: the file's own value, then its
+// includes from the last to the first, each with its own includes after it.
 function collect(
   file: string,
+  tableName: string,
   key: string,
   included: boolean,
   read: Set<string>,
@@ -109,15 +126,15 @@ function collect(
     }
     return;
   }
-  const build = asTable(table.build);
-  if (build[key] !== undefined) {
-    entries.push({ file, value: build[key], included });
+  const settings = asTable(table[tableName]);
+  if (settings[key] !== undefined) {
+    entries.push({ file, value: settings[key], included });
   }
   const includes = Array.isArray(table.include) ? table.include : [table.include];
   for (const include of [...includes].reverse()) {
     const path = typeof include === "string" ? include : asTable(include).path;
     if (typeof path === "string") {
-      collect(resolve(dirname(file), path), key, true, read, entries);
+      collect(resolve(dirname(file), path), tableName, key, true, read, entries);
     }
   }
 }

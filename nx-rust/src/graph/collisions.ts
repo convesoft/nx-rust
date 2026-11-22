@@ -42,6 +42,13 @@ export interface ProjectCargoMetadata {
    */
   configurationWarnings?: string[];
   /**
+   * The warning about a rustfmt configuration file outside the repository
+   * that rustfmt takes for the crate, which the executor prints at the
+   * start of its `fmt-check` and `fmt` tasks and which no key holds
+   * (`DES-DIAGNOSTICS`); absent without one.
+   */
+  formattingWarnings?: string[];
+  /**
    * The warnings that `createDependencies` found for targets of the project,
    * which `createMetadata` adds, so that the executor prints each at the
    * start of a task of its target (`DES-TARGET-DEFAULT-GUARD`); absent
