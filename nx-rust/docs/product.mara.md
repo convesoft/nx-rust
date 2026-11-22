@@ -3,9 +3,10 @@
 `@convesoft/nx-rust` is an Nx plugin that makes Cargo workspaces first-class Nx
 projects while Cargo stays the build tool.
 
-> **Status:** milestones 0.1 to 0.5 are implemented on `main` and not
-> published to npm yet. What is left of v1 is 1.0, as the [roadmap](#roadmap)
-> shows.
+> **Status:** milestones 0.1 to 0.5 are implemented on `main`, and 1.0 release
+> candidates are published on npm under the `next` dist-tag
+> (`nx add @convesoft/nx-rust@next`). What is left of v1 is real-repository
+> validation, as the [roadmap](#roadmap) shows.
 
 It is written for Nx monorepos where Rust crates sit beside JS and TS apps and
 libraries. In such a repository Nx knows every JS project, but Rust is usually
