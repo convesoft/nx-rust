@@ -216,5 +216,7 @@ merges of pull requests on which both required checks passed, and no direct
 push. The required checks are the jobs named `Build, lint, test and format` and
 `End-to-end tests` in `.github/workflows/ci.yml`, so renaming either, or adding
 a job that must pass, means changing the branch protection as well. The
-end-to-end jobs for each toolchain run behind `End-to-end tests` and are not
-required checks themselves.
+build/lint/format job and the sharded unit-test jobs run behind
+`Build, lint, test and format`, and the end-to-end jobs for each toolchain run
+behind `End-to-end tests`; none of those underlying jobs is a required check
+itself.
