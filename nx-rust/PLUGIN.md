@@ -12,11 +12,16 @@ Its `:::mara` blocks are the normative text. This page only points to them.
 ## Detection
 
 The plugin is active when `nx.json` lists `@convesoft/nx-rust` under
-`plugins`. Each member of a Cargo workspace that the plugin discovers is then
-an Nx project, and each Cargo workspace has one project for workspace-level
-tasks: its root crate, or a project named after the workspace's folder where
-the root `Cargo.toml` defines no crate
-([project names](docs/workspaces.mara.md#project-names)).
+`plugins`. The crates that the plugin discovers are then Nx projects: the
+members of each Cargo workspace it finds, apart from crates that `include` or
+`exclude` on the plugin's entry in `nx.json`, `.gitignore`, `.nxignore` or
+`cargo vendor` leave out ([how workspaces are
+found](docs/workspaces.mara.md#how-workspaces-are-found), [project
+names](docs/workspaces.mara.md#project-names)). Where a workspace's root
+manifest is read, the tasks for the whole workspace are on its root crate, or
+on a project named after the workspace's folder where the root `Cargo.toml`
+defines no crate ([workspace-level
+tasks](docs/workspaces.mara.md#workspace-level-tasks)).
 
 ## Commands
 
@@ -71,8 +76,10 @@ testRunner = "nextest" # needs cargo-nextest installed
 
 Repository-wide settings, such as `targetNames`, go into the plugin's
 `options` in `nx.json`. An unknown key in those options or in the plugin's
-`Cargo.toml` tables fails graph creation. Every setting and where it can go:
-[all settings](docs/configuration.mara.md#all-settings).
+`Cargo.toml` tables fails graph creation, and so does an unknown option under
+`targets.<name>.options`; the other fields of a `targets.<name>` table go to
+the Nx target as they are. Every setting and where it can go: [all
+settings](docs/configuration.mara.md#all-settings).
 
 Where a repository has them, a `project.json` or `package.json` in a crate's
 folder and `targetDefaults` in `nx.json` take part too: Nx applies them after
