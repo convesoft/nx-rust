@@ -1,8 +1,9 @@
 import type { ExecutorContext, ProjectConfiguration } from "@nx/devkit";
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { hostTriple } from "../src/cargo/host-triple";
 import { type CargoTargetOptions, cargoSteps } from "../src/executors/command";
 import { declaredOptionsOf } from "../src/executors/declared-options";
 import { formGroups, planGroups } from "../src/executors/groups";
@@ -21,6 +22,8 @@ import {
   taskCalls,
   taskOutput,
   testEnvironment,
+  withoutRunner,
+  workspaceTestSteps,
   writeBaseline,
 } from "./harness";
 
@@ -83,7 +86,7 @@ describe("the commands of a test task with the test option", () => {
     expect(
       testModeNote("a:test", { kind: "affected", commits: ["c0ffee"], reason: "x" }, false, "it"),
     ).toBe(
-      'a:test: runs every test of the test target "it", which its option test names, and selects no affected tests; the test mode is affected:c0ffee.',
+      'a:test: runs the test target "it" that its option test names, as in test mode full, and selects no affected tests; the test mode is affected:c0ffee.',
     );
   });
 });
@@ -162,17 +165,20 @@ describe("groups and test modes of test tasks with the test option", () => {
           env,
         );
         expect(plan(tasks)).toEqual(["alone a", "alone b", "alone c", "workspace d,shared"]);
+        // Under hakari with the host among its platforms, and under cargo,
+        // the ordinary tasks share a command that selects them with -p.
+        const host = hostTriple(join(workspace.root, "rust"), env);
+        expect(host).toBeDefined();
         for (const strategy of ["hakari", "cargo"] as const) {
           expect(
             plan(
-              tasks.map((task) => ({ ...task, featureUnification: strategy, hakariPlatforms: [] })),
+              tasks.map((task) => ({
+                ...task,
+                featureUnification: strategy,
+                hakariPlatforms: [host as string],
+              })),
             ),
-          ).toEqual(
-            strategy === "cargo"
-              ? ["alone a", "alone b", "alone c", "crates d,shared"]
-              : // Under hakari, a host that `platforms` does not list runs alone anyway.
-                ["alone a", "alone b", "alone c", "alone d", "alone shared"],
-          );
+          ).toEqual(["alone a", "alone b", "alone c", "crates d,shared"]);
         }
       } finally {
         workspace.remove();
@@ -209,9 +215,9 @@ describe("groups and test modes of test tasks with the test option", () => {
         expect(selected.testMode).toEqual({
           mode: expect.objectContaining({ kind: "affected", commits: [sha] }),
           selects: false,
-          note: `a:test: runs every test of the test target "it", which its option test names, and selects no affected tests; the test mode is affected:${sha}.`,
+          note: `a:test: runs the test target "it" that its option test names, as in test mode full, and selects no affected tests; the test mode is affected:${sha}.`,
         });
-        // The same crate without the option selects.
+        // b, without the option, selects.
         expect(whole.testMode?.selects).toBe(true);
         expect(plan([selected, whole])).toEqual(["alone a", "workspace b"]);
       } finally {
@@ -266,6 +272,18 @@ describe("test tasks with the test option through Nx", () => {
         expect(testCalls(workspace)).toEqual([`test -p ${a} --test it`]);
         expect(it.output).toMatch(/test a_integration_test \.\.\. ok/);
         expect(it.output).not.toMatch(/a_unit_test|a_other_test|Doc-tests/);
+
+        // The selected result serves the same selection, and not the full
+        // suite of the same crate, which runs and fails on a's unit test.
+        workspace.cargo.clear();
+        const again = await runNx(workspace, ["run", "a:test", "--test=it"], env);
+        expectStatus(again, 0);
+        expect(testCalls(workspace)).toEqual([]);
+        workspace.cargo.clear();
+        const full = await runNx(workspace, ["run", "a:test"], env);
+        expectStatus(full, 1);
+        expect(testCalls(workspace)).toContain("test --workspace --no-run");
+        expect(full.output).toContain("a's unit test fails");
 
         workspace.cargo.clear();
         const release = await runNx(
@@ -323,6 +341,80 @@ describe("test tasks with the test option through Nx", () => {
     },
     HARNESS_TIMEOUT,
   );
+
+  it(
+    "runs a task with the option in its own command beside a whole-workspace group under workspace-build, each task with its own result",
+    async () => {
+      const workspace = FixtureWorkspace.create("workspace-tests", {
+        ...failingBesideIt,
+        "rust/crates/a/Cargo.toml": (manifest) =>
+          `${manifest}\n[package.metadata.nx.targets.test.options]\ntest = "it"\n`,
+        "rust/crates/b/src/lib.rs": (source) =>
+          (source ?? "").replace(
+            "assert_eq!(super::b(), 2);",
+            'assert_eq!(super::b(), 3, "b\'s unit test fails");',
+          ),
+      });
+      try {
+        const env = workspace.cargo.environment(testEnvironment());
+        const a = packageSpec(workspace.root, "rust", "a");
+        workspace.cargo.clear();
+        const run = await runNx(workspace, ["run-many", "-t", "test", "-p", "a,b,h"], env);
+        expectStatus(run, 1);
+        expect(failedTasks(run.output)).toEqual(["b:test"]);
+        expect(testCalls(workspace).map(withoutRunner)).toEqual(
+          [`test -p ${a} --test it`, ...workspaceTestSteps()].sort(),
+        );
+        expect(taskOutput(run.output, "a:test")).toMatch(/test a_integration_test \.\.\. ok/);
+        expect(taskOutput(run.output, "a:test")).not.toMatch(/a's unit test fails|Doc-tests a\b/);
+        expect(taskOutput(run.output, "b:test")).toContain("b's unit test fails");
+        expect(taskOutput(run.output, "h:test")).toContain("h's test without harness passes");
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
+  it(
+    "keeps the executable that Nx restored for build where the option selects a target with test = false",
+    async () => {
+      // untested's binary prints "plain" as cargo build writes it and "extra"
+      // as a cargo test of its `test = false` target `skipped` rewrites it.
+      const workspace = FixtureWorkspace.create("binary-tests", {
+        "rust/crates/untested/Cargo.toml": (manifest) =>
+          `${manifest}\n[package.metadata.nx.targets.test.options]\ntest = "skipped"\n`,
+      });
+      try {
+        const env = workspace.cargo.environment(testEnvironment());
+        const untested = packageSpec(workspace.root, "rust", "untested");
+        const executable = join(workspace.root, "rust", "target", "debug", "untested");
+        const printed = () => execFileSync(executable, { encoding: "utf8" }).trim();
+        expectStatus(await runNx(workspace, ["build", "untested"], env), 0);
+        expect(printed()).toBe("plain");
+        workspace.cargo.clear();
+        const run = await runNx(
+          workspace,
+          ["run-many", "-t", "build,test", "-p", "untested", "--parallel=1"],
+          env,
+        );
+        expectStatus(run, 0);
+        // build came from the cache, and test ran the selected target; under
+        // workspace-build it also waited for the builds of the other crates
+        // whose executables a whole-workspace cargo test replaces.
+        expect(run.output).toMatch(
+          /> nx run untested:build {2}\[(local cache|existing outputs match the cache, left as is)\]/,
+        );
+        expect(testCalls(workspace)).toEqual([`test -p ${untested} --test skipped`]);
+        expect(run.output).toMatch(/test passes \.\.\. ok/);
+        expect(existsSync(executable)).toBe(true);
+        expect(printed()).toBe("plain");
+      } finally {
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
 });
 
 /** Whether cargo finds `cargo nextest` with the tests' environment. */
@@ -343,6 +435,51 @@ if (!withNextest) {
 const describeWithNextest = withNextest ? describe : describe.skip;
 
 describeWithNextest("test tasks with the test option and the nextest runner", () => {
+  it(
+    "runs the named target in mode affected without asking cargo-affected, and leaves the next full run of the crate its own run",
+    async () => {
+      const workspace = FixtureWorkspace.create("workspace-tests", {
+        ...failingBesideIt,
+        "rust/Cargo.toml": (manifest) =>
+          `${manifest}\n[workspace.metadata.nx]\ntestRunner = "nextest"\naffectedTests = true\n`,
+      });
+      // The stand-in for cargo-affected that the affected specs use.
+      const stub = new StubCargoAffected();
+      try {
+        const base = testEnvironment({ NX_RUST_TEST_MODE: "affected" });
+        const env = workspace.cargo.environment({
+          ...base,
+          PATH: [stub.folder, base.PATH].filter(Boolean).join(delimiter),
+          NX_RUST_STUB_AFFECTED_LOG: stub.log,
+        });
+        const sha = "a".repeat(40);
+        writeBaseline(join(workspace.root, "rust"), [sha]);
+        const a = packageSpec(workspace.root, "rust", "a");
+        workspace.cargo.clear();
+        const selected = await runNx(workspace, ["run", "a:test", "--test=it"], env);
+        expectStatus(selected, 0);
+        expect(selected.output).toContain(
+          `a:test: runs the test target "it" that its option test names, as in test mode full, and selects no affected tests; the test mode is affected:${sha}.`,
+        );
+        expect(testCalls(workspace)).toEqual([`nextest run --no-tests=pass -p ${a} --test it`]);
+        expect(existsSync(stub.log)).toBe(false);
+
+        // The crate's run without the option is not served by the selected
+        // result: it runs its tests, and fails on a's unit test.
+        workspace.cargo.clear();
+        const whole = await runNx(workspace, ["run", "a:test"], env);
+        expectStatus(whole, 1);
+        expect(whole.output).toContain(`a:test: test mode affected:${sha}`);
+        expect(testCalls(workspace).some((call) => call.startsWith("nextest run"))).toBe(true);
+        expect(whole.output).toContain("a's unit test fails");
+      } finally {
+        stub.remove();
+        workspace.remove();
+      }
+    },
+    HARNESS_TIMEOUT,
+  );
+
   it(
     "runs only the named test target with cargo nextest run and no doctest step, also with the release profile",
     async () => {
@@ -366,6 +503,12 @@ describeWithNextest("test tasks with the test option and the nextest runner", ()
         const other = await runNx(workspace, ["run", "a:test", "--test=other"], env);
         expectStatus(other, 1);
         expect(other.output).toContain("a's other target fails");
+
+        const unknown = await runNx(workspace, ["run", "a:test", "--test=nosuch"], env);
+        expectStatus(unknown, 1);
+        expect(unknown.output).toMatch(
+          /no test target named `nosuch` in `\S+\/crates\/a#0\.1\.0` package/,
+        );
       } finally {
         workspace.remove();
       }

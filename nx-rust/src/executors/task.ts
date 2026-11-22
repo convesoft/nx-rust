@@ -639,7 +639,10 @@ export function prepareTask(
       if (selects) {
         throw new TaskError(`${task}: ${error.message}`);
       }
-      missing = `${task}: warning: cargo-affected is not installed, which the selection of affected tests in this workspace needs in test mode affected; this run is in test mode ${testModeText(mode)} and runs the full suite without it. ${error.tool.install}`;
+      missing =
+        selectedTarget === undefined
+          ? `${task}: warning: cargo-affected is not installed, which the selection of affected tests in this workspace needs in test mode affected; this run is in test mode ${testModeText(mode)} and runs the full suite without it. ${error.tool.install}`
+          : `${task}: warning: cargo-affected is not installed, which the selection of affected tests in this workspace needs in test mode affected; this task runs the test target ${JSON.stringify(selectedTarget)} that its option test names, which needs no selection. ${error.tool.install}`;
     }
     const note = [testModeNote(task, mode, optedOut, selectedTarget), missing]
       .filter((line) => line !== undefined)

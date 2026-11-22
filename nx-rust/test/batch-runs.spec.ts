@@ -1047,8 +1047,12 @@ function printed(workspace: FixtureWorkspace): Record<string, string> {
   );
 }
 
-/** The crates of binary-tests whose executables a whole-workspace cargo test replaces. */
-const waitedBuilds = ["app", "benched", "gated", "harnessless"];
+/**
+ * The crates of binary-tests whose executables a whole-workspace cargo test
+ * replaces, untested's through its `test = false` target, which the `test`
+ * option can select (DES-TEST-RUN, "One test target").
+ */
+const waitedBuilds = ["app", "benched", "gated", "harnessless", "untested"];
 
 describe("the two batch executors", () => {
   it.each<[string, string[]]>([
@@ -1195,7 +1199,7 @@ describe("the two batch executors", () => {
         // Under workspace-build, app's test waits for the builds of every
         // crate whose executables its cargo test replaces.
         expect(run.output).toContain(
-          "app:test: the cargo test of this task, which builds the whole workspace under workspace-build, replaces the executables that app:build and benched:build and gated:build and harnessless:build declare as their outputs, because those crates have a binary and an integration test or a bench that cargo test builds, and this run holds app:build and benched:build and gated:build and harnessless:build without the dependency of app:test on them that @convesoft/nx-rust infers.",
+          "app:test: the cargo test of this task, which builds the whole workspace under workspace-build, replaces the executables that app:build and benched:build and gated:build and harnessless:build and untested:build declare as their outputs, because those crates have a binary and an integration test or a bench that cargo test builds, and this run holds app:build and benched:build and gated:build and harnessless:build and untested:build without the dependency of app:test on them that @convesoft/nx-rust infers.",
         );
         // The other ten tests share the steps of one group.
         expect(calls(workspace).filter((call) => call.startsWith("test "))).toEqual(
