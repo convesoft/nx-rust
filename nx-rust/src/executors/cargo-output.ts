@@ -32,19 +32,13 @@ const escapeSequences = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:
 
 /**
  * A line of cargo's human-readable output without terminal escape
- * sequences and without the progress text before its last carriage return,
- * which the reading matches, while a task's output keeps the line as cargo
- * wrote it: cargo colours its status lines, errors and lists where
- * `CARGO_TERM_COLOR=always` asks it to, as CI configurations set it, and
- * where `CARGO_TERM_PROGRESS_WHEN=always` asks it to, writes its progress
- * bar and a carriage return before the next line on the same line
- * (`EVD-CARGO-TARGET-COMMANDS`, "build.warnings in the test steps"). JSON
- * messages are written without them.
+ * sequences, which the reading matches, while a task's output keeps the
+ * line as cargo wrote it: cargo colours its status lines, errors and lists
+ * where `CARGO_TERM_COLOR=always` asks it to, as CI configurations set it.
+ * JSON messages are written without them.
  */
 export function plainLine(line: string): string {
-  const plain = line.includes("\u001b") ? line.replace(escapeSequences, "") : line;
-  const end = plain.replace(/\r+$/, "");
-  return end.includes("\r") ? end.slice(end.lastIndexOf("\r") + 1) : end;
+  return line.includes("\u001b") ? line.replace(escapeSequences, "") : line;
 }
 
 /** What a step's output shows for one crate. */

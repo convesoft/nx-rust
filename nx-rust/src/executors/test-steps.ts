@@ -12,6 +12,7 @@ import {
   startsBlock,
 } from "./cargo-output";
 import {
+  deniedWarningsLine,
   describeStoppedByWarnings,
   describeWarnedPackages,
   fixOfStoppedByWarnings,
@@ -55,7 +56,8 @@ export interface RunnerSetup {
  * crate; one that concerns only a member outside the group is left out,
  * unless it is an error, which can explain a failure and goes to every
  * crate; every other block goes to every crate. Where `warningsDenied` is
- * set, every warning goes to every crate before any of these rules, since
+ * set, every warning, as {@link deniedWarningsLine} reads its first line,
+ * goes to every crate before any of these rules, since
  * each fails the whole step and its location need not be in the folder of
  * the crate that cargo compiled it for (`DES-TEST-RUN`, "Denied warnings in
  * a test step").
@@ -81,7 +83,7 @@ export function attributeText(
   );
   for (const block of blocks) {
     const [header] = block;
-    if (warningsDenied && plainLine(header).startsWith("warning")) {
+    if (warningsDenied && deniedWarningsLine(header).startsWith("warning")) {
       for (const part of parts) {
         part.push(...block);
       }

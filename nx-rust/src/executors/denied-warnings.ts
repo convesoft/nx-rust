@@ -133,6 +133,28 @@ export interface StoppedByWarnings {
   furtherErrors: boolean;
 }
 
+// Cargo's progress bar, without escape sequences, as it writes it before a
+// carriage return where CARGO_TERM_PROGRESS_WHEN=always asks for it:
+// `    Building [========>         ] 1/3: d(test)` padded with spaces.
+const progressBar = /^\s*Building \[[ =>]*\] \d+\/\d+(?:: .*)?$/;
+
+/**
+ * A line of cargo's output as the reading of denied warnings matches it
+ * (`DES-TEST-RUN`, "Denied warnings in a test step"): {@link plainLine},
+ * and without cargo's progress bars before its last carriage return, where
+ * everything before that carriage return is such a bar; any other line is
+ * read as {@link plainLine} reads it. Only the denial line, cargo's
+ * summaries of denied warnings and the warning blocks that every task gets
+ * are read this way, so that text that a test prints after a carriage
+ * return is read as before everywhere else.
+ */
+export function deniedWarningsLine(line: string): string {
+  const plain = plainLine(line).replace(/\r+$/, "");
+  const segments = plain.split("\r");
+  const last = segments.pop() as string;
+  return segments.every((segment) => segment === "" || progressBar.test(segment)) ? last : plain;
+}
+
 // Cargo's line after the summary of a unit whose warnings it denies.
 const deniedLine = /^error: warnings are denied by `build\.warnings` configuration$/;
 // Cargo's summary of a unit's warnings, which starts with `error:` where it
@@ -148,8 +170,9 @@ const notCompiledLine = /^error: (?:could not compile `|failed to run custom bui
  * configuration`. The packages are those of cargo's summaries that start
  * with `error:`, as `` error: `d` (lib) generated 1 warning ``; cargo starts
  * no new job after the first, so it names only the packages that it compiled
- * before it stopped. Lines are read as {@link plainLine} gives them, without
- * escape sequences and progress text. The plugin decides nothing itself: it
+ * before it stopped. Those two kinds of lines are read as
+ * {@link deniedWarningsLine} gives them, without escape sequences and
+ * cargo's progress bars. The plugin decides nothing itself: it
  * reads cargo's verdict, and `setting` only names what denies the warnings.
  *
  * @returns `undefined` where cargo does not say that warnings are denied.
@@ -159,11 +182,12 @@ export function stoppedByWarnings(
   lines: readonly string[],
   setting: () => string | undefined,
 ): StoppedByWarnings | undefined {
-  const plain = lines.map(plainLine);
-  if (!plain.some((line) => deniedLine.test(line))) {
+  const denials = lines.map(deniedWarningsLine);
+  if (!denials.some((line) => deniedLine.test(line))) {
     return undefined;
   }
-  const packages = [...new Set(plain.flatMap((line) => deniedSummary.exec(line)?.[1] ?? []))];
+  const packages = [...new Set(denials.flatMap((line) => deniedSummary.exec(line)?.[1] ?? []))];
+  const plain = lines.map(plainLine);
   const furtherErrors =
     !plain.some((line) => notCompiledLine.test(line)) &&
     plain.some(

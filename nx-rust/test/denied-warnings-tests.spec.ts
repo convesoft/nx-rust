@@ -102,6 +102,27 @@ describe("the reading of a test step that denied warnings stopped", () => {
     }
   });
 
+  it("leaves the text that a test prints after a carriage return to the readers that decide results, as before", () => {
+    // Only cargo's progress bars are left out, and only in the lines of
+    // denied warnings: a test's own progress line stays with its test.
+    const output = [
+      "    Starting 1 test across 1 binary",
+      "        FAIL [   0.002s] (1/1) b t::bad",
+      "  stdout ───",
+      "",
+      "    b's first output line",
+      "    Download 50%\rDownload 100%",
+      "    b's following output line",
+      "",
+      "     Summary [   0.002s] 1 test run: 0 passed, 1 failed",
+    ].join("\n");
+    const [a, b] = readNextestStep(output, nextestEnd(100, null), group, undefined, {
+      missing: "/r.xml",
+    });
+    expect(a.output).not.toMatch(/b's first output line|Download 100%|b's following output line/);
+    expect(b.output).toMatch(/Download 50%\rDownload 100%\n {4}b's following output line/);
+  });
+
   it("gives every task a denied warning whose location is in a crate of the group, though cargo compiled it for another", () => {
     // d compiles a module stored in a's folder with #[path].
     const output = deniedInD.replace(
