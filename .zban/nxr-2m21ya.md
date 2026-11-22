@@ -20,3 +20,5 @@ Context: finding 3 of the architecture audit after 0.6 (21 November 2026, at 54a
 - [ ] Say in the summary where a copy's behaviour changed (root spelling, links, separators) and why that is right
 
 Done when: no hand-written containment test is left in `nx-rust/src/`, and `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e` and `pnpm nx format:check --all` pass.
+
+Added by the architecture audit after 1.0.0-rc.2 (22 November 2026, at 66964f3): `nx-rust/src/graph/rustfmt-config.ts` (PR #90) uses `realPath` of `graph/real-path.ts`, but has two more hand-written containment tests, `insidePath` and `isWithin`. Include them here.

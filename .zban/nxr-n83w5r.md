@@ -20,3 +20,5 @@ Context: finding 10 of the architecture audit after 0.6 (21 November 2026, at 54
 - [ ] Move code only; keep the `// @mara implements` markers and compare the code links before and after
 
 Done when: the specs pass unchanged, and `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e`, `pnpm nx format:check --all` and the Mara validation pass.
+
+Added by the architecture audit after 1.0.0-rc.2 (22 November 2026, at 66964f3): `nx-rust/src/executors/group-run.ts` is 818 lines after nxr-tjxcvx and nxr-w1qhmx, and `readStep` now also carries the denied-warnings setting. The workers of both issues suggested a further cut: the step readers (`readStep`, `sharedOutcomes`, `hasLibrary`, `listNextestTests`) into `step-readers.ts`, leaving `runGroup` and its checks. Weigh it beside the two cuts above, after nxr-e4wynf has shared the readers' matchers and messages.

@@ -22,3 +22,5 @@ Context: finding 9 of the architecture audit after 0.6 (21 November 2026, at 54a
 - [ ] Keep the `// @mara implements` markers and compare the code links before and after
 
 Done when: `cache-keys.spec.ts` and `runtime-inputs.spec.ts` pass unchanged, and `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e`, `pnpm nx format:check --all` and the Mara validation pass.
+
+Added by the architecture audit after 1.0.0-rc.2 (22 November 2026, at 66964f3): `nx-rust/src/graph/inputs.ts` is about 955 lines after nxr-rpcfg4. Its worker suggested the same cut: `toolchainCommand`, `variablesCommand`, `namedToolVersion` and `versionCommand` into `toolchain-input.ts`.

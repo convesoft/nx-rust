@@ -9,6 +9,10 @@ tags:
 blocked_by:
   - nxr-8jv932
   - nxr-rxetx7
+  - nxr-e4wynf
+  - nxr-pydcgt
+  - nxr-9qcd84
+  - nxr-je2fns
 discovered_from: nxr-e2z8sz
 created_at: 2026-11-21T18:46:15Z
 ---
@@ -29,3 +33,5 @@ Context: finding 6 of the architecture audit after 0.6 (21 November 2026, at 54a
 - [ ] Keep the `// @mara implements` markers on their declarations and compare the code links before and after with `mara related`
 
 Done when: a check for cycles finds none that runs at load time, the Mara links are the same, and `pnpm nx run-many -t build lint test`, `pnpm nx e2e nx-rust-e2e`, `pnpm nx format:check --all` and the Mara validation pass.
+
+Added by the architecture audit after 1.0.0-rc.2 (22 November 2026, at 66964f3, finding 9): PR #90 added one more load-time cycle. `nx-rust/src/graph/discovery.ts` imports `rustfmtConfigurationWarnings` from `graph/rustfmt-config.ts`, which imports `describeWorkspaces` back from `discovery.ts`; `graph/unignored-directories.ts` and `graph/declared-files.ts` import it from there too. Move `describeWorkspaces` (with the `CargoWorkspace` type if needed) to a leaf module that all four import. The seam issues of that audit (nxr-e4wynf, nxr-pydcgt, nxr-9qcd84, nxr-je2fns) now come before this issue, because they move code between the modules whose imports this issue settles.
