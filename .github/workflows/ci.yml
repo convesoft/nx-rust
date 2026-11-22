@@ -16,21 +16,16 @@ concurrency:
 #
 # The branch protection of `main` requires two status checks, the jobs named
 # `Build, lint, test and format` (`check`) and `End-to-end tests` (`e2e`).
-# `e2e` only gathers the results of `e2e-stable` and `e2e-msrv`, which run
-# the end-to-end suite on one toolchain each, at the same time, and are not
-# required checks themselves. Renaming a required job, or adding a job that
-# must pass, means changing the branch protection too, or pull requests wait
-# for a check that never reports.
+# `check` gathers the results of `build-lint-format` and the four sharded unit
+# test jobs `test-1`..`test-4`; `e2e` gathers `e2e-stable` and `e2e-msrv`.
+# None of the underlying jobs is a required check itself. Renaming a required
+# job, or adding a job that must pass, means changing the branch protection
+# too, or pull requests wait for a check that never reports.
 jobs:
-  check:
-    name: Build, lint, test and format
+  build-lint-format:
+    name: Build, lint and format
     runs-on: ubuntu-latest
-    # The tests that need an optional tool, and building cargo-affected on a
-    # cache miss, add to the 10 minutes or so that the rest takes.
-    timeout-minutes: 35
-    env:
-      # The cargo-affected that the steps below build and cache.
-      CARGO_AFFECTED_VERSION: 0.4.1
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       # Installs the pnpm version that `packageManager` in package.json names.
@@ -39,93 +34,8 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
-      # The fixture tests run cargo, and the `lint`, `fmt` and `fmt-check`
-      # targets run clippy and rustfmt. `1.91.0` is the toolchain that the
-      # `different-toolchains` fixture pins (nx-rust/test/README.md). The
-      # tests' cargo uses rustup's default, `stable`, so that toolchain gets
-      # the `wasm32-unknown-unknown` target, which the cases that build a wasm
-      # package need, and the `llvm-tools` component, whose llvm-cov and
-      # llvm-profdata cargo-affected runs to collect coverage.
-      - name: Install the Rust toolchains
-        run: |
-          rustup toolchain install stable --profile minimal \
-            --component clippy,rustfmt,llvm-tools --target wasm32-unknown-unknown
-          rustup toolchain install 1.91.0 --profile minimal
-          rustup default stable
-          cargo --version
-      # CI installs every optional tool, so that the tests that need one run
-      # here instead of skipping (verification.mara.md, "How the plugin is
-      # tested"; nx-rust/test/README.md). Each one is a prebuilt release at a
-      # pinned version: the versions that the docs' evidence was gathered
-      # with, and for wasm-bindgen the version that the `wasm-packages`
-      # fixture locks, the only one its tests accept. Every tool gets a folder
-      # of its own outside the Cargo home, so that the cases about a missing
-      # tool hide it without hiding cargo or rustc. cargo-nextest, which the
-      # tests find only through `cargo nextest`, goes on PATH; the harness
-      # takes the others from the folders that its variables name.
-      - name: Install cargo-nextest, cargo-hakari and wasm-bindgen
-        env:
-          NEXTEST_VERSION: 0.9.152
-          NEXTEST_SHA256: d039b43c3e0958441b6ad0a39c8884d018b3d2e8fb9928f209074b1100b5e17a
-          HAKARI_VERSION: 0.9.39
-          HAKARI_SHA256: 699a3193a9bd1a8d914b970d3f50f3385f24fbd8b1294d0c0ff31fbe7c2c9f48
-          WASM_BINDGEN_VERSION: 0.2.130
-          WASM_BINDGEN_SHA256: 9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f
-        run: |
-          # fetch <url> <sha256>: downloads the archive into RUNNER_TEMP and checks it.
-          fetch() {
-            curl -fsSL -o "$RUNNER_TEMP/${1##*/}" "$1"
-            echo "$2  $RUNNER_TEMP/${1##*/}" | sha256sum -c -
-          }
-          tools="$RUNNER_TEMP/tools"
-          mkdir -p "$tools/nextest" "$tools/cargo-hakari" "$tools/wasm-bindgen"
-
-          archive=cargo-nextest-$NEXTEST_VERSION-x86_64-unknown-linux-gnu.tar.gz
-          fetch "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$NEXTEST_VERSION/$archive" "$NEXTEST_SHA256"
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$tools/nextest" cargo-nextest
-
-          archive=cargo-hakari-$HAKARI_VERSION-x86_64-unknown-linux-gnu.tar.gz
-          fetch "https://github.com/guppy-rs/guppy/releases/download/cargo-hakari-$HAKARI_VERSION/$archive" "$HAKARI_SHA256"
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$tools/cargo-hakari" cargo-hakari
-
-          name=wasm-bindgen-$WASM_BINDGEN_VERSION-x86_64-unknown-linux-musl
-          fetch "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$WASM_BINDGEN_VERSION/$name.tar.gz" "$WASM_BINDGEN_SHA256"
-          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$tools/wasm-bindgen" --strip-components=1 "$name/wasm-bindgen"
-
-          PATH="$tools/nextest:$PATH" cargo nextest --version
-          "$tools/cargo-hakari/cargo-hakari" hakari --version
-          "$tools/wasm-bindgen/wasm-bindgen" --version
-          echo "$tools/nextest" >> "$GITHUB_PATH"
-          echo "NX_RUST_TEST_CARGO_HAKARI=$tools/cargo-hakari" >> "$GITHUB_ENV"
-          echo "NX_RUST_TEST_WASM_BINDGEN=$tools/wasm-bindgen" >> "$GITHUB_ENV"
-      # cargo-affected publishes no prebuilt binaries, so it is built from
-      # crates.io with its own lockfile where the cache of GitHub Actions,
-      # which is scoped by branch and evicts entries, has none for that
-      # version, and restored otherwise. It is saved right after the build,
-      # so that a run whose tests fail keeps it too.
-      - name: Restore cargo-affected
-        id: cargo-affected
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ runner.temp }}/cargo-affected
-          key: cargo-affected-${{ env.CARGO_AFFECTED_VERSION }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Build cargo-affected
-        if: steps.cargo-affected.outputs.cache-hit != 'true'
-        run: |
-          cargo install --locked cargo-affected --version "$CARGO_AFFECTED_VERSION" \
-            --root "$RUNNER_TEMP/cargo-affected"
-      - name: Save cargo-affected
-        if: steps.cargo-affected.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ runner.temp }}/cargo-affected
-          key: ${{ steps.cargo-affected.outputs.cache-primary-key }}
-      - name: Name cargo-affected to the tests
-        run: |
-          "$RUNNER_TEMP/cargo-affected/bin/cargo-affected" affected --version
-          echo "NX_RUST_TEST_CARGO_AFFECTED=$RUNNER_TEMP/cargo-affected/bin" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm nx run-many -t build lint test
+      - run: pnpm nx run-many -t build lint
       # Without `--all`, Nx checks only the files changed against the base.
       - run: pnpm nx format:check --all
       - name: Install zban
@@ -144,6 +54,78 @@ jobs:
       # `mara schema validate` and `mara project validate` do not run here yet:
       # the knowledge base needs a Mara version that is not published
       # (nxr-0x99we). Until then they are run locally.
+
+  # The unit test suite runs across four shards at the same time, balanced by
+  # `nx-rust/jest.sequencer.cjs`. They are four explicit jobs rather than a
+  # matrix for the same reason as `e2e-stable` and `e2e-msrv` below: `check`
+  # verifies that each shard's result is literally `success`.
+  test-1:
+    name: Unit tests (shard 1/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/unit-tests
+        with:
+          shard: 1/4
+
+  test-2:
+    name: Unit tests (shard 2/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/unit-tests
+        with:
+          shard: 2/4
+
+  test-3:
+    name: Unit tests (shard 3/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/unit-tests
+        with:
+          shard: 3/4
+
+  test-4:
+    name: Unit tests (shard 4/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/unit-tests
+        with:
+          shard: 4/4
+
+  # The required check `Build, lint, test and format`: it passes only when
+  # build/lint/format and every unit test shard succeeded.
+  check:
+    name: Build, lint, test and format
+    needs: [build-lint-format, test-1, test-2, test-3, test-4]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check that build, lint, format and all test shards passed
+        env:
+          BUILD_LINT_FORMAT: ${{ needs.build-lint-format.result }}
+          TEST_1: ${{ needs.test-1.result }}
+          TEST_2: ${{ needs.test-2.result }}
+          TEST_3: ${{ needs.test-3.result }}
+          TEST_4: ${{ needs.test-4.result }}
+        run: |
+          echo "Build, lint and format: $BUILD_LINT_FORMAT"
+          echo "Unit tests (shard 1/4): $TEST_1"
+          echo "Unit tests (shard 2/4): $TEST_2"
+          echo "Unit tests (shard 3/4): $TEST_3"
+          echo "Unit tests (shard 4/4): $TEST_4"
+          test "$BUILD_LINT_FORMAT" = success
+          test "$TEST_1" = success
+          test "$TEST_2" = success
+          test "$TEST_3" = success
+          test "$TEST_4" = success
 
   # The suite runs against the latest stable Cargo and against 1.91.0, the
   # oldest Cargo the plugin supports (REQ-COMPATIBILITY, VER-SETUP), in two
