@@ -85,6 +85,7 @@ that place:
 inputs = [
   "...", # keep the inferred inputs
   { env = "DATABASE_URL" }, # add a variable for this target
+  { runtime = "tar --version" }, # and the version of a program it runs
   "!{projectRoot}/docs/**", # and leave the docs folder out
 ]
 ```
@@ -111,9 +112,15 @@ binaries, by failing the task instead of caching it
 `lint`, `test` or an artifact target, and a file that a proc macro opens
 itself, stay unprotected.
 
-An input on one target stays with that target. If a build script reads the
-variable, so that crates which depend on this one compile differently too, add
-it with `envInputs` instead ([Caching](caching.mara.md#what-is-in-a-cache-key)).
+An input on one target stays with that target: above, a new `DATABASE_URL` or
+a `tar` on `PATH` that reports another version runs this crate's `test` again, and its `build` and
+the tasks of the crates that depend on it are still restored from the cache.
+That is the place for what only tests read. `envInputs` and `runtimeInputs`
+reach further: they join the crate's `default` named input, and with it every
+cached target of the crate and of the crates that depend on it. Use them when a
+build script or macro reads the variable or runs the program, so that those
+crates compile differently too
+([Caching](caching.mara.md#what-is-in-a-cache-key)).
 
 `implicitDependencies` adds edges to projects that Cargo does not know about,
 such as a JS project whose output a test reads. It only adds: an entry starting
