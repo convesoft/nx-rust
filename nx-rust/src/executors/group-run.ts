@@ -43,6 +43,8 @@ import {
   removeToolConfiguration,
   writeToolConfiguration,
 } from "./nextest";
+import { type DeniedWarnings, deniedWarnings } from "../cargo/warnings-setting";
+import { withDeniedWarnings } from "./denied-warnings";
 import { resetNxWorkspaceContext } from "./nx-task-files";
 import { checksAfterCargo, type GroupInvocation, type PreparedTask } from "./task";
 import { packagesVariable, type RecordEntry, recordVariable } from "./test-runner";
@@ -261,6 +263,7 @@ export async function runGroup(
           record,
           packages,
           first.invocation.runner,
+          () => deniedWarnings(cwd, cargoEnvironment(invocation, first.prepared.env)),
         );
       }
       outcomes.forEach((outcome, at) => {
@@ -473,6 +476,7 @@ function readStep(
   record: string | undefined,
   packages: string,
   runner: readonly string[] | undefined,
+  denied: () => DeniedWarnings | undefined,
 ): CrateOutcome[] {
   // A group of one crate that selects it runs the command that its task runs
   // on its own, and passes each step where cargo exits with status 0. The
@@ -502,35 +506,34 @@ function readStep(
     case "nextest":
       throw new Error("A nextest step is read from its JUnit report (readNextestStep).");
     case "command":
-      return sharedOutcomes(members, crates, output, end, scope);
+      return sharedOutcomes(members, crates, output, end, scope, denied);
   }
 }
 
 // What the output of a command for several crates, or for the whole
-// workspace, shows for each crate.
+// workspace, shows for each crate. A command with JSON messages also fails
+// the crates with warnings that Cargo denies (`DES-BATCH`, "Denied warnings").
 function sharedOutcomes(
   members: readonly GroupMember[],
   crates: readonly OutputCrate[],
   output: string,
   end: CommandEnd,
   scope: OutputScope | undefined,
+  denied: () => DeniedWarnings | undefined,
 ): CrateOutcome[] {
+  const allTargets = members[0].prepared.options.allTargets === true;
+  const withWarnings = (outcomes: CrateOutcome[], tests: boolean) =>
+    withDeniedWarnings(outcomes, output, crates, members[0].invocation.members, tests, denied);
   switch (members[0].prepared.target) {
     case "build":
     case "napi-build":
-      return readJsonStep(output, end, crates, false, scope);
+      return withWarnings(readJsonStep(output, end, crates, false, scope), false);
     case "wasm-build":
       // Its compile builds the libraries alone, with `--lib` (`DES-WASM`).
-      return readJsonStep(output, end, crates, false, scope, true);
+      return withWarnings(readJsonStep(output, end, crates, false, scope, true), false);
     case "check":
     case "lint":
-      return readJsonStep(
-        output,
-        end,
-        crates,
-        members[0].prepared.options.allTargets === true,
-        scope,
-      );
+      return withWarnings(readJsonStep(output, end, crates, allTargets, scope), allTargets);
     case "test":
       return readTestStep(output, end, crates);
     default:

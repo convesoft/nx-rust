@@ -80,6 +80,12 @@ allowed is never reused where they are denied. Cargo honours `build.warnings`
 from 1.97 on; older versions ignore it without a word
 ([[EVD-CARGO-TARGET-COMMANDS]]).
 
+Where tasks share one cargo command, cargo ignores `build.warnings`, because the
+command reads its JSON messages to tell the crates apart. The plugin then applies
+the setting itself: a task fails where its crate, or a workspace crate or path
+dependency it depends on, has a warning, as `cargo clippy -p <crate>` would
+fail, and a warning in an unrelated crate fails no task.
+
 ## Running binaries
 
 `nx run api` is Nx's own syntax and needs a target, so `run` is started as
@@ -611,7 +617,7 @@ Each command starts in the root folder of the crate's workspace, names the crate
 
 **Flags as options.** A flag beyond the package selection comes from an option of the target, so that a command passes only what its options ask for ([[DES-INVOCATION]]). `--all-targets` on `check` and `lint` is such an option, on by default. A crate switches it off in the options of the target in its `[package.metadata.nx]` table ([[DES-METADATA-TABLES]]), for example when its benches need a nightly compiler, which stable rejects under `--all-targets`. Tasks whose options differ never share a cargo call ([[TERM-GROUP]]). The option is `allTargets` ([[DES-PLUGIN-OPTIONS]]). `--all-targets` is what rust-analyzer passes by default, so `check` compiles the units the editor compiles and the two reuse each other's work ([[EVD-CARGO-TARGET-COMMANDS]]).
 
-**Warnings.** No target adds a flag that turns warnings into errors. A task fails on warnings where the repository says so through Cargo: lint levels in `[lints]` and `[workspace.lints]`, `build.warnings` in `.cargo/config.toml` or `CARGO_BUILD_WARNINGS`, which Cargo honours from 1.97 on, and `RUSTFLAGS`, all of which are cache inputs ([[DES-INPUTS]]). Passing `-D warnings` to clippy would differ from plain `cargo clippy` and check every selected member again whenever a developer alternates the two ([[EVD-CARGO-TARGET-COMMANDS]]).
+**Warnings.** No target adds a flag that turns warnings into errors. A task fails on warnings where the repository says so through Cargo: lint levels in `[lints]` and `[workspace.lints]`, `build.warnings` in `.cargo/config.toml` or `CARGO_BUILD_WARNINGS`, which Cargo honours from 1.97 on, and `RUSTFLAGS`, all of which are cache inputs ([[DES-INPUTS]]). Cargo ignores `build.warnings` under `--message-format=json`, which a command shared by several crates passes, so the batch applies it there itself ([[DES-BATCH]], "Denied warnings"). Passing `-D warnings` to clippy would differ from plain `cargo clippy` and check every selected member again whenever a developer alternates the two ([[EVD-CARGO-TARGET-COMMANDS]]).
 
 **Formatting.** `fmt` exists on every crate and formats only the crates of its tasks. `cargo fmt --all` would also rewrite path dependencies outside the workspace, and plain `cargo fmt` in the workspace root would rewrite members that have no project ([[EVD-CARGO-TARGET-COMMANDS]], [[REQ-SKIP-CRATES]]). `cargo fmt -p` takes package names only, not package ID specifications, and matches them against the workspace's members alone, whose names are unique, so the name addresses the crate also where a dependency has the same name ([[EVD-CARGO-PACKAGE-SPECS]]).
 
