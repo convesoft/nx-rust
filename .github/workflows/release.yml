@@ -106,10 +106,25 @@ jobs:
             pkg.version = process.env.VERSION;
             fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
           '
-          for required in package.json README.md LICENSE-APACHE LICENSE-MIT executors.json generators.json src/index.js src/index.d.ts; do
-            test -f "dist/nx-rust/$required"
-          done
           (cd dist/nx-rust && npm pack --dry-run)
+          # The tarball holds these files and every file of nx-rust/docs, as it is.
+          (cd dist/nx-rust && npm pack --dry-run --json --silent) > "$RUNNER_TEMP/pack.json"
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const [listing, ...fixed] = process.argv.slice(1);
+            const docs = fs
+              .readdirSync("nx-rust/docs", { recursive: true, withFileTypes: true })
+              .filter((entry) => entry.isFile())
+              .map((entry) => path.posix.join("docs", path.relative("nx-rust/docs", path.join(entry.parentPath, entry.name)).split(path.sep).join("/")));
+            // npm 10 and 11 print a list of packages, npm 12 an object keyed by the package name.
+            const packed = Object.values(JSON.parse(fs.readFileSync(listing, "utf8")))[0];
+            const files = new Set(packed.files.map((f) => f.path));
+            const missing = [...fixed, ...docs].filter((file) => !files.has(file));
+            if (missing.length > 0) {
+              throw new Error("Missing from the package: " + missing.join(", "));
+            }
+          ' "$RUNNER_TEMP/pack.json" package.json README.md PLUGIN.md LICENSE-APACHE LICENSE-MIT executors.json generators.json src/index.js src/index.d.ts
 
   publish:
     name: Publish @convesoft/nx-rust to npm
