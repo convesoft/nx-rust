@@ -337,6 +337,7 @@ export function projectNodes(projects: readonly CargoProject[]): CreateNodesResu
                 ...(project.workspace.configurationWarnings.length > 0
                   ? { configurationWarnings: project.workspace.configurationWarnings }
                   : {}),
+                ...formattingWarnings(project),
               },
             },
           },
@@ -344,4 +345,16 @@ export function projectNodes(projects: readonly CargoProject[]): CreateNodesResu
       },
     ];
   });
+}
+
+// The warning about a rustfmt configuration file outside the repository
+// that rustfmt takes for the project's crate, which its `fmt-check` and
+// `fmt` tasks print and no key holds, as `formattingWarnings` of the
+// project's metadata, or nothing.
+function formattingWarnings(project: CargoProject): { formattingWarnings?: string[] } {
+  const warning =
+    project.pkg === undefined
+      ? undefined
+      : project.workspace.formattingWarnings?.get(project.pkg.manifest_path);
+  return warning === undefined ? {} : { formattingWarnings: [warning] };
 }

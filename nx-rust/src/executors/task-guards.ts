@@ -445,14 +445,21 @@ export function checkOptionTriple(
 // for the task's target, each once (`DES-DIAGNOSTICS`, "Warnings where they
 // are seen"), and those about its workspace's Cargo configuration that Nx
 // does not hash, which no key holds, so that a cache hit replays them as the
-// run that stored the result printed them.
+// run that stored the result printed them; for `fmt-check` and `fmt`, also
+// the one about a rustfmt configuration outside the repository, which no key
+// holds either.
 // @mara implements DES-DIAGNOSTICS
 export function projectWarnings(context: ExecutorContext): string[] {
   const project = context.projectsConfigurations?.projects?.[context.projectName ?? ""];
   const cargo = project === undefined ? undefined : cargoMetadataOf(project);
+  const inferred = targetMetadata(
+    project?.targets?.[context.targetName ?? ""]?.metadata?.[targetCargoMetadataKey],
+  )?.target;
+  const formats = inferred === "fmt-check" || inferred === "fmt";
   const warnings: unknown[] = [
     ...(Array.isArray(cargo?.warnings) ? cargo.warnings : []),
     ...(Array.isArray(cargo?.configurationWarnings) ? cargo.configurationWarnings : []),
+    ...(formats && Array.isArray(cargo?.formattingWarnings) ? cargo.formattingWarnings : []),
   ];
   const targetWarnings: unknown[] = Array.isArray(cargo?.targetWarnings)
     ? cargo.targetWarnings
