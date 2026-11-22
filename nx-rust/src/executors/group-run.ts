@@ -539,13 +539,7 @@ function sharedOutcomes(
     case "check":
     case "lint":
       return withWarnings(
-        readJsonStep(
-          output,
-          end,
-          crates,
-          members[0].prepared.options.allTargets === true,
-          scope,
-        ),
+        readJsonStep(output, end, crates, members[0].prepared.options.allTargets === true, scope),
       );
     case "test":
       return readTestStep(output, end, crates);
