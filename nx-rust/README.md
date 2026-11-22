@@ -44,6 +44,10 @@ tags = ["scope:backend"]
 The user guide and specification are in the repository:
 <https://github.com/convesoft/nx-rust/blob/main/nx-rust/docs/index.mara.md>
 
+The package carries the same pages for its own version: `PLUGIN.md`, a short
+guide for coding agents, and the `docs/` folder, both at
+`node_modules/@convesoft/nx-rust/`.
+
 ## License
 
 MIT OR Apache-2.0

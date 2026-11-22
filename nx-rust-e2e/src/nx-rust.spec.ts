@@ -215,6 +215,20 @@ describe("@convesoft/nx-rust", () => {
     }
   });
 
+  // Agents and developers read the documentation of the installed version
+  // there, through node_modules: PLUGIN.md and every file of nx-rust/docs, as
+  // it is in the repository.
+  it("has PLUGIN.md at the package root and the docs folder as it is", () => {
+    const installed = join(projectDirectory, "node_modules", "@convesoft", "nx-rust");
+    const docs = join(workspaceRoot, "nx-rust", "docs");
+
+    expect(readFileSync(join(installed, "PLUGIN.md"), "utf8")).toEqual(
+      readFileSync(join(workspaceRoot, "nx-rust", "PLUGIN.md"), "utf8"),
+    );
+    expect(fileDigests(join(installed, "docs"))).toEqual(fileDigests(docs));
+    expect(Object.keys(fileDigests(docs))).toContain("index.mara.md");
+  });
+
   it(
     "creates a crate with the installed library generator",
     () => {
