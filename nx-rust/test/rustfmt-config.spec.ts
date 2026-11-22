@@ -154,31 +154,39 @@ describe("the warning about a rustfmt configuration outside the repository", () 
     HARNESS_TIMEOUT,
   );
 
-  (process.platform === "darwin" ? it.skip : it)(
-    "says that the keys of the other crates do not hold a per-user file that XDG_CONFIG_HOME places in a crate's folder, and nothing to that crate",
-    async () => {
-      const workspace = FixtureWorkspace.create("subfolder-workspace");
-      const config = join(workspace.root, "rust", "crates", "api", "config");
-      const env = { ...environment(), XDG_CONFIG_HOME: config };
-      try {
-        mkdirSync(join(config, "rustfmt"), { recursive: true });
-        writeFileSync(join(config, "rustfmt", "rustfmt.toml"), "tab_spaces = 2\n");
-        const shown = await runNx(workspace, ["show", "projects"], env);
-        const model = await runNx(workspace, ["run", "model:fmt-check"], env);
-        const api = await runNx(workspace, ["run", "api:fmt-check"], env);
-        const inside =
-          "nx-rust: rustfmt takes its configuration from rust/crates/api/config/rustfmt/rustfmt.toml, a per-user folder that HOME or XDG_CONFIG_HOME places in the repository, for the crates of the Cargo workspace in rust that no other rustfmt.toml or .rustfmt.toml covers, but the file lies outside the folders of those crates, so their keys do not hold it, and a fmt-check result cached before a change to it can be restored afterwards.";
+  // XDG_CONFIG_HOME does not count on macOS.
+  (process.platform === "darwin" ? describe.skip : describe)(
+    "with XDG_CONFIG_HOME in the repository",
+    () => {
+      it(
+        "says that the keys of the other crates do not hold a per-user file that XDG_CONFIG_HOME places in a crate's folder, and nothing to that crate",
+        async () => {
+          const workspace = FixtureWorkspace.create("subfolder-workspace");
+          const config = join(workspace.root, "rust", "crates", "api", "config");
+          const env = { ...environment(), XDG_CONFIG_HOME: config };
+          try {
+            mkdirSync(join(config, "rustfmt"), { recursive: true });
+            writeFileSync(join(config, "rustfmt", "rustfmt.toml"), "tab_spaces = 2\n");
+            const shown = await runNx(workspace, ["show", "projects"], env);
+            const model = await runNx(workspace, ["run", "model:fmt-check"], env);
+            const api = await runNx(workspace, ["run", "api:fmt-check"], env);
+            const inside =
+              "nx-rust: rustfmt takes its configuration from rust/crates/api/config/rustfmt/rustfmt.toml, a per-user folder that HOME or XDG_CONFIG_HOME places in the repository, for the crates of the Cargo workspace in rust that no other rustfmt.toml or .rustfmt.toml covers, but the file lies outside the folders of those crates, so their keys do not hold it, and a fmt-check result cached before a change to it can be restored afterwards.";
 
-        expect({
-          shown: shown.output.includes(inside),
-          outside: shown.output.includes("lies outside the repository"),
-          model: taskOutput(model.output, "model:fmt-check").includes(inside),
-          api: taskOutput(api.output, "api:fmt-check").includes("rustfmt takes its configuration"),
-        }).toEqual({ shown: true, outside: false, model: true, api: false });
-      } finally {
-        workspace.remove();
-      }
+            expect({
+              shown: shown.output.includes(inside),
+              outside: shown.output.includes("lies outside the repository"),
+              model: taskOutput(model.output, "model:fmt-check").includes(inside),
+              api: taskOutput(api.output, "api:fmt-check").includes(
+                "rustfmt takes its configuration",
+              ),
+            }).toEqual({ shown: true, outside: false, model: true, api: false });
+          } finally {
+            workspace.remove();
+          }
+        },
+        HARNESS_TIMEOUT,
+      );
     },
-    HARNESS_TIMEOUT,
   );
 });
