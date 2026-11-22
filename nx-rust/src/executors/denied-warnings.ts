@@ -1,5 +1,13 @@
 import type { DeniedWarnings } from "../cargo/warnings-setting";
-import { type CrateOutcome, describeList, packageName } from "./cargo-output";
+import {
+  type CommandEnd,
+  type CrateOutcome,
+  describeList,
+  type OutputCrate,
+  packageName,
+  plainLine,
+  readTestStep,
+} from "./cargo-output";
 
 /**
  * The packages for which a command's JSON messages report a warning: a
@@ -69,4 +77,100 @@ export function withDeniedWarnings(
       message: outcome.message === undefined ? message : `${outcome.message}\n${message}`,
     };
   });
+}
+
+/** How a step's reading asks about Cargo's `build.warnings` for its command. */
+export interface StepWarnings {
+  /** Whether Cargo denies warnings, for a step whose JSON messages cargo does not fail on. */
+  denied: () => DeniedWarnings | undefined;
+  /** What sets the warnings to `deny`, for a step whose own output says they are denied. */
+  setting: () => string | undefined;
+}
+
+/**
+ * Reads a `cargo test` that selects its crates with `-p` ({@link readTestStep}),
+ * naming, where cargo failed and says that it denies warnings, the packages
+ * with warnings and what denies them (`DES-TEST-RUN`, "Denied warnings in a
+ * test step").
+ */
+// @mara implements DES-TEST-RUN
+export function readTestStepWithWarnings(
+  output: string,
+  end: CommandEnd,
+  crates: readonly OutputCrate[],
+  setting: () => string | undefined,
+): CrateOutcome[] {
+  const stopped =
+    end.kind === "failed" ? stoppedByWarnings(output.split("\n"), setting) : undefined;
+  return readTestStep(
+    output,
+    end,
+    crates,
+    stopped === undefined
+      ? undefined
+      : describeStoppedByWarnings(stopped, (names) =>
+          describeList(names.map((name) => `\`${name}\``)),
+        ),
+  );
+}
+
+/**
+ * Where a test step stopped because Cargo denies warnings, as cargo's own
+ * output says (`DES-TEST-RUN`, "Denied warnings in a test step").
+ */
+export interface StoppedByWarnings {
+  /** The packages whose warnings cargo reports as denied, each once, in order. */
+  packages: string[];
+  /** What denies them, as `denyingSetting` names it, if anything that the plugin reads does. */
+  source: string | undefined;
+}
+
+// Cargo's line after the summary of a unit whose warnings it denies.
+const deniedLine = /^error: warnings are denied by `build\.warnings` configuration$/;
+// Cargo's summary of a unit's warnings, which starts with `error:` where it
+// denies them and with `warning:` otherwise.
+const deniedSummary = /^error: `([^`]+)` \([^)]*\) generated \d+ warnings?\b/;
+
+/**
+ * Reads from a test step's text, which cargo prints without JSON messages
+ * or with `json-render-diagnostics`, whether cargo stopped because it denies
+ * warnings: where a line says `warnings are denied by \`build.warnings\`
+ * configuration`. The packages are those of cargo's summaries that start
+ * with `error:`, as `` error: `d` (lib) generated 1 warning ``; cargo starts
+ * no new job after the first, so it names only the packages that it compiled
+ * before it stopped. The plugin decides nothing itself: it reads cargo's
+ * verdict, and `setting` only names what denies the warnings.
+ *
+ * @returns `undefined` where cargo does not say that warnings are denied.
+ */
+// @mara implements DES-TEST-RUN
+export function stoppedByWarnings(
+  lines: readonly string[],
+  setting: () => string | undefined,
+): StoppedByWarnings | undefined {
+  const plain = lines.map(plainLine);
+  if (!plain.some((line) => deniedLine.test(line))) {
+    return undefined;
+  }
+  const packages = [...new Set(plain.flatMap((line) => deniedSummary.exec(line)?.[1] ?? []))];
+  return { packages, source: setting() };
+}
+
+/**
+ * The cause of a test step's stop by denied warnings, as a message names
+ * it: the packages with warnings, as `describe` names them, and what denies
+ * them, worded as the JSON compile steps' message words it
+ * ({@link withDeniedWarnings}).
+ */
+export function describeStoppedByWarnings(
+  stopped: StoppedByWarnings,
+  describe: (names: readonly string[]) => string,
+): string {
+  const setting =
+    stopped.source === undefined
+      ? "warnings are denied by Cargo's build.warnings setting, as cargo says"
+      : `warnings are denied: ${stopped.source}`;
+  return stopped.packages.length === 0
+    ? `${setting}, and cargo's output names no package with warnings; its diagnostics above show them`
+    : `cargo reported warnings in ${describe(stopped.packages)}, and ${setting}`;
 }

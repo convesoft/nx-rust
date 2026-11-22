@@ -44,6 +44,19 @@ function configuredWarnings(
 }
 
 /**
+ * What sets `build.warnings` to `deny` for a cargo command started in
+ * `folder` with the environment `env`, as {@link deniedWarnings} names it,
+ * without asking for cargo's version: for a command whose own output says
+ * that warnings are denied (`DES-TEST-RUN`, "Denied warnings in a test
+ * step"). `undefined` where nothing that the plugin reads sets it to `deny`.
+ */
+// @mara implements DES-TEST-RUN
+export function denyingSetting(folder: string, env: NodeJS.ProcessEnv): string | undefined {
+  const setting = configuredWarnings(folder, env);
+  return setting?.value === "deny" ? setting.source : undefined;
+}
+
+/**
  * Whether Cargo denies warnings for a cargo command started in `folder`
  * with the environment `env` (`DES-BATCH`, "Denied warnings"): where
  * {@link configuredWarnings} gives `deny` and the cargo of that folder and

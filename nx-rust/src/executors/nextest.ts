@@ -10,6 +10,7 @@ import {
   outsideMembers,
   plainLine,
 } from "./cargo-output";
+import { stoppedByWarnings } from "./denied-warnings";
 import { attributeText, failStopped, notCompiled, splitLines } from "./test-steps";
 
 /**
@@ -399,7 +400,9 @@ export function parseNextestList(stdout: string): ListedTests {
  *   failed test of its own where the list cannot be read;
  * - with 101, the build of the test binaries failed, which stops the step
  *   before any test runs, and every task fails with the crates that did not
- *   compile (`DES-BATCH`, "Test runs");
+ *   compile (`DES-BATCH`, "Test runs"), and where cargo says that it denies
+ *   warnings, with the packages with warnings and what denies them, as
+ *   `setting` names it (`DES-TEST-RUN`, "Denied warnings in a test step");
  * - with 105, a setup script failed, and every task fails with the scripts
  *   that the report names;
  * - with any other status, by a signal or without a start, every task fails.
@@ -418,6 +421,8 @@ export function parseNextestList(stdout: string): ListedTests {
  *
  * @param selection Whether the step runs a selection of affected tests
  *   (`DES-TEST-RUN`, step 3), which the count's wording then names.
+ * @param setting What denies warnings for the step's command, asked only
+ *   where cargo says that it denies them.
  */
 // @mara implements DES-TEST-RUN
 // @mara implements DES-DIAGNOSTICS
@@ -430,9 +435,13 @@ export function readNextestStep(
   report: JunitReport,
   listed?: ListedTests,
   selection = false,
+  setting: () => string | undefined = () => undefined,
 ): CrateOutcome[] {
   const lines = splitLines(output);
-  const texts = attributeNextest(lines, crates, scope).map((part) => part.join("\n"));
+  const stopped = end.kind === "build-failed" ? stoppedByWarnings(lines, setting) : undefined;
+  const texts = attributeNextest(lines, crates, scope, stopped !== undefined).map((part) =>
+    part.join("\n"),
+  );
   if (end.kind === "unexplained") {
     return failEvery(crates, texts, end.reason);
   }
@@ -443,6 +452,7 @@ export function readNextestStep(
       notCompiled(lines),
       outsideMembers(crates, scope).names,
       "cargo nextest run",
+      stopped,
     );
   }
   const names = new Set(crates.map((crate) => crate.name));
@@ -617,9 +627,15 @@ function attributeNextest(
   lines: readonly string[],
   crates: readonly OutputCrate[],
   scope: OutputScope | undefined,
+  warningsDenied: boolean,
 ): string[][] {
   const start = lines.findIndex((line) => /^\s*Starting \d+ tests? across /.test(plainLine(line)));
-  const parts = attributeText(start === -1 ? lines : lines.slice(0, start), crates, scope);
+  const parts = attributeText(
+    start === -1 ? lines : lines.slice(0, start),
+    crates,
+    scope,
+    warningsDenied,
+  );
   if (start === -1) {
     return parts;
   }
