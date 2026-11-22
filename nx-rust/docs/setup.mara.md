@@ -134,7 +134,7 @@ adds:
 
 ### Several checkouts of one repository
 
-Nx 24 shares one local cache, in your home folder, between the linked git
+Nx 24 normally shares one local cache, in your home folder, between the linked git
 worktrees of a repository, and between separate clones that it takes for the
 same workspace. Sharing is off for a checkout where `nx.json` sets
 `cacheDirectory` or the environment sets `NX_CACHE_DIRECTORY`,

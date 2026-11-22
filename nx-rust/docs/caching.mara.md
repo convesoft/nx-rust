@@ -164,7 +164,7 @@ Cargo's build and artifact directories, `target/` by default, are Cargo's,
 and `fileInputs` refuses paths inside them: a key over Cargo's outputs would
 change with every build, and the sources they are made from count already.
 So keep test data such as fixtures, golden files or downloaded samples outside
-them. In the crate's folder, every file that Git does not ignore counts. A
+them. In the crate's folder, every file that neither Git nor `.nxignore` ignores counts. A
 file that Git ignores, such as a downloaded sample, and a file elsewhere in
 the repository need a `fileInputs` pattern, which counts ignored files too.
 
@@ -598,9 +598,7 @@ add an input that tells them apart ([[RISK-HOST-ENVIRONMENT]]).
 
 Nx 24 keeps its local cache, and the database of the task results in it, in
 your home folder, under `~/.nx`, one per workspace rather than one per
-checkout. It tells workspaces apart by the Nx Cloud id in `nx.json`, or else
-by the git remote, or the first commit where there is none, together with the
-workspace's folder inside the repository. Linked git worktrees of a
+checkout. It tells workspaces apart by the Nx Cloud id or access token in `nx.json`, or else by the git remote, or the first commit where there is none, together with the workspace's folder inside the repository. A checkout for which Nx finds none of these, such as a shallow clone without a remote or a folder that is no git repository, or whose folder under `~/.nx` Nx cannot use, keeps a cache of its own. Linked git worktrees of a
 repository therefore share the cache, and so do separate clones that Nx takes
 for the same workspace. Sharing is off for a checkout where `nx.json` sets
 `cacheDirectory`, or the environment sets `NX_CACHE_DIRECTORY`,
@@ -637,9 +635,7 @@ in does that, for every member of a workspace at once:
 inputs = ["...", { runtime = "pwd" }]
 ```
 
-Each checkout then builds its own artifacts once and restores only those, also
-where a remote cache such as Nx Cloud is set up, because Nx looks the same key
-up there. It costs the reuse of `build` results between checkouts, and between
+Each checkout then builds its own artifacts once and restores only those, also where a remote cache such as Nx Cloud is set up, because Nx looks the same key up there. Two checkouts at the same path, as on two machines or two CI runners, still get the same key. It costs the reuse of `build` results between checkouts, and between
 CI and your machine, wherever their folders differ; the other targets are still
 shared. Running such tasks with `--skip-nx-cache` also works, but it runs them
 every time and stores nothing.
