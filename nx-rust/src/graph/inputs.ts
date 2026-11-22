@@ -429,7 +429,13 @@ export function targetInputs(
       ? []
       : externalDependencyInputs(target, subject, workspaceRoot, readsDigest, settings)),
     ...environmentInputs(target),
-    ...(target === "lint" ? [{ runtime: clippyConfigurationCommand(workspaceRoot) }] : []),
+    ...(target === "lint"
+      ? [
+          {
+            runtime: clippyConfigurationCommand(workspaceRoot, subject.workspace.clippyFolders),
+          },
+        ]
+      : []),
     {
       runtime: toolchainCommand(
         workspaceRoot,
@@ -667,8 +673,8 @@ export function lockfileInputs(subject: InputSubject, context: InputContext): In
  * One `env` input per variable of `DES-INPUTS` that applies to the target:
  * the fixed list, `CARGO_BUILD_WARNINGS` on the targets that compile, and
  * `CLIPPY_CONF_DIR` on `lint`, whose value alone this hashes: the
- * configuration file in its folder reaches the key through
- * {@link clippyConfigurationCommand}. The variables whose names start with
+ * configuration file in its folder, and in each folder that Cargo's `[env]`
+ * names for it, reaches the key through {@link clippyConfigurationCommand}. The variables whose names start with
  * `CARGO_PROFILE_` or `CARGO_TARGET_` are in the toolchain command instead
  * ({@link toolchainCommand}).
  */
