@@ -160,19 +160,39 @@ fileInputs = ["../../../proto/**/*.proto", "../../../README.md"]
   whose folder holds Cargo's build or artifact directory, such as
   `../../**`, leaves that directory out, so that a build changes no key.
 
-Cargo writes everything in its build and artifact directories, `target/` by
-default. A key over those files would change with every build, and the
-sources they are made from count already. So keep test data that Cargo does
-not make, such as fixtures, golden files or downloaded samples, outside
-`target/`: in the crate's folder, which counts whole, or in a folder that
-`fileInputs` lists. Where a test needs such files inside `target/`, for
-example because another step puts them there or the test looks for them
-beside the executable that `CARGO_BIN_EXE_<name>` names, nothing hashes them.
-Key what decides their content with a `runtime` input on the crate's `test`
-target ([above](#what-is-in-a-cache-key)), such as the version of the tool
-that writes them. A path that is relative to `CARGO_BIN_EXE_<name>` lies in
+Cargo's build and artifact directories, `target/` by default, are Cargo's,
+and `fileInputs` refuses paths inside them: a key over Cargo's outputs would
+change with every build, and the sources they are made from count already.
+So keep test data such as fixtures, golden files or downloaded samples outside
+them. In the crate's folder, every file that Git does not ignore counts. A
+file that Git ignores, such as a downloaded sample, and a file elsewhere in
+the repository need a `fileInputs` pattern, which counts ignored files too.
+
+Where a test reads files inside `target/`, for example ones that another step
+puts beside the executable that `CARGO_BIN_EXE_<name>` names, no input covers
+them. A `runtime` input on the crate's `test` target
+([above](#what-is-in-a-cache-key)) then has to print everything that decides
+what the test reads. Where the files exist before Nx computes the key, a
+command that prints their digest does that:
+
+```toml
+# rust/crates/api/Cargo.toml
+[package.metadata.nx.targets.test]
+inputs = ["...", { runtime = "cksum rust/target/debug/golden.txt" }]
+```
+
+The command runs in the repository root, and Nx keys what it prints on
+standard output and standard error, whatever its exit status. A changed, empty
+or missing file thus each gives another key, the missing one through cksum's
+message, and the same content gives the same key again.
+
+Where the step that writes the files runs after Nx has computed the key, key
+every input of that step instead: its own input files, its options and the
+version of the tool. The tool's version alone is enough only where nothing
+else decides what it writes. A path relative to `CARGO_BIN_EXE_<name>` lies in
 the artifact directory that `CARGO_TARGET_DIR` or `build.target-dir` sets, so
-it moves with them; a path relative to `env!("CARGO_MANIFEST_DIR")` does not.
+it moves with them, and the command has to name the same place; a path
+relative to `env!("CARGO_MANIFEST_DIR")` does not move.
 
 Whenever `build` runs cargo, also when nothing needs compiling, the plugin
 reads the dependency files that Cargo writes beside the crate's library and
@@ -576,13 +596,18 @@ add an input that tells them apart ([[RISK-HOST-ENVIRONMENT]]).
 
 ## Sharing the cache between checkouts
 
-Unless `nx.json` or the environment names a cache directory, Nx 24 keeps its
-local cache in your home folder, under `~/.nx`, one per repository rather
-than one per checkout. Every checkout of the repository uses it: linked git
-worktrees, and also separate clones with the same remote, or the same first
-commit where there is none. No key holds the folder of the
-checkout, so a result stored in one checkout is restored in another, and
-`nx reset` empties the cache of them all.
+Nx 24 keeps its local cache, and the database of the task results in it, in
+your home folder, under `~/.nx`, one per workspace rather than one per
+checkout. It tells workspaces apart by the Nx Cloud id in `nx.json`, or else
+by the git remote, or the first commit where there is none, together with the
+workspace's folder inside the repository. Linked git worktrees of a
+repository therefore share the cache, and so do separate clones that Nx takes
+for the same workspace. Sharing is off for a checkout where `nx.json` sets
+`cacheDirectory`, or the environment sets `NX_CACHE_DIRECTORY`,
+`NX_WORKSPACE_DATA_DIRECTORY` or `NX_PROJECT_GRAPH_CACHE_DIRECTORY`. The
+plugin puts the folder of the checkout into no key, so a result stored in one
+checkout is restored in the others that share the cache, and `nx reset`
+empties the cache that they share.
 
 What a hit restores follows [What is stored](#what-is-stored):
 
@@ -591,7 +616,8 @@ What a hit restores follows [What is stored](#what-is-stored):
   `Compiling` lines do.
 - `build` restores the final artifacts only: executables, `cdylib` and
   `staticlib` files. Never the `.d` files beside them, nor anything of Cargo's
-  build directory. Cargo in this checkout still compiles whatever it needs.
+  build directory. Cargo in this checkout still compiles whatever it needs
+  when it next runs.
 - A restored executable or library is the one that the other checkout built,
   so the absolute paths compiled into it name that checkout: a value of
   `env!("CARGO_MANIFEST_DIR")`, the folders in its debug information, and
@@ -601,9 +627,27 @@ What a hit restores follows [What is stored](#what-is-stored):
   part of the key, so a value that names the checkout gives each checkout
   keys of its own.
 
-Where artifacts have to come from the checkout they run in, give each checkout
-a cache of its own. In `nx.json`, a relative `cacheDirectory` is read against
-each checkout's folder:
+Where artifacts have to come from the checkout they run in, give `build` a key
+that names the checkout. A `runtime` input that prints the folder Nx runs it
+in does that, for every member of a workspace at once:
+
+```toml
+# rust/Cargo.toml
+[workspace.metadata.nx.targets.build]
+inputs = ["...", { runtime = "pwd" }]
+```
+
+Each checkout then builds its own artifacts once and restores only those, also
+where a remote cache such as Nx Cloud is set up, because Nx looks the same key
+up there. It costs the reuse of `build` results between checkouts, and between
+CI and your machine, wherever their folders differ; the other targets are still
+shared. Running such tasks with `--skip-nx-cache` also works, but it runs them
+every time and stores nothing.
+
+A cache directory of its own separates only the local cache. After a local
+miss Nx still asks a remote cache for the same key, so a checkout with its own
+directory can restore another checkout's or CI's artifacts from there. In
+`nx.json`, a relative `cacheDirectory` is read against each checkout's folder:
 
 ```json
 {
@@ -611,12 +655,12 @@ each checkout's folder:
 }
 ```
 
-An absolute path is shared again by every checkout that names it. Nx hashes
-`nx.json` into every key, so each task runs once more after the change. For
-one shell or one command, `NX_CACHE_DIRECTORY` does the same and wins over
-`cacheDirectory`. The Nx daemon keeps the directories that it chose when it
-started, so set the variable for every command in that checkout, or set
-`NX_DAEMON=false` with it:
+Nx hashes `nx.json` into every key, so each task runs once more after the
+change. For one shell or one command, `NX_CACHE_DIRECTORY` does the same and
+wins over `cacheDirectory`. The Nx daemon keeps the directories that it chose
+when it started, also when later commands set the variable. Stop a running
+daemon first with `nx daemon --stop` and then set the variable for every
+command in that checkout, or set `NX_DAEMON=false` with it:
 
 ```sh
 NX_CACHE_DIRECTORY=.nx/cache NX_DAEMON=false nx run-many -t build test

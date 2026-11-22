@@ -113,7 +113,7 @@ binaries, by failing the task instead of caching it
 itself, stay unprotected.
 
 An input on one target stays with that target: above, a new `DATABASE_URL` or
-another `tar` on `PATH` runs this crate's `test` again, and its `build` and
+a `tar` on `PATH` that reports another version runs this crate's `test` again, and its `build` and
 the tasks of the crates that depend on it are still restored from the cache.
 That is the place for what only tests read. `envInputs` and `runtimeInputs`
 reach further: they join the crate's `default` named input, and with it every
