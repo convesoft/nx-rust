@@ -201,7 +201,8 @@ describe("@convesoft/nx-rust", () => {
   });
 
   // The global setup builds the plugin from this project's folder, not from
-  // the workspace root, and the package has to look the same either way.
+  // the workspace root, and the package has to look the same either way
+  // (VER-SETUP).
   it("has the README and the licences at the package root", () => {
     const installed = join(projectDirectory, "node_modules", "@convesoft", "nx-rust");
     const sources = {
@@ -217,7 +218,7 @@ describe("@convesoft/nx-rust", () => {
 
   // Agents and developers read the documentation of the installed version
   // there, through node_modules: PLUGIN.md and every file of nx-rust/docs, as
-  // it is in the repository.
+  // it is in the repository (ADR-BUNDLED-DOCS, VER-SETUP).
   it("has PLUGIN.md at the package root and the docs folder as it is", () => {
     const installed = join(projectDirectory, "node_modules", "@convesoft", "nx-rust");
     const docs = join(workspaceRoot, "nx-rust", "docs");

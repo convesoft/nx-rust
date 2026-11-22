@@ -475,6 +475,18 @@ The maintainer's decision of 14 November 2026. The milestones of the [roadmap](p
 Amended by the maintainer on 21 November 2026: `@convesoft/nx-rust` uses its own independent semantic versioning (rather than matching Nx's major version, since private Nx internals can change in minor releases while one plugin version can span multiple Nx majors; [[REQ-COMPATIBILITY]]). Ahead of `1.0.0`, 1.0 release candidates (starting with `1.0.0-rc.1`) may be published to npm through `.github/workflows/release.yml` via npm Trusted Publishing (OIDC, bound to the `npm` GitHub Environment) so real-repository validation ([[VAL-MIXED-REPO]], [[VAL-CARGO-PARITY]], [[VAL-CACHE-TRUST]]) can install the plugin from npm.
 :::
 
+:::mara decision ADR-BUNDLED-DOCS
+:mid: 01M81H7N75PJEZC7XE5B1Z4JTR
+:title: Ship PLUGIN.md and the docs folder in the npm package
+:status: accepted
+
+The maintainer's decision of 22 November 2026. The published `@convesoft/nx-rust` package carries `PLUGIN.md` at its root and every file of `nx-rust/docs/` as it is, in a `docs/` folder beside it, so that coding agents and developers in an adopting repository read, through `node_modules/@convesoft/nx-rust/`, the documentation of the version they have installed rather than that of `main`. `PLUGIN.md` is a short guide for agents: it summarises the common commands, the `Cargo.toml` tables and the caching rules and points into `docs/`, whose items stay the normative text. Linking only to the documentation on GitHub, as the README did, was the alternative; it describes `main`, which can be ahead of or behind a published release ([[ADR-PUBLISHING-AT-1-0]]).
+
+`PLUGIN.md` sits at the package root because that is the path Nx 24 names. In the `nx` 24.0.6 package that this repository installs, `dist/src/ai/set-up-ai-agents/get-agent-rules.js` writes into the agent rules it generates: "For Nx plugin best practices, check `node_modules/@nx/<plugin>/PLUGIN.md`. Not all plugins have this file - proceed without it if unavailable." The rule names only `@nx/*` plugins, sets no format, and no code of `nx` reads the file. Of the `@nx/*` 24.0.6 plugins installed here, only `@nx/jest` ships one, at `dist/PLUGIN.md`, not at the path that the rule names; its sections (detection, commands, a quick reference) are the shape that the plugin's `PLUGIN.md` follows. Read on 22 November 2026, not run.
+
+Two consequences are accepted. The pages ship as they are, so a relative link that leaves `docs/`, such as the links to `.zban/` in the documentation index and in the product page, does not resolve inside the package. And the package grows by the size of the pages, about 1.9 MB unpacked when this was decided, most of it this page.
+:::
+
 :::mara decision ADR-UNKNOWN-OPTIONS
 :mid: 01M7A93PSWEZZPRGCDQCJ8DHE4
 :title: Run tasks without options the executor does not know and say so in their output
