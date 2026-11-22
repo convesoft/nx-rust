@@ -26,6 +26,11 @@
             "output": "."
           },
           {
+            "input": "./nx-rust/docs",
+            "glob": "**/*",
+            "output": "./docs"
+          },
+          {
             "input": "./nx-rust/src",
             "glob": "**/!(*.ts)",
             "output": "./src"
