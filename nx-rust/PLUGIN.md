@@ -7,7 +7,8 @@ and rust-analyzer work as they would without the plugin.
 
 The full documentation of this installed version is in the [`docs/`](docs/)
 folder next to this file; start at [`docs/index.mara.md`](docs/index.mara.md).
-Its `:::mara` blocks are the normative text. This page only points to them.
+Its Mara item sections (with a `Type` / `ID` / `Status` table) are the normative
+text. This page only points to them.
 
 ## Detection
 

@@ -173,6 +173,9 @@ importers:
         specifier: 1.9.0
         version: 1.9.0
     devDependencies:
+      '@convesoft/mara':
+        specifier: 0.4.0-rc.1
+        version: 0.4.0-rc.1
       '@convesoft/zban':
         specifier: 1.0.0-rc.1
         version: 1.0.0-rc.1
@@ -181,7 +184,7 @@ importers:
         version: 30.3.0
       '@napi-rs/cli':
         specifier: ^3.10.12
-        version: 3.10.12(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@22.20.5)(supports-color@8.1.1)
+        version: 3.10.12(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.20.5)(supports-color@8.1.1)
       '@nx/jest':
         specifier: 24.0.6
         version: 24.0.6(ca8e3f6a40771f58d78c76ca3d94b2e6)
@@ -197,9 +200,6 @@ importers:
       '@nx/workspace':
         specifier: 24.0.6
         version: 24.0.6(@swc-node/register@1.11.1(@swc/core@1.15.47(@swc/helpers@0.5.24))(@swc/types@0.1.28)(supports-color@8.1.1)(typescript@6.0.3))(@swc/core@1.15.47(@swc/helpers@0.5.24))
-      '@sourcegraph/scip-typescript':
-        specifier: 0.6.2
-        version: 0.6.2(@typescript-eslint/types@8.72.2)
       '@swc-node/register':
         specifier: ~1.11.1
         version: 1.11.1(@swc/core@1.15.47(@swc/helpers@0.5.24))(@swc/types@0.1.28)(supports-color@8.1.1)(typescript@6.0.3)
@@ -882,9 +882,6 @@ packages:
   '@borewit/text-codec@0.2.3':
     resolution: {integrity: sha512-49CycTz1aAZmvFcwkeFyhud1HUmRIB5Tabf7ALV+VA4Iu85MTfz2cUwzPagMFAdVBvrWdkCxG67I30tUwwpKsw==}
 
-  '@bufbuild/protobuf@2.17.0':
-    resolution: {integrity: sha512-hcPkSz6D7MiTU/5VBBhK+kxaYDoOdQ6yJRFJ3kS8Nydp+VZXfg1vrpABKPNod8bXMufsVCmiUJVIKFzCzta4uw==}
-
   '@cacheable/memory@2.2.0':
     resolution: {integrity: sha512-CTLKqLItRCEixEAewD3/j9DB3/o96gpTPD4eJ1v+DGOlxZRZncRQkGYqqnAGCscYd6RNeXfGeiuCphsPtqyIfQ==}
 
@@ -898,6 +895,23 @@ packages:
   '@clack/prompts@1.7.0':
     resolution: {integrity: sha512-y7/yvZ2TPAnR9+jnc00klvNNLkJiXFFrQA/hlLCcxA9a2A4zQIOimyFQ9XfwYKiGD1fb5GY8vbKIIgO8d5Tb2A==}
     engines: {node: '>= 20.12.0'}
+
+  '@convesoft/mara-linux-arm64-gnu@0.4.0-rc.1':
+    resolution: {integrity: sha512-QqjC9nWGpyjCWJrQqudswUt6Y03ncMttYrpjQ6uaxc/Uy0U5/eG8mjPiDN3+ZBzwDGWvoWmOP9tGA2K4oo8kbA==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@convesoft/mara-linux-x64-gnu@0.4.0-rc.1':
+    resolution: {integrity: sha512-YmjXA5eHAebIlC4DE51smH2wfo+0OJK9PCA6ebuUSGDwOF6QpioNGV1kNx9jzdVzfABzrsKgv9Z3lC6z6Xu2Yg==}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@convesoft/mara@0.4.0-rc.1':
+    resolution: {integrity: sha512-yXp+eDCZO4Ue+lZNkAQMwmpYyHzAfbSGCcDa5QPClSRSmU+5F5C/xwwRMYeGdF4t8veXjbk6cS/OHJoI4mUo1w==}
+    engines: {node: '>=24'}
+    hasBin: true
 
   '@convesoft/zban-darwin-arm64@1.0.0-rc.1':
     resolution: {integrity: sha512-COEGic4h0an4Pl0Ga79grgHKZb/PM95aPwrgbVBbss9S7cMKRuKdve9WjDoPfBOOzyGoGZLD9zEgGeKFyM9FaA==}
@@ -2486,9 +2500,6 @@ packages:
     resolution: {integrity: sha512-SEeaJLb3qBNF/OaXnaR1NmmBbFYk1zC0ZH/52fATcRPLFg/p791YrcyFFy44Bo9sLaGuSuLp5Q6axbb/O+v/RA==}
     engines: {node: ^14.18.0 || >=16.0.0}
 
-  '@scip-code/scip@0.10.0':
-    resolution: {integrity: sha512-tAQfyCv/Kap1XS3Xw/30JVxUfhmWCvfuIa7SOVOiY7xuUQhCa5A7SfevKVWzzB+6wxVo0rC+jUYSjwSP1YnvKw==}
-
   '@sec-ant/readable-stream@0.4.1':
     resolution: {integrity: sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==}
 
@@ -2508,11 +2519,6 @@ packages:
 
   '@sinonjs/fake-timers@15.4.0':
     resolution: {integrity: sha512-DsG+8/LscQIQg68J6Ef3dv10u6nVyetYn923s3/sus5eaGfTo1of5WMZSLf0UJc9KDuKPilPH0UDJCjvNbDNCA==}
-
-  '@sourcegraph/scip-typescript@0.6.2':
-    resolution: {integrity: sha512-ABean4n8irltY8YAsaJXaJT2QnsM5ZwYjZXiL028HTrbUoAvw+BsIn3rN09lMhl8qH5EgZoq5is6Ux5odP8JMA==}
-    engines: {node: '>=22.23.4'}
-    hasBin: true
 
   '@sveltejs/acorn-typescript@1.0.13':
     resolution: {integrity: sha512-wgKggnhZVL9Bfx1OaKKTrYY9BFRk6C8UAkQNUcIv1+llzYrIqy+RZm5HPKzn0NpEBvTVhTqB4kQyllZywsRBRQ==}
@@ -3474,10 +3480,6 @@ packages:
     resolution: {integrity: sha512-FQN4MRfuJeHf7cBbBMJFXhKSDq+2kAArBlmRBvcvFE5BB1HZKXtSFASDhdlz9zOYwxh8lDdnvmMOe/+5cdoEdg==}
     engines: {node: '>= 0.8'}
 
-  commander@15.1.0:
-    resolution: {integrity: sha512-cgnQ88TRrWcC7pVq46RzJVRMktu3W2RcbnoidnfBsl1bmDCBwJS/udcIZpKoCrbAYYaCqsz1yZCVIgbIaU3ddQ==}
-    engines: {node: '>=22.12.0'}
-
   commander@6.2.1:
     resolution: {integrity: sha512-U7VdrJFnJgo4xjrHpTzu0yrHPGImdsmD95ZlgYSEajAn2JKzDhDTPG9kBTefmObL2w/ngeZnilk+OV9CG3d7UA==}
     engines: {node: '>= 6'}
@@ -3593,9 +3595,6 @@ packages:
   decompress-response@10.0.0:
     resolution: {integrity: sha512-oj7KWToJuuxlPr7VV0vabvxEIiqNMo+q0NueIiL3XhtwC6FVOX7Hr1c0C4eD0bmf7Zr+S/dSf2xvkH3Ad6sU3Q==}
     engines: {node: '>=20'}
-
-  dedent-js@1.0.1:
-    resolution: {integrity: sha512-OUepMozQULMLUmhxS95Vudo0jb0UchLimi3+pQ2plj61Fcy8axbP9hbiD4Sz6DPqn6XG3kfmziVfQ1rSys5AJQ==}
 
   dedent@1.7.2:
     resolution: {integrity: sha512-WzMx3mW98SN+zn3hgemf4OzdmyNhhhKz5Ay0pUfQiMQ3e1g+xmTJWp/pKdwKVXhdSkAEGIIzqeuWrL3mV/AXbA==}
@@ -5152,10 +5151,6 @@ packages:
     resolution: {integrity: sha512-cdGef/drWFoydD1JsMzuFf8100nZl+GT+yacc2bEced5f9Rjk4z+WtFUTBu9PhOi9j/jfmBPu0mMEY4wIdAF8A==}
     engines: {node: '>= 0.6.0'}
 
-  progress@2.0.3:
-    resolution: {integrity: sha512-7PiHtLll5LdnKIMw100I+8xJXR5gW2QwWYkT6iJva0bXitZKa/XMrSbdmg3r2Xnaidz9Qumd0VPaMrZlF9V9sA==}
-    engines: {node: '>=0.4.0'}
-
   proxy-addr@2.0.8:
     resolution: {integrity: sha512-5nnx0yGyVUcY6t9RnWcARWtwT9F1D8O9rt08htPvnd49W1IgZtmLkhu9WfMzQj1cFxjHIO6connUNVW5k7AVyQ==}
     engines: {node: '>= 0.10'}
@@ -5311,9 +5306,6 @@ packages:
   saxes@6.0.0:
     resolution: {integrity: sha512-xAg7SOnEhrm5zI3puOOKyy1OMcMlIJZYNJY7xLBwSze0UjhPLnWfj2GF2EpT0jmzaJKIWKHLsaSSajf35bcYnA==}
     engines: {node: '>=v12.22.7'}
-
-  scule@1.3.0:
-    resolution: {integrity: sha512-6FtHJEvt+pVMIB9IBY+IcCJ6Z5f1iQnytgyfKMhDKgmzYG+TeH/wx1y3l27rshSbLiSanrR9ffZDrEsmjlQF2g==}
 
   seek-bzip@2.0.0:
     resolution: {integrity: sha512-SMguiTnYrhpLdk3PwfzHeotrcwi8bNV4iemL9tx9poR/yeaMYwB9VzR1w7b57DuWpuqR8n6oZboi0hj3AxZxQg==}
@@ -5519,12 +5511,6 @@ packages:
   supports-preserve-symlinks-flag@1.0.0:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
-
-  svelte2tsx@0.7.63:
-    resolution: {integrity: sha512-gRgz/V6wOx0NDZhm6OMD2VIh+/HrgZc3k6ibX93rkNPEkWNn/P3Uhb1fYCqOrimEUpQd8r65dhiHZIJXSQBeow==}
-    peerDependencies:
-      svelte: ^3.55 || ^4.0.0-next.0 || ^4.0 || ^5.0.0-next.0
-      typescript: ^4.9.4 || ^5.0.0 || ^6.0.0
 
   svelte@5.57.3:
     resolution: {integrity: sha512-5mAftM3SoDV9X0zdF386F9p2pv8iKOwi/KfBS1XnBAkVCKFzVOLHUoa8iGWAt4buoicLmyWVRpuuD5wplXOQsg==}
@@ -6766,8 +6752,6 @@ snapshots:
 
   '@borewit/text-codec@0.2.3': {}
 
-  '@bufbuild/protobuf@2.17.0': {}
-
   '@cacheable/memory@2.2.0':
     dependencies:
       '@cacheable/utils': 2.5.0
@@ -6791,6 +6775,17 @@ snapshots:
       fast-string-width: 3.0.2
       fast-wrap-ansi: 0.2.0
       sisteransi: 1.0.5
+
+  '@convesoft/mara-linux-arm64-gnu@0.4.0-rc.1':
+    optional: true
+
+  '@convesoft/mara-linux-x64-gnu@0.4.0-rc.1':
+    optional: true
+
+  '@convesoft/mara@0.4.0-rc.1':
+    optionalDependencies:
+      '@convesoft/mara-linux-arm64-gnu': 0.4.0-rc.1
+      '@convesoft/mara-linux-x64-gnu': 0.4.0-rc.1
 
   '@convesoft/zban-darwin-arm64@1.0.0-rc.1':
     optional: true
@@ -7421,7 +7416,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@napi-rs/cli@3.10.12(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@22.20.5)(supports-color@8.1.1)':
+  '@napi-rs/cli@3.10.12(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.20.5)(supports-color@8.1.1)':
     dependencies:
       '@inquirer/prompts': 8.8.0(@types/node@22.20.5)
       '@napi-rs/cross-toolchain': 1.0.5(supports-color@8.1.1)
@@ -7436,8 +7431,8 @@ snapshots:
       typanion: 3.14.0
       typescript: 6.0.3
     optionalDependencies:
-      '@emnapi/core': 2.0.0-beta.3
-      '@emnapi/runtime': 2.0.0-beta.3
+      '@emnapi/core': 1.11.2
+      '@emnapi/runtime': 1.11.2
     transitivePeerDependencies:
       - '@napi-rs/cross-toolchain-arm64-target-aarch64'
       - '@napi-rs/cross-toolchain-arm64-target-armv7'
@@ -8299,10 +8294,6 @@ snapshots:
 
   '@pkgr/core@0.3.6': {}
 
-  '@scip-code/scip@0.10.0':
-    dependencies:
-      '@bufbuild/protobuf': 2.17.0
-
   '@sec-ant/readable-stream@0.4.1': {}
 
   '@sinclair/typebox@0.34.52': {}
@@ -8319,22 +8310,10 @@ snapshots:
     dependencies:
       '@sinonjs/commons': 3.0.1
 
-  '@sourcegraph/scip-typescript@0.6.2(@typescript-eslint/types@8.72.2)':
-    dependencies:
-      '@bufbuild/protobuf': 2.17.0
-      '@jridgewell/trace-mapping': 0.3.31
-      '@scip-code/scip': 0.10.0
-      commander: 15.1.0
-      progress: 2.0.3
-      svelte: 5.57.3(@typescript-eslint/types@8.72.2)
-      svelte2tsx: 0.7.63(svelte@5.57.3(@typescript-eslint/types@8.72.2))(typescript@6.0.3)
-      typescript: 6.0.3
-    transitivePeerDependencies:
-      - '@typescript-eslint/types'
-
   '@sveltejs/acorn-typescript@1.0.13(acorn@8.19.0)':
     dependencies:
       acorn: 8.19.0
+    optional: true
 
   '@swc-node/core@1.15.0(@swc/core@1.15.47(@swc/helpers@0.5.24))(@swc/types@0.1.28)':
     dependencies:
@@ -9004,7 +8983,8 @@ snapshots:
 
   argparse@3.0.4: {}
 
-  aria-query@5.3.1: {}
+  aria-query@5.3.1:
+    optional: true
 
   array-flatten@1.1.1: {}
 
@@ -9026,7 +9006,8 @@ snapshots:
 
   aws4@1.13.2: {}
 
-  axobject-query@4.1.0: {}
+  axobject-query@4.1.0:
+    optional: true
 
   b4a@1.9.0: {}
 
@@ -9390,7 +9371,8 @@ snapshots:
 
   clone@1.0.4: {}
 
-  clsx@2.1.1: {}
+  clsx@2.1.1:
+    optional: true
 
   co@4.6.0: {}
 
@@ -9412,8 +9394,6 @@ snapshots:
   combined-stream@1.0.8:
     dependencies:
       delayed-stream: 1.0.0
-
-  commander@15.1.0: {}
 
   commander@6.2.1: {}
 
@@ -9521,8 +9501,6 @@ snapshots:
     dependencies:
       mimic-response: 4.0.0
 
-  dedent-js@1.0.1: {}
-
   dedent@1.7.2(babel-plugin-macros@3.1.0):
     optionalDependencies:
       babel-plugin-macros: 3.1.0
@@ -9549,7 +9527,8 @@ snapshots:
     dependencies:
       address: 2.0.3
 
-  devalue@5.9.4: {}
+  devalue@5.9.4:
+    optional: true
 
   diff@4.0.4: {}
 
@@ -9688,7 +9667,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  esm-env@1.2.2: {}
+  esm-env@1.2.2:
+    optional: true
 
   espree@11.2.0:
     dependencies:
@@ -9713,6 +9693,7 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.6.0
     optionalDependencies:
       '@typescript-eslint/types': 8.72.2
+    optional: true
 
   esrecurse@4.3.0:
     dependencies:
@@ -10255,6 +10236,7 @@ snapshots:
   is-reference@3.0.3:
     dependencies:
       '@types/estree': 1.0.10
+    optional: true
 
   is-stream@2.0.1: {}
 
@@ -11013,7 +10995,8 @@ snapshots:
 
   lines-and-columns@2.0.3: {}
 
-  locate-character@3.0.0: {}
+  locate-character@3.0.0:
+    optional: true
 
   locate-path@5.0.0:
     dependencies:
@@ -11077,6 +11060,7 @@ snapshots:
   magic-string@0.30.21:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
+    optional: true
 
   make-asynchronous@1.1.0:
     dependencies:
@@ -11558,8 +11542,6 @@ snapshots:
 
   process@0.11.10: {}
 
-  progress@2.0.3: {}
-
   proxy-addr@2.0.8:
     dependencies:
       forwarded: 0.2.0
@@ -11715,8 +11697,6 @@ snapshots:
   saxes@6.0.0:
     dependencies:
       xmlchars: 2.2.0
-
-  scule@1.3.0: {}
 
   seek-bzip@2.0.0:
     dependencies:
@@ -11942,13 +11922,6 @@ snapshots:
 
   supports-preserve-symlinks-flag@1.0.0: {}
 
-  svelte2tsx@0.7.63(svelte@5.57.3(@typescript-eslint/types@8.72.2))(typescript@6.0.3):
-    dependencies:
-      dedent-js: 1.0.1
-      scule: 1.3.0
-      svelte: 5.57.3(@typescript-eslint/types@8.72.2)
-      typescript: 6.0.3
-
   svelte@5.57.3(@typescript-eslint/types@8.72.2):
     dependencies:
       '@jridgewell/remapping': 2.3.5
@@ -11968,6 +11941,7 @@ snapshots:
       zimmerframe: 1.1.5
     transitivePeerDependencies:
       - '@typescript-eslint/types'
+    optional: true
 
   symbol-tree@3.2.4: {}
 
@@ -12434,4 +12408,5 @@ snapshots:
 
   yocto-queue@0.1.0: {}
 
-  zimmerframe@1.1.5: {}
+  zimmerframe@1.1.5:
+    optional: true

@@ -43,7 +43,3 @@ Thumbs.db
 .nx/migrate-runs
 .claude/worktrees
 .claude/settings.local.json
-
-# Mara local mutation coordination; schema and authored knowledge are tracked.
-/.mara/mutation.lock
-/.mara/transaction/

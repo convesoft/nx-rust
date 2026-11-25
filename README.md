@@ -110,7 +110,7 @@ pnpm install
 pnpm nx run-many -t build lint test
 pnpm nx e2e nx-rust-e2e          # publishes to a local registry and installs from it
 pnpm nx format:check --all
-mara schema validate && mara project validate
+pnpm mara schema validate && pnpm mara project validate
 zban check
 ```
 
