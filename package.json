@@ -11,6 +11,7 @@
     "smol-toml": "1.9.0"
   },
   "devDependencies": {
+    "@convesoft/mara": "0.4.0-rc.1",
     "@convesoft/zban": "1.0.0-rc.1",
     "@jest/test-sequencer": "~30.3.0",
     "@napi-rs/cli": "^3.10.12",
@@ -19,7 +20,6 @@
     "@nx/oxlint": "24.0.6",
     "@nx/plugin": "24.0.6",
     "@nx/workspace": "24.0.6",
-    "@sourcegraph/scip-typescript": "0.6.2",
     "@swc-node/register": "~1.11.1",
     "@swc/cli": "~0.8.1",
     "@swc/core": "~1.15.5",

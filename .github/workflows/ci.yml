@@ -39,9 +39,8 @@ jobs:
       # Without `--all`, Nx checks only the files changed against the base.
       - run: pnpm nx format:check --all
       - run: pnpm zban check
-      # `mara schema validate` and `mara project validate` do not run here yet:
-      # the knowledge base needs a Mara version that is not published
-      # (nxr-0x99we). Until then they are run locally.
+      - run: pnpm mara --no-daemon schema validate
+      - run: pnpm mara --no-daemon project validate
 
   # Restores the latest CI per-suite timing profile once per workflow run and
   # passes that exact snapshot to every shard, so all four shards compute the

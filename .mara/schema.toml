@@ -1,0 +1,141 @@
+format_version = 1
+statuses = ["draft", "accepted", "retired"]
+
+[types.goal]
+id_prefix = "GOAL-"
+description = "A desired outcome and why it matters."
+
+[types.need]
+id_prefix = "NEED-"
+description = "A stakeholder capability, condition or result without prescribing realization."
+
+[types.scenario]
+id_prefix = "SCN-"
+description = "A concrete operational situation or flow and its outcomes."
+
+[types.requirement]
+id_prefix = "REQ-"
+description = "A precise, necessary and verifiable obligation on the solution."
+
+[types.design]
+id_prefix = "DES-"
+description = "An engineering specification of a realization."
+
+[types.decision]
+id_prefix = "ADR-"
+description = "A consequential engineering choice, its context and rationale."
+
+[types.risk]
+id_prefix = "RISK-"
+description = "Uncertainty that could adversely affect a goal, need or requirement."
+
+[types.risk.fields.likelihood]
+kind = "enum"
+values = ["rare", "unlikely", "possible", "likely", "almost-certain"]
+
+[types.risk.fields.consequence]
+kind = "enum"
+values = ["minimal", "minor", "moderate", "major", "severe"]
+
+[types.term]
+id_prefix = "TERM-"
+description = "A canonical project or domain definition with equivalent aliases."
+
+[types.term.fields.aliases]
+kind = "text"
+repeatable = true
+
+[types.evidence]
+id_prefix = "EVD-"
+description = "A durable empirical or analytical conclusion with interpretable provenance."
+
+[types.verification]
+id_prefix = "VER-"
+description = "A definition of how requirement conformity is established."
+
+[types.verification.fields.methods]
+kind = "enum"
+values = ["test", "analysis", "inspection", "demonstration"]
+repeatable = true
+
+[types.validation]
+id_prefix = "VAL-"
+description = "A definition of how need satisfaction or goal achievement is established."
+
+[types.validation.fields.methods]
+kind = "enum"
+values = ["test", "analysis", "inspection", "demonstration"]
+repeatable = true
+
+[relations.contributes_to]
+inverse = "contributed_to_by"
+description = "Achieving the source helps achieve the goal without guaranteeing it."
+targets = { need = ["goal"], design = ["goal"] }
+
+[relations.satisfies]
+inverse = "satisfied_by"
+description = "The source specifies something intended to fulfill the target at the next engineering level; not proof."
+targets = { requirement = ["need"], design = ["requirement"] }
+
+[relations.decomposes]
+inverse = "decomposed_by"
+description = "The source is a constituent of the same-flavour parent; child-to-parent, not complete decomposition proof."
+targets = { need = ["need"], requirement = ["requirement"], design = ["design"] }
+same_type = true
+
+[relations.derives_from]
+inverse = "gives_rise_to"
+description = "The requirement follows analytically from the target requirement; not generic origin tracking."
+targets = { requirement = ["requirement"] }
+
+[relations.supersedes]
+inverse = "superseded_by"
+description = "A distinct same-flavour replacement takes over operative meaning while preserving historical lineage."
+targets = { goal = ["goal"], need = ["need"], scenario = ["scenario"], requirement = ["requirement"], design = ["design"], decision = ["decision"], term = ["term"], verification = ["verification"], validation = ["validation"] }
+same_type = true
+acyclic = true
+
+[relations.justifies]
+inverse = "justified_by"
+description = "The decision supplies rationale for establishing or choosing the requirement or design."
+targets = { decision = ["requirement", "design"] }
+
+[relations.accepts]
+inverse = "accepted_by"
+description = "An authorized decision explicitly tolerates the risk; the link alone does not establish authority."
+targets = { decision = ["risk"] }
+
+[relations.threatens]
+inverse = "threatened_by"
+description = "The uncertainty could prevent or degrade the target's achievement."
+targets = { risk = ["goal", "need", "requirement"] }
+
+[relations.mitigates]
+inverse = "mitigated_by"
+description = "The requirement or design is intended to reduce likelihood or consequence; not proof of effectiveness."
+targets = { requirement = ["risk"], design = ["risk"] }
+
+[relations.verifies]
+inverse = "verified_by"
+description = "The verification defines an objective conformity check for the requirement."
+targets = { verification = ["requirement"] }
+
+[relations.validates]
+inverse = "validated_by"
+description = "The validation defines an intended-outcome check for the need or goal."
+targets = { validation = ["need", "goal"] }
+
+[relations.exercises]
+inverse = "exercised_by"
+description = "The validation uses the scenario as operational context."
+targets = { validation = ["scenario"] }
+
+[relations.supports]
+inverse = "supported_by"
+description = "The evidence supplies empirical or analytical support for engineering reasoning."
+targets = { evidence = ["goal", "need", "requirement", "design", "decision", "risk"] }
+
+[relations.implements]
+inverse = "implemented_by"
+description = "An external code reference realizes a requirement or design, or a test reference realizes a verification; not execution evidence."
+targets = { code = ["requirement", "design", "verification"] }

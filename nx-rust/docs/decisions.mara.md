@@ -5,708 +5,954 @@ rest on. Most of this comes from a design discussion recorded on 12 November 202
 
 ## Decisions
 
-:::mara decision ADR-NEW-PLUGIN
-:mid: 01M78FHG7FZFXQ6B84EG2CKHRS
-:title: Build a new plugin that closes the gaps of the existing ones
-:status: accepted
-:justifies: REQ-DEPENDENCY-EDGES
-:justifies: REQ-EXTERNAL-DEPS
-:justifies: REQ-MULTI-WORKSPACE
-:justifies: REQ-BATCHING
+---
+
+<a id="01M78FHG7FZFXQ6B84EG2CKHRS"></a>
+
+### Build a new plugin that closes the gaps of the existing ones
+
+| Type      | Decision                                                              |
+| --------- | --------------------------------------------------------------------- |
+| ID        | ADR-NEW-PLUGIN                                                        |
+| Status    | Accepted                                                              |
+| Justifies | [REQ-DEPENDENCY-EDGES](workspaces.mara.md#01M78FHG7FCAFQC6190Y3J4B5A) |
+| Justifies | [REQ-EXTERNAL-DEPS](workspaces.mara.md#01M78FHG7FCVSEDGQW30RSSCMA)    |
+| Justifies | [REQ-MULTI-WORKSPACE](workspaces.mara.md#01M78FHG7FM0VMSF1ZZQBRH77A)  |
+| Justifies | [REQ-BATCHING](execution.mara.md#01M78FHG7FRS15ZD38BR42JSK7)          |
 
 Three projects were read before this design. [eddacraft/nxrust](https://github.com/eddacraft/nxrust) (v0.3.0) is the closest prior art and already reads overrides from Cargo metadata. [@monodon/rust](https://github.com/Cammisuli/monodon) (3.0.0, requires Nx 22) is the plugin the Nx documentation lists, and the reference for Nx release on `Cargo.toml`. [max-sixty/cargo-affected](https://github.com/max-sixty/cargo-affected) (0.4.1, self-described as very early) selects tests by coverage on top of nextest.
 
-None of them is a dependency of this design, except cargo-affected, which is optional. nx-rust is a separate plugin whose design starts from the gaps found in nxrust ([[EVD-NXRUST-GAPS]]): dev-dependencies missing from the graph, the whole lockfile as an input, no batching and no handling of feature unification, unhashed build-script and Cargo configuration inputs, an in-memory metadata cache with the workspace fixed at the Nx root, and builds that restore `rlib` files into Cargo's directory.
-:::
+None of them is a dependency of this design, except cargo-affected, which is optional. nx-rust is a separate plugin whose design starts from the gaps found in nxrust ([EVD-NXRUST-GAPS](#01M78FHG7F71QFJZNFBAATR6N4)): dev-dependencies missing from the graph, the whole lockfile as an input, no batching and no handling of feature unification, unhashed build-script and Cargo configuration inputs, an in-memory metadata cache with the workspace fixed at the Nx root, and builds that restore `rlib` files into Cargo's directory.
 
-:::mara decision ADR-CARGO-SOURCE-OF-TRUTH
-:mid: 01M78FHG7F2CB9W8YBQ9DNXCB0
-:title: Take projects, targets and dependencies from cargo metadata
-:status: accepted
-:justifies: REQ-INFERRED-PROJECTS
-:justifies: DES-METADATA-REPORT
-:justifies: DES-DISCOVERY
+---
+
+<a id="01M78FHG7F2CB9W8YBQ9DNXCB0"></a>
+
+### Take projects, targets and dependencies from cargo metadata
+
+| Type      | Decision                                                               |
+| --------- | ---------------------------------------------------------------------- |
+| ID        | ADR-CARGO-SOURCE-OF-TRUTH                                              |
+| Status    | Accepted                                                               |
+| Justifies | [REQ-INFERRED-PROJECTS](workspaces.mara.md#01M78FHG7FTJGK8AM848F0DHR4) |
+| Justifies | [DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E)   |
+| Justifies | [DES-DISCOVERY](workspaces.mara.md#01M78FHG7FJ3Z6F0AX0K80EH9D)         |
 
 A second description of a crate, such as a `project.json`, has to be written, kept in step with `Cargo.toml` and reviewed, and it drifts. Cargo already knows the members, their targets and their dependencies, and reports them through `cargo metadata`. The plugin takes everything from that report and needs no per-crate Nx file. The cost is one cargo call per workspace when the graph is created, and a design that is limited to what Cargo reports plus the metadata tables.
 
 It also means that every machine that computes the graph needs cargo, including one that only runs JS tasks. When cargo is missing or rejects a manifest, graph creation fails. Leaving the Rust projects out instead was rejected: that machine would have another graph and other cache keys than the rest of the team, and `nx affected` would skip crates without saying so.
-:::
 
-:::mara decision ADR-METADATA-NO-DEPS
-:mid: 01M78RC7T7GK1RSH8S11ZV38EZ
-:title: Build the graph from cargo metadata without dependency resolution
-:status: accepted
-:justifies: DES-METADATA-REPORT
+---
 
-`cargo metadata` can resolve the whole dependency graph or, with `--no-deps`, report only the workspace's own packages. The full report was the first assumption. It needs the manifest of every dependency, so on a machine without a filled Cargo cache it downloads the crates of the lockfile, and it creates or updates `Cargo.lock` on the way. Nx builds the project graph for every command, also for JS-only work and in every CI job, and each of those machines needs cargo ([[ADR-CARGO-SOURCE-OF-TRUTH]]). The full report would add a registry download to all of them.
+<a id="01M78RC7T7GK1RSH8S11ZV38EZ"></a>
 
-The plugin therefore asks with `--no-deps`. That report still names the members, their targets, their declared dependencies with paths and features, the metadata tables and Cargo's directories, which is all that projects, targets and edges need, apart from the crates that `[patch]`, `[replace]` and `paths` redirect to ([[EVD-CARGO-NO-DEPS]]). What it lacks is the resolved versions of external crates. Only per-crate lockfile hashing needs those, and `Cargo.lock` holds them. The cost is that the plugin reads `Cargo.lock` itself for that purpose, that a path dependency outside the workspace needs a report of its own, and that the plugin reads the redirection tables from Cargo's manifests and configuration files itself ([[ADR-REDIRECTION-EDGES]]).
-:::
+### Build the graph from cargo metadata without dependency resolution
 
-:::mara decision ADR-NO-METADATA-CACHE
-:mid: 01M7AY77VPMGWNN9SVRD56JAPH
-:title: Request the cargo metadata report afresh in every graph computation
-:status: accepted
-:justifies: DES-METADATA-REPORT
+| Type      | Decision                                                             |
+| --------- | -------------------------------------------------------------------- |
+| ID        | ADR-METADATA-NO-DEPS                                                 |
+| Status    | Accepted                                                             |
+| Justifies | [DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E) |
 
-Agreed with the maintainer on 13 November 2026. [[REQ-METADATA-DISK-CACHE]] planned to keep a workspace's `cargo metadata` report between Nx processes. With `--no-deps` ([[ADR-METADATA-NO-DEPS]]) the report is cheap: 180 ms for the 598 members of polkadot-sdk, the largest workspace measured, 79 ms for 262 members and 13 ms for 55, against about 15 to 30 ms to read a stored report back and check it ([[EVD-METADATA-TIMING]]). The runs that would gain most are those without the Nx daemon, as in CI, where the first command of a job finds nothing stored.
+`cargo metadata` can resolve the whole dependency graph or, with `--no-deps`, report only the workspace's own packages. The full report was the first assumption. It needs the manifest of every dependency, so on a machine without a filled Cargo cache it downloads the crates of the lockfile, and it creates or updates `Cargo.lock` on the way. Nx builds the project graph for every command, also for JS-only work and in every CI job, and each of those machines needs cargo ([ADR-CARGO-SOURCE-OF-TRUTH](#01M78FHG7F2CB9W8YBQ9DNXCB0)). The full report would add a registry download to all of them.
 
-A stored report could be reused only under a key that covers everything the report depends on: which target files and READMEs exist, gitignored ones included, which Nx's file map leaves out; the manifests of path dependencies outside the workspace; Cargo's configuration above the repository and in the Cargo home; environment variables; and the toolchain that rustup picks. A key that missed one would give a stale set of targets, for example a `build` whose outputs lack a new binary, which [[GOAL-TRUSTED-CACHE]] does not allow. The plugin therefore requests each report afresh in every graph computation and keeps none between computations, in the Nx daemon either.
+The plugin therefore asks with `--no-deps`. That report still names the members, their targets, their declared dependencies with paths and features, the metadata tables and Cargo's directories, which is all that projects, targets and edges need, apart from the crates that `[patch]`, `[replace]` and `paths` redirect to ([EVD-CARGO-NO-DEPS](#01M78RC7T7182TG80N949GFTTC)). What it lacks is the resolved versions of external crates. Only per-crate lockfile hashing needs those, and `Cargo.lock` holds them. The cost is that the plugin reads `Cargo.lock` itself for that purpose, that a path dependency outside the workspace needs a report of its own, and that the plugin reads the redirection tables from Cargo's manifests and configuration files itself ([ADR-REDIRECTION-EDGES](#01M7AQ58FTSJX0AWN2BGZF4TND)).
 
-Rejected: a report stored in Nx's workspace data folder, or kept in the daemon's memory, under such a key. It would save at most about 0.15 s per computation on the largest workspace measured, it needs helpers that Nx exports only as internals ([[RISK-UPSTREAM-CHANGES]]), and every gap in the key would be a wrong graph.
-:::
+---
 
-:::mara decision ADR-MULTI-WORKSPACE
-:mid: 01M78FHG7FZZT4VV8SYT01Z2B2
-:title: Support several Cargo workspaces through a workspace context
-:status: accepted
-:justifies: REQ-MULTI-WORKSPACE
-:justifies: DES-DISCOVERY
+<a id="01M7AY77VPMGWNN9SVRD56JAPH"></a>
 
-Repositories that add Rust to an existing monorepo rarely have one Cargo workspace at the Nx root: they have a workspace in a subfolder, tools as standalone crates, and sometimes several workspaces. Requiring one root workspace would force a restructuring before the plugin can be tried. The plugin supports any number of workspaces anywhere, and hangs everything Cargo scopes to a workspace off one [[TERM-WORKSPACE-CONTEXT]]: lockfile, build directory, toolchain file, batch and coverage database. Standalone crates are workspaces of one and share no build directory; the plugin does not hide that.
-:::
+### Request the cargo metadata report afresh in every graph computation
 
-:::mara decision ADR-PROJECT-NAMES
-:mid: 01M78FHG7FAG0YENBEH7FQ7WX1
-:title: Name projects after crates and fail on a collision
-:status: accepted
-:justifies: REQ-PROJECT-NAMES
+| Type      | Decision                                                             |
+| --------- | -------------------------------------------------------------------- |
+| ID        | ADR-NO-METADATA-CACHE                                                |
+| Status    | Accepted                                                             |
+| Justifies | [DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E) |
 
-The crate name is what a Rust developer types, so it is the Nx project name. With several workspaces two crates can share a name. Deriving unique names automatically, for example from paths, would make names unpredictable and would change them when a second crate appears. A collision is therefore an error naming both paths, and the user fixes it with a per-crate name or a per-workspace prefix in metadata. Because commands always use the real package name and manifest path, the Nx name is free to differ. A crate whose folder also is a JS project is the exception. Nx applies `package.json` and `project.json` after every plugin, so the name set there wins, and neither the crate name nor its `name` override can change it ([[EVD-NX-PROJECT-MERGE]]).
-:::
+Agreed with the maintainer on 13 November 2026. [REQ-METADATA-DISK-CACHE](workspaces.mara.md#01M78FHG7FM7J2WAZSP8WESWVG) planned to keep a workspace's `cargo metadata` report between Nx processes. With `--no-deps` ([ADR-METADATA-NO-DEPS](#01M78RC7T7GK1RSH8S11ZV38EZ)) the report is cheap: 180 ms for the 598 members of polkadot-sdk, the largest workspace measured, 79 ms for 262 members and 13 ms for 55, against about 15 to 30 ms to read a stored report back and check it ([EVD-METADATA-TIMING](#01M7AY6TM7M03TJ2XKFHTP6R4A)). The runs that would gain most are those without the Nx daemon, as in CI, where the first command of a job finds nothing stored.
 
-:::mara decision ADR-WORKSPACE-PROJECT-NAME
-:mid: 01M7A8AKF5KKZ457ED2PX0NX4D
-:title: Name the workspace project after its folder's path
-:status: accepted
-:justifies: REQ-PROJECT-NAMES
-:justifies: REQ-METADATA-OVERRIDES
-:justifies: DES-PROJECT-GRAPH
-:justifies: DES-METADATA-TABLES
+A stored report could be reused only under a key that covers everything the report depends on: which target files and READMEs exist, gitignored ones included, which Nx's file map leaves out; the manifests of path dependencies outside the workspace; Cargo's configuration above the repository and in the Cargo home; environment variables; and the toolchain that rustup picks. A key that missed one would give a stale set of targets, for example a `build` whose outputs lack a new binary, which [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7) does not allow. The plugin therefore requests each report afresh in every graph computation and keeps none between computations, in the Nx daemon either.
 
-Agreed with the maintainer on 13 November 2026, for a [[TERM-WORKSPACE-PROJECT]] whose root manifest defines no crate. Cargo has no name for a workspace ([[EVD-WORKSPACE-PROJECT-NAMES]]), so the plugin derives one: the path of the workspace folder from the root of the Nx workspace, with each `/` replaced by `-`. Such a name is determined by the workspace's folder alone: it needs no configuration and does not depend on which other workspaces or crates exist, so it does not change when one appears, and the objection of [[ADR-PROJECT-NAMES]] to names derived from paths does not apply. Nx also accepts the folder itself where a project name is expected. The root of the Nx workspace has no such path, and its folder name differs between checkouts, so a workspace there is called `cargo-workspace`. Rejected: the folder's last segment, which is Nx's own default for a `project.json` without a name but lets `a/rust` and `b/rust` collide; the path with a `-workspace` suffix, which collides less often but is longer; one fixed name, which every workspace after the first would have to override; `rust` at the root, which a workspace in `rust/` gets too; and the name in the root `package.json`, which would name a Cargo project from a JS file. The names are not unique. `services/billing/` and `services-billing/` both give `services-billing`, the root and a folder `cargo-workspace/` both give `cargo-workspace`, and a folder named like one of its own crates gives that crate's name. Each of these fails like any other collision between two projects of this plugin, and the `name` in `[workspace.metadata.nx.project]` resolves it.
+Rejected: a report stored in Nx's workspace data folder, or kept in the daemon's memory, under such a key. It would save at most about 0.15 s per computation on the largest workspace measured, it needs helpers that Nx exports only as internals ([RISK-UPSTREAM-CHANGES](#01M78FHG7F662HG5KVZQEN15Z3)), and every gap in the key would be a wrong graph.
 
-A collision between any two of the plugin's projects, crates or workspace projects, fails with the plugin's error, so that the user learns both manifests and both remedies; one with a JS project stays Nx's error, as for crates. The override is the sub-table `[workspace.metadata.nx.project]`, holding the `name`, `tags` and `targets` of a package table, because [[ADR-METADATA-KEY]] makes the `nx` table hold what a `project.json` holds while the workspace table's own keys are defaults for the members. Rejected: `workspaceProject`, which is long; `root`, which Nx uses for a project's folder; and a flat `name` in the workspace table, which reads as a default for members and leaves the project's own targets without a place. When the root manifest defines a crate, that crate's table already configures the project, so the sub-table is an error instead of a second place for the same settings. The workspace's name prefix stays with the members, whose names it separates; a workspace project's default name comes from its folder, and a collision of that name is resolved with the project's own `name`. Names are neither checked nor rewritten beyond `/` to `-`: Nx accepts any string, and the characters that are awkward on its command line are rare in folder names and fixed with the override. Where the workspace folder already is an Nx project, Nx merges the two and names the result ([[EVD-NX-PROJECT-MERGE]]); the plugin accepts that as it does for a crate, because [[REQ-WORKSPACE-PROJECT]] fixes the project's root.
-:::
+---
 
-:::mara decision ADR-ALL-DEP-KINDS
-:mid: 01M78FHG7F89HNQ2GAMHTHFRC2
-:title: Keep every dependency kind in the graph, including cycles
-:status: accepted
-:justifies: REQ-DEPENDENCY-EDGES
-:justifies: DES-PROJECT-GRAPH
+<a id="01M78FHG7FZZT4VV8SYT01Z2B2"></a>
+
+### Support several Cargo workspaces through a workspace context
+
+| Type      | Decision                                                             |
+| --------- | -------------------------------------------------------------------- |
+| ID        | ADR-MULTI-WORKSPACE                                                  |
+| Status    | Accepted                                                             |
+| Justifies | [REQ-MULTI-WORKSPACE](workspaces.mara.md#01M78FHG7FM0VMSF1ZZQBRH77A) |
+| Justifies | [DES-DISCOVERY](workspaces.mara.md#01M78FHG7FJ3Z6F0AX0K80EH9D)       |
+
+Repositories that add Rust to an existing monorepo rarely have one Cargo workspace at the Nx root: they have a workspace in a subfolder, tools as standalone crates, and sometimes several workspaces. Requiring one root workspace would force a restructuring before the plugin can be tried. The plugin supports any number of workspaces anywhere, and hangs everything Cargo scopes to a workspace off one [TERM-WORKSPACE-CONTEXT](product.mara.md#01M78FHG7FMWPZ9BFDB3SSSXM3): lockfile, build directory, toolchain file, batch and coverage database. Standalone crates are workspaces of one and share no build directory; the plugin does not hide that.
+
+---
+
+<a id="01M78FHG7FAG0YENBEH7FQ7WX1"></a>
+
+### Name projects after crates and fail on a collision
+
+| Type      | Decision                                                           |
+| --------- | ------------------------------------------------------------------ |
+| ID        | ADR-PROJECT-NAMES                                                  |
+| Status    | Accepted                                                           |
+| Justifies | [REQ-PROJECT-NAMES](workspaces.mara.md#01M78FHG7FHKQE34YBKH1C5WSN) |
+
+The crate name is what a Rust developer types, so it is the Nx project name. With several workspaces two crates can share a name. Deriving unique names automatically, for example from paths, would make names unpredictable and would change them when a second crate appears. A collision is therefore an error naming both paths, and the user fixes it with a per-crate name or a per-workspace prefix in metadata. Because commands always use the real package name and manifest path, the Nx name is free to differ. A crate whose folder also is a JS project is the exception. Nx applies `package.json` and `project.json` after every plugin, so the name set there wins, and neither the crate name nor its `name` override can change it ([EVD-NX-PROJECT-MERGE](#01M7A0S43EXZZGRM5WND8Z0BBG)).
+
+---
+
+<a id="01M7A8AKF5KKZ457ED2PX0NX4D"></a>
+
+### Name the workspace project after its folder's path
+
+| Type      | Decision                                                                   |
+| --------- | -------------------------------------------------------------------------- |
+| ID        | ADR-WORKSPACE-PROJECT-NAME                                                 |
+| Status    | Accepted                                                                   |
+| Justifies | [REQ-PROJECT-NAMES](workspaces.mara.md#01M78FHG7FHKQE34YBKH1C5WSN)         |
+| Justifies | [REQ-METADATA-OVERRIDES](configuration.mara.md#01M78FHG7FJ4E8DDDAMXCG8AKF) |
+| Justifies | [DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6)         |
+| Justifies | [DES-METADATA-TABLES](configuration.mara.md#01M78FHG7FX2K81MEQEY7YQHTN)    |
+
+Agreed with the maintainer on 13 November 2026, for a [TERM-WORKSPACE-PROJECT](product.mara.md#01M78FHG7F8DTF27C4K7XPZK6X) whose root manifest defines no crate. Cargo has no name for a workspace ([EVD-WORKSPACE-PROJECT-NAMES](#01M7A8AKF5NT40CMP6236AFA2V)), so the plugin derives one: the path of the workspace folder from the root of the Nx workspace, with each `/` replaced by `-`. Such a name is determined by the workspace's folder alone: it needs no configuration and does not depend on which other workspaces or crates exist, so it does not change when one appears, and the objection of [ADR-PROJECT-NAMES](#01M78FHG7FAG0YENBEH7FQ7WX1) to names derived from paths does not apply. Nx also accepts the folder itself where a project name is expected. The root of the Nx workspace has no such path, and its folder name differs between checkouts, so a workspace there is called `cargo-workspace`. Rejected: the folder's last segment, which is Nx's own default for a `project.json` without a name but lets `a/rust` and `b/rust` collide; the path with a `-workspace` suffix, which collides less often but is longer; one fixed name, which every workspace after the first would have to override; `rust` at the root, which a workspace in `rust/` gets too; and the name in the root `package.json`, which would name a Cargo project from a JS file. The names are not unique. `services/billing/` and `services-billing/` both give `services-billing`, the root and a folder `cargo-workspace/` both give `cargo-workspace`, and a folder named like one of its own crates gives that crate's name. Each of these fails like any other collision between two projects of this plugin, and the `name` in `[workspace.metadata.nx.project]` resolves it.
+
+A collision between any two of the plugin's projects, crates or workspace projects, fails with the plugin's error, so that the user learns both manifests and both remedies; one with a JS project stays Nx's error, as for crates. The override is the sub-table `[workspace.metadata.nx.project]`, holding the `name`, `tags` and `targets` of a package table, because [ADR-METADATA-KEY](#01M78FHG7FQK38H3AQ3ZN130A0) makes the `nx` table hold what a `project.json` holds while the workspace table's own keys are defaults for the members. Rejected: `workspaceProject`, which is long; `root`, which Nx uses for a project's folder; and a flat `name` in the workspace table, which reads as a default for members and leaves the project's own targets without a place. When the root manifest defines a crate, that crate's table already configures the project, so the sub-table is an error instead of a second place for the same settings. The workspace's name prefix stays with the members, whose names it separates; a workspace project's default name comes from its folder, and a collision of that name is resolved with the project's own `name`. Names are neither checked nor rewritten beyond `/` to `-`: Nx accepts any string, and the characters that are awkward on its command line are rare in folder names and fixed with the override. Where the workspace folder already is an Nx project, Nx merges the two and names the result ([EVD-NX-PROJECT-MERGE](#01M7A0S43EXZZGRM5WND8Z0BBG)); the plugin accepts that as it does for a crate, because [REQ-WORKSPACE-PROJECT](workspaces.mara.md#01M78FHG7FEH8W5X747EMPM5B1) fixes the project's root.
+
+---
+
+<a id="01M78FHG7F89HNQ2GAMHTHFRC2"></a>
+
+### Keep every dependency kind in the graph, including cycles
+
+| Type      | Decision                                                              |
+| --------- | --------------------------------------------------------------------- |
+| ID        | ADR-ALL-DEP-KINDS                                                     |
+| Status    | Accepted                                                              |
+| Justifies | [REQ-DEPENDENCY-EDGES](workspaces.mara.md#01M78FHG7FCAFQC6190Y3J4B5A) |
+| Justifies | [DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6)    |
 
 Leaving dev-dependencies out of the graph means a change in a crate used only by another crate's tests does not invalidate those cached tests. All three kinds are therefore edges.
 
-Cargo allows cycles through dev-dependencies. Three treatments were considered: drop the edge that closes the cycle and add the crate's files as explicit inputs, fail graph creation, or keep the edge. Nx 24 fails only on a cycle between tasks, not between projects ([[EVD-NX-24-INSPECTION]]), and the plugin's targets declare no dependencies between crates beyond the lockfile task, which depends on nothing ([[ADR-NO-RUST-BUILD-DEPS]]). The edge is kept, so `nx graph` shows at least what Cargo sees and no workspace that Cargo accepts is rejected. The exception is an edge to a crate that `[patch]`, `[replace]` or `paths` redirects to and that reaches the edge's source through normal or build dependencies: Cargo rejects that cycle, so the edge is left out and inputs cover the source's dev-dependencies ([[ADR-REDIRECTION-EDGES]]). If a user's own `dependsOn` turns the project cycle into a task cycle, Nx reports it. Nx 24 hashes `^` inputs over a project cycle stably ([[EVD-NX-24-INPUT-SEMANTICS]]).
-:::
+Cargo allows cycles through dev-dependencies. Three treatments were considered: drop the edge that closes the cycle and add the crate's files as explicit inputs, fail graph creation, or keep the edge. Nx 24 fails only on a cycle between tasks, not between projects ([EVD-NX-24-INSPECTION](#01M78FHG7F32NTNKGXVJT9QA2A)), and the plugin's targets declare no dependencies between crates beyond the lockfile task, which depends on nothing ([ADR-NO-RUST-BUILD-DEPS](#01M78FHG7FCE6NXVG4J9K82XME)). The edge is kept, so `nx graph` shows at least what Cargo sees and no workspace that Cargo accepts is rejected. The exception is an edge to a crate that `[patch]`, `[replace]` or `paths` redirects to and that reaches the edge's source through normal or build dependencies: Cargo rejects that cycle, so the edge is left out and inputs cover the source's dev-dependencies ([ADR-REDIRECTION-EDGES](#01M7AQ58FTSJX0AWN2BGZF4TND)). If a user's own `dependsOn` turns the project cycle into a task cycle, Nx reports it. Nx 24 hashes `^` inputs over a project cycle stably ([EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD)).
 
-:::mara decision ADR-EXTERNAL-NODES
-:mid: 01M78FHG7FYRBX038BA9MX7YXN
-:title: Represent external crates as graph nodes
-:status: retired
+---
+
+<a id="01M78FHG7FYRBX038BA9MX7YXN"></a>
+
+### Represent external crates as graph nodes
+
+| Type   | Decision           |
+| ------ | ------------------ |
+| ID     | ADR-EXTERNAL-NODES |
+| Status | Retired            |
 
 With the whole `Cargo.lock` as an input, any dependency update invalidates every crate of the workspace. Each direct external dependency becomes a node with the prefix `cargo:` instead, so a crate can be hashed on the dependencies it uses. This is agreed in principle; the hashing mechanism is not designed yet.
 
 Neither is the identity of a node. Several workspaces have several lockfiles, and one lockfile can hold several versions of a crate, so a name without a version cannot stand for all of them. The nodes are therefore created only together with the hashing design, and until then the whole lockfile stays an input.
 
-Retired on 13 November 2026: v1 creates no external nodes. Nx 24 keys crates correctly through such nodes, but `nx affected` ignores them after a change to `Cargo.lock` alone ([[EVD-NX-24-EXTERNAL-NODES]]). [[ADR-LOCKFILE-TASK]] replaces this decision.
-:::
+Retired on 13 November 2026: v1 creates no external nodes. Nx 24 keys crates correctly through such nodes, but `nx affected` ignores them after a change to `Cargo.lock` alone ([EVD-NX-24-EXTERNAL-NODES](#01M7ACCPE3NW5Z2SMKCY08AV3H)). [ADR-LOCKFILE-TASK](#01M7ACCPE3JYNPZCK42RZG5H3H) replaces this decision.
 
-:::mara decision ADR-LOCKFILE-TASK
-:mid: 01M7ACCPE3JYNPZCK42RZG5H3H
-:title: Key crates on a lockfile task per workspace, not on external nodes
-:status: accepted
-:justifies: REQ-EXTERNAL-DEPS
-:justifies: DES-LOCKFILE-HASHING
-:justifies: REQ-NO-RUST-TASK-DEPS
-:supersedes: ADR-EXTERNAL-NODES
+---
 
-With the whole `Cargo.lock` as an input, any dependency update invalidates every crate of the workspace. [[ADR-EXTERNAL-NODES]] planned a graph node with the prefix `cargo:` for each external dependency, so that a crate's key could follow the dependencies it uses. In Nx 24.0.6 such nodes key the crates correctly, but `nx affected` then selects no crate after a change to `Cargo.lock` alone: Nx works out which external nodes moved only for JS lockfiles, and a plugin has no way to tell it ([[EVD-NX-24-EXTERNAL-NODES]]). A pipeline that runs `nx affected` would skip Rust on every dependency update. The nodes would also reach JS projects: a target without an `externalDependencies` input hashes every external node of the graph, so each change to a `Cargo.lock` would invalidate the `package.json` scripts of every JS project.
+<a id="01M7ACCPE3JYNPZCK42RZG5H3H"></a>
 
-Each workspace therefore has one task that reads its `Cargo.lock` and writes, for each crate, a digest of the packages the crate reaches. Every cached target of a crate depends on that task and hashes the crate's digest, or the digests of all members where the crate is built with the features of the whole workspace (below). A change to `Cargo.lock` reaches the task through its file input, and Nx selects every task that reads the task's output, so `nx affected` selects the crates of that workspace, and those whose digest did not change are restored from the cache ([[EVD-NX-24-LOCKFILE-TASK]]). `nx affected` selects more than it must and the keys select exactly, which is the trade [[GOAL-TRUSTED-CACHE]] asks for. Under the feature strategies that build with the whole workspace's features, a crate's key holds the digests of all members, because a package that only another member reaches can change the features of a dependency they share; there a change that moves any member's digest runs every crate of the workspace again ([[DES-INPUTS]]), and the check after a task's cargo calls compares every digest that its key holds, not only its crate's own ([[DES-LOCKFILE-HASHING]], "Post-check").
+### Key crates on a lockfile task per workspace, not on external nodes
 
-A digest describes what cargo builds only while cargo calls the lockfile current. A stale lockfile cannot be keyed by its files at all: on identical files, cargo resolved a new dependency to another version once a newer one was published ([[EVD-CARGO-LOCK-CHECK]]). The task therefore first runs `cargo update --workspace`. That leaves a current lockfile alone and brings a stale or missing one up to date exactly as the crates' own cargo commands would, so adding a dependency and running `nx build` works as with plain cargo; in locked mode it fails instead. The task is not cached, because cargo's verdict also depends on files outside the repository, which Nx cannot hash, and Nx 24 keeps a result out of the cache only when the task fails ([[EVD-NX-24-LOCKFILE-UPDATE]]).
+| Type       | Decision                                                              |
+| ---------- | --------------------------------------------------------------------- |
+| ID         | ADR-LOCKFILE-TASK                                                     |
+| Status     | Accepted                                                              |
+| Justifies  | [REQ-EXTERNAL-DEPS](workspaces.mara.md#01M78FHG7FCVSEDGQW30RSSCMA)    |
+| Justifies  | [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D) |
+| Justifies  | [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN)   |
+| Supersedes | [ADR-EXTERNAL-NODES](#01M78FHG7FYRBX038BA9MX7YXN)                     |
 
-Rejected: external nodes alone, for the reasons above; external nodes for the keys together with a task of constant output for `nx affected`, which works but keeps the invalidation of JS projects and needs node names that tell apart versions and lockfiles; a digest in a target option, which keys correctly but which `nx affected` never selects; the whole lockfile, which does not meet [[REQ-EXTERNAL-DEPS]]; a comparison of manifests with lockfile entries written by the plugin, which missed cases that cargo catches; failing the task on a stale lockfile, which breaks adding a dependency and building; and running the crates of a stale workspace uncached under keys that never repeat, which runs them twice and fills the cache with entries nothing reaches.
+With the whole `Cargo.lock` as an input, any dependency update invalidates every crate of the workspace. [ADR-EXTERNAL-NODES](#01M78FHG7FYRBX038BA9MX7YXN) planned a graph node with the prefix `cargo:` for each external dependency, so that a crate's key could follow the dependencies it uses. In Nx 24.0.6 such nodes key the crates correctly, but `nx affected` then selects no crate after a change to `Cargo.lock` alone: Nx works out which external nodes moved only for JS lockfiles, and a plugin has no way to tell it ([EVD-NX-24-EXTERNAL-NODES](#01M7ACCPE3NW5Z2SMKCY08AV3H)). A pipeline that runs `nx affected` would skip Rust on every dependency update. The nodes would also reach JS projects: a target without an `externalDependencies` input hashes every external node of the graph, so each change to a `Cargo.lock` would invalidate the `package.json` scripts of every JS project.
 
-The costs are one cargo call per workspace in every run that includes a cached crate task, also when every crate is then restored from the cache, and index fetches on a cold cargo home; a rewrite of `Cargo.lock` in a run where every crate task is then restored, which is cargo's own write ([[REQ-NO-MANIFEST-WRITES]]); a dependency of crate targets on a target of another project, the first exception that [[REQ-NO-RUST-TASK-DEPS]] makes, the drift check of the `hakari` strategy being the second; a graph that shows no external crates; and reliance on how Nx 24 selects the tasks that read a producer's output, which a later Nx major could change. The end-to-end checks of [[VER-CACHE-KEYS]] cover that selection, and a later major is supported only once they pass ([[ADR-COMPATIBILITY]]).
-:::
+Each workspace therefore has one task that reads its `Cargo.lock` and writes, for each crate, a digest of the packages the crate reaches. Every cached target of a crate depends on that task and hashes the crate's digest, or the digests of all members where the crate is built with the features of the whole workspace (below). A change to `Cargo.lock` reaches the task through its file input, and Nx selects every task that reads the task's output, so `nx affected` selects the crates of that workspace, and those whose digest did not change are restored from the cache ([EVD-NX-24-LOCKFILE-TASK](#01M7ACCPE3Z4TVZ0EBZZVXR4PP)). `nx affected` selects more than it must and the keys select exactly, which is the trade [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7) asks for. Under the feature strategies that build with the whole workspace's features, a crate's key holds the digests of all members, because a package that only another member reaches can change the features of a dependency they share; there a change that moves any member's digest runs every crate of the workspace again ([DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)), and the check after a task's cargo calls compares every digest that its key holds, not only its crate's own ([DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D), "Post-check").
 
-:::mara decision ADR-METADATA-KEY
-:mid: 01M78FHG7FQK38H3AQ3ZN130A0
-:title: Keep overrides under the nx key of Cargo metadata
-:status: accepted
-:justifies: REQ-METADATA-OVERRIDES
-:justifies: DES-METADATA-TABLES
-:accepts: RISK-METADATA-KEY-COLLISION
+A digest describes what cargo builds only while cargo calls the lockfile current. A stale lockfile cannot be keyed by its files at all: on identical files, cargo resolved a new dependency to another version once a newer one was published ([EVD-CARGO-LOCK-CHECK](#01M7ANS8X2N5DQ2844PTFSYCA0)). The task therefore first runs `cargo update --workspace`. That leaves a current lockfile alone and brings a stale or missing one up to date exactly as the crates' own cargo commands would, so adding a dependency and running `nx build` works as with plain cargo; in locked mode it fails instead. The task is not cached, because cargo's verdict also depends on files outside the repository, which Nx cannot hash, and Nx 24 keeps a result out of the cache only when the task fails ([EVD-NX-24-LOCKFILE-UPDATE](#01M7ANS8X2BSA42J4X4E6QFP0R)).
+
+Rejected: external nodes alone, for the reasons above; external nodes for the keys together with a task of constant output for `nx affected`, which works but keeps the invalidation of JS projects and needs node names that tell apart versions and lockfiles; a digest in a target option, which keys correctly but which `nx affected` never selects; the whole lockfile, which does not meet [REQ-EXTERNAL-DEPS](workspaces.mara.md#01M78FHG7FCVSEDGQW30RSSCMA); a comparison of manifests with lockfile entries written by the plugin, which missed cases that cargo catches; failing the task on a stale lockfile, which breaks adding a dependency and building; and running the crates of a stale workspace uncached under keys that never repeat, which runs them twice and fills the cache with entries nothing reaches.
+
+The costs are one cargo call per workspace in every run that includes a cached crate task, also when every crate is then restored from the cache, and index fetches on a cold cargo home; a rewrite of `Cargo.lock` in a run where every crate task is then restored, which is cargo's own write ([REQ-NO-MANIFEST-WRITES](setup.mara.md#01M78FHG7F8PRTX5Q1T77QNQ1K)); a dependency of crate targets on a target of another project, the first exception that [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN) makes, the drift check of the `hakari` strategy being the second; a graph that shows no external crates; and reliance on how Nx 24 selects the tasks that read a producer's output, which a later Nx major could change. The end-to-end checks of [VER-CACHE-KEYS](verification.mara.md#01M78FHG7FR5BWJMDVC9GHC213) cover that selection, and a later major is supported only once they pass ([ADR-COMPATIBILITY](#01M78FHG7FFBVZPZCQKJNXGT0P)).
+
+---
+
+<a id="01M78FHG7FQK38H3AQ3ZN130A0"></a>
+
+### Keep overrides under the nx key of Cargo metadata
+
+| Type      | Decision                                                                   |
+| --------- | -------------------------------------------------------------------------- |
+| ID        | ADR-METADATA-KEY                                                           |
+| Status    | Accepted                                                                   |
+| Justifies | [REQ-METADATA-OVERRIDES](configuration.mara.md#01M78FHG7FJ4E8DDDAMXCG8AKF) |
+| Justifies | [DES-METADATA-TABLES](configuration.mara.md#01M78FHG7FX2K81MEQEY7YQHTN)    |
+| Accepts   | [RISK-METADATA-KEY-COLLISION](#01M78FHG7F58QYEVQ7DX5KNQK5)                 |
 
 Overrides live in `Cargo.toml`, next to what they override, in `[package.metadata.nx]` and `[workspace.metadata.nx]`. The key `nx` mirrors the `nx` property that Nx reads from `package.json` and holds what a `project.json` would hold, which is short and familiar to Nx users. The alternatives were `nx-rust`, named after the package as Cargo tools usually do, and a split between `nx` for project settings and `nx-rust` for plugin switches. `nx` was chosen with the known cost that another Nx plugin for Rust could claim the same key.
-:::
 
-:::mara decision ADR-NX-TARGET-NAMES
-:mid: 01M78FHG7FTBB2RVZTTTWPYG1P
-:title: Use Nx target names by default
-:status: accepted
-:justifies: REQ-TARGET-NAMES
-:justifies: DES-TARGETS
-:accepts: RISK-TARGET-DEFAULTS
+---
+
+<a id="01M78FHG7FTBB2RVZTTTWPYG1P"></a>
+
+### Use Nx target names by default
+
+| Type      | Decision                                                             |
+| --------- | -------------------------------------------------------------------- |
+| ID        | ADR-NX-TARGET-NAMES                                                  |
+| Status    | Accepted                                                             |
+| Justifies | [REQ-TARGET-NAMES](configuration.mara.md#01M78FHG7FP3Z0DWAES110WHYT) |
+| Justifies | [DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3)            |
+| Accepts   | [RISK-TARGET-DEFAULTS](#01M78FHG7FAJAK7K2EN2P4XE8C)                  |
 
 The plugin is written first for mixed JS/TS and Rust repositories, whose pipelines run `nx affected -t lint test build`. With Cargo's names, clippy would be skipped until every pipeline adds `clippy`. Inferred targets therefore use the Nx name where Nx projects conventionally have a target for the same job: clippy runs as `lint`, and `test` and `build` keep their names. Every name can be changed in the plugin options, so Cargo's names are an opt-in. The cost is that target defaults written for JS targets of the same name also reach Rust targets.
 
-Formatting was decided separately. Nx has a convention for it, but it is the built-in commands `nx format:check` and `nx format:write`, not a target. They run prettier or oxfmt over files and cannot be made to run rustfmt in Nx 24 ([[EVD-NX-FORMAT]]). Naming the rustfmt targets `format-check` with `format-write` or `format` was considered. They keep Cargo's names, `fmt-check` and `fmt`, so that nobody takes them for that command: `format` is a reserved command name, and `nx format <project>` would silently run Nx's formatter instead of `cargo fmt`.
+Formatting was decided separately. Nx has a convention for it, but it is the built-in commands `nx format:check` and `nx format:write`, not a target. They run prettier or oxfmt over files and cannot be made to run rustfmt in Nx 24 ([EVD-NX-FORMAT](#01M78JWQAZK1MDJ6GC4M70ZCXX)). Naming the rustfmt targets `format-check` with `format-write` or `format` was considered. They keep Cargo's names, `fmt-check` and `fmt`, so that nobody takes them for that command: `format` is a reserved command name, and `nx format <project>` would silently run Nx's formatter instead of `cargo fmt`.
 
-`check` has a counterpart: `typecheck`, which the TypeScript plugin of `@nx/js` infers and which the CI workflow that Nx generates runs beside `lint`, `test` and `build` ([[EVD-NX-24-TARGETS]]). It keeps Cargo's name all the same. That pipeline already runs `lint`, and clippy checks everything `cargo check` does, so a Rust `typecheck` would only check every affected crate a second time; clippy does not reuse what `cargo check` compiled for the crate itself ([[EVD-CARGO-TARGET-COMMANDS]]). A repository that wants the name can rename the target. The remaining targets (`doc`, `bench`, `run`) and the targets of the workspace project (`audit`, `deny`, `update`) have no Nx counterpart and keep the names of Cargo and the tools.
-:::
+`check` has a counterpart: `typecheck`, which the TypeScript plugin of `@nx/js` infers and which the CI workflow that Nx generates runs beside `lint`, `test` and `build` ([EVD-NX-24-TARGETS](#01M7A4FCEFW4N06285629BJCB1)). It keeps Cargo's name all the same. That pipeline already runs `lint`, and clippy checks everything `cargo check` does, so a Rust `typecheck` would only check every affected crate a second time; clippy does not reuse what `cargo check` compiled for the crate itself ([EVD-CARGO-TARGET-COMMANDS](#01M7A4FCEFVN0W56WPDHWWW88N)). A repository that wants the name can rename the target. The remaining targets (`doc`, `bench`, `run`) and the targets of the workspace project (`audit`, `deny`, `update`) have no Nx counterpart and keep the names of Cargo and the tools.
 
-:::mara decision ADR-NO-RUST-BUILD-DEPS
-:mid: 01M78FHG7FCE6NXVG4J9K82XME
-:title: Put no build dependencies between Rust crates
-:status: accepted
-:justifies: REQ-NO-RUST-TASK-DEPS
-:justifies: DES-TARGETS
+---
 
-Cargo builds a crate's dependencies itself, so a `dependsOn: ["^build"]` between crates adds no ordering that is needed. It only starts one cargo process per dependency, and they queue on the build lock ([[EVD-NXRUST-BUILD-DEPS]]). Invalidation is handled by `^` inputs. JS consumers of an artifact depend on the artifact target.
+<a id="01M78FHG7FCE6NXVG4J9K82XME"></a>
 
-The first design also made `^build` on edges from JS projects to Rust crates an opt-in. Nx leaves no room for that: a JS target that declares `^build` gets the `build` task of every project it depends on that has such a target, and neither the plugin nor the dependency can decline ([[EVD-NX-24-INSPECTION]]). The plugin therefore adds no dependency to JS projects and removes none. A JS target's own `^build` runs the native `build` of the crates its project depends on directly and stops there, because those targets depend only on their workspace's lockfile task ([[DES-LOCKFILE-HASHING]]), which has no `build`. The cost is a native build that a consumer of a wasm package or a Node addon does not need; batching folds such builds into one cargo call ([[DES-BATCH]]). Renaming the native build so that `^build` would miss it was rejected, because `nx affected -t build` would then skip Rust ([[ADR-NX-TARGET-NAMES]]).
+### Put no build dependencies between Rust crates
 
-In a crate folder that also is a JS project, a `package.json` script, a `project.json` target or a plugin listed after nx-rust can replace the crate's `build` ([[REQ-MIXED-PROJECTS]]). That target is not the plugin's any more, and the plugin adds nothing to it and removes nothing from it either. Where it depends on `^build`, as the TypeScript plugin's `build` does or as a `targetDefaults` entry keyed `build` gives it, a JS consumer's `^build` runs it and, through it, the native `build` of the crates that the mixed project depends on directly, which stop at their workspace's lockfile task ([[EVD-NX-MIXED-CONSUMER]]). That is one more level of native builds, which batching folds into one cargo call; it costs time and leaves results correct.
-:::
+| Type      | Decision                                                            |
+| --------- | ------------------------------------------------------------------- |
+| ID        | ADR-NO-RUST-BUILD-DEPS                                              |
+| Status    | Accepted                                                            |
+| Justifies | [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN) |
+| Justifies | [DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3)           |
 
-:::mara decision ADR-MIXED-PROJECT-TARGETS
-:mid: 01M7J4NJ5W2KQHV5E6A7CT2CS2
-:title: Leave a crate's targets to the JS files of its folder
-:status: accepted
-:justifies: REQ-MIXED-PROJECTS
-:justifies: DES-MIXED-PROJECTS
+Cargo builds a crate's dependencies itself, so a `dependsOn: ["^build"]` between crates adds no ordering that is needed. It only starts one cargo process per dependency, and they queue on the build lock ([EVD-NXRUST-BUILD-DEPS](#01M78FHG7FKCEAGRQKJ36NF8WZ)). Invalidation is handled by `^` inputs. JS consumers of an artifact depend on the artifact target.
 
-A crate folder that also is a JS project gets the plugin's targets under their usual names, and Nx lays the folder's `package.json` and `project.json`, and the plugins listed after nx-rust, over them by its own rules ([[EVD-NX-PROJECT-MERGE]]). The plugin neither renames an inferred target that one of them also defines nor reports that it was replaced. Decided on 16 November 2026 for the maintainer from the accepted items, as the specification of milestone 0.4 (nxr-ym403k); listed in the review of the decisions made in 0.4.
+The first design also made `^build` on edges from JS projects to Rust crates an opt-in. Nx leaves no room for that: a JS target that declares `^build` gets the `build` task of every project it depends on that has such a target, and neither the plugin nor the dependency can decline ([EVD-NX-24-INSPECTION](#01M78FHG7F32NTNKGXVJT9QA2A)). The plugin therefore adds no dependency to JS projects and removes none. A JS target's own `^build` runs the native `build` of the crates its project depends on directly and stops there, because those targets depend only on their workspace's lockfile task ([DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D)), which has no `build`. The cost is a native build that a consumer of a wasm package or a Node addon does not need; batching folds such builds into one cargo call ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)). Renaming the native build so that `^build` would miss it was rejected, because `nx affected -t build` would then skip Rust ([ADR-NX-TARGET-NAMES](#01M78FHG7FTBB2RVZTTTWPYG1P)).
 
-- **Why the folder's files win.** [[REQ-METADATA-OVERRIDES]] gives them precedence over the crate's Cargo metadata, and the guard reads them as the project's own statement ([[DES-TARGET-DEFAULT-GUARD]], "Other layers", decided by the maintainer on 15 November 2026). A napi crate's `build` script that runs `napi build`, or a TypeScript build, is what the folder's author wrote `build` for.
-- **Not chosen: renaming the inferred target where a name collides.** The names of a crate's targets would then depend on its folder's JS files, so that `nx affected -t build` and `nx run-many -t test` would cover different work in different crates ([[REQ-TARGET-NAMES]]), and the plugin never renames on its own ([[REQ-PROJECT-NAMES]]). Whoever wants both renames one: the script, or the plugin's target through `targetNames`.
+In a crate folder that also is a JS project, a `package.json` script, a `project.json` target or a plugin listed after nx-rust can replace the crate's `build` ([REQ-MIXED-PROJECTS](artifacts.mara.md#01M78FHG7FJ88KAM4MK9SZ4FZH)). That target is not the plugin's any more, and the plugin adds nothing to it and removes nothing from it either. Where it depends on `^build`, as the TypeScript plugin's `build` does or as a `targetDefaults` entry keyed `build` gives it, a JS consumer's `^build` runs it and, through it, the native `build` of the crates that the mixed project depends on directly, which stop at their workspace's lockfile task ([EVD-NX-MIXED-CONSUMER](#01M7J4NJ5W34WWBCND0ZSB4ZN7)). That is one more level of native builds, which batching folds into one cargo call; it costs time and leaves results correct.
+
+---
+
+<a id="01M7J4NJ5W2KQHV5E6A7CT2CS2"></a>
+
+### Leave a crate's targets to the JS files of its folder
+
+| Type      | Decision                                                           |
+| --------- | ------------------------------------------------------------------ |
+| ID        | ADR-MIXED-PROJECT-TARGETS                                          |
+| Status    | Accepted                                                           |
+| Justifies | [REQ-MIXED-PROJECTS](artifacts.mara.md#01M78FHG7FJ88KAM4MK9SZ4FZH) |
+| Justifies | [DES-MIXED-PROJECTS](artifacts.mara.md#01M7J4NJ5WGAAQEBVGQCFFCQ02) |
+
+A crate folder that also is a JS project gets the plugin's targets under their usual names, and Nx lays the folder's `package.json` and `project.json`, and the plugins listed after nx-rust, over them by its own rules ([EVD-NX-PROJECT-MERGE](#01M7A0S43EXZZGRM5WND8Z0BBG)). The plugin neither renames an inferred target that one of them also defines nor reports that it was replaced. Decided on 16 November 2026 for the maintainer from the accepted items, as the specification of milestone 0.4 (nxr-ym403k); listed in the review of the decisions made in 0.4.
+
+- **Why the folder's files win.** [REQ-METADATA-OVERRIDES](configuration.mara.md#01M78FHG7FJ4E8DDDAMXCG8AKF) gives them precedence over the crate's Cargo metadata, and the guard reads them as the project's own statement ([DES-TARGET-DEFAULT-GUARD](targets.mara.md#01M7AT4GDP59EWQTMVSVR69G4M), "Other layers", decided by the maintainer on 15 November 2026). A napi crate's `build` script that runs `napi build`, or a TypeScript build, is what the folder's author wrote `build` for.
+- **Not chosen: renaming the inferred target where a name collides.** The names of a crate's targets would then depend on its folder's JS files, so that `nx affected -t build` and `nx run-many -t test` would cover different work in different crates ([REQ-TARGET-NAMES](configuration.mara.md#01M78FHG7FP3Z0DWAES110WHYT)), and the plugin never renames on its own ([REQ-PROJECT-NAMES](workspaces.mara.md#01M78FHG7FHKQE34YBKH1C5WSN)). Whoever wants both renames one: the script, or the plugin's target through `targetNames`.
 - **Not chosen: reporting the collision.** The napi-rs project template gives every addon's `package.json` the scripts `build` and `test`, so a warning would fire in the common setup on a deliberate configuration, and an error would stop it. A replaced target runs its own command under its own key, so it cannot hand Nx a result that cargo would not give; what can, a later layer that keeps the plugin's executor and narrows its lists, the guard already reports.
-- **Nx's own means are the remedy.** `nx.includedScripts` in the `package.json` keeps scripts out of the targets, and the order of the plugins in `nx.json`, where `nx add` appends a new plugin, decides between two plugins' targets ([[EVD-NX-MIXED-CONSUMER]]).
+- **Nx's own means are the remedy.** `nx.includedScripts` in the `package.json` keeps scripts out of the targets, and the order of the plugins in `nx.json`, where `nx add` appends a new plugin, decides between two plugins' targets ([EVD-NX-MIXED-CONSUMER](#01M7J4NJ5W34WWBCND0ZSB4ZN7)).
 
-The lockfile task of a workspace whose folder already is an Nx project can be replaced in the same way, and then the crates' cached tasks find no digest. They fail without storing a result ([[DES-LOCKFILE-HASHING]], "Merged project"), so this needs no check of its own either; renaming the lockfile task through `targetNames` resolves it.
+The lockfile task of a workspace whose folder already is an Nx project can be replaced in the same way, and then the crates' cached tasks find no digest. They fail without storing a result ([DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D), "Merged project"), so this needs no check of its own either; renaming the lockfile task through `targetNames` resolves it.
 
 To undo: a warning for a replaced inferred target can be added later without breaking a repository; renaming targets automatically would change names users already run.
-:::
 
-:::mara decision ADR-RESULTS-ONLY-CACHE
-:mid: 01M78FHG7FYVQP1W5GZC509GEF
-:title: Cache task results and final artifacts, never Cargo's intermediates
-:status: accepted
-:justifies: REQ-CACHE-OUTPUTS
-:justifies: DES-OUTPUTS
-:justifies: DES-BUILD-DIRS
+---
+
+<a id="01M78FHG7FYVQP1W5GZC509GEF"></a>
+
+### Cache task results and final artifacts, never Cargo's intermediates
+
+| Type      | Decision                                                        |
+| --------- | --------------------------------------------------------------- |
+| ID        | ADR-RESULTS-ONLY-CACHE                                          |
+| Status    | Accepted                                                        |
+| Justifies | [REQ-CACHE-OUTPUTS](caching.mara.md#01M78FHG7FR6HKPFNAN6P607RX) |
+| Justifies | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)       |
+| Justifies | [DES-BUILD-DIRS](caching.mara.md#01M78FHG7FMKCDSEX3Y6Q65F4Y)    |
 
 Cargo's build directory is large, its layout is internal and changes between Cargo versions, and restoring parts of it from another run confuses Cargo's own freshness checks. Nx therefore stores what a consumer needs: the result of a check or test, and the final artifacts of a build. Cargo keeps its build directory, which CI caches as a whole. A cache hit on `build` gives back a binary, not a warm compiler state; the next real compile relies on the build directory.
 
 Final artifacts are the files that something other than Cargo consumes: executables, and `cdylib` and `staticlib` libraries. An `rlib` or `dylib` only feeds further Rust compilation and stays Cargo's. Nx can store only files inside the repository, so where the artifact directory lies outside it, the targets that would store artifacts run uncached. Caching their result without the files would restore a build that has no binary.
-:::
 
-:::mara decision ADR-DECLARED-INPUTS
-:mid: 01M78FHG7FGX22WZF138Z8K89G
-:title: Describe cache keys with declared inputs, not a custom hasher
-:status: accepted
-:justifies: DES-INPUTS
-:justifies: REQ-ENV-ALLOWLIST
+---
 
-Nx deprecates custom hashers and plans to remove them in Nx 25 ([[EVD-NX-24-INSPECTION]]). Task-based affected, the default in Nx 24, selects tasks by matching changed files against their declared inputs, so complete file inputs are also what make `nx affected` correct. Environment and runtime inputs only change keys: a change to them alone makes no task affected ([[EVD-NX-24-INPUT-SEMANTICS]]). All cache inputs are therefore declared: filesets, `^` inputs, environment variables, runtime commands and target options. Environment variables come from a fixed, extendable list, never the whole environment, because a key that includes everything never repeats.
+<a id="01M78FHG7FGX22WZF138Z8K89G"></a>
+
+### Describe cache keys with declared inputs, not a custom hasher
+
+| Type      | Decision                                                        |
+| --------- | --------------------------------------------------------------- |
+| ID        | ADR-DECLARED-INPUTS                                             |
+| Status    | Accepted                                                        |
+| Justifies | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)        |
+| Justifies | [REQ-ENV-ALLOWLIST](caching.mara.md#01M78FHG7FB30V9FZNFF0TFHC1) |
+
+Nx deprecates custom hashers and plans to remove them in Nx 25 ([EVD-NX-24-INSPECTION](#01M78FHG7F32NTNKGXVJT9QA2A)). Task-based affected, the default in Nx 24, selects tasks by matching changed files against their declared inputs, so complete file inputs are also what make `nx affected` correct. Environment and runtime inputs only change keys: a change to them alone makes no task affected ([EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD)). All cache inputs are therefore declared: filesets, `^` inputs, environment variables, runtime commands and target options. Environment variables come from a fixed, extendable list, never the whole environment, because a key that includes everything never repeats.
 
 For files the choice goes the other way. The whole folder of a crate is an input, not a list of source folders. A list would invalidate less, but it misses what macros and build scripts read: a README included as crate documentation, templates, migrations, protocol definitions, and sources at a path the manifest names. Running a crate's tasks again after a change that could not affect them is the accepted side of that trade. A negated pattern in the repository's own configuration takes files out of the folder's input, on the repository's responsibility.
-:::
 
-:::mara decision ADR-BATCH-EXECUTOR
-:mid: 01M78FHG7F9MD0KQ68Y5CC4HK5
-:title: Run tasks through an Nx batch executor
-:status: accepted
-:justifies: REQ-BATCHING
-:justifies: DES-BATCH
-:accepts: RISK-BATCH-BEHAVIOUR
+---
 
-Nx decides what runs and what is cached, per crate. Cargo should still be invoked as few times as possible, because each invocation takes the build lock and resolves the workspace again. An executor with `batchImplementation` and `preferBatch: true` gets both: Nx hashes, restores and caches each task, and the plugin serves each group of tasks with one cargo call for each step of their target, not one per crate. `build` and `doc` run through a second such executor, because Nx stores a batch's outputs only when the whole batch has ended and would otherwise store what a later `cargo test` of the same batch wrote ([[ADR-TEST-AFTER-BUILD]]). The known cost is that Nx starts no other task while a batch runs.
-:::
+<a id="01M78FHG7F9MD0KQ68Y5CC4HK5"></a>
 
-:::mara decision ADR-TASK-NAME-VARIABLES
-:mid: 01M7FZHXES8CVY46H25QJG3BV7
-:title: Leave out of cargo's environment the two variables by which Nx names a task's project
-:status: accepted
-:justifies: DES-BATCH
+### Run tasks through an Nx batch executor
 
-[[TERM-GROUP]] gives the tasks of a group one environment, and cargo got each task's environment with the per-task variables that are the same in every way of running the task, among them `NX_TASK_TARGET_PROJECT` and `LERNA_PACKAGE_NAME`, which Nx sets to the task's project ([[EVD-NX-24-BATCHES]], "Task environment"). Of what Nx 24 sets for a task after its dotenv files (`getNxEnvVariablesForTask` in `tasks-runner/task-env.js`), only these two differ between tasks of one target and configuration: `NX_TASK_TARGET_TARGET` and `NX_TASK_TARGET_CONFIGURATION` name the target and the configuration, and `NX_TASK_HASH` is left out already. So no group could hold two crates: a batch under `workspace-build` ran `nx run-many -t test -p a b` as six cargo commands, three for each task, where [[REQ-BATCHING]] asks for three (nxr-8f9dz2, 15 November 2026), and one cargo command cannot give its build scripts and tests the values of two crates.
+| Type      | Decision                                                     |
+| --------- | ------------------------------------------------------------ |
+| ID        | ADR-BATCH-EXECUTOR                                           |
+| Status    | Accepted                                                     |
+| Justifies | [REQ-BATCHING](execution.mara.md#01M78FHG7FRS15ZD38BR42JSK7) |
+| Justifies | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)    |
+| Accepts   | [RISK-BATCH-BEHAVIOUR](#01M78FHG7FARJNEMM2EFX7XFY9)          |
+
+Nx decides what runs and what is cached, per crate. Cargo should still be invoked as few times as possible, because each invocation takes the build lock and resolves the workspace again. An executor with `batchImplementation` and `preferBatch: true` gets both: Nx hashes, restores and caches each task, and the plugin serves each group of tasks with one cargo call for each step of their target, not one per crate. `build` and `doc` run through a second such executor, because Nx stores a batch's outputs only when the whole batch has ended and would otherwise store what a later `cargo test` of the same batch wrote ([ADR-TEST-AFTER-BUILD](#01M7DJ8QGMASKGT057YS8Z9QBY)). The known cost is that Nx starts no other task while a batch runs.
+
+---
+
+<a id="01M7FZHXES8CVY46H25QJG3BV7"></a>
+
+### Leave out of cargo's environment the two variables by which Nx names a task's project
+
+| Type      | Decision                                                  |
+| --------- | --------------------------------------------------------- |
+| ID        | ADR-TASK-NAME-VARIABLES                                   |
+| Status    | Accepted                                                  |
+| Justifies | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) |
+
+[TERM-GROUP](product.mara.md#01M78FHG7FKNVJ758TVW9DMDAD) gives the tasks of a group one environment, and cargo got each task's environment with the per-task variables that are the same in every way of running the task, among them `NX_TASK_TARGET_PROJECT` and `LERNA_PACKAGE_NAME`, which Nx sets to the task's project ([EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA), "Task environment"). Of what Nx 24 sets for a task after its dotenv files (`getNxEnvVariablesForTask` in `tasks-runner/task-env.js`), only these two differ between tasks of one target and configuration: `NX_TASK_TARGET_TARGET` and `NX_TASK_TARGET_CONFIGURATION` name the target and the configuration, and `NX_TASK_HASH` is left out already. So no group could hold two crates: a batch under `workspace-build` ran `nx run-many -t test -p a b` as six cargo commands, three for each task, where [REQ-BATCHING](execution.mara.md#01M78FHG7FRS15ZD38BR42JSK7) asks for three (nxr-8f9dz2, 15 November 2026), and one cargo command cannot give its build scripts and tests the values of two crates.
 
 The maintainer decided on 15 November 2026, asked what cargo, build scripts and Rust tests should see, "Leave out those two variables (Recommended)": cargo never gets `NX_TASK_TARGET_PROJECT` and `LERNA_PACKAGE_NAME`, whether a task runs on its own or in a batch, in any output style, so that the tasks of one target share an environment and a command, and no result can depend on a value that only some ways of running would give. The other variables of Nx's per-task layer, the target's name and the configuration, stay. A build script or test that needs to know its crate reads `CARGO_PKG_NAME`, which cargo sets. Not chosen: leaving out every variable that names the task, the target and the configuration too, which take nothing from the sharing, and keeping them all, with which no group would ever hold two crates.
-:::
 
-:::mara decision ADR-WORKSPACE-TEST-EXECUTABLES
-:mid: 01M7FZHXESE3W8G8747SRPX9GP
-:title: Let a test of the whole workspace wait for the builds whose executables it writes
-:status: accepted
-:justifies: DES-TARGETS
-:justifies: REQ-NO-RUST-TASK-DEPS
+---
 
-Under `workspace-build`, every step of a `test` group selects the whole workspace ([[DES-TEST-RUN]], "Under `workspace-build`"), and a `cargo test` that selects the whole workspace replaces the executables that the `build` of every crate with a binary and an integration test or bench stores, not only those of the group's crates, on Cargo 1.91.0 and 1.100.0 ([[EVD-CARGO-ARTIFACT-WRITERS]], "Commands that select the whole workspace"). [[DES-TARGETS]] ordered a crate's `test` after its own `build` only. Within one batched command, Nx awaits each batch and stores the `build` batch before it starts anything else ([[EVD-NX-24-BATCHES]]); but where tasks run on their own and at the same time, as with `--batch=false` or `NX_BATCH_MODE=false`, which [[DES-BATCH]] offers for a task that waits for a signal, the `test` of one crate could run while the `build` of another runs or is being stored, and Nx could store the executable of `cargo test` under that build's key, which [[GOAL-TRUSTED-CACHE]] excludes.
+<a id="01M7FZHXESE3W8G8747SRPX9GP"></a>
 
-The maintainer decided on 15 November 2026, asked what should prevent that, "Tests wait for those builds (Recommended)": under `workspace-build`, a crate's `test` depends on the `build` of each crate of its workspace whose executables a `cargo test` of the whole workspace replaces, so that Nx orders them in every mode, also with `--batch=false` or `NX_BATCH_MODE=false`. The crates are those of the rule of [[DES-TARGETS]], applied to every member with a project: a binary and a target of kind `test` or `bench` whose `test` flag is on, whatever the `required-features`. That rule counted, in the fixture with one crate of each shape, the four crates whose executables the command replaced and one more whose binary needs a feature, and no `cdylib`, `staticlib` or example; it is the rule that ordered a crate's `test` after its own `build`, which becomes one case of it, so that one rule and one guard cover both. It is a third exception of [[REQ-NO-RUST-TASK-DEPS]].
+### Let a test of the whole workspace wait for the builds whose executables it writes
 
-What it costs: `nx test <crate>` also runs or restores the `build` of those crates. Nx counts a task's dependencies in its key and in `nx affected`, so a change to the inputs of such a crate's `build` runs every `test` of the workspace again, and `nx affected -t test` selects them all; under `workspace-build` those tests share their cargo commands, which build the whole workspace anyway. Not chosen: failing a `test` that starts while such a `build` is unfinished, which fails an ordinary `nx run-many -t build test` with batching off; refusing `test` under `workspace-build` outside a batch, which leaves `--batch=false` and `NX_BATCH_MODE=false` without a way to run tests; and accepting the overlap as part of [[RISK-ARTIFACT-DIR-WRITERS]], which stores wrong entries.
-:::
+| Type      | Decision                                                            |
+| --------- | ------------------------------------------------------------------- |
+| ID        | ADR-WORKSPACE-TEST-EXECUTABLES                                      |
+| Status    | Accepted                                                            |
+| Justifies | [DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3)           |
+| Justifies | [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN) |
 
-:::mara decision ADR-STAGED-BUILDS
-:mid: 01M7X59APKESA509GHH54BNQW7
-:title: Build the whole workspace, and compile artifact targets, into a stage, and move only the task's own files into the artifact directory
-:status: accepted
-:justifies: DES-BATCH
-:justifies: DES-BUILD-DIRS
-:justifies: DES-INVOCATION
-:justifies: DES-OUTPUTS
-:justifies: REQ-CARGO-UNCHANGED
+Under `workspace-build`, every step of a `test` group selects the whole workspace ([DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ), "Under `workspace-build`"), and a `cargo test` that selects the whole workspace replaces the executables that the `build` of every crate with a binary and an integration test or bench stores, not only those of the group's crates, on Cargo 1.91.0 and 1.100.0 ([EVD-CARGO-ARTIFACT-WRITERS](#01M7DJ8QGMBPJSJHQ2BVBCHA1R), "Commands that select the whole workspace"). [DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3) ordered a crate's `test` after its own `build` only. Within one batched command, Nx awaits each batch and stores the `build` batch before it starts anything else ([EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA)); but where tasks run on their own and at the same time, as with `--batch=false` or `NX_BATCH_MODE=false`, which [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) offers for a task that waits for a signal, the `test` of one crate could run while the `build` of another runs or is being stored, and Nx could store the executable of `cargo test` under that build's key, which [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7) excludes.
 
-A `build` that selects the whole workspace links the executables, `cdylib` and `staticlib` files of every member again, also of fresh units, with its own environment and feature set ([[EVD-CARGO-ARTIFACT-WRITERS]]). Two builds of one Cargo workspace whose commands differ, such as through a crate's own `RUSTFLAGS` in a dotenv file or its own feature set, therefore replace each other's files on disk within one command. This happens after a build of an earlier wave of a batch, after a build that Nx restored before the batch, and with batching off. A cached task that runs such an executable, such as a packaging step, then stores a result made from the wrong build ([[EVD-BATCH-FILES-ON-DISK]]). The first remedy kept the other builds' files and put them back after each later group (commit 41c2299 of nxr-yfh7zh). Its review found a window: while the later group's cargo runs, the files on disk are the other variant, and a task that is already running, or a continuous task that Nx starts between two waves of a batch, reads it. Leaving a group for a following batch also gave the build left out a key computed before its dependencies had run, and the review got a wrong cache hit from it (nxr-f04xen; [[EVD-STAGED-BUILDS]]).
+The maintainer decided on 15 November 2026, asked what should prevent that, "Tests wait for those builds (Recommended)": under `workspace-build`, a crate's `test` depends on the `build` of each crate of its workspace whose executables a `cargo test` of the whole workspace replaces, so that Nx orders them in every mode, also with `--batch=false` or `NX_BATCH_MODE=false`. The crates are those of the rule of [DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3), applied to every member with a project: a binary and a target of kind `test` or `bench` whose `test` flag is on, whatever the `required-features`. That rule counted, in the fixture with one crate of each shape, the four crates whose executables the command replaced and one more whose binary needs a feature, and no `cdylib`, `staticlib` or example; it is the rule that ordered a crate's `test` after its own `build`, which becomes one case of it, so that one rule and one guard cover both. It is a third exception of [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN).
+
+What it costs: `nx test <crate>` also runs or restores the `build` of those crates. Nx counts a task's dependencies in its key and in `nx affected`, so a change to the inputs of such a crate's `build` runs every `test` of the workspace again, and `nx affected -t test` selects them all; under `workspace-build` those tests share their cargo commands, which build the whole workspace anyway. Not chosen: failing a `test` that starts while such a `build` is unfinished, which fails an ordinary `nx run-many -t build test` with batching off; refusing `test` under `workspace-build` outside a batch, which leaves `--batch=false` and `NX_BATCH_MODE=false` without a way to run tests; and accepting the overlap as part of [RISK-ARTIFACT-DIR-WRITERS](#01M7DJ8QGM2WH33TJ7HBG7XRD0), which stores wrong entries.
+
+---
+
+<a id="01M7X59APKESA509GHH54BNQW7"></a>
+
+### Build the whole workspace, and compile artifact targets, into a stage, and move only the task's own files into the artifact directory
+
+| Type      | Decision                                                          |
+| --------- | ----------------------------------------------------------------- |
+| ID        | ADR-STAGED-BUILDS                                                 |
+| Status    | Accepted                                                          |
+| Justifies | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)         |
+| Justifies | [DES-BUILD-DIRS](caching.mara.md#01M78FHG7FMKCDSEX3Y6Q65F4Y)      |
+| Justifies | [DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB)      |
+| Justifies | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)         |
+| Justifies | [REQ-CARGO-UNCHANGED](caching.mara.md#01M78FHG7F5VCD6HDS9R6HDS3Z) |
+
+A `build` that selects the whole workspace links the executables, `cdylib` and `staticlib` files of every member again, also of fresh units, with its own environment and feature set ([EVD-CARGO-ARTIFACT-WRITERS](#01M7DJ8QGMBPJSJHQ2BVBCHA1R)). Two builds of one Cargo workspace whose commands differ, such as through a crate's own `RUSTFLAGS` in a dotenv file or its own feature set, therefore replace each other's files on disk within one command. This happens after a build of an earlier wave of a batch, after a build that Nx restored before the batch, and with batching off. A cached task that runs such an executable, such as a packaging step, then stores a result made from the wrong build ([EVD-BATCH-FILES-ON-DISK](#01M7WVPS52WX44QPGQDNT5PQM5)). The first remedy kept the other builds' files and put them back after each later group (commit 41c2299 of nxr-yfh7zh). Its review found a window: while the later group's cargo runs, the files on disk are the other variant, and a task that is already running, or a continuous task that Nx starts between two waves of a batch, reads it. Leaving a group for a following batch also gave the build left out a key computed before its dependencies had run, and the review got a wrong cache hit from it (nxr-f04xen; [EVD-STAGED-BUILDS](#01M7X59APKVHDRKGF3ZJ3EYWB9)).
 
 The maintainer decided on 20 November 2026. He was asked: "nxr-yfh7zh: two builds of one Cargo workspace whose commands differ (a crate with its own RUSTFLAGS in a dotenv file, or its own feature set) replace each other's executables on disk within one command, so a cached task that runs such an executable (a packaging step) can store a result made from the wrong build. The fix that was built (keep the files, put them back afterwards) leaves a window. How should builds be made safe?" He chose "Stage artifacts (Recommended)". As described to him, whole-workspace `build` and `napi-build` run cargo with `--target-dir <stage>` and `build.build-dir` set to the real directory, then move only their own crates' final files into the artifact directory. This leaves no window, also fixes batching off, and removes the leaving of a build for a later batch together with its confirmed wrong cache hit. `REQ-CARGO-UNCHANGED` and `DES-INVOCATION` are amended: two more cargo flags, visible with `--verbose`. `nx build pa` no longer refreshes other crates' executables in `target/`. Two configurations of one crate into one folder fail with guidance instead of sharing a command. It is a new high-risk piece of work that starts with a spike, and the keep-and-put-back remedy for builds is dropped. Not chosen: refusing such commands, keeping and putting back, and stating the limit only.
 
-The spike confirmed on cargo 1.91.0 and 1.100.0 what the choice relies on ([[EVD-STAGED-BUILDS]]). With the stage and the build directory that cargo would use anyway, a staged build reuses plain cargo's work and plain cargo reuses the staged build's. It writes nothing into the artifact directory and reports the exact paths of its files in the stage. Build scripts keep their `OUT_DIR` in the build directory, and the plugin sets no `CARGO_TARGET_DIR` for them. Cargo's build lock keeps serializing commands. `wasm-build`, whose compile and post-processing work like `napi-build`'s, is staged as well. `cargo test` cannot be: it fixes the stage's path into `CARGO_BIN_EXE_<name>` without counting it in the fingerprint, so a later plain `cargo test` runs a missing executable. A `test` or `bench` batch therefore keeps and puts back the builds' files, as [[ADR-TEST-AFTER-BUILD]] records. [[DES-BATCH]] ("Staged builds") describes the design.
+The spike confirmed on cargo 1.91.0 and 1.100.0 what the choice relies on ([EVD-STAGED-BUILDS](#01M7X59APKVHDRKGF3ZJ3EYWB9)). With the stage and the build directory that cargo would use anyway, a staged build reuses plain cargo's work and plain cargo reuses the staged build's. It writes nothing into the artifact directory and reports the exact paths of its files in the stage. Build scripts keep their `OUT_DIR` in the build directory, and the plugin sets no `CARGO_TARGET_DIR` for them. Cargo's build lock keeps serializing commands. `wasm-build`, whose compile and post-processing work like `napi-build`'s, is staged as well. `cargo test` cannot be: it fixes the stage's path into `CARGO_BIN_EXE_<name>` without counting it in the fingerprint, so a later plain `cargo test` runs a missing executable. A `test` or `bench` batch therefore keeps and puts back the builds' files, as [ADR-TEST-AFTER-BUILD](#01M7DJ8QGMASKGT057YS8Z9QBY) records. [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) ("Staged builds") describes the design.
 
-The control plane settled two questions of the design on 20 November 2026, of which the maintainer is told. The stage lies in the artifact directory, as `.nx-rust-stage/<process id>-<counter>`, rather than in Nx's `.nx/workspace-data`: on the file system of the files it replaces, among Cargo's directories, which the build input check leaves out and where cargo 1.91.0 spells generated files in the stage's records, and removed by `cargo clean`; a marker with the process's start time tells a stage left by a dead process from a live one's, also where the id was reused ([[DES-BATCH]], "Staged builds"). Whether a process runs is judged in the process namespace of the command that looks, so commands in separate containers that share one artifact directory can remove each other's live stage. And where a group of a batch fails, the later groups of the same batch process still run and are stored, also under `--nx-bail`, which Nx 24 does not tell a batch. The maintainer confirmed this one on 21 November 2026, agreeing ("Agree with recommendation") that it stands as a documented limitation of Nx until Nx passes the flag to a batch.
+The control plane settled two questions of the design on 20 November 2026, of which the maintainer is told. The stage lies in the artifact directory, as `.nx-rust-stage/<process id>-<counter>`, rather than in Nx's `.nx/workspace-data`: on the file system of the files it replaces, among Cargo's directories, which the build input check leaves out and where cargo 1.91.0 spells generated files in the stage's records, and removed by `cargo clean`; a marker with the process's start time tells a stage left by a dead process from a live one's, also where the id was reused ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Staged builds"). Whether a process runs is judged in the process namespace of the command that looks, so commands in separate containers that share one artifact directory can remove each other's live stage. And where a group of a batch fails, the later groups of the same batch process still run and are stored, also under `--nx-bail`, which Nx 24 does not tell a batch. The maintainer confirmed this one on 21 November 2026, agreeing ("Agree with recommendation") that it stands as a documented limitation of Nx until Nx passes the flag to a batch.
 
-What it costs: two flags on the commands concerned, which a verbose run prints; a build of the whole workspace that no longer refreshes the final artifacts of members whose `build` the command does not run; a `.nx-rust-stage` folder in the artifact directory while such a command runs, and after an interrupted one until the next; and the refusal of two `build` tasks of one crate whose files lie in one folder. Not chosen earlier for nxr-yfh7zh: a later group that selects only its own crates, which changes the features that cargo resolves for a crate depending on what else the batch holds, against [[REQ-STABLE-FEATURES]]; and failing such tasks with a message to run them in separate commands, which takes away what users can run today.
+What it costs: two flags on the commands concerned, which a verbose run prints; a build of the whole workspace that no longer refreshes the final artifacts of members whose `build` the command does not run; a `.nx-rust-stage` folder in the artifact directory while such a command runs, and after an interrupted one until the next; and the refusal of two `build` tasks of one crate whose files lie in one folder. Not chosen earlier for nxr-yfh7zh: a later group that selects only its own crates, which changes the features that cargo resolves for a crate depending on what else the batch holds, against [REQ-STABLE-FEATURES](execution.mara.md#01M78FHG7FNYQZJD8HRKA23YRY); and failing such tasks with a message to run them in separate commands, which takes away what users can run today.
 
-A stage has a second use since 21 November 2026 (nxr-5hzxra): a `test` or `bench` group of a batch holds in one the files of the command's cached builds that its cargo commands link again, as hard links, and puts them back from it when it ends ([[ADR-TEST-AFTER-BUILD]], [[DES-BATCH]], "Files that a test batch puts back"). It builds nothing there, and `cargo test` still runs with the artifact directory that cargo uses anyway. The orchestrator chose the stage after the review of the first implementation, which kept the files under second names beside them, where a batch killed while it ran left them for a later build with a folder or glob output to store; a stage left so is removed by the next staged command or test group that keeps files, as for a build.
-:::
+A stage has a second use since 21 November 2026 (nxr-5hzxra): a `test` or `bench` group of a batch holds in one the files of the command's cached builds that its cargo commands link again, as hard links, and puts them back from it when it ends ([ADR-TEST-AFTER-BUILD](#01M7DJ8QGMASKGT057YS8Z9QBY), [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Files that a test batch puts back"). It builds nothing there, and `cargo test` still runs with the artifact directory that cargo uses anyway. The orchestrator chose the stage after the review of the first implementation, which kept the files under second names beside them, where a batch killed while it ran left them for a later build with a folder or glob output to store; a stage left so is removed by the next staged command or test group that keeps files, as for a build.
 
-:::mara decision ADR-WORKSPACE-FEATURES
-:mid: 01M78FHG7F9M47HN1VS68YT9K3
-:title: Never resolve features for whichever crates happen to be selected
-:status: accepted
-:justifies: REQ-STABLE-FEATURES
-:justifies: DES-UNIFICATION
-:justifies: DES-FEATURE-SETS
+---
 
-A batch of whatever is affected changes the set of crates built together on every run. Because of [[TERM-FEATURE-UNIFICATION]], that changes the features of shared dependencies, which causes rebuild churn and makes a crate's result depend on its batch. The plugin therefore resolves features for the whole workspace on every run, for every group of tasks that shares a cargo command. Three strategies do this at different costs: `hakari` where the workspace already uses cargo-hakari, Cargo's own `feature-unification` setting as an experimental opt-in, and building the whole workspace as the fallback that always works. Where a shared command would make features follow the selection all the same, because its flags act on the selected crates or because its triple cannot be built for the whole workspace or is not one that the hack crate covers, each task runs its crate alone instead, so that its features follow from its own crate and its result from what its own key holds. That costs speed and can compile a shared dependency in more than one variant, but never a result; the control plane decided it on 14 November 2026, of which the maintainer is told ([[DES-BATCH]], "Groups of one crate").
-:::
+<a id="01M78FHG7F9M47HN1VS68YT9K3"></a>
 
-:::mara decision ADR-ONE-TEST-TARGET
-:mid: 01M78FHG7FWYPHVZ9TAHHZ0A5N
-:title: Keep one test target and put the mode in the cache key
-:status: accepted
-:justifies: REQ-AFFECTED-TESTS
-:justifies: REQ-TEST-MODE-KEY
-:justifies: DES-TEST-MODE
+### Never resolve features for whichever crates happen to be selected
 
-Affected-test selection could be a second target beside `test`. Users would then have to know which one to run where, and pipelines would differ between branches. Instead there is one `test` target that decides inside whether to run a subset or the full suite. What keeps the cache honest is the [[TERM-TEST-MODE]] in the key: a runtime input that prints `full` or `affected:<baseline commit>`.
-:::
+| Type      | Decision                                                            |
+| --------- | ------------------------------------------------------------------- |
+| ID        | ADR-WORKSPACE-FEATURES                                              |
+| Status    | Accepted                                                            |
+| Justifies | [REQ-STABLE-FEATURES](execution.mara.md#01M78FHG7FNYQZJD8HRKA23YRY) |
+| Justifies | [DES-UNIFICATION](execution.mara.md#01M78FHG7F43VP2172VYY8A41Q)     |
+| Justifies | [DES-FEATURE-SETS](execution.mara.md#01M78FHG7FBXD8XDCTFPZQD2QA)    |
 
-:::mara decision ADR-TEST-MODE-CHOICE
-:mid: 01M78NVF8E9Q5SD8FDP09ADE2D
-:title: Let the consumer choose the test mode, with a default per environment
-:status: accepted
-:justifies: DES-TEST-MODE
-:justifies: REQ-AFFECTED-TESTS
+A batch of whatever is affected changes the set of crates built together on every run. Because of [TERM-FEATURE-UNIFICATION](product.mara.md#01M78FHG7FH1JD1FSYB97BFN9P), that changes the features of shared dependencies, which causes rebuild churn and makes a crate's result depend on its batch. The plugin therefore resolves features for the whole workspace on every run, for every group of tasks that shares a cargo command. Three strategies do this at different costs: `hakari` where the workspace already uses cargo-hakari, Cargo's own `feature-unification` setting as an experimental opt-in, and building the whole workspace as the fallback that always works. Where a shared command would make features follow the selection all the same, because its flags act on the selected crates or because its triple cannot be built for the whole workspace or is not one that the hack crate covers, each task runs its crate alone instead, so that its features follow from its own crate and its result from what its own key holds. That costs speed and can compile a shared dependency in more than one variant, but never a result; the control plane decided it on 14 November 2026, of which the maintainer is told ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Groups of one crate").
+
+---
+
+<a id="01M78FHG7FWYPHVZ9TAHHZ0A5N"></a>
+
+### Keep one test target and put the mode in the cache key
+
+| Type      | Decision                                                         |
+| --------- | ---------------------------------------------------------------- |
+| ID        | ADR-ONE-TEST-TARGET                                              |
+| Status    | Accepted                                                         |
+| Justifies | [REQ-AFFECTED-TESTS](testing.mara.md#01M78FHG7FNTNJW0STSNNP2AF5) |
+| Justifies | [REQ-TEST-MODE-KEY](testing.mara.md#01M78FHG7FS5MHY2P1ZPS6D403)  |
+| Justifies | [DES-TEST-MODE](testing.mara.md#01M78FHG7F7NZT1HQM98QHVY34)      |
+
+Affected-test selection could be a second target beside `test`. Users would then have to know which one to run where, and pipelines would differ between branches. Instead there is one `test` target that decides inside whether to run a subset or the full suite. What keeps the cache honest is the [TERM-TEST-MODE](product.mara.md#01M78FHG7FZA0TQ1TJABZBVGAP) in the key: a runtime input that prints `full` or `affected:<baseline commit>`.
+
+---
+
+<a id="01M78NVF8E9Q5SD8FDP09ADE2D"></a>
+
+### Let the consumer choose the test mode, with a default per environment
+
+| Type      | Decision                                                         |
+| --------- | ---------------------------------------------------------------- |
+| ID        | ADR-TEST-MODE-CHOICE                                             |
+| Status    | Accepted                                                         |
+| Justifies | [DES-TEST-MODE](testing.mara.md#01M78FHG7F7NZT1HQM98QHVY34)      |
+| Justifies | [REQ-AFFECTED-TESTS](testing.mara.md#01M78FHG7FNTNJW0STSNNP2AF5) |
 
 The first design said the mode is `full` on the main branch and `affected` elsewhere. The plugin cannot tell reliably which of the two it is on: CI checkouts are detached or shallow, pull requests are tested on merge commits, and release branches and merge queues are neither. Asking Git whether HEAD is contained in the default branch was considered and rejected for the same reasons. The pipeline knows what it is running, so the consumer chooses: the environment variable `NX_RUST_TEST_MODE` names the mode of a run.
 
-Two things follow. The `affectedTests` setting does not choose a mode. It declares that a workspace uses selection, which adds the baseline target and the mode input and makes every machine check the setup, so a missing tool shows on a developer's machine and not first in CI. And the default without the variable depends on where the run happens: `affected` on a developer's machine, so that local work gets selection without any setup, and `full` where Nx detects CI ([[EVD-NX-24-INSPECTION]]), so that a pipeline that sets nothing, such as the one for main, runs the whole suite. A pull request pipeline asks for `affected` explicitly.
+Two things follow. The `affectedTests` setting does not choose a mode. It declares that a workspace uses selection, which adds the baseline target and the mode input and makes every machine check the setup, so a missing tool shows on a developer's machine and not first in CI. And the default without the variable depends on where the run happens: `affected` on a developer's machine, so that local work gets selection without any setup, and `full` where Nx detects CI ([EVD-NX-24-INSPECTION](#01M78FHG7F32NTNKGXVJT9QA2A)), so that a pipeline that sets nothing, such as the one for main, runs the whole suite. A pull request pipeline asks for `affected` explicitly.
 
 An environment variable switches selection on, and not a command-line flag, because the command that puts the mode into the cache key can read the environment but not the `nx` command line. The flag `--affectedTests=false` can only force the full suite.
-:::
 
-:::mara decision ADR-TEST-SELECTOR
-:mid: 01M78FHG7FH90JZ8ESEP4R4HCJ
-:title: Use cargo-affected only to select and nextest to run
-:status: accepted
-:justifies: DES-TEST-RUN
-:justifies: REQ-DOCTESTS
+---
+
+<a id="01M78FHG7FH90JZ8ESEP4R4HCJ"></a>
+
+### Use cargo-affected only to select and nextest to run
+
+| Type      | Decision                                                   |
+| --------- | ---------------------------------------------------------- |
+| ID        | ADR-TEST-SELECTOR                                          |
+| Status    | Accepted                                                   |
+| Justifies | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) |
+| Justifies | [REQ-DOCTESTS](testing.mara.md#01M78FHG7FWPF1WTP90ASPYEMV) |
 
 cargo-affected can both select and run tests, but it is very early and has no archive support. The plugin asks it for the selection only and runs the tests itself through nextest, which keeps per-crate results under the plugin's control, keeps the selector replaceable, and leaves room for a distributed mode. nextest does not run doctests, so they run through `cargo test --doc` whenever nextest is the runner; that is not optional.
-:::
 
-:::mara decision ADR-AFFECTED-TESTS-WIDENING
-:mid: 01M7J59DN6SH9F9NGK13ETDBVZ
-:title: Narrow by coverage only where coverage sees a change's whole effect, and widen by inputs everywhere else
-:status: accepted
-:justifies: DES-TEST-RUN
+---
 
-cargo-affected selects by the coverage that tests leave at run time. It lists the changed files without stored rows with `tracked_by_coverage: false` and selects no test for them ([[EVD-CARGO-AFFECTED-REPORT]]), and it misses tests that reach changed code through a program they start, as ripgrep's integration tests do with `rg`. A review of the first form of this decision found with plain cargo that the flag is no guide: a proc-macro crate with unit tests of its own has rows, and a change to it selected its own passing tests while a dependent's test of the generated code failed. The control plane decided on 16 November 2026, from [[REQ-SELECTION-SAFETY]] and [[GOAL-TRUSTED-CACHE]], the following, which step 2 of [[DES-TEST-RUN]] carries out.
+<a id="01M7J59DN6SH9F9NGK13ETDBVZ"></a>
+
+### Narrow by coverage only where coverage sees a change's whole effect, and widen by inputs everywhere else
+
+| Type      | Decision                                                   |
+| --------- | ---------------------------------------------------------- |
+| ID        | ADR-AFFECTED-TESTS-WIDENING                                |
+| Status    | Accepted                                                   |
+| Justifies | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) |
+
+cargo-affected selects by the coverage that tests leave at run time. It lists the changed files without stored rows with `tracked_by_coverage: false` and selects no test for them ([EVD-CARGO-AFFECTED-REPORT](#01M7J4YJXH9M7KNRM19MJPWS7H)), and it misses tests that reach changed code through a program they start, as ripgrep's integration tests do with `rg`. A review of the first form of this decision found with plain cargo that the flag is no guide: a proc-macro crate with unit tests of its own has rows, and a change to it selected its own passing tests while a dependent's test of the generated code failed. The control plane decided on 16 November 2026, from [REQ-SELECTION-SAFETY](testing.mara.md#01M78FHG7F81B81DHEYS6QEQVS) and [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7), the following, which step 2 of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) carries out.
 
 - **By kind, not by rows.** Coverage narrows a changed file only where its whole effect on tests runs through code that coverage records at run time: a `.rs` file with rows in the workspace folder, of a member that is not a proc macro, that is not the member's build script and that no `fileInputs` pattern names. Every source file of a proc-macro crate, build scripts and the files that crates declare, every file other than Rust source, and a file without rows widen. The flag adds files to that set and never takes one out. Not taken: widening only the files that the flag marks, which the first form did and which passed a failing dependent.
 - **Ownership by inputs, in the whole repository.** A widening file adds all tests of every crate of the group whose `test` task has it among its inputs, as the plugin infers them and the user declares them, through `^` inputs including the crates that depend on it. The plugin takes the changed files of the whole repository from git itself, while cargo-affected's own call keeps `diff.relative`. A file that is an input of no crate of the group adds nothing, and one that the plugin cannot place runs the full suite. Not taken: the first form's rule that only files in a member's folder count and that files outside the members' folders add nothing, which missed shared migrations, snapshots or schemas that a member declares, crates by path elsewhere in the repository, and configuration that `.cargo/config.toml` includes.
 - **Programs that tests start.** A change among the inputs of a member with a binary target runs all integration tests of that member, and all tests of every member that depends on it by a Cargo dependency of any kind, an Nx dependency or declared inputs that reach its folder. Not taken: only the member's own integration tests, which the first form ran and which leaves a test in another crate that starts the binary unselected. A test that starts a program without any declared relation is outside what the plugin can see, and its cache key is already wrong without affected mode.
-- **The limit that stays.** Code that another crate evaluates while it compiles, a `const fn` used in a `const` or a macro by example, leaves no row for that crate's tests. Widening every change to a library to all tests of all its dependents would end the narrowing altogether, so this stays a stated limit, said in the user guide next to the statement that an affected run never stands in for the full run ([[RISK-CARGO-AFFECTED]]). Not taken: that widening.
+- **The limit that stays.** Code that another crate evaluates while it compiles, a `const fn` used in a `const` or a macro by example, leaves no row for that crate's tests. Widening every change to a library to all tests of all its dependents would end the narrowing altogether, so this stays a stated limit, said in the user guide next to the statement that an affected run never stands in for the full run ([RISK-CARGO-AFFECTED](#01M78FHG7F5EH60R4TW2E645EW)). Not taken: that widening.
 - **Build scripts that read Rust source.** A build script that reads a Rust file of its own crate is seen through `fileInputs`, which then widens that file; without the declaration a change to it narrows like other Rust code, and the user guide says so. Not taken: widening every Rust file of a crate with a build script, which would end the narrowing in every crate that has one.
 
-To undo a rule, step 2 of [[DES-TEST-RUN]] drops it; nothing else depends on them.
-:::
+To undo a rule, step 2 of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) drops it; nothing else depends on them.
 
-:::mara decision ADR-AFFECTED-BASELINE-CONTEXT
-:mid: 01M7J8GXGNJ2X4GBGAJW7N0ZMS
-:title: Trust a baseline only in the context it was collected in
-:status: accepted
-:justifies: DES-BASELINE
-:justifies: DES-TEST-RUN
+---
 
-cargo-affected's fingerprint holds `Cargo.lock`, the workspace's manifests, `rustc -vV`, `RUSTFLAGS` and `CARGO_BUILD_TARGET` ([[EVD-CARGO-AFFECTED-REPORT]]), but not the features or profile of the command nor the environment variables that tests read. A review found with plain cargo that collecting without a feature and running with it, or changing a variable that `envInputs` declares, selected nothing and passed every check of the report, while the tests would have failed. The control plane decided on 16 November 2026, from [[GOAL-TRUSTED-CACHE]] and [[REQ-SELECTION-SAFETY]], that the plugin records beside the baseline the context of the collection that it knows and that changes what is compiled or run: the cargo options of the test command such as features and profile, the target triple, and a hash of the value of each environment input of the workspace's `test` tasks. Step 1 of [[DES-TEST-RUN]] compares the record with the task's own before it trusts a report. A difference, or a baseline without a record, runs the full suite, and the task says why. Not taken: relying on cargo-affected's fingerprint, which misses these, and adding them to it upstream, which the plugin cannot do. To undo it, [[DES-BASELINE]] stops writing the record and step 1 stops comparing.
+<a id="01M7J8GXGNJ2X4GBGAJW7N0ZMS"></a>
+
+### Trust a baseline only in the context it was collected in
+
+| Type      | Decision                                                   |
+| --------- | ---------------------------------------------------------- |
+| ID        | ADR-AFFECTED-BASELINE-CONTEXT                              |
+| Status    | Accepted                                                   |
+| Justifies | [DES-BASELINE](ci.mara.md#01M78FHG7F1EWYSCPVF4MY7YGF)      |
+| Justifies | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) |
+
+cargo-affected's fingerprint holds `Cargo.lock`, the workspace's manifests, `rustc -vV`, `RUSTFLAGS` and `CARGO_BUILD_TARGET` ([EVD-CARGO-AFFECTED-REPORT](#01M7J4YJXH9M7KNRM19MJPWS7H)), but not the features or profile of the command nor the environment variables that tests read. A review found with plain cargo that collecting without a feature and running with it, or changing a variable that `envInputs` declares, selected nothing and passed every check of the report, while the tests would have failed. The control plane decided on 16 November 2026, from [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7) and [REQ-SELECTION-SAFETY](testing.mara.md#01M78FHG7F81B81DHEYS6QEQVS), that the plugin records beside the baseline the context of the collection that it knows and that changes what is compiled or run: the cargo options of the test command such as features and profile, the target triple, and a hash of the value of each environment input of the workspace's `test` tasks. Step 1 of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) compares the record with the task's own before it trusts a report. A difference, or a baseline without a record, runs the full suite, and the task says why. Not taken: relying on cargo-affected's fingerprint, which misses these, and adding them to it upstream, which the plugin cannot do. To undo it, [DES-BASELINE](ci.mara.md#01M78FHG7F1EWYSCPVF4MY7YGF) stops writing the record and step 1 stops comparing.
 
 The review of nxr-tabkjx found with the real cargo-affected that a declared runtime input reading a file outside the repository, collected with the file holding `good` and run with `bad`, selected no test in affected mode while the full suite failed. On 17 November 2026 the maintainer extended the rule: what git cannot show has to equal the collection's, so the record also holds, for every runtime input of the `test` tasks but the test mode command, the declared `runtimeInputs` and the plugin's own such as the toolchain command, a hash of the command's output, run as Nx runs it. Step 1 runs them again and compares; a different output, a command that fails, or a record without them runs the full suite and names the input. Undo: drop the field, which leaves a change outside git unseen.
 
-The review of nxr-d0t9vm found with the real cargo-affected that the rule held for the test runs but not for the collection itself: a collection in another context chose `collect --diff`, re-collected nothing and wrote the new context's record beside coverage of the old one, so that an affected run in the new context left out a failing test. On 17 November 2026 the maintainer decided that the same comparison guards the collection: [[DES-BASELINE]] runs `--diff` only where the record that is there before the collection can be read, is of the current version and equals the context of this collection in every field, and collects everything into an empty database otherwise. No safe undo.
-:::
+The review of nxr-d0t9vm found with the real cargo-affected that the rule held for the test runs but not for the collection itself: a collection in another context chose `collect --diff`, re-collected nothing and wrote the new context's record beside coverage of the old one, so that an affected run in the new context left out a failing test. On 17 November 2026 the maintainer decided that the same comparison guards the collection: [DES-BASELINE](ci.mara.md#01M78FHG7F1EWYSCPVF4MY7YGF) runs `--diff` only where the record that is there before the collection can be read, is of the current version and equals the context of this collection in every field, and collects everything into an empty database otherwise. No safe undo.
 
-:::mara decision ADR-TEST-SELECTING-RUNNER
-:mid: 01M7DMTE8WN7QHDS5925MFCEVV
-:title: Run a group's test binaries through a selecting runner and every doctest of the workspace where the whole workspace is built
-:status: accepted
-:justifies: DES-TEST-RUN
-:justifies: DES-UNIFICATION
-:accepts: RISK-TEST-RUNNER-MACOS
+---
 
-Under `workspace-build`, every step of a group of `test` tasks compiles with the features of the whole workspace ([[REQ-STABLE-FEATURES]]), and stable cargo has no flag that leaves out whole crates without resolving features for the rest: `-p` and `--workspace --exclude` both narrow them, and `resolver.feature-unification` needs a nightly flag ([[EVD-WORKSPACE-TEST-SELECTION]]). The maintainer chose on 14 November 2026 "Selecting runner (Recommended)". As put to him: with the default runner, one `cargo test --workspace --no-fail-fast` with a runner for the host on the command line, which cargo starts for every test binary and every doctest with the package's name in `CARGO_PKG_NAME`, and which runs the group's crates and exits with 0 for the rest; with nextest, `cargo nextest run --workspace` with the filterset `package(=a) | package(=b)` and `--no-tests=pass`, then the doctest step with the same runner. He was told what it costs: every run compiles the doctests of every library in the workspace; a compile error in any crate's tests fails every test task of the run; the plugin owns the runner and has to deal with a runner that the user configured; macOS is not verified ([[RISK-TEST-RUNNER-MACOS]]).
+<a id="01M7DMTE8WN7QHDS5925MFCEVV"></a>
+
+### Run a group's test binaries through a selecting runner and every doctest of the workspace where the whole workspace is built
+
+| Type      | Decision                                                        |
+| --------- | --------------------------------------------------------------- |
+| ID        | ADR-TEST-SELECTING-RUNNER                                       |
+| Status    | Accepted                                                        |
+| Justifies | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ)      |
+| Justifies | [DES-UNIFICATION](execution.mara.md#01M78FHG7F43VP2172VYY8A41Q) |
+| Accepts   | [RISK-TEST-RUNNER-MACOS](#01M7DMTE8WRK2WHQ2R4VXJTWQ3)           |
+
+Under `workspace-build`, every step of a group of `test` tasks compiles with the features of the whole workspace ([REQ-STABLE-FEATURES](execution.mara.md#01M78FHG7FNYQZJD8HRKA23YRY)), and stable cargo has no flag that leaves out whole crates without resolving features for the rest: `-p` and `--workspace --exclude` both narrow them, and `resolver.feature-unification` needs a nightly flag ([EVD-WORKSPACE-TEST-SELECTION](#01M7DMTE8WX7EFV63DCFSGAWWJ)). The maintainer chose on 14 November 2026 "Selecting runner (Recommended)". As put to him: with the default runner, one `cargo test --workspace --no-fail-fast` with a runner for the host on the command line, which cargo starts for every test binary and every doctest with the package's name in `CARGO_PKG_NAME`, and which runs the group's crates and exits with 0 for the rest; with nextest, `cargo nextest run --workspace` with the filterset `package(=a) | package(=b)` and `--no-tests=pass`, then the doctest step with the same runner. He was told what it costs: every run compiles the doctests of every library in the workspace; a compile error in any crate's tests fails every test task of the run; the plugin owns the runner and has to deal with a runner that the user configured; macOS is not verified ([RISK-TEST-RUNNER-MACOS](#01M7DMTE8WRK2WHQ2R4VXJTWQ3)).
 
 The options he did not take, as the research for the decision measured them:
 
 - **Run everything and keep the group's results.** `cargo test --workspace --no-fail-fast`, with the other crates' results reduced to warnings. It needs nothing new, but every run runs every test of the workspace: 3.3 s against 1.3 s with the selecting runner and 0.09 s with `-p` in the research's workspace, where one test of another crate took 2 s. A test elsewhere that hangs, needs a service or has side effects holds up or disturbs the group.
-- **The plugin runs the test binaries itself**, after `cargo build --workspace --lib --bins --tests --keep-going --message-format=json`. A compile error in another crate's tests would then fail only that crate. But the plugin would have to reproduce how cargo runs a test, with its folder, variables, library path, `[env]`, runner, output and summary of failures; a task would no longer run `cargo test` ([[VER-TESTING]]); and the doctests would still need another way, which a library that does not compile still stops.
-- **No batching for tests.** One `cargo test -p` per task, with the features of its crate. It costs a cargo command per crate and further builds of shared dependencies beside the whole-workspace ones of `check`, `build` and `lint`, and would amend [[REQ-BATCHING]] and [[ADR-WORKSPACE-FEATURES]] for `test`.
+- **The plugin runs the test binaries itself**, after `cargo build --workspace --lib --bins --tests --keep-going --message-format=json`. A compile error in another crate's tests would then fail only that crate. But the plugin would have to reproduce how cargo runs a test, with its folder, variables, library path, `[env]`, runner, output and summary of failures; a task would no longer run `cargo test` ([VER-TESTING](verification.mara.md#01M78FHG7F4RZ7Y316GEAW105Y)); and the doctests would still need another way, which a library that does not compile still stops.
+- **No batching for tests.** One `cargo test -p` per task, with the features of its crate. It costs a cargo command per crate and further builds of shared dependencies beside the whole-workspace ones of `check`, `build` and `lint`, and would amend [REQ-BATCHING](execution.mara.md#01M78FHG7FRS15ZD38BR42JSK7) and [ADR-WORKSPACE-FEATURES](#01M78FHG7F9M47HN1VS68YT9K3) for `test`.
 
-**Four reviews, and the doctests.** Within his answer the control plane decided, of which the maintainer was told, how the runner works and how its results are checked. Four reviews of that design on 14 November 2026, and the experiments made for them, found wrong passes, and every one of them lay in the doctests: rustdoc counts any non-zero exit of a standalone `should_panic` doctest as a pass, so a runner that failed, a Node that did not start or a program that the loader could not load passed a doctest that never ran ([[EVD-TEST-RUNNER-EVIDENCE]]); with a runner, rustdoc runs merged edition-2024 doctests in one process, so that one that ended the process hid a failing one ([[EVD-TEST-RUNNER-EVIDENCE]]); a runner that ended with 0 before it recorded anything passed every program, which the check could only catch by comparing cargo's and rustdoc's human-readable output with the record ([[EVD-TEST-RUNNER-SILENT-EXIT]]); and terminal settings such as `CARGO_TERM_QUIET`, `[env]` and what tests print changed that output or the environment, so that the comparison passed vacuously or failed good runs. The maintainer had answered on the way that a standalone `should_panic` doctest ending without an unwinding panic should fail with an explanation ("Fail it, and explain why (Recommended)"), not pass as an abort.
+**Four reviews, and the doctests.** Within his answer the control plane decided, of which the maintainer was told, how the runner works and how its results are checked. Four reviews of that design on 14 November 2026, and the experiments made for them, found wrong passes, and every one of them lay in the doctests: rustdoc counts any non-zero exit of a standalone `should_panic` doctest as a pass, so a runner that failed, a Node that did not start or a program that the loader could not load passed a doctest that never ran ([EVD-TEST-RUNNER-EVIDENCE](#01M7DQV5AEH9FVXN5XCW749Y6G)); with a runner, rustdoc runs merged edition-2024 doctests in one process, so that one that ended the process hid a failing one ([EVD-TEST-RUNNER-EVIDENCE](#01M7DQV5AEH9FVXN5XCW749Y6G)); a runner that ended with 0 before it recorded anything passed every program, which the check could only catch by comparing cargo's and rustdoc's human-readable output with the record ([EVD-TEST-RUNNER-SILENT-EXIT](#01M7DT543KQM8ZV17Y8RQK1SAZ)); and terminal settings such as `CARGO_TERM_QUIET`, `[env]` and what tests print changed that output or the environment, so that the comparison passed vacuously or failed good runs. The maintainer had answered on the way that a standalone `should_panic` doctest ending without an unwinding panic should fail with an explanation ("Fail it, and explain why (Recommended)"), not pass as an abort.
 
 **The doctests run without a runner.** Put to him with the four reviews, the maintainer chose on 14 November 2026 "Run all doctests, keep the group's results (Recommended)": the test binaries keep the selecting runner, checked against cargo's machine-readable list of the executables that it runs, and the doctests run for the whole workspace with a plain `cargo test --doc` and no runner, of whose results the plugin reports those of the crates that Nx asked for. The option he did not take was to keep the runner for doctests and harden it, by pinning terminal settings, rejecting output that the plugin does not recognise and restricting what tests print. This replaces the doctest part of his first answer and makes his answer on `should_panic` doctests moot: without a runner, rustdoc decides them as under plain cargo, and an aborting one passes. Its costs, told to him: every test run compiles and runs the doctests of every library, whose side effects and hangs reach the run, and a doctest of another crate that fails only warns.
 
-**What the control plane decided within it**, on 14 November 2026, of which the maintainer is told ([[DES-TEST-RUN]], "Under `workspace-build`"): with the `cargo` runner the group runs `cargo test --workspace --no-run`, which compiles what plain `cargo test` compiles, examples without `test = true` included; then the test binaries with `--tests`, the selection that plain `cargo test` runs besides doctests, and cargo's JSON messages; then the doctests. A task passes the test binaries' step only where every test executable that cargo's messages name for its crate has a record that ends with the status 0, and nothing that cargo writes for people or a test writes decides it. Every artifact message of that command counts, with no stopping point, because a proc macro can write a forged `build-finished` line into the stream while it is compiled; a forged artifact line can then only fail a good run, which is accepted. nextest runs under the repository's configuration as plain `cargo nextest run` does, its `default-filter` included, without a profile of the plugin's own and without `--ignore-default-filter`. The runner is a Node script on Linux and macOS alike, because it passes cargo's environment on exactly, where bash as `/bin/sh` rewrote `SHELLOPTS` and `BASHOPTS`, at about 15 to 30 ms for each test binary of the workspace ([[EVD-TEST-STEPS-SPLIT]]). The maintainer confirmed that choice on 14 November 2026: "Node on Linux and macOS (Recommended)"; `/bin/sh` on Linux with Node on macOS was the option not taken. nextest needs no runner. Where a runner for the host is or may be configured, the group's tests run one crate per command, because the plugin cannot show that it reads the user's runner as cargo does ("A runner the user configured"). The `cargo` strategy passes `-Zfeature-unification` on the command line, so that stable cargo fails instead of narrowing the features ([[DES-UNIFICATION]]).
-:::
+**What the control plane decided within it**, on 14 November 2026, of which the maintainer is told ([DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ), "Under `workspace-build`"): with the `cargo` runner the group runs `cargo test --workspace --no-run`, which compiles what plain `cargo test` compiles, examples without `test = true` included; then the test binaries with `--tests`, the selection that plain `cargo test` runs besides doctests, and cargo's JSON messages; then the doctests. A task passes the test binaries' step only where every test executable that cargo's messages name for its crate has a record that ends with the status 0, and nothing that cargo writes for people or a test writes decides it. Every artifact message of that command counts, with no stopping point, because a proc macro can write a forged `build-finished` line into the stream while it is compiled; a forged artifact line can then only fail a good run, which is accepted. nextest runs under the repository's configuration as plain `cargo nextest run` does, its `default-filter` included, without a profile of the plugin's own and without `--ignore-default-filter`. The runner is a Node script on Linux and macOS alike, because it passes cargo's environment on exactly, where bash as `/bin/sh` rewrote `SHELLOPTS` and `BASHOPTS`, at about 15 to 30 ms for each test binary of the workspace ([EVD-TEST-STEPS-SPLIT](#01M7DWK026HSWGJ537QZAN4GHV)). The maintainer confirmed that choice on 14 November 2026: "Node on Linux and macOS (Recommended)"; `/bin/sh` on Linux with Node on macOS was the option not taken. nextest needs no runner. Where a runner for the host is or may be configured, the group's tests run one crate per command, because the plugin cannot show that it reads the user's runner as cargo does ("A runner the user configured"). The `cargo` strategy passes `-Zfeature-unification` on the command line, so that stable cargo fails instead of narrowing the features ([DES-UNIFICATION](execution.mara.md#01M78FHG7F43VP2172VYY8A41Q)).
 
-:::mara decision ADR-ARTIFACT-TARGET-NAMES
-:mid: 01M78FHG7FYRNEHZNVW6V2DWJ0
-:title: Give each kind of artifact its own target name
-:status: accepted
-:justifies: REQ-ARTIFACT-TARGETS
-:justifies: DES-ARTIFACT-STEPS
+---
 
-A different kind of artifact gets its own target name (`napi-build`, `wasm-build`); a different flavour of the same artifact is a flag. One `build` target with a configuration per artifact was rejected for four reasons. Nx's `dependsOn` names a target and cannot pin a configuration of it ([[EVD-NX-24-INSPECTION]]), so a JS app could not depend on the wasm build. `nx run-many -t build -c wasm` would run the default native build on every crate without a wasm configuration. One configuration applies per invocation, so native plus wasm would take two commands. And a named target exists only on crates that produce that artifact.
-:::
+<a id="01M78FHG7FYRNEHZNVW6V2DWJ0"></a>
 
-:::mara decision ADR-NO-WASM-PACK
-:mid: 01M78FHG7F6KP7TGK6B0447FHY
-:title: Call cargo and the wasm-bindgen CLI directly
-:status: accepted
-:justifies: DES-WASM
+### Give each kind of artifact its own target name
+
+| Type      | Decision                                                             |
+| --------- | -------------------------------------------------------------------- |
+| ID        | ADR-ARTIFACT-TARGET-NAMES                                            |
+| Status    | Accepted                                                             |
+| Justifies | [REQ-ARTIFACT-TARGETS](artifacts.mara.md#01M78FHG7FP44K4K3TDR87ZFQS) |
+| Justifies | [DES-ARTIFACT-STEPS](artifacts.mara.md#01M78FHG7F47NNMQ07P6DKD6KB)   |
+
+A different kind of artifact gets its own target name (`napi-build`, `wasm-build`); a different flavour of the same artifact is a flag. One `build` target with a configuration per artifact was rejected for four reasons. Nx's `dependsOn` names a target and cannot pin a configuration of it ([EVD-NX-24-INSPECTION](#01M78FHG7F32NTNKGXVJT9QA2A)), so a JS app could not depend on the wasm build. `nx run-many -t build -c wasm` would run the default native build on every crate without a wasm configuration. One configuration applies per invocation, so native plus wasm would take two commands. And a named target exists only on crates that produce that artifact.
+
+---
+
+<a id="01M78FHG7F6KP7TGK6B0447FHY"></a>
+
+### Call cargo and the wasm-bindgen CLI directly
+
+| Type      | Decision                                                 |
+| --------- | -------------------------------------------------------- |
+| ID        | ADR-NO-WASM-PACK                                         |
+| Status    | Accepted                                                 |
+| Justifies | [DES-WASM](artifacts.mara.md#01M78FHG7FEJ8068G4VR6C06QJ) |
 
 wasm-pack is not a base to build on: the rustwasm organisation was sunset in 2025 and wasm-pack was slated for archiving. The plugin runs `cargo build` and the `wasm-bindgen` CLI itself, which also lets the compile step take part in batching.
-:::
 
-:::mara decision ADR-SINGLE-MACHINE
-:mid: 01M78FHG7FYYRPH4D9BRH2Y94M
-:title: Target a single machine in v1
-:status: accepted
-:justifies: DES-TEST-PHASES
+---
+
+<a id="01M78FHG7FYYRPH4D9BRH2Y94M"></a>
+
+### Target a single machine in v1
+
+| Type      | Decision                                                      |
+| --------- | ------------------------------------------------------------- |
+| ID        | ADR-SINGLE-MACHINE                                            |
+| Status    | Accepted                                                      |
+| Justifies | [DES-TEST-PHASES](testing.mara.md#01M78FHG7F64P52Y7055J0MYAC) |
 
 Spreading Rust tasks across Nx agents needs answers that are not available yet: where Nx computes hashes, whether targets can be pinned to one machine, and how batched tasks are assigned to agents. v1 runs all Rust tasks of a pipeline on one machine. The only v1 requirement for a later distributed mode is a seam: the test executor keeps building and running as separate internal phases.
-:::
 
-:::mara decision ADR-COMPATIBILITY
-:mid: 01M78FHG7FFBVZPZCQKJNXGT0P
-:title: Support Nx 24, Cargo 1.91+, Linux and macOS
-:status: accepted
-:justifies: REQ-COMPATIBILITY
-:justifies: DES-BUILD-DIRS
-:accepts: RISK-UPSTREAM-CHANGES
+---
 
-Nx 24 makes task-based affected the default, which the cache design relies on. The plugin supports the Nx majors its end-to-end suite has passed on, which is Nx 24 at first. The batch executor interface and the way Nx evaluates inputs are not stable across majors ([[RISK-UPSTREAM-CHANGES]]), so a later major joins the package's peer dependency range only once the suite passes on it. Promising "Nx 24 and later" was rejected, because it would claim behaviour nobody has checked. Cargo 1.91 is the first version with a separate build directory, so there is one cache model and no degraded mode for older toolchains. Windows hosts need their own handling of paths, shells and linkers and are left out of v1. A repository with an older Nx or Cargo gets a clear error.
-:::
+<a id="01M78FHG7FFBVZPZCQKJNXGT0P"></a>
 
-:::mara decision ADR-V1-SCOPE
-:mid: 01M78FHG7FTPVXE53KP8PW9NR7
-:title: Limit what v1 does
-:status: accepted
-:justifies: REQ-NO-MANIFEST-WRITES
-:justifies: REQ-DIAGNOSTICS
-:justifies: REQ-COMPATIBILITY
-:accepts: RISK-UNDECLARED-INPUTS
-:accepts: RISK-HOST-ENVIRONMENT
+### Support Nx 24, Cargo 1.91+, Linux and macOS
+
+| Type      | Decision                                                      |
+| --------- | ------------------------------------------------------------- |
+| ID        | ADR-COMPATIBILITY                                             |
+| Status    | Accepted                                                      |
+| Justifies | [REQ-COMPATIBILITY](setup.mara.md#01M78FHG7FES2FR7DNAAPSDVWE) |
+| Justifies | [DES-BUILD-DIRS](caching.mara.md#01M78FHG7FMKCDSEX3Y6Q65F4Y)  |
+| Accepts   | [RISK-UPSTREAM-CHANGES](#01M78FHG7F662HG5KVZQEN15Z3)          |
+
+Nx 24 makes task-based affected the default, which the cache design relies on. The plugin supports the Nx majors its end-to-end suite has passed on, which is Nx 24 at first. The batch executor interface and the way Nx evaluates inputs are not stable across majors ([RISK-UPSTREAM-CHANGES](#01M78FHG7F662HG5KVZQEN15Z3)), so a later major joins the package's peer dependency range only once the suite passes on it. Promising "Nx 24 and later" was rejected, because it would claim behaviour nobody has checked. Cargo 1.91 is the first version with a separate build directory, so there is one cache model and no degraded mode for older toolchains. Windows hosts need their own handling of paths, shells and linkers and are left out of v1. A repository with an older Nx or Cargo gets a clear error.
+
+---
+
+<a id="01M78FHG7FTPVXE53KP8PW9NR7"></a>
+
+### Limit what v1 does
+
+| Type      | Decision                                                           |
+| --------- | ------------------------------------------------------------------ |
+| ID        | ADR-V1-SCOPE                                                       |
+| Status    | Accepted                                                           |
+| Justifies | [REQ-NO-MANIFEST-WRITES](setup.mara.md#01M78FHG7F8PRTX5Q1T77QNQ1K) |
+| Justifies | [REQ-DIAGNOSTICS](setup.mara.md#01M78FHG7FGW9BB3M4MCE52PEG)        |
+| Justifies | [REQ-COMPATIBILITY](setup.mara.md#01M78FHG7FES2FR7DNAAPSDVWE)      |
+| Accepts   | [RISK-UNDECLARED-INPUTS](#01M78FHG7F7QAFW6P09CQYEPJA)              |
+| Accepts   | [RISK-HOST-ENVIRONMENT](#01M78FHG7F36BVH0EP3K2REH3E)               |
 
 The plugin stays a thin layer between Nx and Cargo. It does not install toolchains or tools: rustup, nextest, cargo-affected, cargo-hakari and the `wasm-bindgen` CLI are the user's to install, and the plugin reports what is missing. It does not build hermetically: there is no sandbox and no remote execution, and it trusts Cargo and a declared set of inputs. It does not write `Cargo.toml`, `Cargo.lock` or `.cargo/config.toml` outside generators, release and tasks the user runs to change them. It does not run on Windows hosts.
 
-Also outside v1: cross-compiling Node addons to other platforms, wasm tests, publishing napi and wasm packages to npm, tests on triples other than the host, migration from `@monodon/rust`, formatting Rust through `nx format` ([[EVD-NX-FORMAT]]), and distributed execution ([[ADR-SINGLE-MACHINE]]). Adding any of these needs a recorded need and decision first.
-:::
+Also outside v1: cross-compiling Node addons to other platforms, wasm tests, publishing napi and wasm packages to npm, tests on triples other than the host, migration from `@monodon/rust`, formatting Rust through `nx format` ([EVD-NX-FORMAT](#01M78JWQAZK1MDJ6GC4M70ZCXX)), and distributed execution ([ADR-SINGLE-MACHINE](#01M78FHG7FYYRPH4D9BRH2Y94M)). Adding any of these needs a recorded need and decision first.
 
-:::mara decision ADR-SETUP-GENERATORS
-:mid: 01M78FHG7FYKPH14862MWJ4KJB
-:title: Ship init and crate generators in v1
-:status: accepted
-:justifies: REQ-INIT
-:justifies: REQ-CRATE-GENERATORS
+---
+
+<a id="01M78FHG7FYKPH14862MWJ4KJB"></a>
+
+### Ship init and crate generators in v1
+
+| Type      | Decision                                                         |
+| --------- | ---------------------------------------------------------------- |
+| ID        | ADR-SETUP-GENERATORS                                             |
+| Status    | Accepted                                                         |
+| Justifies | [REQ-INIT](setup.mara.md#01M78FHG7FCBH4HM2R3S09S9KV)             |
+| Justifies | [REQ-CRATE-GENERATORS](setup.mara.md#01M78FHG7F7C38X583EWPV1J5J) |
 
 v1 has an `init` generator behind `nx add`, and `library` and `binary` generators that wrap `cargo new`. Because projects are inferred, generators are a convenience: a crate created with plain `cargo new` works the same. A generator that migrates a repository from `@monodon/rust` is left for later.
-:::
 
-:::mara decision ADR-WORKSPACE-ROOT
-:mid: 01M78NVF8ENATA4CGDH3PMYVSF
-:title: Run cargo in the workspace root and key the toolchain found there
-:status: accepted
-:justifies: DES-INVOCATION
-:justifies: DES-INPUTS
-:justifies: REQ-TOOLCHAIN-KEY
+---
 
-rustup picks the toolchain file, and Cargo its configuration files, from the folder a command starts in and its parents, not from the manifest of the crate being built. A command for a group of crates has one such folder. The plugin therefore starts every cargo command in the workspace root, so the toolchain file and configuration files found from the workspace root apply to every task ([[TERM-WORKSPACE-CONTEXT]]). A task's environment can still override the toolchain file, as `RUSTUP_TOOLCHAIN` in a crate's `.env` does, and the toolchain input is evaluated with that environment ([[EVD-NX-24-INPUT-SEMANTICS]]). Starting each task in its crate's folder was rejected: per-crate files would apply as they do for a developer who works in that folder, but crates with such files could not share an invocation.
+<a id="01M78NVF8ENATA4CGDH3PMYVSF"></a>
 
-The first design keyed the toolchain with `rustup run <channel> rustc -Vv`, with the channel read from the toolchain file. That needs rustup, and it misses a toolchain chosen through `RUSTUP_TOOLCHAIN` or `rustup override`, which cargo honours. Plain `rustc -Vv`, run in the workspace root, asks the question cargo will ask, with or without rustup, as long as no setting names another compiler. `RUSTC`, `CARGO_BUILD_RUSTC` and `build.rustc` do, and cargo then runs that compiler, so the command also asks the one they name, while `rustc -Vv` still names the toolchain of the task's cargo ([[EVD-CARGO-COMPILER-SELECTION]]).
+### Run cargo in the workspace root and key the toolchain found there
 
-The cost is that a toolchain or configuration file inside a member crate changes the cache key without changing what Nx runs, and that a developer who starts cargo inside such a crate builds differently from Nx. The documentation says so. Nx 24 runs a runtime input through `sh -c` in the repository root, so the toolchain command can change into the workspace root first ([[EVD-NX-24-INPUT-SEMANTICS]]).
-:::
+| Type      | Decision                                                        |
+| --------- | --------------------------------------------------------------- |
+| ID        | ADR-WORKSPACE-ROOT                                              |
+| Status    | Accepted                                                        |
+| Justifies | [DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB)    |
+| Justifies | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)        |
+| Justifies | [REQ-TOOLCHAIN-KEY](caching.mara.md#01M78FHG7FRC3KSSDACETE745J) |
 
-:::mara decision ADR-CI-LINUX-ONLY
-:mid: 01M78KFR0QP1XDDHMYRA2RTNET
-:title: Run CI on Linux only for the moment
-:status: accepted
-:accepts: RISK-MACOS-UNVERIFIED
-:accepts: RISK-TERMINAL-ENVIRONMENT-MACOS
+rustup picks the toolchain file, and Cargo its configuration files, from the folder a command starts in and its parents, not from the manifest of the crate being built. A command for a group of crates has one such folder. The plugin therefore starts every cargo command in the workspace root, so the toolchain file and configuration files found from the workspace root apply to every task ([TERM-WORKSPACE-CONTEXT](product.mara.md#01M78FHG7FMWPZ9BFDB3SSSXM3)). A task's environment can still override the toolchain file, as `RUSTUP_TOOLCHAIN` in a crate's `.env` does, and the toolchain input is evaluated with that environment ([EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD)). Starting each task in its crate's folder was rejected: per-crate files would apply as they do for a developer who works in that folder, but crates with such files could not share an invocation.
 
-GitHub's hosted macOS runners are in short supply in November 2026, so jobs on them wait long or do not start. The plugin is a JavaScript package with no platform-specific build, so only test runs are affected: this repository's CI runs its unit and end-to-end tests on Linux only for the moment. macOS stays a supported host ([[ADR-COMPATIBILITY]]), and code must not assume Linux. What is deferred is the check: no macOS run backs the claim until the jobs are added, and [[VER-SETUP]] says so. When macOS runners are usable again, the macOS jobs are added to the workflow, the macOS part of the verification is restored, and this decision and its risk are retired.
-:::
+The first design keyed the toolchain with `rustup run <channel> rustc -Vv`, with the channel read from the toolchain file. That needs rustup, and it misses a toolchain chosen through `RUSTUP_TOOLCHAIN` or `rustup override`, which cargo honours. Plain `rustc -Vv`, run in the workspace root, asks the question cargo will ask, with or without rustup, as long as no setting names another compiler. `RUSTC`, `CARGO_BUILD_RUSTC` and `build.rustc` do, and cargo then runs that compiler, so the command also asks the one they name, while `rustc -Vv` still names the toolchain of the task's cargo ([EVD-CARGO-COMPILER-SELECTION](#01M7CMKMP5A6X62T5HNG5582R3)).
 
-:::mara decision ADR-PUBLISHING-AT-1-0
-:mid: 01M7D7W01MEC0ER974G0K2G8M1
-:title: Complete the milestones on main and decide on publishing at 1.0
-:status: accepted
+The cost is that a toolchain or configuration file inside a member crate changes the cache key without changing what Nx runs, and that a developer who starts cargo inside such a crate builds differently from Nx. The documentation says so. Nx 24 runs a runtime input through `sh -c` in the repository root, so the toolchain command can change into the workspace root first ([EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD)).
+
+---
+
+<a id="01M78KFR0QP1XDDHMYRA2RTNET"></a>
+
+### Run CI on Linux only for the moment
+
+| Type    | Decision                                                       |
+| ------- | -------------------------------------------------------------- |
+| ID      | ADR-CI-LINUX-ONLY                                              |
+| Status  | Accepted                                                       |
+| Accepts | [RISK-MACOS-UNVERIFIED](#01M78KFPPYBZHRM9B41K0TG46Q)           |
+| Accepts | [RISK-TERMINAL-ENVIRONMENT-MACOS](#01M7F8NEP74P35FFBKMAVR6SXB) |
+
+GitHub's hosted macOS runners are in short supply in November 2026, so jobs on them wait long or do not start. The plugin is a JavaScript package with no platform-specific build, so only test runs are affected: this repository's CI runs its unit and end-to-end tests on Linux only for the moment. macOS stays a supported host ([ADR-COMPATIBILITY](#01M78FHG7FFBVZPZCQKJNXGT0P)), and code must not assume Linux. What is deferred is the check: no macOS run backs the claim until the jobs are added, and [VER-SETUP](verification.mara.md#01M78FHG7F2C09346B53ZGK2EZ) says so. When macOS runners are usable again, the macOS jobs are added to the workflow, the macOS part of the verification is restored, and this decision and its risk are retired.
+
+---
+
+<a id="01M7D7W01MEC0ER974G0K2G8M1"></a>
+
+### Complete the milestones on main and decide on publishing at 1.0
+
+| Type   | Decision              |
+| ------ | --------------------- |
+| ID     | ADR-PUBLISHING-AT-1-0 |
+| Status | Accepted              |
 
 The maintainer's decision of 14 November 2026. The milestones of the [roadmap](product.mara.md#roadmap) are completed on `main` one after another, and no 0.x milestone is published to npm on its own: whether and when `@convesoft/nx-rust` is published is decided at 1.0. A 0.x milestone is complete when its own checks pass on `main`, and publishing is not one of them; whether publishing is a check of 1.0 is part of what is decided there. Until a version is published, `nx add @convesoft/nx-rust` cannot install the plugin, and the status notes say so. Publishing each 0.x milestone once it is complete, as the milestones were first planned, was rejected.
 
-Amended by the maintainer on 21 November 2026: `@convesoft/nx-rust` uses its own independent semantic versioning (rather than matching Nx's major version, since private Nx internals can change in minor releases while one plugin version can span multiple Nx majors; [[REQ-COMPATIBILITY]]). Ahead of `1.0.0`, 1.0 release candidates (starting with `1.0.0-rc.1`) may be published to npm through `.github/workflows/release.yml` via npm Trusted Publishing (OIDC, bound to the `npm` GitHub Environment) so real-repository validation ([[VAL-MIXED-REPO]], [[VAL-CARGO-PARITY]], [[VAL-CACHE-TRUST]]) can install the plugin from npm.
-:::
+Amended by the maintainer on 21 November 2026: `@convesoft/nx-rust` uses its own independent semantic versioning (rather than matching Nx's major version, since private Nx internals can change in minor releases while one plugin version can span multiple Nx majors; [REQ-COMPATIBILITY](setup.mara.md#01M78FHG7FES2FR7DNAAPSDVWE)). Ahead of `1.0.0`, 1.0 release candidates (starting with `1.0.0-rc.1`) may be published to npm through `.github/workflows/release.yml` via npm Trusted Publishing (OIDC, bound to the `npm` GitHub Environment) so real-repository validation ([VAL-MIXED-REPO](verification.mara.md#01M78FHG7FNP9RYQ1PNN0KTGR3), [VAL-CARGO-PARITY](verification.mara.md#01M78FHG7FAY110WZM8PBA7NSX), [VAL-CACHE-TRUST](verification.mara.md#01M78FHG7FYW60Y8SGM0JTPGBF)) can install the plugin from npm.
 
-:::mara decision ADR-BUNDLED-DOCS
-:mid: 01M81H7N75PJEZC7XE5B1Z4JTR
-:title: Ship PLUGIN.md and the docs folder in the npm package
-:status: accepted
+---
 
-The maintainer's decision of 22 November 2026. The published `@convesoft/nx-rust` package carries `PLUGIN.md` at its root and every file of `nx-rust/docs/` as it is, in a `docs/` folder beside it, so that coding agents and developers in an adopting repository read, through `node_modules/@convesoft/nx-rust/`, the documentation of the version they have installed rather than that of `main`. `PLUGIN.md` is a short guide for agents: it summarises the common commands, the `Cargo.toml` tables and the caching rules and points into `docs/`, whose items stay the normative text. Linking only to the documentation on GitHub, as the README did, was the alternative; it describes `main`, which can be ahead of or behind a published release ([[ADR-PUBLISHING-AT-1-0]]).
+<a id="01M81H7N75PJEZC7XE5B1Z4JTR"></a>
+
+### Ship PLUGIN.md and the docs folder in the npm package
+
+| Type   | Decision         |
+| ------ | ---------------- |
+| ID     | ADR-BUNDLED-DOCS |
+| Status | Accepted         |
+
+The maintainer's decision of 22 November 2026. The published `@convesoft/nx-rust` package carries `PLUGIN.md` at its root and every file of `nx-rust/docs/` as it is, in a `docs/` folder beside it, so that coding agents and developers in an adopting repository read, through `node_modules/@convesoft/nx-rust/`, the documentation of the version they have installed rather than that of `main`. `PLUGIN.md` is a short guide for agents: it summarises the common commands, the `Cargo.toml` tables and the caching rules and points into `docs/`, whose items stay the normative text. Linking only to the documentation on GitHub, as the README did, was the alternative; it describes `main`, which can be ahead of or behind a published release ([ADR-PUBLISHING-AT-1-0](#01M7D7W01MEC0ER974G0K2G8M1)).
 
 `PLUGIN.md` sits at the package root because that is the path Nx 24 names. In the `nx` 24.0.6 package that this repository installs, `dist/src/ai/set-up-ai-agents/get-agent-rules.js` writes into the agent rules it generates: "For Nx plugin best practices, check `node_modules/@nx/<plugin>/PLUGIN.md`. Not all plugins have this file - proceed without it if unavailable." The rule names only `@nx/*` plugins, sets no format, and no code of `nx` reads the file. Of the `@nx/*` 24.0.6 plugins installed here, only `@nx/jest` ships one, at `dist/PLUGIN.md`, not at the path that the rule names; its sections (detection, commands, a quick reference) are the shape that the plugin's `PLUGIN.md` follows. Read on 22 November 2026, not run.
 
 The build copies the folder whole, so a new page ships without a change to the build. `PLUGIN.md` links into `docs/` with paths relative to the package root, which resolve both in the repository, where `nx-rust/` holds both, and in the installed package.
 
 Two consequences are accepted. The pages ship as they are, so a relative link that leaves `docs/`, such as the links to `.zban/` in the documentation index and in the product page, does not resolve inside the package. And the package grows by the size of the pages, about 1.9 MB unpacked when this was decided, of which this page is about 0.77 MB, some 40%.
-:::
 
-:::mara decision ADR-UNKNOWN-OPTIONS
-:mid: 01M7A93PSWEZZPRGCDQCJ8DHE4
-:title: Run tasks without options the executor does not know and say so in their output
-:status: accepted
-:justifies: REQ-UNKNOWN-OPTIONS
-:justifies: REQ-UNKNOWN-METADATA-OPTIONS
-:justifies: DES-UNKNOWN-OPTIONS
+---
 
-Rust targets share their names with JS targets ([[ADR-NX-TARGET-NAMES]]), so options written for JS executors reach the plugin's executors: from a `targetDefaults` entry such as `test: { options: { passWithNoTests: true } }`, from a `project.json` or `package.json`, and from flags such as `--coverage` on `nx affected -t test`, which Nx passes to every task of the target ([[EVD-NX-OPTION-VALIDATION]]). On 13 November 2026 the maintainer chose to run such a task as if the option were absent and to say so in the task's own output when it starts. Two reviews then found cases in which the plugin named a source that had not supplied the option. He decided on the same day that the line says the option was passed on the command line only when it is among the command's own flags, and otherwise that it comes from the workspace's configuration, naming the command that shows exactly where and the two fixes for a `targetDefaults` entry.
+<a id="01M7A93PSWEZZPRGCDQCJ8DHE4"></a>
+
+### Run tasks without options the executor does not know and say so in their output
+
+| Type      | Decision                                                                         |
+| --------- | -------------------------------------------------------------------------------- |
+| ID        | ADR-UNKNOWN-OPTIONS                                                              |
+| Status    | Accepted                                                                         |
+| Justifies | [REQ-UNKNOWN-OPTIONS](configuration.mara.md#01M7A93PSWRTX4KDZVJ0ACW62Y)          |
+| Justifies | [REQ-UNKNOWN-METADATA-OPTIONS](configuration.mara.md#01M7A93PSWEY0RVZ0WCQM20EFG) |
+| Justifies | [DES-UNKNOWN-OPTIONS](configuration.mara.md#01M7A93PSWW34M2MF0BAD1S6PJ)          |
+
+Rust targets share their names with JS targets ([ADR-NX-TARGET-NAMES](#01M78FHG7FTBB2RVZTTTWPYG1P)), so options written for JS executors reach the plugin's executors: from a `targetDefaults` entry such as `test: { options: { passWithNoTests: true } }`, from a `project.json` or `package.json`, and from flags such as `--coverage` on `nx affected -t test`, which Nx passes to every task of the target ([EVD-NX-OPTION-VALIDATION](#01M7A93PSWDSC2D81P6MX8WZZ7)). On 13 November 2026 the maintainer chose to run such a task as if the option were absent and to say so in the task's own output when it starts. Two reviews then found cases in which the plugin named a source that had not supplied the option. He decided on the same day that the line says the option was passed on the command line only when it is among the command's own flags, and otherwise that it comes from the workspace's configuration, naming the command that shows exactly where and the two fixes for a `targetDefaults` entry.
 
 Rejected:
 
-- **A closed schema** (`additionalProperties: false`). Nx then fails every task that it hands to the batch implementation, those without the option too, with an unhandled `SchemaError` that names neither the option nor a task, and `--verbose` adds nothing. That breaks [[REQ-BATCHING]], under which a task fails only for its own crate.
+- **A closed schema** (`additionalProperties: false`). Nx then fails every task that it hands to the batch implementation, those without the option too, with an unhandled `SchemaError` that names neither the option nor a task, and `--verbose` adds nothing. That breaks [REQ-BATCHING](execution.mara.md#01M78FHG7FRS15ZD38BR42JSK7), under which a task fails only for its own crate.
 - **Failing the task**, with a clear message from the executor. Settings that mixed repositories use routinely would stop Rust tasks until every entry and flag was narrowed, although such an option changes nothing that cargo does.
-- **Ignoring the option silently.** A misspelt option, or one the user expects to have an effect, would go unnoticed ([[NEED-CLEAR-FAILURES]]).
-- **Reporting at graph creation.** As an error it stops every Nx command of the repository, JS ones included ([[REQ-DIAGNOSTICS]]). As a warning it reaches only the daemon's log on a developer machine. A flag on the command line is not in the graph at all.
-- **Naming the file or the `targetDefaults` key** that gave the option. Two reviews found cases in which a reconstruction of Nx's merge from the executor's context named a source that had not supplied the option ([[EVD-NX-OPTION-VALIDATION]]). Nx records the source in its own source map, which `nx show target` shows, and the line names that command instead.
+- **Ignoring the option silently.** A misspelt option, or one the user expects to have an effect, would go unnoticed ([NEED-CLEAR-FAILURES](product.mara.md#01M78FHG7FV4WYX1Q7P92VTFTT)).
+- **Reporting at graph creation.** As an error it stops every Nx command of the repository, JS ones included ([REQ-DIAGNOSTICS](setup.mara.md#01M78FHG7FGW9BB3M4MCE52PEG)). As a warning it reaches only the daemon's log on a developer machine. A flag on the command line is not in the graph at all.
+- **Naming the file or the `targetDefaults` key** that gave the option. Two reviews found cases in which a reconstruction of Nx's merge from the executor's context named a source that had not supplied the option ([EVD-NX-OPTION-VALIDATION](#01M7A93PSWDSC2D81P6MX8WZZ7)). Nx records the source in its own source map, which `nx show target` shows, and the line names that command instead.
 
-Ignoring is safe for the cache: Nx keeps the option in the task's key, so a run with another value runs again instead of restoring a result made without it ([[GOAL-TRUSTED-CACHE]]). The costs are that a misspelt Rust option set through a target default or a flag only warns, and that the warning repeats on every run until the entry is narrowed. A declared option with a value of the wrong type still fails every task that Nx hands to the batch implementation with it, with Nx's message, because the option types stay in the schema for Nx's conversion of command-line values.
+Ignoring is safe for the cache: Nx keeps the option in the task's key, so a run with another value runs again instead of restoring a result made without it ([GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7)). The costs are that a misspelt Rust option set through a target default or a flag only warns, and that the warning repeats on every run until the entry is narrowed. A declared option with a value of the wrong type still fails every task that Nx hands to the batch implementation with it, with Nx's message, because the option types stay in the schema for Nx's conversion of command-line values.
 
-The plugin's own tables in Cargo manifests are treated differently. The plugin owns that source and knows at graph creation which options its executors have, so an unknown key under a target's `options` or one of its configurations there fails graph creation, the earliest point at which the mistake is known, and names the manifest, the target, the configuration if any, and the key ([[REQ-DIAGNOSTICS]]).
-:::
+The plugin's own tables in Cargo manifests are treated differently. The plugin owns that source and knows at graph creation which options its executors have, so an unknown key under a target's `options` or one of its configurations there fails graph creation, the earliest point at which the mistake is known, and names the manifest, the target, the configuration if any, and the key ([REQ-DIAGNOSTICS](setup.mara.md#01M78FHG7FGW9BB3M4MCE52PEG)).
 
-:::mara decision ADR-NO-ERROR-CODES
-:mid: 01M7A67WRX56A7M56CJZ7VF326
-:title: Name problems in words, without error codes, in v1
-:status: accepted
-:justifies: DES-DIAGNOSTICS
+---
 
-A diagnostic says what is wrong, where, and what to do ([[REQ-DIAGNOSTICS]]). In v1 it carries no code. Nx 24 shows no numbered codes in its diagnostics, and the cargo messages seen while designing the generators carried none either ([[EVD-NX-24-SETUP]], [[EVD-CARGO-NEW]]), so a code would stand alone in a user's output. Once published, a code is an interface to keep stable and to document. Tests check the facts a message names instead.
+<a id="01M7A67WRX56A7M56CJZ7VF326"></a>
 
-Codes may be introduced later without breaking anything, because adding a code to a message takes away nothing a user or a script relies on. They would serve people or tools that need to refer to one problem across releases: a documentation page per problem, filtering warnings in a pipeline, or wording that changes often. One possible scheme is a stable code for each row of [[DES-DIAGNOSTICS]], listed in the setup guidance and never reused for another problem. Whether to introduce codes, and in what form, is decided when such a need arises.
-:::
+### Name problems in words, without error codes, in v1
 
-:::mara decision ADR-DECLARED-FILE-INPUTS
-:mid: 01M7ACMK1QTQXRJFFNXHPB53FS
-:title: Declare files outside a crate instead of learning them from builds
-:status: accepted
-:justifies: REQ-BUILD-SCRIPT-INPUTS
-:justifies: REQ-FILE-INPUTS-HASHABLE
-:justifies: REQ-BUILD-INPUT-CHECK
-:justifies: DES-INPUTS
-:justifies: DES-BUILD-INPUT-CHECK
+| Type      | Decision                                                    |
+| --------- | ----------------------------------------------------------- |
+| ID        | ADR-NO-ERROR-CODES                                          |
+| Status    | Accepted                                                    |
+| Justifies | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG) |
 
-A build script, a macro or a test can read files outside its crate's folder, which the crate-file input does not cover. The cache key has to name such files before the task runs, and nothing reports them then: neither the `cargo metadata` report nor Cargo's JSON messages carry them ([[EVD-CARGO-NO-DEPS]], [[EVD-CARGO-DEP-INFO]]). Only Cargo's records of a finished build do. The repository therefore declares these files in its Cargo manifests under `fileInputs`, and the plugin turns each pattern into an Nx fileset. The key is named to pair with the keys that add environment variables and commands to the key.
+A diagnostic says what is wrong, where, and what to do ([REQ-DIAGNOSTICS](setup.mara.md#01M78FHG7FGW9BB3M4MCE52PEG)). In v1 it carries no code. Nx 24 shows no numbered codes in its diagnostics, and the cargo messages seen while designing the generators carried none either ([EVD-NX-24-SETUP](#01M7A67N99XVQ7ZV6NVRJB0W8N), [EVD-CARGO-NEW](#01M7A66QH6W8544G03RW7GAX0G)), so a code would stand alone in a user's output. Once published, a code is an interface to keep stable and to document. Tests check the facts a message names instead.
+
+Codes may be introduced later without breaking anything, because adding a code to a message takes away nothing a user or a script relies on. They would serve people or tools that need to refer to one problem across releases: a documentation page per problem, filtering warnings in a pipeline, or wording that changes often. One possible scheme is a stable code for each row of [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG), listed in the setup guidance and never reused for another problem. Whether to introduce codes, and in what form, is decided when such a need arises.
+
+---
+
+<a id="01M7ACMK1QTQXRJFFNXHPB53FS"></a>
+
+### Declare files outside a crate instead of learning them from builds
+
+| Type      | Decision                                                               |
+| --------- | ---------------------------------------------------------------------- |
+| ID        | ADR-DECLARED-FILE-INPUTS                                               |
+| Status    | Accepted                                                               |
+| Justifies | [REQ-BUILD-SCRIPT-INPUTS](caching.mara.md#01M78FHG7FC47G6VCHVQBY6JT2)  |
+| Justifies | [REQ-FILE-INPUTS-HASHABLE](caching.mara.md#01M7AE8CZ89406C7ZQ4FS2ST0V) |
+| Justifies | [REQ-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QH5F72B0567M3WNP1)    |
+| Justifies | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)               |
+| Justifies | [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H)    |
+
+A build script, a macro or a test can read files outside its crate's folder, which the crate-file input does not cover. The cache key has to name such files before the task runs, and nothing reports them then: neither the `cargo metadata` report nor Cargo's JSON messages carry them ([EVD-CARGO-NO-DEPS](#01M78RC7T7182TG80N949GFTTC), [EVD-CARGO-DEP-INFO](#01M7ACMK1Q7ATJKRRHC2WPJE1Z)). Only Cargo's records of a finished build do. The repository therefore declares these files in its Cargo manifests under `fileInputs`, and the plugin turns each pattern into an Nx fileset. The key is named to pair with the keys that add environment variables and commands to the key.
 
 Three alternatives were rejected:
 
-- **Learning the paths from earlier builds.** Only `cargo build` leaves a documented record, the dependency file beside each artifact. The records of `check`, `lint`, `test` and `doc` exist only in the build directory, whose layout moved between Cargo 1.97 and 1.100 and which the plugin never reads ([[DES-BUILD-DIRS]]). Records exist per machine and only after a build, so a fresh CI checkout has none: its first run would either compute a key without the files, which a shared cache could later answer with a result built from other files, or a key that never hits. Carried in a runtime input, the learned files would change keys but never make a task affected, because task-based affected matches changed files against declared file inputs only ([[ADR-DECLARED-INPUTS]], [[EVD-NX-24-INPUT-SEMANTICS]], [[EVD-NX-24-FILE-INPUTS]]).
-- **Scanning `build.rs` and the sources for literal paths.** Build helpers such as tauri-build and bindgen print `rerun-if-changed` for paths they compute, and a proc macro can open files itself ([[EVD-CARGO-DEP-INFO]]). A scan would find a part and suggest it found all.
-- **Leaving the files out of v1.** A runtime command under `runtimeInputs` that hashes the files changes keys, but `nx affected` ignores it. A change to a shared protocol definition would then leave `nx affected -t build` green without building the crates that embed it, which [[NEED-AFFECTED]] rules out.
+- **Learning the paths from earlier builds.** Only `cargo build` leaves a documented record, the dependency file beside each artifact. The records of `check`, `lint`, `test` and `doc` exist only in the build directory, whose layout moved between Cargo 1.97 and 1.100 and which the plugin never reads ([DES-BUILD-DIRS](caching.mara.md#01M78FHG7FMKCDSEX3Y6Q65F4Y)). Records exist per machine and only after a build, so a fresh CI checkout has none: its first run would either compute a key without the files, which a shared cache could later answer with a result built from other files, or a key that never hits. Carried in a runtime input, the learned files would change keys but never make a task affected, because task-based affected matches changed files against declared file inputs only ([ADR-DECLARED-INPUTS](#01M78FHG7FGX22WZF138Z8K89G), [EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD), [EVD-NX-24-FILE-INPUTS](#01M7ACMK1QCT1DZYXHK8C0D50R)).
+- **Scanning `build.rs` and the sources for literal paths.** Build helpers such as tauri-build and bindgen print `rerun-if-changed` for paths they compute, and a proc macro can open files itself ([EVD-CARGO-DEP-INFO](#01M7ACMK1Q7ATJKRRHC2WPJE1Z)). A scan would find a part and suggest it found all.
+- **Leaving the files out of v1.** A runtime command under `runtimeInputs` that hashes the files changes keys, but `nx affected` ignores it. A change to a shared protocol definition would then leave `nx affected -t build` green without building the crates that embed it, which [NEED-AFFECTED](product.mara.md#01M78FHG7F4CKFXTSBXJ7131EY) rules out.
 
-A declaration also covers what no record shows: a file that a proc macro opens by itself, which Cargo does not track either. Its cost is that the repository has to state the files. To catch what it forgot, a `build` task that ran cargo compares the dependency files Cargo wrote with its inputs, and fails when one names a repository file that no input covers ([[REQ-BUILD-INPUT-CHECK]]). It fails instead of warning because Nx stores every successful result and an executor cannot report success without it being stored, so a warning would leave a result under a key known to miss a file ([[EVD-NX-24-FILE-INPUTS]]). Nx Cloud can record the files a task reads, but nothing records them without it, so that is no substitute.
+A declaration also covers what no record shows: a file that a proc macro opens by itself, which Cargo does not track either. Its cost is that the repository has to state the files. To catch what it forgot, a `build` task that ran cargo compares the dependency files Cargo wrote with its inputs, and fails when one names a repository file that no input covers ([REQ-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QH5F72B0567M3WNP1)). It fails instead of warning because Nx stores every successful result and an executor cannot report success without it being stored, so a warning would leave a result under a key known to miss a file ([EVD-NX-24-FILE-INPUTS](#01M7ACMK1QCT1DZYXHK8C0D50R)). Nx Cloud can record the files a task reads, but nothing records them without it, so that is no substitute.
 
-Nx matches a declared pattern only against the files of the project whose folder holds the folder where the pattern starts, and leaves out the projects in folders below it ([[EVD-NX-24-FILESET-SCOPE]]), so a pattern written to cover the crates beside a crate, such as `../*/src/**`, would miss them. A declared pattern is never left out of the key without a word: the plugin turns it into filesets that Nx matches, one for each folder of its own projects below where the pattern starts, and fails graph creation where it reaches the folder of a project that another plugin or entry creates, which it cannot see when it creates its own. Leaving such files out with a warning, or documenting the limit, was rejected, because the key would still miss files that the repository declared ([[GOAL-TRUSTED-CACHE]]). More files in a key than the pattern names are acceptable; fewer are not. The two decisions therefore err on different sides. Adding filesets errs towards more: where the plugin cannot tell whether a segment matches a folder, it adds the folder. Failing graph creation must not fail a pattern that works: the plugin reads the pattern as Nx does, each alternative of braces as a pattern of its own and each segment matched with Nx's own glob matching, and fails only for a folder that the pattern reaches; only a construct that it cannot evaluate keeps the error, whose pattern still works when added. A pattern that names a folder, by a trailing `/` or by a name at its end, counts everything below it, also where it has a glob and Nx alone would count files only, as Nx counts a path without a glob.
-:::
+Nx matches a declared pattern only against the files of the project whose folder holds the folder where the pattern starts, and leaves out the projects in folders below it ([EVD-NX-24-FILESET-SCOPE](#01M7CH4GX6F2REGP5T284NW0DB)), so a pattern written to cover the crates beside a crate, such as `../*/src/**`, would miss them. A declared pattern is never left out of the key without a word: the plugin turns it into filesets that Nx matches, one for each folder of its own projects below where the pattern starts, and fails graph creation where it reaches the folder of a project that another plugin or entry creates, which it cannot see when it creates its own. Leaving such files out with a warning, or documenting the limit, was rejected, because the key would still miss files that the repository declared ([GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7)). More files in a key than the pattern names are acceptable; fewer are not. The two decisions therefore err on different sides. Adding filesets errs towards more: where the plugin cannot tell whether a segment matches a folder, it adds the folder. Failing graph creation must not fail a pattern that works: the plugin reads the pattern as Nx does, each alternative of braces as a pattern of its own and each segment matched with Nx's own glob matching, and fails only for a folder that the pattern reaches; only a construct that it cannot evaluate keeps the error, whose pattern still works when added. A pattern that names a folder, by a trailing `/` or by a name at its end, counts everything below it, also where it has a glob and Nx alone would count files only, as Nx counts a path without a glob.
 
-:::mara decision ADR-GRAPH-NO-TOOLCHAIN-INSTALL
-:mid: 01M7AN094P6S3K7M62DNC8P15H
-:title: Let rustup install no toolchain while the graph or a cache key is computed
-:status: accepted
-:justifies: DES-METADATA-REPORT
-:justifies: DES-INPUTS
-:justifies: DES-DIAGNOSTICS
+---
 
-A workspace's `rust-toolchain.toml` can pin a toolchain that the machine lacks, and rustup installs such a toolchain the first time a command needs it, unless `RUSTUP_AUTO_INSTALL=0` is set ([[EVD-RUSTUP-MISSING-TOOLCHAIN]]). The plugin runs cargo whenever Nx creates the project graph, also on a machine that only works on JS projects. It therefore runs every cargo command of graph creation with `RUSTUP_AUTO_INSTALL=0`: a pinned toolchain that is missing fails graph creation with rustup's message, which names it, and creating the graph downloads nothing ([[ADR-V1-SCOPE]]). Where cargo is no rustup proxy, the variable has no effect. The cargo commands of tasks get no such setting, so a task installs a missing toolchain exactly when the same plain cargo command would ([[REQ-CARGO-UNCHANGED]]).
+<a id="01M7AN094P6S3K7M62DNC8P15H"></a>
 
-The toolchain input of a task's key runs `rustc -Vv`, and the version query of a compiler or rustdoc that a setting names, with the variable as well. Nx 24.0.6 cannot fail a task from a runtime input: it keys the task on what the command prints and runs it ([[EVD-RUSTUP-MISSING-TOOLCHAIN]]). When the toolchain is missing, the input therefore yields a value that never repeats, so that no result stored under that key can be restored, and the task runs as plain cargo does. The message that names the toolchain comes from graph creation, which fails first in nearly every case.
+### Let rustup install no toolchain while the graph or a cache key is computed
+
+| Type      | Decision                                                             |
+| --------- | -------------------------------------------------------------------- |
+| ID        | ADR-GRAPH-NO-TOOLCHAIN-INSTALL                                       |
+| Status    | Accepted                                                             |
+| Justifies | [DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E) |
+| Justifies | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)             |
+| Justifies | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG)          |
+
+A workspace's `rust-toolchain.toml` can pin a toolchain that the machine lacks, and rustup installs such a toolchain the first time a command needs it, unless `RUSTUP_AUTO_INSTALL=0` is set ([EVD-RUSTUP-MISSING-TOOLCHAIN](#01M7AN00P9TZ5VQQT8SSXTHC4V)). The plugin runs cargo whenever Nx creates the project graph, also on a machine that only works on JS projects. It therefore runs every cargo command of graph creation with `RUSTUP_AUTO_INSTALL=0`: a pinned toolchain that is missing fails graph creation with rustup's message, which names it, and creating the graph downloads nothing ([ADR-V1-SCOPE](#01M78FHG7FTPVXE53KP8PW9NR7)). Where cargo is no rustup proxy, the variable has no effect. The cargo commands of tasks get no such setting, so a task installs a missing toolchain exactly when the same plain cargo command would ([REQ-CARGO-UNCHANGED](caching.mara.md#01M78FHG7F5VCD6HDS9R6HDS3Z)).
+
+The toolchain input of a task's key runs `rustc -Vv`, and the version query of a compiler or rustdoc that a setting names, with the variable as well. Nx 24.0.6 cannot fail a task from a runtime input: it keys the task on what the command prints and runs it ([EVD-RUSTUP-MISSING-TOOLCHAIN](#01M7AN00P9TZ5VQQT8SSXTHC4V)). When the toolchain is missing, the input therefore yields a value that never repeats, so that no result stored under that key can be restored, and the task runs as plain cargo does. The message that names the toolchain comes from graph creation, which fails first in nearly every case.
 
 Leaving rustup's default was rejected, because `nx graph`, or any Nx command that creates the graph or computes a key, could then download a toolchain unasked. Setting the variable for tasks as well, or failing a task from the executor when its toolchain is missing, was rejected, because a task would then fail where the same plain cargo command succeeds. Keying the task on rustup's message was rejected, because the message names a channel such as `stable` and not the release that cargo would install, so a result could be restored for another toolchain.
-:::
 
-:::mara decision ADR-REDIRECTION-EDGES
-:mid: 01M7AQ58FTSJX0AWN2BGZF4TND
-:title: Give the crates that [patch], [replace] and paths redirect to edges from every member that may use them
-:status: accepted
-:justifies: REQ-DEPENDENCY-EDGES
-:justifies: DES-PROJECT-GRAPH
-:justifies: DES-METADATA-REPORT
-:justifies: DES-INPUTS
-:justifies: DES-DISCOVERY
-:justifies: DES-DIAGNOSTICS
-:justifies: REQ-INPUT-FILES
+---
 
-Agreed with the maintainer on 13 November 2026. Through `[patch]`, `[replace]` and `paths`, cargo builds a local crate in place of a registry or git dependency, and the graph's `--no-deps` report shows none of them. Without more, a crate that cargo builds against another crate of the repository this way has no edge to it, and neither `nx affected` nor its cache keys follow that crate ([[EVD-CARGO-REDIRECTIONS]], [[GOAL-TRUSTED-CACHE]]).
+<a id="01M7AQ58FTSJX0AWN2BGZF4TND"></a>
+
+### Give the crates that [patch], [replace] and paths redirect to edges from every member that may use them
+
+| Type      | Decision                                                              |
+| --------- | --------------------------------------------------------------------- |
+| ID        | ADR-REDIRECTION-EDGES                                                 |
+| Status    | Accepted                                                              |
+| Justifies | [REQ-DEPENDENCY-EDGES](workspaces.mara.md#01M78FHG7FCAFQC6190Y3J4B5A) |
+| Justifies | [DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6)    |
+| Justifies | [DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E)  |
+| Justifies | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)              |
+| Justifies | [DES-DISCOVERY](workspaces.mara.md#01M78FHG7FJ3Z6F0AX0K80EH9D)        |
+| Justifies | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG)           |
+| Justifies | [REQ-INPUT-FILES](caching.mara.md#01M78FHG7F5EMJYNVQRAZX9C63)         |
+
+Agreed with the maintainer on 13 November 2026. Through `[patch]`, `[replace]` and `paths`, cargo builds a local crate in place of a registry or git dependency, and the graph's `--no-deps` report shows none of them. Without more, a crate that cargo builds against another crate of the repository this way has no edge to it, and neither `nx affected` nor its cache keys follow that crate ([EVD-CARGO-REDIRECTIONS](#01M7AQ4FBNBJZK6DKFSMS2793S), [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7)).
 
 The plugin therefore reads the tables from files when it creates the graph: `[patch]` and `[replace]` from each workspace's root manifest, and `[patch]` and `paths` from the configuration files that cargo reads for the workspace's tasks. That needs no cargo call, no network and no `Cargo.lock`. It is the one place where the plugin parses Cargo's files itself, and it makes a TOML parser a dependency of the plugin.
 
 The files say neither whether cargo uses a redirected crate nor which crates reach it, through a registry crate or through a path crate of another workspace. Every member with a registry or git dependency, of its own or of a path crate it reaches, therefore gets an edge to every redirected crate with a project but itself. That is a superset: no edge is missing, so keys and `nx affected` are right, and the graph may show edges that cargo does not have.
 
-Where the redirected crate reaches the member through normal or build dependencies, cargo would reject the member's use of it as a cycle, so only the member's dev-dependencies can lead there. The edge would close a cycle that cargo never has, which a user's `dependsOn: ["^build"]` turns into a task cycle that fails the run ([[EVD-NX-24-INSPECTION]]). That edge is left out, and the member's targets get the redirected crate's files as an input instead. Where the redirected crate reaches the member only through a dev-dependency, the edge stays, as [[ADR-ALL-DEP-KINDS]] keeps such cycles.
+Where the redirected crate reaches the member through normal or build dependencies, cargo would reject the member's use of it as a cycle, so only the member's dev-dependencies can lead there. The edge would close a cycle that cargo never has, which a user's `dependsOn: ["^build"]` turns into a task cycle that fails the run ([EVD-NX-24-INSPECTION](#01M78FHG7F32NTNKGXVJT9QA2A)). That edge is left out, and the member's targets get the redirected crate's files as an input instead. Where the redirected crate reaches the member only through a dev-dependency, the edge stays, as [ADR-ALL-DEP-KINDS](#01M78FHG7F89HNQ2GAMHTHFRC2) keeps such cycles.
 
-The review of the change refined this on 13 November 2026, without changing the answers above: a dependency whose name, source and version requirement a redirected crate satisfies is resolved to it by cargo, so that edge is real and always kept, and it counts among the real dependencies that leave a possible edge out. A requirement that the redirected crate does not satisfy is no redirection. Two redirected crates that may only possibly use each other get no edge either way, but each other's files as an input, because cargo can have at most one direction and the plugin cannot tell which ([[DES-PROJECT-GRAPH]]).
+The review of the change refined this on 13 November 2026, without changing the answers above: a dependency whose name, source and version requirement a redirected crate satisfies is resolved to it by cargo, so that edge is real and always kept, and it counts among the real dependencies that leave a possible edge out. A requirement that the redirected crate does not satisfy is no redirection. Two redirected crates that may only possibly use each other get no edge either way, but each other's files as an input, because cargo can have at most one direction and the plugin cannot tell which ([DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6)).
 
-A configuration file outside the repository, such as the Cargo home's, applies like one inside it, and the plugin warns that Nx does not see changes to it. On 14 November 2026 the control plane of the work decided, as the consistent extension of that warning, that it covers every file whose redirections the plugin follows and whose changes Nx does not see: also a configuration file or root manifest inside the repository that an ignore rule, such as one in `.gitignore` or `.nxignore`, leaves out of the files that Nx reads, for which the Nx daemon does not create the graph again either ([[EVD-CARGO-REDIRECTIONS]]). Its remedy is to stop ignoring the file or to run `nx reset` after changing it. Later that day the warning became part of the one for every Cargo configuration file that Nx does not hash ([[RISK-HOST-ENVIRONMENT]], [[DES-DIAGNOSTICS]]), which no key holds and which every task of the workspace's projects prints; for a file with redirections it adds that the graph's edges follow a change only once Nx creates the graph again.
+A configuration file outside the repository, such as the Cargo home's, applies like one inside it, and the plugin warns that Nx does not see changes to it. On 14 November 2026 the control plane of the work decided, as the consistent extension of that warning, that it covers every file whose redirections the plugin follows and whose changes Nx does not see: also a configuration file or root manifest inside the repository that an ignore rule, such as one in `.gitignore` or `.nxignore`, leaves out of the files that Nx reads, for which the Nx daemon does not create the graph again either ([EVD-CARGO-REDIRECTIONS](#01M7AQ4FBNBJZK6DKFSMS2793S)). Its remedy is to stop ignoring the file or to run `nx reset` after changing it. Later that day the warning became part of the one for every Cargo configuration file that Nx does not hash ([RISK-HOST-ENVIRONMENT](#01M78FHG7F36BVH0EP3K2REH3E), [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG)), which no key holds and which every task of the workspace's projects prints; for a file with redirections it adds that the graph's edges follow a change only once Nx creates the graph again.
 
-Rejected: edges only from the members that declare the redirected crate's name, which miss the uses through registry crates and through other workspaces' crates; a resolved `cargo metadata` report, which needs the network or a filled Cargo home and writes `Cargo.lock`, or with `--locked` fails while it is stale ([[ADR-METADATA-NO-DEPS]]); reading `Cargo.lock` while the graph is created, which still needs the tables for the crates' folders, holds no trace of `paths` and needs the superset whenever the lockfile is stale; a warning or an error in place of edges; and inputs in place of edges, which neither the `^` inputs of the member's dependents nor the project graph follow.
-:::
+Rejected: edges only from the members that declare the redirected crate's name, which miss the uses through registry crates and through other workspaces' crates; a resolved `cargo metadata` report, which needs the network or a filled Cargo home and writes `Cargo.lock`, or with `--locked` fails while it is stale ([ADR-METADATA-NO-DEPS](#01M78RC7T7GK1RSH8S11ZV38EZ)); reading `Cargo.lock` while the graph is created, which still needs the tables for the crates' folders, holds no trace of `paths` and needs the superset whenever the lockfile is stale; a warning or an error in place of edges; and inputs in place of edges, which neither the `^` inputs of the member's dependents nor the project graph follow.
 
-:::mara decision ADR-SKIP-VENDORED-CRATES
-:mid: 01M7AXAXTJ5B3ZF3AQ7X1BXVSE
-:title: Skip the crates whose folder holds cargo's .cargo-checksum.json, unless they are members
-:status: accepted
-:justifies: DES-DISCOVERY
-:justifies: DES-METADATA-REPORT
-:justifies: REQ-SKIP-CRATES
+---
 
-Settled on 13 November 2026 under the maintainer's standing instruction to settle what follows from decisions already taken, as a consequence of [[ADR-CARGO-SOURCE-OF-TRUTH]]. `cargo vendor` writes the packages of a registry or git source into a folder, and Nx hands every `Cargo.toml` there to the plugin. Inside a workspace's folder `cargo metadata` fails for each of them, which failed graph creation; outside every workspace's folder each became a standalone crate with a project ([[EVD-CARGO-REDIRECTIONS]]).
+<a id="01M7AXAXTJ5B3ZF3AQ7X1BXVSE"></a>
 
-A crate whose folder holds `.cargo-checksum.json` beside its `Cargo.toml` is a package of a directory source: `cargo vendor` writes that file for every crate it vendors, and cargo refuses a directory-source package without it ([[EVD-CARGO-REDIRECTIONS]]). The plugin reads no such manifest, so the crate gets no project, no edge and no cargo call of its own, wherever its folder lies, whichever plugin entry receives the manifest and whatever Cargo's configuration says. A crate that a workspace's report lists among its members, as cargo enrols one that a member depends on by path, is a member like any other and gets its project. A path dependency on such a crate that is no member is a path dependency without a project, whose folder is an input of the crates that use it, but the plugin requests no report for it. Cargo checks a vendored crate's files against that file, and `Cargo.lock` holds its checksum, which the lockfile digests cover ([[DES-LOCKFILE-HASHING]]). `exclude` on the plugin's entry and `.nxignore` stay the way to keep Nx from handing the files over at all.
+### Skip the crates whose folder holds cargo's .cargo-checksum.json, unless they are members
 
-The rule settled first skipped every manifest in a folder that a `[source.<name>]` table's `directory` names in the configuration files that cargo reads for a workspace. The review dropped it the same day, because a folder named in configuration is the wrong evidence: with `directory = "../shared"` in the configuration of a workspace whose member depends by path on a member of the workspace in `shared/`, the graph lost both crates of `shared/` and the edge between the members, while cargo still built the dependency by path ([[EVD-CARGO-REDIRECTIONS]]). A plugin entry that received only the vendor folder never saw the configuration that named it, and still failed.
+| Type      | Decision                                                             |
+| --------- | -------------------------------------------------------------------- |
+| ID        | ADR-SKIP-VENDORED-CRATES                                             |
+| Status    | Accepted                                                             |
+| Justifies | [DES-DISCOVERY](workspaces.mara.md#01M78FHG7FJ3Z6F0AX0K80EH9D)       |
+| Justifies | [DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E) |
+| Justifies | [REQ-SKIP-CRATES](workspaces.mara.md#01M78FHG7FG8P6G2HEZA4XB0FT)     |
+
+Settled on 13 November 2026 under the maintainer's standing instruction to settle what follows from decisions already taken, as a consequence of [ADR-CARGO-SOURCE-OF-TRUTH](#01M78FHG7F2CB9W8YBQ9DNXCB0). `cargo vendor` writes the packages of a registry or git source into a folder, and Nx hands every `Cargo.toml` there to the plugin. Inside a workspace's folder `cargo metadata` fails for each of them, which failed graph creation; outside every workspace's folder each became a standalone crate with a project ([EVD-CARGO-REDIRECTIONS](#01M7AQ4FBNBJZK6DKFSMS2793S)).
+
+A crate whose folder holds `.cargo-checksum.json` beside its `Cargo.toml` is a package of a directory source: `cargo vendor` writes that file for every crate it vendors, and cargo refuses a directory-source package without it ([EVD-CARGO-REDIRECTIONS](#01M7AQ4FBNBJZK6DKFSMS2793S)). The plugin reads no such manifest, so the crate gets no project, no edge and no cargo call of its own, wherever its folder lies, whichever plugin entry receives the manifest and whatever Cargo's configuration says. A crate that a workspace's report lists among its members, as cargo enrols one that a member depends on by path, is a member like any other and gets its project. A path dependency on such a crate that is no member is a path dependency without a project, whose folder is an input of the crates that use it, but the plugin requests no report for it. Cargo checks a vendored crate's files against that file, and `Cargo.lock` holds its checksum, which the lockfile digests cover ([DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D)). `exclude` on the plugin's entry and `.nxignore` stay the way to keep Nx from handing the files over at all.
+
+The rule settled first skipped every manifest in a folder that a `[source.<name>]` table's `directory` names in the configuration files that cargo reads for a workspace. The review dropped it the same day, because a folder named in configuration is the wrong evidence: with `directory = "../shared"` in the configuration of a workspace whose member depends by path on a member of the workspace in `shared/`, the graph lost both crates of `shared/` and the edge between the members, while cargo still built the dependency by path ([EVD-CARGO-REDIRECTIONS](#01M7AQ4FBNBJZK6DKFSMS2793S)). A plugin entry that received only the vendor folder never saw the configuration that named it, and still failed.
 
 Rejected as well: documenting `exclude` only, which leaves a repository that commits its vendored sources with a failing graph until the user finds the option; recognising a vendor folder by its name; and reading the vendored crates and dropping the failures, which costs one cargo call for each of hundreds of crates and still gives the crates outside every workspace's folder projects.
-:::
 
-:::mara decision ADR-TRIPLE-OUTPUTS
-:mid: 01M7BGFY4YPWXVSM78SMPJJV3Y
-:title: Declare build and doc outputs in the folders of the triples that Cargo's configuration or environment picks
-:status: accepted
-:justifies: DES-OUTPUTS
-:justifies: DES-INPUTS
+---
 
-Agreed with the maintainer on 13 November 2026, who chose "Follow cargo: cache with the right folder". Without `--target`, cargo builds for the triples that `build.target` in its configuration and `CARGO_BUILD_TARGET` pick, and puts their artifacts and documentation into each triple's folder of the artifact directory, also for the host's own triple ([[EVD-CARGO-TRIPLE-FOLDERS]]). Outputs that ignored those settings would name folders that cargo does not write to, and a cached success would restore no artifact ([[GOAL-TRUSTED-CACHE]]). Since caching landed, the plugin therefore left `build` and `doc` uncached where the configuration sets `build.target`, and failed a cached one whose triple `CARGO_BUILD_TARGET` picks.
+<a id="01M7BGFY4YPWXVSM78SMPJJV3Y"></a>
 
-The plugin now reads the triples that the configuration and the environment pick, as cargo does, and declares the outputs of `build` and `doc` in each one's folder, a list of triples in each triple's folder, so that both stay cached ([[DES-OUTPUTS]]). Cargo has no stable command that reports them, so the plugin merges the configuration files itself, in cargo's order ([[EVD-CARGO-TRIPLE-FOLDERS]]).
+### Declare build and doc outputs in the folders of the triples that Cargo's configuration or environment picks
+
+| Type      | Decision                                                  |
+| --------- | --------------------------------------------------------- |
+| ID        | ADR-TRIPLE-OUTPUTS                                        |
+| Status    | Accepted                                                  |
+| Justifies | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4) |
+| Justifies | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)  |
+
+Agreed with the maintainer on 13 November 2026, who chose "Follow cargo: cache with the right folder". Without `--target`, cargo builds for the triples that `build.target` in its configuration and `CARGO_BUILD_TARGET` pick, and puts their artifacts and documentation into each triple's folder of the artifact directory, also for the host's own triple ([EVD-CARGO-TRIPLE-FOLDERS](#01M7BGGY6GSG8M0H26G1H71RVN)). Outputs that ignored those settings would name folders that cargo does not write to, and a cached success would restore no artifact ([GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7)). Since caching landed, the plugin therefore left `build` and `doc` uncached where the configuration sets `build.target`, and failed a cached one whose triple `CARGO_BUILD_TARGET` picks.
+
+The plugin now reads the triples that the configuration and the environment pick, as cargo does, and declares the outputs of `build` and `doc` in each one's folder, a list of triples in each triple's folder, so that both stay cached ([DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)). Cargo has no stable command that reports them, so the plugin merges the configuration files itself, in cargo's order ([EVD-CARGO-TRIPLE-FOLDERS](#01M7BGGY6GSG8M0H26G1H71RVN)).
 
 Two limits follow from the principle that nothing is cached that the plugin cannot name. Outputs are fixed when Nx creates the graph, so a triple that only a task's environment picks, such as through a dotenv file of the crate, fails a cached task before cargo runs. And where the plugin cannot name the folder at all, as for `host-tuple` or a file that only `include` adds, `build` and `doc` stay uncached unless their options name a triple.
 
-Agreed with the maintainer on 14 November 2026, after a review found that the Nx daemon keeps outputs that name the old triple when a configuration file outside the repository changes, and that the key did not change with it: the key of a cached `build` and `doc` follows the triples that cargo will use when the task runs, through a runtime input that resolves them with the same function, whatever the daemon's graph holds; the executor then fails such a task before cargo runs and says to run `nx reset` ([[DES-INPUTS]], [[EVD-CARGO-TRIPLE-FOLDERS]]). The executor compares with the graph's outputs and not with what the runtime input printed for the key, so a change of the configuration or of the task's environment made while a command is running, between the computing of a task's key and the start of the task, is outside what it sees, as for every input of a key ([[DES-OUTPUTS]], "Keys").
+Agreed with the maintainer on 14 November 2026, after a review found that the Nx daemon keeps outputs that name the old triple when a configuration file outside the repository changes, and that the key did not change with it: the key of a cached `build` and `doc` follows the triples that cargo will use when the task runs, through a runtime input that resolves them with the same function, whatever the daemon's graph holds; the executor then fails such a task before cargo runs and says to run `nx reset` ([DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP), [EVD-CARGO-TRIPLE-FOLDERS](#01M7BGGY6GSG8M0H26G1H71RVN)). The executor compares with the graph's outputs and not with what the runtime input printed for the key, so a change of the configuration or of the task's environment made while a command is running, between the computing of a task's key and the start of the task, is outside what it sees, as for every input of a key ([DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4), "Keys").
 
-The `targetTriple` option, by the control plane's decision of 14 November 2026 under [[GOAL-TRUSTED-CACHE]], which applies the rule that the maintainer was told that day, and did not object to, as closely as an option allows: a cached `build` or `doc` whose option is `host-tuple` or a target specification file fails before cargo runs, and its message says to pass the host's triple, which it names, in place of `host-tuple`, or for a specification file to build with a built-in triple or uncached ([[DES-OUTPUTS]]). Where Cargo's configuration picks such a value, graph creation leaves the targets uncached; an option arrives with the task, when Nx has decided to cache it already.
+The `targetTriple` option, by the control plane's decision of 14 November 2026 under [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7), which applies the rule that the maintainer was told that day, and did not object to, as closely as an option allows: a cached `build` or `doc` whose option is `host-tuple` or a target specification file fails before cargo runs, and its message says to pass the host's triple, which it names, in place of `host-tuple`, or for a specification file to build with a built-in triple or uncached ([DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)). Where Cargo's configuration picks such a value, graph creation leaves the targets uncached; an option arrives with the task, when Nx has decided to cache it already.
 
 Rejected: rejecting `build.target` and `CARGO_BUILD_TARGET` for cached targets, the interim rule, which leaves every repository that configures a triple without cached builds or makes it repeat the triple as an option; caching only what the `targetTriple` option names; and naming the host's folder for a `host-tuple` option, which no output can do, because Nx puts the option's text into the outputs.
-:::
 
-:::mara decision ADR-ARTIFACT-DIR-OUTPUTS
-:mid: 01M7CKYHWJVN634GVV0818HP11
-:title: Fail a cached build or doc whose artifact directory is not the one its outputs name
-:status: accepted
-:justifies: DES-OUTPUTS
-:justifies: DES-INPUTS
-:justifies: DES-BUILD-INPUT-CHECK
+---
 
-The control plane's decision of 14 November 2026 under [[GOAL-TRUSTED-CACHE]], which applies to the artifact directory the rule for the triple that the maintainer was told that day and did not object to ([[ADR-TRIPLE-OUTPUTS]]). The outputs of `build` and `doc` name the artifact directory of graph creation's report, but cargo can write elsewhere when the task runs: under the Nx daemon after a change to a configuration file outside the repository, and wherever a dotenv file that Nx loads only for the task sets `CARGO_TARGET_DIR`, `CARGO_BUILD_TARGET_DIR` or `CARGO_HOME`. Both were reproduced with Nx 24.0.6: Nx stored whatever lay at the declared paths under a key that did not change, and restored an older binary for a newer source ([[EVD-NX-24-MOVED-ARTIFACT-DIRS]]).
+<a id="01M7CKYHWJVN634GVV0818HP11"></a>
 
-The key of a cached `build` and `doc` therefore follows the artifact directory that cargo will use, whatever the daemon's graph holds: the runtime input that prints the triples also prints the directory, in the form that the outputs name it, so that it splits no key that the outputs do not split already ([[DES-INPUTS]]). When such a task starts, the executor asks cargo for its directories with the task's environment and fails the task before cargo builds where the artifact directory is not the one that the outputs name: with the `nx reset` message where Cargo's configuration changed, and with a message that names both folders and where to set the variable instead where the task's environment moves it ([[DES-OUTPUTS]]). The check of [[DES-BUILD-INPUT-CHECK]] takes Cargo's build and artifact directories from the same report, so a `CARGO_BUILD_BUILD_DIR` that only the task's environment sets no longer fails it. The executor compares with the graph's outputs, not with the directory that the runtime input printed for the key, so a change of Cargo's configuration or of the task's environment made while a command is running, between the computing of a task's key and the start of the task, is outside what it sees, as for every input of a key; that needs the configuration to change twice during one command, and closing it would need a record written when the key is computed for the executor to compare with, which the plugin does not write ([[EVD-NX-24-MOVED-ARTIFACT-DIRS]]).
+### Fail a cached build or doc whose artifact directory is not the one its outputs name
 
-The plugin asks cargo, with `cargo metadata --no-deps`, rather than reading the configuration and the variables itself: cargo resolves every source, a file that `include` adds as each version reads it, a Cargo home that only the task's environment names, and the templates of `build.build-dir`. It costs one cargo call in each evaluation of the runtime input and one at the start of each such task that runs, about 6 ms each where cargo is the rustup proxy ([[EVD-NX-24-MOVED-ARTIFACT-DIRS]]). Tasks run as a group share their workspace and environment, so a group asks once ([[DES-BATCH]]).
+| Type      | Decision                                                            |
+| --------- | ------------------------------------------------------------------- |
+| ID        | ADR-ARTIFACT-DIR-OUTPUTS                                            |
+| Status    | Accepted                                                            |
+| Justifies | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)           |
+| Justifies | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)            |
+| Justifies | [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) |
+
+The control plane's decision of 14 November 2026 under [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7), which applies to the artifact directory the rule for the triple that the maintainer was told that day and did not object to ([ADR-TRIPLE-OUTPUTS](#01M7BGFY4YPWXVSM78SMPJJV3Y)). The outputs of `build` and `doc` name the artifact directory of graph creation's report, but cargo can write elsewhere when the task runs: under the Nx daemon after a change to a configuration file outside the repository, and wherever a dotenv file that Nx loads only for the task sets `CARGO_TARGET_DIR`, `CARGO_BUILD_TARGET_DIR` or `CARGO_HOME`. Both were reproduced with Nx 24.0.6: Nx stored whatever lay at the declared paths under a key that did not change, and restored an older binary for a newer source ([EVD-NX-24-MOVED-ARTIFACT-DIRS](#01M7CKYHWJGAN6S9J3GRE4PKWV)).
+
+The key of a cached `build` and `doc` therefore follows the artifact directory that cargo will use, whatever the daemon's graph holds: the runtime input that prints the triples also prints the directory, in the form that the outputs name it, so that it splits no key that the outputs do not split already ([DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)). When such a task starts, the executor asks cargo for its directories with the task's environment and fails the task before cargo builds where the artifact directory is not the one that the outputs name: with the `nx reset` message where Cargo's configuration changed, and with a message that names both folders and where to set the variable instead where the task's environment moves it ([DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)). The check of [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) takes Cargo's build and artifact directories from the same report, so a `CARGO_BUILD_BUILD_DIR` that only the task's environment sets no longer fails it. The executor compares with the graph's outputs, not with the directory that the runtime input printed for the key, so a change of Cargo's configuration or of the task's environment made while a command is running, between the computing of a task's key and the start of the task, is outside what it sees, as for every input of a key; that needs the configuration to change twice during one command, and closing it would need a record written when the key is computed for the executor to compare with, which the plugin does not write ([EVD-NX-24-MOVED-ARTIFACT-DIRS](#01M7CKYHWJGAN6S9J3GRE4PKWV)).
+
+The plugin asks cargo, with `cargo metadata --no-deps`, rather than reading the configuration and the variables itself: cargo resolves every source, a file that `include` adds as each version reads it, a Cargo home that only the task's environment names, and the templates of `build.build-dir`. It costs one cargo call in each evaluation of the runtime input and one at the start of each such task that runs, about 6 ms each where cargo is the rustup proxy ([EVD-NX-24-MOVED-ARTIFACT-DIRS](#01M7CKYHWJGAN6S9J3GRE4PKWV)). Tasks run as a group share their workspace and environment, so a group asks once ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)).
 
 Rejected: comparing only the variables, which misses a configuration file that changed under the daemon and a `build-dir` template; a warning, which leaves the wrong result in the cache; and reading the task's dotenv files when the graph is created, with Nx's internal `getGraphTimeDotEnvForTask`, so that such a folder is cached, which depends on an internal Nx API and leaves `.env.<configuration>` files unknown, because outputs belong to a target and not to a configuration.
-:::
 
-:::mara decision ADR-BATCHED-PUBLISH
-:mid: 01M7DBRA91K5CG1Y1FKGKQMMC4
-:title: Publish the crates of each Cargo workspace with one multi-crate cargo publish
-:status: accepted
-:justifies: DES-RELEASE
+---
+
+<a id="01M7DBRA91K5CG1Y1FKGKQMMC4"></a>
+
+### Publish the crates of each Cargo workspace with one multi-crate cargo publish
+
+| Type      | Decision                                                  |
+| --------- | --------------------------------------------------------- |
+| ID        | ADR-BATCHED-PUBLISH                                       |
+| Status    | Accepted                                                  |
+| Justifies | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
 
 The maintainer's decision of 14 November 2026, with the option chosen, word for word: "One `cargo publish` per workspace (Recommended)".
 
-Nx release orders publishing only through the `dependsOn` of the target `nx-release-publish`; `@nx/js` and `@monodon/rust` 3.0.0 give each package `^nx-release-publish` ([[EVD-NX-24-RELEASE]]). Cargo 1.91 and later publish several crates of a workspace in one call: cargo orders them, packages and verifies each against the others before it uploads any, waits for each upload to appear in the index, and stops rather than publish a crate after the wait for one it depends on has timed out. One dependent alone cannot even be packaged before its dependency's new version is in the registry ([[EVD-CARGO-PUBLISH]]).
+Nx release orders publishing only through the `dependsOn` of the target `nx-release-publish`; `@nx/js` and `@monodon/rust` 3.0.0 give each package `^nx-release-publish` ([EVD-NX-24-RELEASE](#01M7DBRA91S2P3MB401BJTKKH1)). Cargo 1.91 and later publish several crates of a workspace in one call: cargo orders them, packages and verifies each against the others before it uploads any, waits for each upload to appear in the index, and stops rather than publish a crate after the wait for one it depends on has timed out. One dependent alone cannot even be packaged before its dependency's new version is in the registry ([EVD-CARGO-PUBLISH](#01M7DBRA912K68NXEN2P6KCWMW)).
 
-Each crate's `nx-release-publish` therefore has no `dependsOn`. Its executor has a batch implementation with `preferBatch`, which runs one `cargo publish -p a -p b …` per Cargo workspace, and per registry since the refinement below, and leaves the order to cargo ([[DES-RELEASE]]). [[REQ-NO-RUST-TASK-DEPS]] stays as it is.
+Each crate's `nx-release-publish` therefore has no `dependsOn`. Its executor has a batch implementation with `preferBatch`, which runs one `cargo publish -p a -p b …` per Cargo workspace, and per registry since the refinement below, and leaves the order to cargo ([DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)). [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN) stays as it is.
 
-**Refinement.** On 14 November 2026, after the research on Nx's `--registry` (nxr-fwxn1r), the control plane of the work refined this decision, and the maintainer is told: the crates are grouped per Cargo workspace, release group and the registry that cargo publishes them to, with one `cargo publish` for each group, and a call runs after those whose crates its crates depend on ([[DES-RELEASE]]). One call for crates whose `publish` settings differ fails as a whole: `publish = ["alpha"]` beside `["beta"]` conflict, and a crate without a list beside one with `["alpha"]` needs a registry named for the call, while plain cargo publishes each of them alone ([[EVD-CARGO-PUBLISH-REGISTRIES]]). Where every crate of a workspace goes to one registry, the usual case, it stays one call per workspace.
+**Refinement.** On 14 November 2026, after the research on Nx's `--registry` (nxr-fwxn1r), the control plane of the work refined this decision, and the maintainer is told: the crates are grouped per Cargo workspace, release group and the registry that cargo publishes them to, with one `cargo publish` for each group, and a call runs after those whose crates its crates depend on ([DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)). One call for crates whose `publish` settings differ fails as a whole: `publish = ["alpha"]` beside `["beta"]` conflict, and a crate without a list beside one with `["alpha"]` needs a registry named for the call, while plain cargo publishes each of them alone ([EVD-CARGO-PUBLISH-REGISTRIES](#01M7DMCC1WD0BE0TJ7BB161T31)). Where every crate of a workspace goes to one registry, the usual case, it stays one call per workspace.
 
-Rejected: one task per crate whose `dependsOn` names the publish targets of the crates it depends on, as `@nx/js` and `@monodon/rust` do. It is the form Nx expects, with a result per task from Nx itself, but it needs an exception to [[REQ-NO-RUST-TASK-DEPS]]; `nx release publish --dry-run` fails for every dependent of a crate bumped in the same run, because cargo cannot verify the dependent against a version that is not in the registry yet; a registry whose index takes longer than cargo's 60-second wait lets cargo end the dependency's task successfully, after which the dependent's task starts and fails ([[EVD-CARGO-PUBLISH]]); and `^nx-release-publish` follows the plugin's edges, a superset of Cargo's dependencies ([[DES-PROJECT-GRAPH]]), whose cycles Nx breaks in an arbitrary direction under the `nxIgnoreCycles` that `nx release publish` sets ([[EVD-NX-24-RELEASE]]).
+Rejected: one task per crate whose `dependsOn` names the publish targets of the crates it depends on, as `@nx/js` and `@monodon/rust` do. It is the form Nx expects, with a result per task from Nx itself, but it needs an exception to [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN); `nx release publish --dry-run` fails for every dependent of a crate bumped in the same run, because cargo cannot verify the dependent against a version that is not in the registry yet; a registry whose index takes longer than cargo's 60-second wait lets cargo end the dependency's task successfully, after which the dependent's task starts and fails ([EVD-CARGO-PUBLISH](#01M7DBRA912K68NXEN2P6KCWMW)); and `^nx-release-publish` follows the plugin's edges, a superset of Cargo's dependencies ([DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6)), whose cycles Nx breaks in an arbitrary direction under the `nxIgnoreCycles` that `nx release publish` sets ([EVD-NX-24-RELEASE](#01M7DBRA91S2P3MB401BJTKKH1)).
 
-The costs: publishing rests on Nx's batch executor interface and on per-task results from a batch, which milestone 0.2 builds and checks ([[ADR-BATCH-EXECUTOR]], [[RISK-BATCH-BEHAVIOUR]]); the result of each crate comes from reading cargo's output; and without a batch the tasks publish one crate each in no set order, so a dependent fails before any upload, under the check that its dependencies are in the registry ([[DES-RELEASE]]), until its dependency is published. Multi-crate publishing needs Cargo 1.91, which [[ADR-COMPATIBILITY]] requires anyway: Cargo 1.89 rejects several `-p` on `cargo publish` as unstable.
-:::
+The costs: publishing rests on Nx's batch executor interface and on per-task results from a batch, which milestone 0.2 builds and checks ([ADR-BATCH-EXECUTOR](#01M78FHG7F9MD0KQ68Y5CC4HK5), [RISK-BATCH-BEHAVIOUR](#01M78FHG7FARJNEMM2EFX7XFY9)); the result of each crate comes from reading cargo's output; and without a batch the tasks publish one crate each in no set order, so a dependent fails before any upload, under the check that its dependencies are in the registry ([DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)), until its dependency is published. Multi-crate publishing needs Cargo 1.91, which [ADR-COMPATIBILITY](#01M78FHG7FFBVZPZCQKJNXGT0P) requires anyway: Cargo 1.89 rejects several `-p` on `cargo publish` as unstable.
 
-:::mara decision ADR-PUBLISH-REGISTRY-OPTION
-:mid: 01M7DMCC1WYYNB0EBYZSH53KKT
-:title: Fail a crate's publish task that receives Nx's registry option, and point to Cargo's own settings
-:status: accepted
-:justifies: DES-RELEASE
+---
+
+<a id="01M7DMCC1WYYNB0EBYZSH53KKT"></a>
+
+### Fail a crate's publish task that receives Nx's registry option, and point to Cargo's own settings
+
+| Type      | Decision                                                  |
+| --------- | --------------------------------------------------------- |
+| ID        | ADR-PUBLISH-REGISTRY-OPTION                               |
+| Status    | Accepted                                                  |
+| Justifies | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
 
 The maintainer's decision of 14 November 2026, with the option chosen, word for word: "Keep failing, with guidance (Recommended)".
 
-`nx release publish --registry <value>` hands the same raw value to every publish task of the run, npm packages and crates alike, and a `registry` in a target's options or in a `targetDefaults` entry keyed by `nx-release-publish` reaches the task as well ([[EVD-NX-24-PUBLISH-OPTIONS]]). npm takes the value as a URL: given a bare name, npm 12 warned and published to the public npm registry, and pnpm 12 failed. Cargo takes the name of a configured registry with `--registry`, which refuses any value with `:` or `+`, or an index URL with `--index`, which refuses a bare name ([[EVD-CARGO-PUBLISH-REGISTRIES]]). One value cannot be right for both kinds of package.
+`nx release publish --registry <value>` hands the same raw value to every publish task of the run, npm packages and crates alike, and a `registry` in a target's options or in a `targetDefaults` entry keyed by `nx-release-publish` reaches the task as well ([EVD-NX-24-PUBLISH-OPTIONS](#01M7DMCC1WD0EPQSF9J0N6DEA8)). npm takes the value as a URL: given a bare name, npm 12 warned and published to the public npm registry, and pnpm 12 failed. Cargo takes the name of a configured registry with `--registry`, which refuses any value with `:` or `+`, or an index URL with `--index`, which refuses a bare name ([EVD-CARGO-PUBLISH-REGISTRIES](#01M7DMCC1WD0BE0TJ7BB161T31)). One value cannot be right for both kinds of package.
 
-A crate's task that receives `registry` therefore fails before cargo runs, in a dry run too, wherever the value came from, and its message says how Cargo chooses a registry by itself: `publish = ["<name>"]` in the crate's manifest, `registry.default` in Cargo's configuration, or `CARGO_REGISTRY_DEFAULT=<name>` for one run ([[DES-RELEASE]], **Options**). These work as they do with plain cargo ([[GOAL-CARGO-NATIVE]]).
+A crate's task that receives `registry` therefore fails before cargo runs, in a dry run too, wherever the value came from, and its message says how Cargo chooses a registry by itself: `publish = ["<name>"]` in the crate's manifest, `registry.default` in Cargo's configuration, or `CARGO_REGISTRY_DEFAULT=<name>` for one run ([DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T), **Options**). These work as they do with plain cargo ([GOAL-CARGO-NATIVE](product.mara.md#01M78FHG7FRG7B5PSZD2NZ1ZAZ)).
 
 Rejected:
 
-- Treating the value as the name of a Cargo registry, passed as `--registry`. It moves the crates of a call but not what their path dependencies point to: an entry without a `registry` key stays crates.io's in the published crate, whatever the call publishes to and whatever the configuration puts in place of crates.io, so a crate either fails to package or is uploaded to the named registry depending on crates.io's crate of that name ([[EVD-CARGO-PUBLISH-REGISTRIES]]). A workspace that can publish elsewhere names the registry in those entries already, and there `publish = ["<name>"]` chooses it without a flag. A mixed run with a name would also send the npm packages to the public npm registry.
-- Accepting a name or a URL, told apart by the form, and passing a URL as `--index`. A real upload through `--index` needs `--token`, whatever credentials Cargo has for that registry, and the plugin passes no token ([[DES-RELEASE]], **Credentials and tree**); `--index` ignores a crate's `publish` list, and uploaded a crate that allows one registry only into another; and an npm URL is no Cargo index: without `sparse+`, cargo fetches it as a git index and fails ([[EVD-CARGO-PUBLISH-REGISTRIES]]).
+- Treating the value as the name of a Cargo registry, passed as `--registry`. It moves the crates of a call but not what their path dependencies point to: an entry without a `registry` key stays crates.io's in the published crate, whatever the call publishes to and whatever the configuration puts in place of crates.io, so a crate either fails to package or is uploaded to the named registry depending on crates.io's crate of that name ([EVD-CARGO-PUBLISH-REGISTRIES](#01M7DMCC1WD0BE0TJ7BB161T31)). A workspace that can publish elsewhere names the registry in those entries already, and there `publish = ["<name>"]` chooses it without a flag. A mixed run with a name would also send the npm packages to the public npm registry.
+- Accepting a name or a URL, told apart by the form, and passing a URL as `--index`. A real upload through `--index` needs `--token`, whatever credentials Cargo has for that registry, and the plugin passes no token ([DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T), **Credentials and tree**); `--index` ignores a crate's `publish` list, and uploaded a crate that allows one registry only into another; and an npm URL is no Cargo index: without `sparse+`, cargo fetches it as a git index and fails ([EVD-CARGO-PUBLISH-REGISTRIES](#01M7DMCC1WD0BE0TJ7BB161T31)).
 
 The costs: choosing a registry for one run takes an environment variable instead of a flag, and a repository that gives its npm packages a registry on the command line publishes them in a run of their own, as it would have to with any mapping. The decision can be reversed: accepting registry names later breaks no one.
-:::
 
-:::mara decision ADR-PUBLISH-REPLACED-CRATES-IO
-:mid: 01M7DS8KTYRE7ND0ZYRGPMFPTS
-:title: Fail a crate for crates.io where the Cargo configuration replaces crates.io
-:status: accepted
-:justifies: DES-RELEASE
+---
+
+<a id="01M7DS8KTYRE7ND0ZYRGPMFPTS"></a>
+
+### Fail a crate for crates.io where the Cargo configuration replaces crates.io
+
+| Type      | Decision                                                  |
+| --------- | --------------------------------------------------------- |
+| ID        | ADR-PUBLISH-REPLACED-CRATES-IO                            |
+| Status    | Accepted                                                  |
+| Justifies | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
 
 The maintainer's decision of 14 November 2026, with the option chosen, word for word: "Keep failing, with guidance (Recommended)".
 
-On a machine whose Cargo configuration replaces crates.io, as with a mirror, plain `cargo publish` refuses a crate without a `publish` list unless it gets `--registry crates-io`, which goes to crates.io itself past the replacement, and a `publish = ["crates-io"]` list or `CARGO_REGISTRY_DEFAULT=crates-io` sends it there in the same way. The lookup that the plugin runs on crates.io, `cargo info --index sparse+https://index.crates.io/`, asks the replacement instead, and no lookup that asks crates.io itself there is known ([[EVD-CARGO-PUBLISH-REGISTRIES]]), so the plugin cannot establish that its lookups asked the registry that the upload goes to (**Registries** in [[DES-RELEASE]]).
+On a machine whose Cargo configuration replaces crates.io, as with a mirror, plain `cargo publish` refuses a crate without a `publish` list unless it gets `--registry crates-io`, which goes to crates.io itself past the replacement, and a `publish = ["crates-io"]` list or `CARGO_REGISTRY_DEFAULT=crates-io` sends it there in the same way. The lookup that the plugin runs on crates.io, `cargo info --index sparse+https://index.crates.io/`, asks the replacement instead, and no lookup that asks crates.io itself there is known ([EVD-CARGO-PUBLISH-REGISTRIES](#01M7DMCC1WD0BE0TJ7BB161T31)), so the plugin cannot establish that its lookups asked the registry that the upload goes to (**Registries** in [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)).
 
 Such a crate therefore fails before `cargo publish` runs, with each crate that depends on it, and its message says to publish it from a job whose Cargo configuration does not replace crates.io.
 
 Rejected: passing `--registry crates-io`, which would upload to crates.io while the checks before the upload had looked versions up in the replacement.
 
 The cost: a repository whose machines replace crates.io publishes to crates.io from a job, such as a CI job, whose configuration does not.
-:::
 
-:::mara decision ADR-RELEASE-DEPENDENTS
-:mid: 01M7DBRA91HC8EJYF8D7XME1FV
-:title: Read the dependents of a release from the Cargo manifests, not from the project graph
-:status: accepted
-:justifies: DES-RELEASE
+---
 
-The maintainer's decision of 14 November 2026, with the option chosen, word for word: "Bump real dependents; rewrite everywhere (Recommended)". It settles how the release flow handles the plugin's `implicit` edges ([[DES-PROJECT-GRAPH]]).
+<a id="01M7DBRA91HC8EJYF8D7XME1FV"></a>
 
-The plugin returns every edge as `implicit`, so that Nx recomputes them on every graph computation ([[EVD-NX-EDGE-CACHE]]). Nx release takes the dependents of a project only from the `readDependencies` of its version actions, whose default leaves `implicit` edges out ([[EVD-NX-24-RELEASE]]). Version actions that kept the default would find no dependents. The two sources left are the project graph without the type filter and the manifests, through the `cargo metadata --no-deps` report of each workspace ([[DES-METADATA-REPORT]]):
+### Read the dependents of a release from the Cargo manifests, not from the project graph
+
+| Type      | Decision                                                  |
+| --------- | --------------------------------------------------------- |
+| ID        | ADR-RELEASE-DEPENDENTS                                    |
+| Status    | Accepted                                                  |
+| Justifies | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
+
+The maintainer's decision of 14 November 2026, with the option chosen, word for word: "Bump real dependents; rewrite everywhere (Recommended)". It settles how the release flow handles the plugin's `implicit` edges ([DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6)).
+
+The plugin returns every edge as `implicit`, so that Nx recomputes them on every graph computation ([EVD-NX-EDGE-CACHE](#01M7AE241Y0VGGYCNWWR01WR7T)). Nx release takes the dependents of a project only from the `readDependencies` of its version actions, whose default leaves `implicit` edges out ([EVD-NX-24-RELEASE](#01M7DBRA91S2P3MB401BJTKKH1)). Version actions that kept the default would find no dependents. The two sources left are the project graph without the type filter and the manifests, through the `cargo metadata --no-deps` report of each workspace ([DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E)):
 
 | Case                                                                      | Graph without the type filter                                                       | Manifests, through the report                      |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------- |
@@ -719,420 +965,564 @@ The plugin returns every edge as `implicit`, so that Nx recomputes them on every
 | Uses through `[patch]`, `[replace]` and `paths`, possible or assumed      | An edge from every member with a registry or git dependency                         | None                                               |
 | The workspace project                                                     | An edge to every member                                                             | None                                               |
 
-The graph's edges are a superset built for cache keys and `nx affected` ([[DES-PROJECT-GRAPH]], [[ADR-REDIRECTION-EDGES]]). Read for release, they bump crates that never name the released crate and publish versions in which nothing changed. The version actions therefore read dependencies from the report. A crate becomes a dependent, and is bumped, through normal and build dependencies that carry a version requirement, which the crates that use it build. Dev-dependencies cause no bump by this choice, not by cargo's: the crates that use a crate never build its dev-dependencies, although cargo keeps a dev-dependency with a version requirement in the published manifest. Dependencies without a version requirement cause none either: cargo leaves such a dev-dependency out of the published crate and refuses to publish a crate with such a normal dependency ([[EVD-CARGO-PUBLISH]]). Every requirement on a bumped crate is rewritten in every manifest of the repository's Cargo workspaces, `[workspace.dependencies]` and crates outside the release included ([[DES-RELEASE]]), as cargo-release rewrites requirements over all members and the workspace root.
+The graph's edges are a superset built for cache keys and `nx affected` ([DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6), [ADR-REDIRECTION-EDGES](#01M7AQ58FTSJX0AWN2BGZF4TND)). Read for release, they bump crates that never name the released crate and publish versions in which nothing changed. The version actions therefore read dependencies from the report. A crate becomes a dependent, and is bumped, through normal and build dependencies that carry a version requirement, which the crates that use it build. Dev-dependencies cause no bump by this choice, not by cargo's: the crates that use a crate never build its dev-dependencies, although cargo keeps a dev-dependency with a version requirement in the published manifest. Dependencies without a version requirement cause none either: cargo leaves such a dev-dependency out of the published crate and refuses to publish a crate with such a normal dependency ([EVD-CARGO-PUBLISH](#01M7DBRA912K68NXEN2P6KCWMW)). Every requirement on a bumped crate is rewritten in every manifest of the repository's Cargo workspaces, `[workspace.dependencies]` and crates outside the release included ([DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)), as cargo-release rewrites requirements over all members and the workspace root.
 
-Rejected, beside the graph: bumping a crate for a dependency of every kind, as `@nx/js` does for npm packages, which releases crates in which nothing changes for the crates that use them; and updating only the requirements of the crates in the release, which is what Nx does by itself. After a breaking bump, a requirement left in a crate outside the release or in `[workspace.dependencies]` no longer matches the workspace's own crate, and every cargo command that resolves the workspace fails, the lockfile task's among them ([[EVD-CARGO-PUBLISH]]).
+Rejected, beside the graph: bumping a crate for a dependency of every kind, as `@nx/js` does for npm packages, which releases crates in which nothing changes for the crates that use them; and updating only the requirements of the crates in the release, which is what Nx does by itself. After a breaking bump, a requirement left in a crate outside the release or in `[workspace.dependencies]` no longer matches the workspace's own crate, and every cargo command that resolves the workspace fails, the lockfile task's among them ([EVD-CARGO-PUBLISH](#01M7DBRA912K68NXEN2P6KCWMW)).
 
-The costs: the report does not say where a requirement is written, in a member's table or in `[workspace.dependencies]`, so the version actions read and edit the manifests themselves; crates that are not released get changed manifests; and the rewriting is the plugin's own code, because Cargo has no command for it and cargo-edit's `cargo set-version` would be a tool for the user to install ([[ADR-V1-SCOPE]]).
-:::
+The costs: the report does not say where a requirement is written, in a member's table or in `[workspace.dependencies]`, so the version actions read and edit the manifests themselves; crates that are not released get changed manifests; and the rewriting is the plugin's own code, because Cargo has no command for it and cargo-edit's `cargo set-version` would be a tool for the user to install ([ADR-V1-SCOPE](#01M78FHG7FTPVXE53KP8PW9NR7)).
 
-:::mara decision ADR-CACHED-FAILURES
-:mid: 01M7DCSFF6ECEJBD0RE8ZDQRF9
-:title: Leave to Nx and its NX_CACHE_FAILURES setting whether a failed task is stored
-:status: accepted
-:justifies: DES-OUTPUTS
-:justifies: DES-LOCKFILE-HASHING
-:justifies: DES-DIAGNOSTICS
-:justifies: REQ-EXTERNAL-DEPS
+---
 
-The control plane's decision of 14 November 2026 under [[GOAL-TRUSTED-CACHE]], of which the maintainer is told. By default Nx stores nothing for a task that fails. With `NX_CACHE_FAILURES=true`, Nx stores the failure and replays it, as a failure, for the same key, also for a task that the plugin's executor fails before or after cargo runs ([[EVD-NX-24-BATCHES]]). The plugin leaves this to Nx, and every item that says what Nx stores for a failed task names the condition: by default nothing, with the setting the failure, and in neither case a successful result.
+<a id="01M7DCSFF6ECEJBD0RE8ZDQRF9"></a>
+
+### Leave to Nx and its NX_CACHE_FAILURES setting whether a failed task is stored
+
+| Type      | Decision                                                              |
+| --------- | --------------------------------------------------------------------- |
+| ID        | ADR-CACHED-FAILURES                                                   |
+| Status    | Accepted                                                              |
+| Justifies | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)             |
+| Justifies | [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D) |
+| Justifies | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG)           |
+| Justifies | [REQ-EXTERNAL-DEPS](workspaces.mara.md#01M78FHG7FCVSEDGQW30RSSCMA)    |
+
+The control plane's decision of 14 November 2026 under [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7), of which the maintainer is told. By default Nx stores nothing for a task that fails. With `NX_CACHE_FAILURES=true`, Nx stores the failure and replays it, as a failure, for the same key, also for a task that the plugin's executor fails before or after cargo runs ([EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA)). The plugin leaves this to Nx, and every item that says what Nx stores for a failed task names the condition: by default nothing, with the setting the failure, and in neither case a successful result.
 
 `NX_CACHE_FAILURES=true` is the user's own choice of an Nx setting. The plugin has no means to keep Nx from storing a result that its executor reports failed, and a stored failure is replayed as a failure, never as a success, so no result is trusted that should not be. What the setting costs falls on the user who chose it: a failure whose cause lies outside the key, such as a `Cargo.lock` that changed during the run, a missing tool or the network, is replayed until an input of the task changes or the cache is cleared with `nx reset`.
 
 Rejected: keeping the items as they were, which promised that Nx stores nothing for a failed task whatever its settings.
-:::
 
-:::mara decision ADR-VERBOSE-COMMAND
-:mid: 01M7DPAR45W1QX0DDQQ8535BFC
-:title: Print a task's cargo command only when Nx runs verbosely, and let a verbose run's stored output keep it
-:status: accepted
-:justifies: REQ-VERBOSE-COMMAND
-:justifies: DES-INVOCATION
+---
 
-The maintainer's decision of 14 November 2026, the option chosen, word for word: "Only with `--verbose` (Recommended)": normal output stays as it is, and with Nx's verbose flag each task prints the exact cargo command before running it. The options not taken: always printing it, and never printing it. The reason given with the question: since a command selects its crates by their package ID specifications ([[DES-INVOCATION]], "Selecting a crate"), it holds the checkout's absolute path, and Nx replays a task's stored terminal output, also on other machines through a shared cache, so the command stays out of normal output. Cargo's own hints for running a failed test again name the crate by its package name, which a workspace where another package of the resolve shares that name cannot use ([[EVD-CARGO-PACKAGE-SPECS]]), so without the command a user cannot run such a task by hand.
+<a id="01M7DPAR45W1QX0DDQQ8535BFC"></a>
 
-What a verbose run stores was left to the control plane, which settled it on 14 November 2026 under [[GOAL-TRUSTED-CACHE]], within the maintainer's answer: the stored output of a verbose run keeps the lines, and the user guide says so. Nx 24.0.6 stores everything that a task's process and its cargo write, and gives an executor no other way to the terminal ([[EVD-NX-24-VERBOSE]]). Keeping the lines out of the store would therefore mean leaving the run uncached, which a flag for output must not decide and which an executor cannot do for a task that succeeds. No restored result changes through the lines: a hit replays the terminal output as the run that stored the result printed it, as it replays cargo's own lines, which already name the crates' folders by their absolute paths. A user who wants to see the command of a task whose result is stored, without storing anything, runs it with `--skip-nx-cache --verbose`.
+### Print a task's cargo command only when Nx runs verbosely, and let a verbose run's stored output keep it
 
-Rejected: writing the lines to the controlling terminal past Nx, which under Nx's pseudo-terminal is Nx's own and stores what arrives, does not exist in CI and would overwrite the terminal UI; printing the command without its folder, or with package names, which cannot be run where a name is ambiguous; and printing the lookups before the command as well ([[DES-INVOCATION]], "Printing the command").
-:::
+| Type      | Decision                                                          |
+| --------- | ----------------------------------------------------------------- |
+| ID        | ADR-VERBOSE-COMMAND                                               |
+| Status    | Accepted                                                          |
+| Justifies | [REQ-VERBOSE-COMMAND](caching.mara.md#01M7DPAR45N7ZNQ7JRNAWTWPTQ) |
+| Justifies | [DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB)      |
 
-:::mara decision ADR-TEST-AFTER-BUILD
-:mid: 01M7DJ8QGMASKGT057YS8Z9QBY
-:title: Run a crate's test after its own build where cargo test replaces the executables of that build
-:status: accepted
-:justifies: DES-TARGETS
-:justifies: DES-OUTPUTS
-:justifies: DES-BATCH
-:justifies: REQ-NO-RUST-TASK-DEPS
-:accepts: RISK-ARTIFACT-DIR-WRITERS
+The maintainer's decision of 14 November 2026, the option chosen, word for word: "Only with `--verbose` (Recommended)": normal output stays as it is, and with Nx's verbose flag each task prints the exact cargo command before running it. The options not taken: always printing it, and never printing it. The reason given with the question: since a command selects its crates by their package ID specifications ([DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB), "Selecting a crate"), it holds the checkout's absolute path, and Nx replays a task's stored terminal output, also on other machines through a shared cache, so the command stays out of normal output. Cargo's own hints for running a failed test again name the crate by its package name, which a workspace where another package of the resolve shares that name cannot use ([EVD-CARGO-PACKAGE-SPECS](#01M7DDYY0FZTWB37H3FWXCG5AF)), so without the command a user cannot run such a task by hand.
 
-For a crate with a binary and an integration test, `cargo test` replaces the executable that the crate's `build` declares as an output with one built with what dev-dependencies turn on and with the `test` profile, also when nothing needs compiling, and `CARGO_BIN_EXE_<name>`, which the tests run after cargo has released its build lock, names that same file. Nx copies a task's outputs into the cache some milliseconds after its process has ended, and a batch's when the whole batch has ended ([[EVD-CARGO-ARTIFACT-WRITERS]], [[EVD-NX-24-BATCHES]]). Where Nx ran a crate's `build` and `test` at the same time, as it did on `main` in milestone 0.1, it could store the executable of `cargo test` under the key of `build`, and the integration tests could run the executable of `build` and Nx store their result, against [[GOAL-TRUSTED-CACHE]]. A batch that ran a `build` group and then a `test` group stored the executable of `cargo test` every time.
+What a verbose run stores was left to the control plane, which settled it on 14 November 2026 under [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7), within the maintainer's answer: the stored output of a verbose run keeps the lines, and the user guide says so. Nx 24.0.6 stores everything that a task's process and its cargo write, and gives an executor no other way to the terminal ([EVD-NX-24-VERBOSE](#01M7DPAR4595KRB69GS95QAF1V)). Keeping the lines out of the store would therefore mean leaving the run uncached, which a flag for output must not decide and which an executor cannot do for a task that succeeds. No restored result changes through the lines: a hit replays the terminal output as the run that stored the result printed it, as it replays cargo's own lines, which already name the crates' folders by their absolute paths. A user who wants to see the command of a task whose result is stored, without storing anything, runs it with `--skip-nx-cache --verbose`.
 
-On 14 November 2026 the maintainer chose, word for word, "`test` waits for own `build` (Recommended)". In the crates where `cargo test` replaces the executables of `build`, `test` depends on the same crate's `build`, so that the two never run at the same time and Nx stores `build` before `test` starts. The `test` executor fails a task whose run holds that `build` without the dependency, as where a configuration replaced it. In milestone 0.2, `build` and `doc`, the targets whose files Nx stores, run through a batch executor of their own, so that Nx stores their batch before it starts the batch of the tasks that depend on them ([[DES-TARGETS]], [[DES-BATCH]]). On 14 November 2026 the control plane settled its name, `@convesoft/nx-rust:cargo-outputs`.
+Rejected: writing the lines to the controlling terminal past Nx, which under Nx's pseudo-terminal is Nx's own and stores what arrives, does not exist in CI and would overwrite the terminal UI; printing the command without its folder, or with package names, which cannot be run where a name is ambiguous; and printing the lookups before the command as well ([DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB), "Printing the command").
 
-Told to the maintainer with the choice, and accepted with it ([[RISK-ARTIFACT-DIR-WRITERS]]): after a command that runs both, the artifact directory holds what cargo wrote last, the executable of `cargo test`, as plain `cargo build && cargo test` leaves it, while the cache entries are right; two `nx` commands started at once can still overlap; and `run` with options that differ from those of `build` is not ordered.
+---
 
-The first of these consequences changed on 20 November 2026. A cached task outside the plugin that depends on `build`, runs its executable and starts after the `test` batch stored what it made of the test build ([[EVD-BATCH-FILES-ON-DISK]], nxr-5hzxra), and `cargo test` cannot build into a stage of its own as `build` does ([[ADR-STAGED-BUILDS]]). Asked "What should happen for tests?", the maintainer chose "Put builds' files back (Recommended)". As described to him, a `test` or `bench` batch keeps the executables of the command's cached builds and puts them back when it ends, so that after a batched command the artifact directory holds what `build` stored, not what `cargo test` wrote, which changes the consequence he accepted with this decision. A task that reads the file while the tests run can still get `cargo test`'s; that stays a stated limit, as does batching off. Not chosen: failing such test tasks, and stating the limit only. nxr-5hzxra implemented it ([[DES-BATCH]], "Files that a test batch puts back").
+<a id="01M7DJ8QGMASKGT057YS8Z9QBY"></a>
+
+### Run a crate's test after its own build where cargo test replaces the executables of that build
+
+| Type      | Decision                                                            |
+| --------- | ------------------------------------------------------------------- |
+| ID        | ADR-TEST-AFTER-BUILD                                                |
+| Status    | Accepted                                                            |
+| Justifies | [DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3)           |
+| Justifies | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)           |
+| Justifies | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)           |
+| Justifies | [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN) |
+| Accepts   | [RISK-ARTIFACT-DIR-WRITERS](#01M7DJ8QGM2WH33TJ7HBG7XRD0)            |
+
+For a crate with a binary and an integration test, `cargo test` replaces the executable that the crate's `build` declares as an output with one built with what dev-dependencies turn on and with the `test` profile, also when nothing needs compiling, and `CARGO_BIN_EXE_<name>`, which the tests run after cargo has released its build lock, names that same file. Nx copies a task's outputs into the cache some milliseconds after its process has ended, and a batch's when the whole batch has ended ([EVD-CARGO-ARTIFACT-WRITERS](#01M7DJ8QGMBPJSJHQ2BVBCHA1R), [EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA)). Where Nx ran a crate's `build` and `test` at the same time, as it did on `main` in milestone 0.1, it could store the executable of `cargo test` under the key of `build`, and the integration tests could run the executable of `build` and Nx store their result, against [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7). A batch that ran a `build` group and then a `test` group stored the executable of `cargo test` every time.
+
+On 14 November 2026 the maintainer chose, word for word, "`test` waits for own `build` (Recommended)". In the crates where `cargo test` replaces the executables of `build`, `test` depends on the same crate's `build`, so that the two never run at the same time and Nx stores `build` before `test` starts. The `test` executor fails a task whose run holds that `build` without the dependency, as where a configuration replaced it. In milestone 0.2, `build` and `doc`, the targets whose files Nx stores, run through a batch executor of their own, so that Nx stores their batch before it starts the batch of the tasks that depend on them ([DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3), [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)). On 14 November 2026 the control plane settled its name, `@convesoft/nx-rust:cargo-outputs`.
+
+Told to the maintainer with the choice, and accepted with it ([RISK-ARTIFACT-DIR-WRITERS](#01M7DJ8QGM2WH33TJ7HBG7XRD0)): after a command that runs both, the artifact directory holds what cargo wrote last, the executable of `cargo test`, as plain `cargo build && cargo test` leaves it, while the cache entries are right; two `nx` commands started at once can still overlap; and `run` with options that differ from those of `build` is not ordered.
+
+The first of these consequences changed on 20 November 2026. A cached task outside the plugin that depends on `build`, runs its executable and starts after the `test` batch stored what it made of the test build ([EVD-BATCH-FILES-ON-DISK](#01M7WVPS52WX44QPGQDNT5PQM5), nxr-5hzxra), and `cargo test` cannot build into a stage of its own as `build` does ([ADR-STAGED-BUILDS](#01M7X59APKESA509GHH54BNQW7)). Asked "What should happen for tests?", the maintainer chose "Put builds' files back (Recommended)". As described to him, a `test` or `bench` batch keeps the executables of the command's cached builds and puts them back when it ends, so that after a batched command the artifact directory holds what `build` stored, not what `cargo test` wrote, which changes the consequence he accepted with this decision. A task that reads the file while the tests run can still get `cargo test`'s; that stays a stated limit, as does batching off. Not chosen: failing such test tasks, and stating the limit only. nxr-5hzxra implemented it ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Files that a test batch puts back").
 
 Rejected:
 
-- **A plugin lock and a copy of the artifacts that the plugin owns.** Every cargo call of the plugin that can write executables would hold a lock per artifact directory for its whole run, and `build` would link its artifacts into a folder of the plugin while it holds the lock and declare that folder as its outputs. It closes both cases, also across `nx` commands that run at once, but builds wait for running test suites, the artifacts move out of the artifact directory, and a cache hit no longer puts a binary there, against [[ADR-RESULTS-ONLY-CACHE]] and [[DES-OUTPUTS]]. A lock alone leaves the wrong entries, because Nx copies the outputs after cargo has exited and released it.
-- **A build directory of its own for tests.** A private artifact folder over the shared build directory fails beside plain cargo: `env!("CARGO_BIN_EXE_…")` is fixed when the test target is compiled, and the test target's fingerprint does not cover the folder, so after plain `cargo test` the tests ran a stale executable from the other folder, and the other way round. What remains, a whole build directory of their own for `test`, `bench` and `run`, compiles every crate and dependency twice, takes twice the disk and shares no work with plain `cargo test`, against [[REQ-CARGO-UNCHANGED]]; a variant that gives the crate's test profile an identity of its own through a profile setting per package changes how the crate is compiled and clashes with the repository's own profiles.
+- **A plugin lock and a copy of the artifacts that the plugin owns.** Every cargo call of the plugin that can write executables would hold a lock per artifact directory for its whole run, and `build` would link its artifacts into a folder of the plugin while it holds the lock and declare that folder as its outputs. It closes both cases, also across `nx` commands that run at once, but builds wait for running test suites, the artifacts move out of the artifact directory, and a cache hit no longer puts a binary there, against [ADR-RESULTS-ONLY-CACHE](#01M78FHG7FYVQP1W5GZC509GEF) and [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4). A lock alone leaves the wrong entries, because Nx copies the outputs after cargo has exited and released it.
+- **A build directory of its own for tests.** A private artifact folder over the shared build directory fails beside plain cargo: `env!("CARGO_BIN_EXE_…")` is fixed when the test target is compiled, and the test target's fingerprint does not cover the folder, so after plain `cargo test` the tests ran a stale executable from the other folder, and the other way round. What remains, a whole build directory of their own for `test`, `bench` and `run`, compiles every crate and dependency twice, takes twice the disk and shares no work with plain `cargo test`, against [REQ-CARGO-UNCHANGED](caching.mara.md#01M78FHG7F5VCD6HDS9R6HDS3Z); a variant that gives the crate's test profile an identity of its own through a profile setting per package changes how the crate is compiled and clashes with the repository's own profiles.
 - **Not caching those builds.** The `build` of every crate with a binary and an integration test, which is most binary crates, would run uncached, a full compile in a cold CI each time, and the tests running the executable of `build` would still need a lock.
 
-The costs: a command that runs `test` without `build`, such as `nx test api` or `nx affected -t test`, also runs or restores the crate's `build`, one more task, and on a cold build directory, where dev-dependencies or `[profile.test]` make the two executables differ, the plain build of what differs, which plain `cargo build` compiles as well. A dependency between two targets of one crate is not the dependency between crates that [[ADR-NO-RUST-BUILD-DEPS]] rejects: it orders two tasks that write the same files, and it compiles nothing twice.
-:::
+The costs: a command that runs `test` without `build`, such as `nx test api` or `nx affected -t test`, also runs or restores the crate's `build`, one more task, and on a cold build directory, where dev-dependencies or `[profile.test]` make the two executables differ, the plain build of what differs, which plain `cargo build` compiles as well. A dependency between two targets of one crate is not the dependency between crates that [ADR-NO-RUST-BUILD-DEPS](#01M78FHG7FCE6NXVG4J9K82XME) rejects: it orders two tasks that write the same files, and it compiles nothing twice.
 
-:::mara decision ADR-NAPI-SHARED-BUILD-DIR
-:mid: 01M7J3B4MGB6VKYKPMJ2EVTA7K
-:title: Compile Node addons in the shared build directory and accept the rebuilds this causes
-:status: accepted
-:justifies: DES-NAPI
+---
+
+<a id="01M7J3B4MGB6VKYKPMJ2EVTA7K"></a>
+
+### Compile Node addons in the shared build directory and accept the rebuilds this causes
+
+| Type      | Decision                                                 |
+| --------- | -------------------------------------------------------- |
+| ID        | ADR-NAPI-SHARED-BUILD-DIR                                |
+| Status    | Accepted                                                 |
+| Justifies | [DES-NAPI](artifacts.mara.md#01M78FHG7FRRT8J6Z5NYMT12A3) |
 
 The control plane took this decision on 16 November 2026, and the maintainer confirmed it on 20 November 2026.
 
-To collect type definitions, the compile step of `napi-build` sets variables that the build scripts of napi crates watch ([[DES-NAPI]]). Cargo then rebuilds each crate whose build script calls `napi_build::setup()`, and every crate that depends on one of them, whenever those variables change. That happens on every `napi-build` compile and again on the next command without them: a plain `cargo build`, `nx build` or rust-analyzer's check ([[EVD-NAPI-POSTPROCESS]]). For those crates, `napi-build` and plain cargo invalidate each other's work, which [[NEED-CARGO-UNCHANGED]] says should not happen. There were two options:
+To collect type definitions, the compile step of `napi-build` sets variables that the build scripts of napi crates watch ([DES-NAPI](artifacts.mara.md#01M78FHG7FRRT8J6Z5NYMT12A3)). Cargo then rebuilds each crate whose build script calls `napi_build::setup()`, and every crate that depends on one of them, whenever those variables change. That happens on every `napi-build` compile and again on the next command without them: a plain `cargo build`, `nx build` or rust-analyzer's check ([EVD-NAPI-POSTPROCESS](#01M7J1ARJDN1WVK6PSCT84HJH1)). For those crates, `napi-build` and plain cargo invalidate each other's work, which [NEED-CARGO-UNCHANGED](product.mara.md#01M78FHG7FQRS21JJJXM330EJE) says should not happen. There were two options:
 
 - **The shared build directory**, chosen. Only the napi crates and what depends on them are compiled again; in the experiment, three napi crates and one ordinary library out of 41 units, in under 0.2 s against 6.9 s for the whole build. Addon crates are usually leaves, so what depends on them is usually nothing.
 - **A build directory of its own for the napi compile.** It would leave plain cargo's work untouched, but compile everything a second time: under `workspace-build`, the whole workspace, and the extra build directory would grow as large as the first.
 
 The shared directory costs less in the usual layout and is the easier of the two to change later: moving the napi compile to a directory of its own changes no output and no key. Where a napi helper sits deep in the dependency graph, its dependents pay the rebuild, and the maintainer may then prefer the other option.
-:::
 
-:::mara decision ADR-NAPI-RS-3
-:mid: 01M7J3B4MG430J5R1KA7TD5WZW
-:title: Build Node addons of napi-rs 3 only
-:status: accepted
-:justifies: DES-NAPI
+---
+
+<a id="01M7J3B4MG430J5R1KA7TD5WZW"></a>
+
+### Build Node addons of napi-rs 3 only
+
+| Type      | Decision                                                 |
+| --------- | -------------------------------------------------------- |
+| ID        | ADR-NAPI-RS-3                                            |
+| Status    | Accepted                                                 |
+| Justifies | [DES-NAPI](artifacts.mara.md#01M78FHG7FRRT8J6Z5NYMT12A3) |
 
 The control plane took this decision on 16 November 2026, and the maintainer confirmed it on 20 November 2026.
 
-`napi-build` serves crates built with `napi-derive` 3 and post-processed with `@napi-rs/cli` 3.4.0 or later, and fails with a message for any other version ([[DES-NAPI]]). The requirement behind the artifact targets names no version ([[REQ-ARTIFACT-TARGETS]]), so this leaves out existing napi-rs 2 addons. Two facts settle it ([[EVD-NAPI-POSTPROCESS]]). `@napi-rs/cli` 2 exports no functions, so only `napi build`, which runs cargo itself, could post-process with it. And it cannot build `napi-derive` 3 crates, whose macros refuse its variable. napi-rs 3 was announced in July 2025, and `@napi-rs/cli` 3.4.0, the first release that exports all three functions the plugin calls, dates from October 2025. Supporting napi-rs 2 would take a second path for post-processing, with type information in a single file; it can be added later without changing the path for napi-rs 3.
-:::
+`napi-build` serves crates built with `napi-derive` 3 and post-processed with `@napi-rs/cli` 3.4.0 or later, and fails with a message for any other version ([DES-NAPI](artifacts.mara.md#01M78FHG7FRRT8J6Z5NYMT12A3)). The requirement behind the artifact targets names no version ([REQ-ARTIFACT-TARGETS](artifacts.mara.md#01M78FHG7FP44K4K3TDR87ZFQS)), so this leaves out existing napi-rs 2 addons. Two facts settle it ([EVD-NAPI-POSTPROCESS](#01M7J1ARJDN1WVK6PSCT84HJH1)). `@napi-rs/cli` 2 exports no functions, so only `napi build`, which runs cargo itself, could post-process with it. And it cannot build `napi-derive` 3 crates, whose macros refuse its variable. napi-rs 3 was announced in July 2025, and `@napi-rs/cli` 3.4.0, the first release that exports all three functions the plugin calls, dates from October 2025. Supporting napi-rs 2 would take a second path for post-processing, with type information in a single file; it can be added later without changing the path for napi-rs 3.
+
+---
 
 ## Risks
 
 Each risk below is backed by evidence, mitigated by a requirement or design, or
 explicitly accepted by a decision (audited before 1.0 in nxr-fn1vas).
 
-:::mara risk RISK-METADATA-KEY-COLLISION
-:mid: 01M78FHG7F58QYEVQ7DX5KNQK5
-:title: Another tool claims the nx metadata key
-:status: accepted
-:likelihood: unlikely
-:consequence: moderate
-:threatens: NEED-CONFIG-IN-CARGO
+---
 
-Another Nx plugin for Rust, or Nx itself, could start reading `[package.metadata.nx]` with a different meaning. Manifests would then carry settings two tools interpret differently, and one of them would have to move to another key. [[ADR-METADATA-KEY]] accepts this.
-:::
+<a id="01M78FHG7F58QYEVQ7DX5KNQK5"></a>
 
-:::mara risk RISK-TARGET-DEFAULTS
-:mid: 01M78FHG7FAJAK7K2EN2P4XE8C
-:title: Target defaults written for JS reach Rust targets
-:status: accepted
-:likelihood: likely
-:consequence: major
-:threatens: NEED-EFFICIENT-BUILDS
-:threatens: NEED-CORRECT-CACHE
+### Another tool claims the nx metadata key
 
-Because Rust targets share the names `build`, `lint` and `test` with JS targets, a `targetDefaults` entry keyed by a bare name applies to them. Nx 24 lays the entry over the inferred target: its `dependsOn`, `inputs`, `outputs` and `cache` replace the inferred values unless a list keeps them with `"..."`, and its `options` reach the executor ([[EVD-NX-TARGET-DEFAULTS]]). A `dependsOn: ["^build"]` then adds a build of every crate a crate depends on ([[EVD-NXRUST-BUILD-DEPS]]); batching ([[DES-BATCH]]) puts them in one batch with the build that needs them. An `inputs` list written for a JS tool drops the toolchain, environment and workspace inputs from the key, so a result built under other settings is restored. An `outputs` list drops the artifacts, so a cache hit restores no binary, and `cache: true` caches the targets that the plugin leaves uncached because their artifacts lie outside the repository. A `filter` on projects, plugin or executor keeps an entry away from Rust targets ([[EVD-NX-24-INSPECTION]]), but a `plugin` filter cannot select targets from `package.json` scripts or `project.json` files. The executor runs a task without the options it does not know and says so in the task's output, which mitigates what an entry's options do ([[REQ-UNKNOWN-OPTIONS]]). [[REQ-TARGET-DEFAULT-GUARD]] mitigates the rest: the plugin reports such an entry, as an error where Nx could restore a result that the task would not produce.
-:::
+| Type        | Risk                                                               |
+| ----------- | ------------------------------------------------------------------ |
+| ID          | RISK-METADATA-KEY-COLLISION                                        |
+| Status      | Accepted                                                           |
+| Likelihood  | Unlikely                                                           |
+| Consequence | Moderate                                                           |
+| Threatens   | [NEED-CONFIG-IN-CARGO](product.mara.md#01M78FHG7FKY2H96D624M0CEMJ) |
 
-:::mara risk RISK-GUARD-HASH-PLAN
-:mid: 01M7FQT51YQ82Y4SVCT9JATHDP
-:title: The target-default guard reads a list otherwise than Nx's native hash plan
-:status: accepted
-:likelihood: unlikely
-:consequence: major
-:threatens: GOAL-TRUSTED-CACHE
-:threatens: NEED-CORRECT-CACHE
+Another Nx plugin for Rust, or Nx itself, could start reading `[package.metadata.nx]` with a different meaning. Manifests would then carry settings two tools interpret differently, and one of them would have to move to another key. [ADR-METADATA-KEY](#01M78FHG7FQK38H3AQ3ZN130A0) accepts this.
 
-[[DES-TARGET-DEFAULT-GUARD]] judges what another plugin does to an inferred target's `inputs` by expanding them as the JS helpers of Nx's task hasher do. Nx hashes a task by the plan of its native `HashPlanner`, which receives the lists unexpanded ([[EVD-NX-24-PLUGIN-NODES]], "What a list means"). The two readings differ in both directions. The re-check of 15 November 2026 showed these cases:
+---
+
+<a id="01M78FHG7FAJAK7K2EN2P4XE8C"></a>
+
+### Target defaults written for JS reach Rust targets
+
+| Type        | Risk                                                                |
+| ----------- | ------------------------------------------------------------------- |
+| ID          | RISK-TARGET-DEFAULTS                                                |
+| Status      | Accepted                                                            |
+| Likelihood  | Likely                                                              |
+| Consequence | Major                                                               |
+| Threatens   | [NEED-EFFICIENT-BUILDS](product.mara.md#01M78FHG7F597HWJZPETAMWPQ4) |
+| Threatens   | [NEED-CORRECT-CACHE](product.mara.md#01M78FHG7FMWW59PS4KPRKVCEJ)    |
+
+Because Rust targets share the names `build`, `lint` and `test` with JS targets, a `targetDefaults` entry keyed by a bare name applies to them. Nx 24 lays the entry over the inferred target: its `dependsOn`, `inputs`, `outputs` and `cache` replace the inferred values unless a list keeps them with `"..."`, and its `options` reach the executor ([EVD-NX-TARGET-DEFAULTS](#01M7A0NA0X5XDW6MEQNS90EWC2)). A `dependsOn: ["^build"]` then adds a build of every crate a crate depends on ([EVD-NXRUST-BUILD-DEPS](#01M78FHG7FKCEAGRQKJ36NF8WZ)); batching ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)) puts them in one batch with the build that needs them. An `inputs` list written for a JS tool drops the toolchain, environment and workspace inputs from the key, so a result built under other settings is restored. An `outputs` list drops the artifacts, so a cache hit restores no binary, and `cache: true` caches the targets that the plugin leaves uncached because their artifacts lie outside the repository. A `filter` on projects, plugin or executor keeps an entry away from Rust targets ([EVD-NX-24-INSPECTION](#01M78FHG7F32NTNKGXVJT9QA2A)), but a `plugin` filter cannot select targets from `package.json` scripts or `project.json` files. The executor runs a task without the options it does not know and says so in the task's output, which mitigates what an entry's options do ([REQ-UNKNOWN-OPTIONS](configuration.mara.md#01M7A93PSWRTX4KDZVJ0ACW62Y)). [REQ-TARGET-DEFAULT-GUARD](targets.mara.md#01M78FHG7FV5M1E44R30RRAB5P) mitigates the rest: the plugin reports such an entry, as an error where Nx could restore a result that the task would not produce.
+
+---
+
+<a id="01M7FQT51YQ82Y4SVCT9JATHDP"></a>
+
+### The target-default guard reads a list otherwise than Nx's native hash plan
+
+| Type        | Risk                                                             |
+| ----------- | ---------------------------------------------------------------- |
+| ID          | RISK-GUARD-HASH-PLAN                                             |
+| Status      | Accepted                                                         |
+| Likelihood  | Unlikely                                                         |
+| Consequence | Major                                                            |
+| Threatens   | [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7) |
+| Threatens   | [NEED-CORRECT-CACHE](product.mara.md#01M78FHG7FMWW59PS4KPRKVCEJ) |
+
+[DES-TARGET-DEFAULT-GUARD](targets.mara.md#01M7AT4GDP59EWQTMVSVR69G4M) judges what another plugin does to an inferred target's `inputs` by expanding them as the JS helpers of Nx's task hasher do. Nx hashes a task by the plan of its native `HashPlanner`, which receives the lists unexpanded ([EVD-NX-24-PLUGIN-NODES](#01M7F6Z60PVYPTBT2264KKH65C), "What a list means"). The two readings differ in both directions. The re-check of 15 November 2026 showed these cases:
 
 1. A self input written as `{ "input": <name>, "dependencies": false }`, whose definition the guard does not expand, lets a later plugin's named input with a negated pattern take a crate's sources out of its key.
 2. A later plugin that defines `default` anew for a crate that another crate reads through `^default`, where the first crate's own targets read another named input, takes that crate's sources out of the other's key, because the guard does not compare the definitions that a `^` input reads.
 3. A later plugin's negated pattern that the native plan does not apply, such as `"!{workspaceRoot}/rust/crates/api/src/**/*"` or `{ "fileset": "!{projectRoot}/src/**/*", "dependencies": true }`, is refused although the key stays the same.
 
 Cases 1 and 2 end in a stale cache hit, but only where a second plugin contributes these particular forms to a crate's own project. Case 3 is a false refusal, which the fixes that the message offers get past: an `exclude` on that plugin's entry, or the change written into the crate's `project.json`. For a target without `inputs`, the native plan also held a crate's files where a later plugin defined `default` anew, unlike the JS helpers' expansion that the guard copies. The planned mitigation (`nxr-2vzmt5`: compare what the native planner plans for the merged target and for the guard's rebuild, or close cases 1 to 3 one by one) was deferred to the backlog on 15 November 2026 by the maintainer's rule for exotic findings, since all three cases require a second Nx plugin rewriting a crate's own targets.
-:::
 
-:::mara risk RISK-UNDECLARED-INPUTS
-:mid: 01M78FHG7F7QAFW6P09CQYEPJA
-:title: A task reads something its cache key does not cover
-:status: accepted
-:likelihood: possible
-:consequence: major
-:threatens: GOAL-TRUSTED-CACHE
-:threatens: NEED-CORRECT-CACHE
+---
 
-A build script, proc macro or test can read files outside the crate, environment variables outside the allowlist, or the network. A change there does not change the key, and a stale result is restored. The plugin declares what it knows: it hashes the whole folder of a crate and of a path dependency without a project, and warns where Nx cannot see such a dependency's files. A repository adds the files outside a crate that the crate reads ([[REQ-BUILD-SCRIPT-INPUTS]]), and variables and commands. A `build` that ran cargo fails when Cargo's dependency files name a repository file that no input covers ([[REQ-BUILD-INPUT-CHECK]]).
+<a id="01M78FHG7F7QAFW6P09CQYEPJA"></a>
 
-What remains: a file that a proc macro opens without an include macro, which Cargo does not track and no dependency file shows; files that only `check`, `lint`, `test` or `doc` read, or that tests open at run time, since Cargo records those reads only in its build directory or not at all; any undeclared read of a crate whose `build` does not run through Nx, as in a pipeline that runs only `lint` and `test`; files outside the repository, which Nx cannot hash; environment variables outside the list; and the network ([[EVD-CARGO-DEP-INFO]]). Without a sandbox the plugin cannot detect these. [[ADR-V1-SCOPE]] accepts this.
-:::
+### A task reads something its cache key does not cover
 
-:::mara risk RISK-HOST-ENVIRONMENT
-:mid: 01M78FHG7F36BVH0EP3K2REH3E
-:title: A result is restored on a machine that differs in ways the key cannot see
-:status: accepted
-:likelihood: possible
-:consequence: moderate
-:threatens: NEED-CORRECT-CACHE
+| Type        | Risk                                                             |
+| ----------- | ---------------------------------------------------------------- |
+| ID          | RISK-UNDECLARED-INPUTS                                           |
+| Status      | Accepted                                                         |
+| Likelihood  | Possible                                                         |
+| Consequence | Major                                                            |
+| Threatens   | [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7) |
+| Threatens   | [NEED-CORRECT-CACHE](product.mara.md#01M78FHG7FMWW59PS4KPRKVCEJ) |
 
-The key contains the toolchain, including the host triple, and the target triple. It does not contain system libraries, the linker, the C toolchain version, Cargo and tool configuration outside the repository, such as `$CARGO_HOME/config.toml` or a rustfmt configuration in the home directory, or a configuration file inside the repository that an ignore rule leaves out of the files that Nx reads, apart from the triples, the compiler and the rustdoc that such a configuration picks and the Clippy configuration files that `CLIPPY_CONF_DIR` can select, also through such a configuration's `[env]` ([[DES-INPUTS]]). A compiler or rustdoc named there is read when Nx creates the graph, so under the Nx daemon a change to it counts only once the graph is created again. With a cache shared between unlike machines of one triple, a test result or a dynamically linked binary from one can be restored on another where it would behave differently. A repository can add a runtime input that tells its machines apart. [[ADR-V1-SCOPE]] accepts this. The key does not contain the checkout's folder either ([[DES-INVOCATION]]), so a `build` restored in another checkout on the same machine, which Nx 24's per-user cache allows by default, brings executables whose compiled-in paths, such as `env!("CARGO_MANIFEST_DIR")`, name the checkout that built them. On 22 November 2026 the maintainer accepted this as part of this risk; a repository that needs its own paths gives `build` an input that names the checkout ([Caching](caching.mara.md#sharing-the-cache-between-checkouts)).
+A build script, proc macro or test can read files outside the crate, environment variables outside the allowlist, or the network. A change there does not change the key, and a stale result is restored. The plugin declares what it knows: it hashes the whole folder of a crate and of a path dependency without a project, and warns where Nx cannot see such a dependency's files. A repository adds the files outside a crate that the crate reads ([REQ-BUILD-SCRIPT-INPUTS](caching.mara.md#01M78FHG7FC47G6VCHVQBY6JT2)), and variables and commands. A `build` that ran cargo fails when Cargo's dependency files name a repository file that no input covers ([REQ-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QH5F72B0567M3WNP1)).
 
-On 14 November 2026 the maintainer kept this risk for Cargo configuration that Nx does not hash, with the option he chose, word for word: "Keep the risk, warn clearly". No key changes. The plugin warns for every Cargo configuration file that it reads and that Nx does not hash, where the file sets something that can change a build or a check, and says that after a change to it the cache has to be reset with `nx reset` or the tasks run with `--skip-nx-cache` ([[DES-DIAGNOSTICS]]). The two reproductions in [[EVD-CARGO-REDIRECTIONS]] show what the warning names: with the Nx daemon, a `[patch]` switched to another crate of the same name, version and dependencies, and without the daemon a changed `[env]` value in an ignored `.cargo/config.toml`, gave a cache hit for a build that cargo would have done differently. The options not taken were hashing the text of those files into every key, and hashing only their build-affecting tables with a script at hash time; both would give the tasks of every developer with a global Cargo configuration keys of their own.
+What remains: a file that a proc macro opens without an include macro, which Cargo does not track and no dependency file shows; files that only `check`, `lint`, `test` or `doc` read, or that tests open at run time, since Cargo records those reads only in its build directory or not at all; any undeclared read of a crate whose `build` does not run through Nx, as in a pipeline that runs only `lint` and `test`; files outside the repository, which Nx cannot hash; environment variables outside the list; and the network ([EVD-CARGO-DEP-INFO](#01M7ACMK1Q7ATJKRRHC2WPJE1Z)). Without a sandbox the plugin cannot detect these. [ADR-V1-SCOPE](#01M78FHG7FTPVXE53KP8PW9NR7) accepts this.
 
-On 22 November 2026, after `1.0.0-rc.1` restored a cached `lint` past a change to the `clippy.toml` in the folder that `CLIPPY_CONF_DIR` names, the maintainer answered, word for word: "keep external Cargo config (`$CARGO_HOME/config.toml`, etc.) and per-user Rustfmt config (`$XDG_CONFIG_HOME/rustfmt/rustfmt.toml`, `~/.config/rustfmt/rustfmt.toml`, `~/.rustfmt.toml`) accepted under `RISK-HOST-ENVIRONMENT` rather than hashing them into cache keys, and emit the same clear graph-creation warning for per-user Rustfmt configuration outside the repository that the plugin already emits for external Cargo configuration." So a per-user rustfmt configuration file that rustfmt takes for a crate draws a warning in the `fmt-check` and `fmt` tasks of that crate and in no key ([[DES-DIAGNOSTICS]]). A rustfmt configuration file in a folder above the repository, which rustfmt takes before the per-user ones and for the same reason ([[EVD-CLIPPY-RUSTFMT-CONFIG-LOOKUP]]), draws the same warning: that follows from the rule of 14 November 2026 for configuration outside the repository, "Keep the risk, warn clearly", and is not part of the answer of 22 November. The Clippy configuration that `CLIPPY_CONF_DIR` selects is not of this kind: the variable comes from the task's environment, which the key already follows, or from Cargo's `[env]`, which graph creation reads, and `lint` has a runtime input that prints the files of every such folder ([[DES-INPUTS]], "Clippy's configuration folder"). A `clippy.toml` above the repository that clippy takes where the variable is unset and no folder of the repository holds one stays within this risk, still without a warning. On 22 November 2026 the maintainer chose for it, word for word: "Warn, after rc.2: same rule as for Cargo and rustfmt ("keep the risk, warn clearly"), but it stays in the backlog until rc.2 is out." (nxr-8akbay).
-:::
+---
 
-:::mara risk RISK-SUBSET-AS-FULL
-:mid: 01M78FHG7FECGDXGMB8MB75DPD
-:title: A subset test result is reused as a full-suite result
-:status: accepted
-:likelihood: unlikely
-:consequence: severe
-:threatens: REQ-TEST-MODE-KEY
-:threatens: GOAL-TRUSTED-CACHE
+<a id="01M78FHG7F36BVH0EP3K2REH3E"></a>
 
-If the result of running selected tests were stored under the key of the full suite, the main branch could show green for tests that never ran. [[DES-TEST-MODE]] prevents it by putting the mode and the baseline commit into the key, and by letting a task select only where every evaluation of the mode command in its `nx` command printed the mode that its executor reads, with a value that is never restored for an evaluation after a subset ran in another mode ([[EVD-TEST-MODE-GUARD]]). The remaining exposure is the mode command reporting another mode than the one the task runs in, for example when Nx reuses an old evaluation or runs the command in another environment than the task ([[RISK-NX-INPUT-SEMANTICS]]). A run of the test target that the `test` option names is a subset as well: the option is in its key, the task runs in a cargo command of its own, and it never selects affected tests, so its result is neither stored under the key of the whole suite nor counted for another crate ([[DES-TEST-RUN]], "One test target"; [[DES-BATCH]], "Groups of one crate").
-:::
+### A result is restored on a machine that differs in ways the key cannot see
 
-:::mara risk RISK-NX-INPUT-SEMANTICS
-:mid: 01M78FHG7FWVEHYKF3KRPQYTWN
-:title: Nx evaluates inputs differently from what the design assumes
-:status: accepted
-:likelihood: unlikely
-:consequence: major
-:threatens: REQ-TEST-MODE-KEY
-:threatens: REQ-TOOLCHAIN-KEY
-:threatens: NEED-AFFECTED
-:threatens: REQ-ENV-ALLOWLIST
+| Type        | Risk                                                             |
+| ----------- | ---------------------------------------------------------------- |
+| ID          | RISK-HOST-ENVIRONMENT                                            |
+| Status      | Accepted                                                         |
+| Likelihood  | Possible                                                         |
+| Consequence | Moderate                                                         |
+| Threatens   | [NEED-CORRECT-CACHE](product.mara.md#01M78FHG7FMWW59PS4KPRKVCEJ) |
 
-The design assumed that a runtime input is evaluated afresh on each run, also under the Nx daemon; that its command runs through a shell from the repository root, so that it can change into a workspace folder, and with the environment of the `nx` command; that task-based affected treats runtime inputs and batched tasks the way the cache does; and that `^` inputs hash stably when projects form a cycle. Nx 24.0.6 confirms most of this ([[EVD-NX-24-INPUT-SEMANTICS]]). It evaluates a runtime input once per task of every run, also under the daemon, through `sh -c` in the repository root, with the environment of the `nx` command plus the dotenv files it loads for the task. Batched and unbatched runs select the same tasks and share their keys, and `^` inputs hash stably over a project cycle. Two differences remain.
+The key contains the toolchain, including the host triple, and the target triple. It does not contain system libraries, the linker, the C toolchain version, Cargo and tool configuration outside the repository, such as `$CARGO_HOME/config.toml` or a rustfmt configuration in the home directory, or a configuration file inside the repository that an ignore rule leaves out of the files that Nx reads, apart from the triples, the compiler and the rustdoc that such a configuration picks and the Clippy configuration files that `CLIPPY_CONF_DIR` can select, also through such a configuration's `[env]` ([DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)). A compiler or rustdoc named there is read when Nx creates the graph, so under the Nx daemon a change to it counts only once the graph is created again. With a cache shared between unlike machines of one triple, a test result or a dynamically linked binary from one can be restored on another where it would behave differently. A repository can add a runtime input that tells its machines apart. [ADR-V1-SCOPE](#01M78FHG7FTPVXE53KP8PW9NR7) accepts this. The key does not contain the checkout's folder either ([DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB)), so a `build` restored in another checkout on the same machine, which Nx 24's per-user cache allows by default, brings executables whose compiled-in paths, such as `env!("CARGO_MANIFEST_DIR")`, name the checkout that built them. On 22 November 2026 the maintainer accepted this as part of this risk; a repository that needs its own paths gives `build` an input that names the checkout ([Caching](caching.mara.md#sharing-the-cache-between-checkouts)).
 
-In a batch, Nx computes each task's key with an environment it rebuilds for that task from dotenv files, but starts the batch process with the environment of the `nx` command, into which it loaded only the root `.env`, `.env.local` and `.local.env`, and in another order of priority. The two differ when a file in the crate's folder or a root file named for a target or configuration, such as `.env.test`, sets a variable; when `.env.local` and `.local.env` set it differently; and when a shell value equal to a root file's value is unloaded for the task ([[EVD-NX-24-INPUT-SEMANTICS]]). A test mode, a toolchain or a listed variable is then in the key of a task that runs with another value. A result could be stored under a key that does not describe it, a subset result under the full-suite key among them ([[RISK-SUBSET-AS-FULL]]). This takes batching and dotenv files that set one of these variables. [[DES-BATCH]] rebuilds each task's environment from the same files and runs every cargo call with it. That copy of Nx's loading is the remaining exposure: a later Nx that reads other files, or in another order, would bring the gap back.
+On 14 November 2026 the maintainer kept this risk for Cargo configuration that Nx does not hash, with the option he chose, word for word: "Keep the risk, warn clearly". No key changes. The plugin warns for every Cargo configuration file that it reads and that Nx does not hash, where the file sets something that can change a build or a check, and says that after a change to it the cache has to be reset with `nx reset` or the tasks run with `--skip-nx-cache` ([DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG)). The two reproductions in [EVD-CARGO-REDIRECTIONS](#01M7AQ4FBNBJZK6DKFSMS2793S) show what the warning names: with the Nx daemon, a `[patch]` switched to another crate of the same name, version and dependencies, and without the daemon a changed `[env]` value in an ignored `.cargo/config.toml`, gave a cache hit for a build that cargo would have done differently. The options not taken were hashing the text of those files into every key, and hashing only their build-affecting tables with a script at hash time; both would give the tasks of every developer with a global Cargo configuration keys of their own.
+
+On 22 November 2026, after `1.0.0-rc.1` restored a cached `lint` past a change to the `clippy.toml` in the folder that `CLIPPY_CONF_DIR` names, the maintainer answered, word for word: "keep external Cargo config (`$CARGO_HOME/config.toml`, etc.) and per-user Rustfmt config (`$XDG_CONFIG_HOME/rustfmt/rustfmt.toml`, `~/.config/rustfmt/rustfmt.toml`, `~/.rustfmt.toml`) accepted under `RISK-HOST-ENVIRONMENT` rather than hashing them into cache keys, and emit the same clear graph-creation warning for per-user Rustfmt configuration outside the repository that the plugin already emits for external Cargo configuration." So a per-user rustfmt configuration file that rustfmt takes for a crate draws a warning in the `fmt-check` and `fmt` tasks of that crate and in no key ([DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG)). A rustfmt configuration file in a folder above the repository, which rustfmt takes before the per-user ones and for the same reason ([EVD-CLIPPY-RUSTFMT-CONFIG-LOOKUP](#01M81GZP7WVSAEGZMZ8469VS80)), draws the same warning: that follows from the rule of 14 November 2026 for configuration outside the repository, "Keep the risk, warn clearly", and is not part of the answer of 22 November. The Clippy configuration that `CLIPPY_CONF_DIR` selects is not of this kind: the variable comes from the task's environment, which the key already follows, or from Cargo's `[env]`, which graph creation reads, and `lint` has a runtime input that prints the files of every such folder ([DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP), "Clippy's configuration folder"). A `clippy.toml` above the repository that clippy takes where the variable is unset and no folder of the repository holds one stays within this risk, still without a warning. On 22 November 2026 the maintainer chose for it, word for word: "Warn, after rc.2: same rule as for Cargo and rustfmt ("keep the risk, warn clearly"), but it stays in the backlog until rc.2 is out." (nxr-8akbay).
+
+---
+
+<a id="01M78FHG7FECGDXGMB8MB75DPD"></a>
+
+### A subset test result is reused as a full-suite result
+
+| Type        | Risk                                                             |
+| ----------- | ---------------------------------------------------------------- |
+| ID          | RISK-SUBSET-AS-FULL                                              |
+| Status      | Accepted                                                         |
+| Likelihood  | Unlikely                                                         |
+| Consequence | Severe                                                           |
+| Threatens   | [REQ-TEST-MODE-KEY](testing.mara.md#01M78FHG7FS5MHY2P1ZPS6D403)  |
+| Threatens   | [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7) |
+
+If the result of running selected tests were stored under the key of the full suite, the main branch could show green for tests that never ran. [DES-TEST-MODE](testing.mara.md#01M78FHG7F7NZT1HQM98QHVY34) prevents it by putting the mode and the baseline commit into the key, and by letting a task select only where every evaluation of the mode command in its `nx` command printed the mode that its executor reads, with a value that is never restored for an evaluation after a subset ran in another mode ([EVD-TEST-MODE-GUARD](#01M7K5MZ9947Q1ACERV7VWPGF0)). The remaining exposure is the mode command reporting another mode than the one the task runs in, for example when Nx reuses an old evaluation or runs the command in another environment than the task ([RISK-NX-INPUT-SEMANTICS](#01M78FHG7FWVEHYKF3KRPQYTWN)). A run of the test target that the `test` option names is a subset as well: the option is in its key, the task runs in a cargo command of its own, and it never selects affected tests, so its result is neither stored under the key of the whole suite nor counted for another crate ([DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ), "One test target"; [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Groups of one crate").
+
+---
+
+<a id="01M78FHG7FWVEHYKF3KRPQYTWN"></a>
+
+### Nx evaluates inputs differently from what the design assumes
+
+| Type        | Risk                                                            |
+| ----------- | --------------------------------------------------------------- |
+| ID          | RISK-NX-INPUT-SEMANTICS                                         |
+| Status      | Accepted                                                        |
+| Likelihood  | Unlikely                                                        |
+| Consequence | Major                                                           |
+| Threatens   | [REQ-TEST-MODE-KEY](testing.mara.md#01M78FHG7FS5MHY2P1ZPS6D403) |
+| Threatens   | [REQ-TOOLCHAIN-KEY](caching.mara.md#01M78FHG7FRC3KSSDACETE745J) |
+| Threatens   | [NEED-AFFECTED](product.mara.md#01M78FHG7F4CKFXTSBXJ7131EY)     |
+| Threatens   | [REQ-ENV-ALLOWLIST](caching.mara.md#01M78FHG7FB30V9FZNFF0TFHC1) |
+
+The design assumed that a runtime input is evaluated afresh on each run, also under the Nx daemon; that its command runs through a shell from the repository root, so that it can change into a workspace folder, and with the environment of the `nx` command; that task-based affected treats runtime inputs and batched tasks the way the cache does; and that `^` inputs hash stably when projects form a cycle. Nx 24.0.6 confirms most of this ([EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD)). It evaluates a runtime input once per task of every run, also under the daemon, through `sh -c` in the repository root, with the environment of the `nx` command plus the dotenv files it loads for the task. Batched and unbatched runs select the same tasks and share their keys, and `^` inputs hash stably over a project cycle. Two differences remain.
+
+In a batch, Nx computes each task's key with an environment it rebuilds for that task from dotenv files, but starts the batch process with the environment of the `nx` command, into which it loaded only the root `.env`, `.env.local` and `.local.env`, and in another order of priority. The two differ when a file in the crate's folder or a root file named for a target or configuration, such as `.env.test`, sets a variable; when `.env.local` and `.local.env` set it differently; and when a shell value equal to a root file's value is unloaded for the task ([EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD)). A test mode, a toolchain or a listed variable is then in the key of a task that runs with another value. A result could be stored under a key that does not describe it, a subset result under the full-suite key among them ([RISK-SUBSET-AS-FULL](#01M78FHG7FECGDXGMB8MB75DPD)). This takes batching and dotenv files that set one of these variables. [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) rebuilds each task's environment from the same files and runs every cargo call with it. That copy of Nx's loading is the remaining exposure: a later Nx that reads other files, or in another order, would bring the gap back.
 
 Task-based affected selects tasks by changed files, never by environment variables or the output of runtime commands. A toolchain update without a change to a toolchain file, or a new value of a listed variable, makes no task affected, although it changes the keys. A task that does run still misses the cache, so no stale result is restored, but `nx affected` does not run the tasks such a change reaches.
-:::
 
-:::mara risk RISK-BATCH-BEHAVIOUR
-:mid: 01M78FHG7FARJNEMM2EFX7XFY9
-:title: Nx batches behave worse than the design needs
-:status: accepted
-:likelihood: likely
-:consequence: major
-:threatens: REQ-BATCHING
-:threatens: NEED-EFFICIENT-BUILDS
+---
 
-On Nx 24.0.6, an executor with `preferBatch` is batched without `--batch`, and Nx hashes each task of a batch with that task's environment, restores a task on its own and then leaves it out of the batch, and stores and replays each task's own result and terminal output ([[EVD-NX-24-BATCHES]], [[EVD-NX-24-INPUT-SEMANTICS]]). Per-task results and per-task caching hold. Three things are worse than the design needs:
+<a id="01M78FHG7FARJNEMM2EFX7XFY9"></a>
 
-- While a batch runs, Nx starts no other task, whatever `--parallel` allows. Tasks that started before the batch run on, and a task that depends on any task of the batch waits for the whole batch, so in a mixed repository JS tasks wait for the Rust batch. [[ADR-BATCH-EXECUTOR]] accepts this.
-- Nx stores the results and declared outputs of a batch's tasks only when the whole batch has ended. A later group of the batch that writes the declared outputs of an earlier task changes what Nx stores under that task's key, as `cargo test` does with the executable of a crate's `build` when a dev-dependency enables other features. This refutes an assumption of [[DES-BATCH]], that the groups of a batch can run one after another while Nx stores each task's result as it would for the task run alone. [[DES-BATCH]] therefore runs `build` and `doc`, the targets whose files Nx stores, through a batch executor of their own, so that Nx stores their batch before it starts the batch of the tasks that depend on them, such as the `test` that waits for a crate's `build` ([[ADR-TEST-AFTER-BUILD]], [[EVD-CARGO-ARTIFACT-WRITERS]]).
+### Nx batches behave worse than the design needs
+
+| Type        | Risk                                                                |
+| ----------- | ------------------------------------------------------------------- |
+| ID          | RISK-BATCH-BEHAVIOUR                                                |
+| Status      | Accepted                                                            |
+| Likelihood  | Likely                                                              |
+| Consequence | Major                                                               |
+| Threatens   | [REQ-BATCHING](execution.mara.md#01M78FHG7FRS15ZD38BR42JSK7)        |
+| Threatens   | [NEED-EFFICIENT-BUILDS](product.mara.md#01M78FHG7F597HWJZPETAMWPQ4) |
+
+On Nx 24.0.6, an executor with `preferBatch` is batched without `--batch`, and Nx hashes each task of a batch with that task's environment, restores a task on its own and then leaves it out of the batch, and stores and replays each task's own result and terminal output ([EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA), [EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD)). Per-task results and per-task caching hold. Three things are worse than the design needs:
+
+- While a batch runs, Nx starts no other task, whatever `--parallel` allows. Tasks that started before the batch run on, and a task that depends on any task of the batch waits for the whole batch, so in a mixed repository JS tasks wait for the Rust batch. [ADR-BATCH-EXECUTOR](#01M78FHG7F9MD0KQ68Y5CC4HK5) accepts this.
+- Nx stores the results and declared outputs of a batch's tasks only when the whole batch has ended. A later group of the batch that writes the declared outputs of an earlier task changes what Nx stores under that task's key, as `cargo test` does with the executable of a crate's `build` when a dev-dependency enables other features. This refutes an assumption of [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), that the groups of a batch can run one after another while Nx stores each task's result as it would for the task run alone. [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) therefore runs `build` and `doc`, the targets whose files Nx stores, through a batch executor of their own, so that Nx stores their batch before it starts the batch of the tasks that depend on them, such as the `test` that waits for a crate's `build` ([ADR-TEST-AFTER-BUILD](#01M7DJ8QGMASKGT057YS8Z9QBY), [EVD-CARGO-ARTIFACT-WRITERS](#01M7DJ8QGMBPJSJHQ2BVBCHA1R)).
 - Nx takes results in one shape only. A throw or an exit of the batch fails each of its tasks and stores nothing, unless `NX_CACHE_FAILURES=true`, under which Nx stores a failure for each of them that later runs replay without starting a batch. A task left out runs again in a new batch process. Storing a result without terminal output fails and ends the run, while with `--skip-nx-cache` the same results pass. Without `NX_CACHE_FAILURES=true`, Nx stores a task only with the status `success`; with it, a reported failure is stored and replayed as well. Any other status than `success`, `failure` and `skipped` stops Nx with an error, storing nothing, when a generator streams it, and leaves the task unstored in a successful run when it comes in one object of results. A line that the batch process prints itself belongs to no task.
 
 On 14 November 2026 the control plane of the work decided that the text, likelihood and consequence of this risk follow these experiments, without asking the maintainer again.
-:::
 
-:::mara risk RISK-HAKARI-GAPS
-:mid: 01M78FHG7F2NTRC9DZ1NMXWY7V
-:title: cargo-hakari does not unify everything the plugin relies on
-:status: accepted
-:likelihood: unlikely
-:consequence: major
-:threatens: REQ-STABLE-FEATURES
+---
 
-cargo-hakari unifies the features of third-party crates only. It leaves to the selection the features of members, of third-party crates that depend on a member through normal or build dependencies, and of dependencies under platform tables on platforms that its configuration does not list, and its excludes and the `version-only` line style leave further crates out; `cargo hakari verify` and `generate --diff` report none of these ([[EVD-HAKARI-UNIFICATION]]). Cargo itself applies feature flags to the crates that a command selects. [[DES-UNIFICATION]] therefore uses the hack crate only where four checks at graph creation show that none of the gaps of cargo-hakari applies, and otherwise builds the whole workspace, which costs time where it applies; it applied in both workspaces with cargo-hakari that were examined, guppy and nextest, because their members ask features of each other. A group whose flags act on the selected crates, or that builds for a triple that `platforms` does not list, runs one crate per command ([[DES-BATCH]]), and the uncached drift check keeps a stale hack crate from storing results.
+<a id="01M78FHG7F2NTRC9DZ1NMXWY7V"></a>
+
+### cargo-hakari does not unify everything the plugin relies on
+
+| Type        | Risk                                                                |
+| ----------- | ------------------------------------------------------------------- |
+| ID          | RISK-HAKARI-GAPS                                                    |
+| Status      | Accepted                                                            |
+| Likelihood  | Unlikely                                                            |
+| Consequence | Major                                                               |
+| Threatens   | [REQ-STABLE-FEATURES](execution.mara.md#01M78FHG7FNYQZJD8HRKA23YRY) |
+
+cargo-hakari unifies the features of third-party crates only. It leaves to the selection the features of members, of third-party crates that depend on a member through normal or build dependencies, and of dependencies under platform tables on platforms that its configuration does not list, and its excludes and the `version-only` line style leave further crates out; `cargo hakari verify` and `generate --diff` report none of these ([EVD-HAKARI-UNIFICATION](#01M7D9EQW8FQW9BAEZSHQ37116)). Cargo itself applies feature flags to the crates that a command selects. [DES-UNIFICATION](execution.mara.md#01M78FHG7F43VP2172VYY8A41Q) therefore uses the hack crate only where four checks at graph creation show that none of the gaps of cargo-hakari applies, and otherwise builds the whole workspace, which costs time where it applies; it applied in both workspaces with cargo-hakari that were examined, guppy and nextest, because their members ask features of each other. A group whose flags act on the selected crates, or that builds for a triple that `platforms` does not list, runs one crate per command ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)), and the uncached drift check keeps a stale hack crate from storing results.
 
 What remains is a gap that none of these sees, so that a crate's result depends on its batch under a key that does not change:
 
-- **Changes that graph creation does not see in time.** A redirection to a member, or another change to a configuration file outside the repository or one that Nx ignores, made while the Nx daemon keeps a graph that chose `hakari`, counts only when Nx creates the graph again, as for the edges ([[RISK-HOST-ENVIRONMENT]]).
+- **Changes that graph creation does not see in time.** A redirection to a member, or another change to a configuration file outside the repository or one that Nx ignores, made while the Nx daemon keeps a graph that chose `hakari`, counts only when Nx creates the graph again, as for the edges ([RISK-HOST-ENVIRONMENT](#01M78FHG7F36BVH0EP3K2REH3E)).
 - **Shapes that the experiments did not cover.** The settings that the fourth check accepts were tried on one workspace with normal, build and dev-dependencies, a platform table and a crate used on the host and the target, not with proc macros, renamed or optional third-party dependencies, or several versions of one crate.
 - **What cargo-hakari's own checks miss.** The drift check relies on `generate --diff` and `manage-deps --dry-run`, which caught every stale case tried, not every possible one.
 
 The likelihood is unlikely: the first needs a change outside the repository while the daemon runs, which the warning about such a file names; the second a shape where cargo-hakari unifies otherwise than in what was tried; the third a stale hack crate that both commands accept. The consequence stays major: Nx restores a result built with other features, which can hide a failing build or test.
-:::
 
-:::mara risk RISK-CARGO-AFFECTED
-:mid: 01M78FHG7F5EH60R4TW2E645EW
-:title: cargo-affected does not deliver what the test design assumes
-:status: accepted
-:likelihood: possible
-:consequence: major
-:threatens: REQ-AFFECTED-TESTS
-:threatens: NEED-FAST-TESTS
+---
 
-cargo-affected describes itself as extremely early. The design assumed that `status --report-json --report-detail full` lists tests precisely enough to build a nextest filter and to map results to crates, and that `status` is cheap although it lists tests through nextest, which needs built test binaries. Both held on ripgrep, tokio and a fixture: nextest ran exactly the selected tests, every result mapped to its crate, and status builds only what the run then uses ([[EVD-CARGO-AFFECTED-REPORT]], [[EVD-CARGO-AFFECTED-COST]]). A correct filter can still leave out failing tests, so they hold only with the conditions that [[DES-TEST-RUN]] now sets: git's `diff.relative` for a workspace below the top of its repository, the plugin's own check of the changed files against git, the selection on the command line, a baseline used only in the context it was collected in ([[ADR-AFFECTED-BASELINE-CONTEXT]]), and coverage narrowing only changes whose whole effect it records, with every other change widened by the tasks' inputs ([[ADR-AFFECTED-TESTS-WIDENING]]).
+<a id="01M78FHG7F5EH60R4TW2E645EW"></a>
+
+### cargo-affected does not deliver what the test design assumes
+
+| Type        | Risk                                                             |
+| ----------- | ---------------------------------------------------------------- |
+| ID          | RISK-CARGO-AFFECTED                                              |
+| Status      | Accepted                                                         |
+| Likelihood  | Possible                                                         |
+| Consequence | Major                                                            |
+| Threatens   | [REQ-AFFECTED-TESTS](testing.mara.md#01M78FHG7FNTNJW0STSNNP2AF5) |
+| Threatens   | [NEED-FAST-TESTS](product.mara.md#01M78FHG7FX5BYGF6N2SGWAV2D)    |
+
+cargo-affected describes itself as extremely early. The design assumed that `status --report-json --report-detail full` lists tests precisely enough to build a nextest filter and to map results to crates, and that `status` is cheap although it lists tests through nextest, which needs built test binaries. Both held on ripgrep, tokio and a fixture: nextest ran exactly the selected tests, every result mapped to its crate, and status builds only what the run then uses ([EVD-CARGO-AFFECTED-REPORT](#01M7J4YJXH9M7KNRM19MJPWS7H), [EVD-CARGO-AFFECTED-COST](#01M7J59DN6XGWT1DGJ4DMC0J7E)). A correct filter can still leave out failing tests, so they hold only with the conditions that [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) now sets: git's `diff.relative` for a workspace below the top of its repository, the plugin's own check of the changed files against git, the selection on the command line, a baseline used only in the context it was collected in ([ADR-AFFECTED-BASELINE-CONTEXT](#01M7J8GXGNJ2X4GBGAJW7N0ZMS)), and coverage narrowing only changes whose whole effect it records, with every other change widened by the tasks' inputs ([ADR-AFFECTED-TESTS-WIDENING](#01M7J59DN6SH9F9NGK13ETDBVZ)).
 
 What remains is code that another crate evaluates while it compiles, such as a `const fn` used in a `const` or a macro by example, which leaves no coverage for that crate's tests and is a stated limit; a test that starts a program or reads a file without a declared relation, whose key is wrong without affected mode too; and a later cargo-affected that reports otherwise, which runs the full suite where the plugin does not recognise the report. The likelihood is possible. The consequence is major: a pull request's affected run can pass where the full suite fails. The selector stays a replaceable step and the feature is off by default.
-:::
 
-:::mara risk RISK-COVERAGE-COST
-:mid: 01M78FHG7F5ES0QNZ84J94JZQ2
-:title: Collecting coverage costs too much on main
-:status: accepted
-:likelihood: likely
-:consequence: moderate
-:threatens: NEED-FAST-TESTS
+---
 
-The baseline runs `cargo affected collect --diff` on every main commit, and a full `collect` where no usable baseline exists. What that costs depends on the workspace ([[EVD-COVERAGE-COLLECT-COST]]). On ripgrep it costs about as much as the plain test run of the same commit. On rust-analyzer, whose 8,314 tests run in 21 s at 4 threads, a full `collect` took eleven minutes, `--diff` 52 s for a commit that changed no Rust, 1.5 minutes for a change to a leaf crate and 12.5 to 14 minutes for a change to a core crate, and the database that the pipeline saves for every commit held 8.75 GB, 404 MB compressed. Collection runs every test it re-collects under instrumentation, and its cost grows with the number of tests and the code they reach, so a workspace with many fast tests, like rust-analyzer, pays far more on main than selection can save on pull requests ([[EVD-CARGO-AFFECTED-COST]]). Slow tests do not make the trade sure either: where they are integration tests that start a binary or read shared files, the widening of [[DES-TEST-RUN]] can select the whole suite for common changes and leave only the overhead. What pull requests save after that widening, the upkeep of the baseline over many commits and moving the database between CI runs were not measured. The likelihood is likely for workspaces with many fast tests and unknown for the rest. The consequence stays moderate: the main pipeline slows down and the CI cache fills, but no result is wrong.
+<a id="01M78FHG7F5ES0QNZ84J94JZQ2"></a>
 
-What limits it: `affectedTests` is off by default, so only a workspace that turns it on pays, and it can turn it off again. [[DES-BASELINE]] starts a full `collect` without the previous database, which on rust-analyzer took 652 s where writing over the old one took 957 s. The user guide gives the measured costs, says that slow tests make a workspace a candidate and no more, and gives the commands to measure representative changes in one's own repository before switching the feature on ([Continuous integration](ci.mara.md#the-coverage-baseline)). Instrumented and normal builds did not evict each other in Cargo's directories, so they need no separate build directory for that. Collection runs with the parallelism that the pipeline sets, and its memory grows with it: at 4 jobs and 4 test threads rust-analyzer's collection stayed under 7 GiB, page cache included, while at cargo's and nextest's defaults on a 16-core machine with 14 GB a collection ran while the kernel's out-of-memory killer ended other processes.
-:::
+### Collecting coverage costs too much on main
 
-:::mara risk RISK-BASELINE-DRIFT
-:mid: 01M78FHG7F90XWFCQ150XBFKGM
-:title: Selection gets noisy as the baseline falls behind
-:status: accepted
-:likelihood: possible
-:consequence: minor
-:threatens: NEED-FAST-TESTS
+| Type        | Risk                                                          |
+| ----------- | ------------------------------------------------------------- |
+| ID          | RISK-COVERAGE-COST                                            |
+| Status      | Accepted                                                      |
+| Likelihood  | Likely                                                        |
+| Consequence | Moderate                                                      |
+| Threatens   | [NEED-FAST-TESTS](product.mara.md#01M78FHG7FX5BYGF6N2SGWAV2D) |
 
-A pull request compared against an older baseline has a wider diff and selects more tests. How quickly that happens is inferred from how cargo-affected stores its data and will be observed during real-repository validation rather than blocking 1.0, because the consequence is only lost time (never a wrong result) and `affectedTests` is off by default. The full recollect threshold in [[DES-BASELINE]], `fullCollectThreshold` (default 100 commits), is the user-tunable control.
-:::
+The baseline runs `cargo affected collect --diff` on every main commit, and a full `collect` where no usable baseline exists. What that costs depends on the workspace ([EVD-COVERAGE-COLLECT-COST](#01M7JGWF3ZWGCQTDYM0EN28YJ1)). On ripgrep it costs about as much as the plain test run of the same commit. On rust-analyzer, whose 8,314 tests run in 21 s at 4 threads, a full `collect` took eleven minutes, `--diff` 52 s for a commit that changed no Rust, 1.5 minutes for a change to a leaf crate and 12.5 to 14 minutes for a change to a core crate, and the database that the pipeline saves for every commit held 8.75 GB, 404 MB compressed. Collection runs every test it re-collects under instrumentation, and its cost grows with the number of tests and the code they reach, so a workspace with many fast tests, like rust-analyzer, pays far more on main than selection can save on pull requests ([EVD-CARGO-AFFECTED-COST](#01M7J59DN6XGWT1DGJ4DMC0J7E)). Slow tests do not make the trade sure either: where they are integration tests that start a binary or read shared files, the widening of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) can select the whole suite for common changes and leave only the overhead. What pull requests save after that widening, the upkeep of the baseline over many commits and moving the database between CI runs were not measured. The likelihood is likely for workspaces with many fast tests and unknown for the rest. The consequence stays moderate: the main pipeline slows down and the CI cache fills, but no result is wrong.
 
-:::mara risk RISK-UPSTREAM-CHANGES
-:mid: 01M78FHG7F662HG5KVZQEN15Z3
-:title: Unstable upstream interfaces change under the plugin
-:status: accepted
-:likelihood: likely
-:consequence: moderate
-:threatens: NEED-EFFICIENT-BUILDS
-:threatens: NEED-FAST-TESTS
+What limits it: `affectedTests` is off by default, so only a workspace that turns it on pays, and it can turn it off again. [DES-BASELINE](ci.mara.md#01M78FHG7F1EWYSCPVF4MY7YGF) starts a full `collect` without the previous database, which on rust-analyzer took 652 s where writing over the old one took 957 s. The user guide gives the measured costs, says that slow tests make a workspace a candidate and no more, and gives the commands to measure representative changes in one's own repository before switching the feature on ([Continuous integration](ci.mara.md#the-coverage-baseline)). Instrumented and normal builds did not evict each other in Cargo's directories, so they need no separate build directory for that. Collection runs with the parallelism that the pipeline sets, and its memory grows with it: at 4 jobs and 4 test threads rust-analyzer's collection stayed under 7 GiB, page cache included, while at cargo's and nextest's defaults on a 16-core machine with 14 GB a collection ran while the kernel's out-of-memory killer ended other processes.
 
-Several things the plugin uses are not stable: Cargo's `resolver.feature-unification`, whose name or values could still change; the layout of the build directory, which changed in Cargo 1.100; cargo-affected's commands and report format; Nx's batch executor interface; how Nx copies the plugin for each entry of `nx.json` and calls its hooks, which links an entry's hooks to each other and which Nx does not document ([[EVD-NX-24-PLUGIN-ENTRIES]]); and the private `nx/src/*` modules that `init`, graph creation and executors load (`nx/src/devkit-internals`, `nx/src/project-graph/plugins/get-plugins`, `nx/src/project-graph/utils/retrieve-workspace-files`, `nx/src/project-graph/utils/project-configuration/project-nodes-manager`, `nx/src/plugins/package-json`, `nx/src/plugins/project-json/build-nodes/project-json`, `nx/src/utils/workspace-context`, `nx/src/native`, `nx/src/hasher/hash-plan-inspector`, `nx/src/hasher/task-hasher`, `nx/src/tasks-runner/task-env` and `nx/src/tasks-runner/create-task-graph`), which Nx does not count as public API. The plugin routes every private `nx/src/*` load and `nx/package.json` lookup through one internal bridge, which looks for the repository's Nx in `.nx/installation` and then at the repository root, and uses the plugin's own peer dependency only where the repository has no `nx` package at all. It never mixes the two: a private module that is missing from the repository's Nx is an error, not a reason to load the peer's, and a resolution error other than a missing module is reported as it is. The bridge checks the shape of each export that a caller uses before the caller calls it. For dotenv checking ([[DES-BATCH]], "Dotenv files"), the plugin no longer pins an exact version of `dotenv-expand` at run time or re-implements its expansion loop; instead, its static reference check follows the recorded matching (`/(?<!\\)\${([^{}]+)}|(?<!\\)\$([A-Za-z_][A-Za-z0-9_]*)/g`), splitting (including `split(null)` on literal `"null"`), `(?<!\\)` escaping, and `String.prototype.replace` behaviour of Nx's `dotenv-expand`, guarded by a source-text tripwire test on `dotenv-expand`'s `lib/main.js` ([[EVD-DOTENV-STATIC-CHECK]], [[VER-BATCHING]]). The plugin also avoids the build directory layout entirely, keeps the `cargo` strategy experimental and the selector replaceable, fails graph creation where it cannot tell which entry a hook belongs to ([[DES-DISCOVERY]]), and supports only the Nx majors it has been verified on ([[ADR-COMPATIBILITY]], which accepts this ongoing maintenance risk while tracking Cargo's stabilisation and later Nx majors).
-:::
+---
 
-:::mara risk RISK-MIXED-PROJECT-MERGE
-:mid: 01M78FHG7FMS3SAP65G9TME7FF
-:title: Two plugins describe one folder differently
-:status: accepted
-:likelihood: almost-certain
-:consequence: moderate
-:threatens: NEED-JS-BRIDGE
-:threatens: REQ-WORKSPACE-PROJECT
-:threatens: REQ-PROJECT-NAMES
+<a id="01M78FHG7F90XWFCQ150XBFKGM"></a>
 
-A napi or wasm crate usually has `Cargo.toml` and `package.json` side by side, so this plugin and Nx's `package.json` plugin both create a project for the folder. Nx merges them into one project, and it applies `package.json` and `project.json` after every plugin listed in `nx.json` ([[EVD-NX-PROJECT-MERGE]]). The project is therefore named by `package.json`, or by a `project.json` that sets a name, and not after the crate. A script or `project.json` target that has the name of an inferred target, such as `build` or `test`, and runs something else replaces the inferred target, with its cache settings and inputs, without a message. The same happens to the workspace project when a Cargo workspace sits in a folder that already is an Nx project, such as a repository root with a `project.json` or with an `nx` key in its `package.json`. An edge that names such a project by its crate name is dropped without a message or fails graph creation, while a `dependsOn` entry that names it is rewritten to the new name. [[REQ-MIXED-PROJECTS]] mitigates it by making the outcome predictable rather than different: the plugin keeps its names, leaves replaced targets to the files that replace them, and documents the means Nx offers to keep a target, while a replaced lockfile task makes the crates' tasks fail rather than store a result ([[ADR-MIXED-PROJECT-TARGETS]]). Verified on Nx 24.0.6 ([[EVD-NX-PROJECT-MERGE]]); later Nx majors are verified before joining the peer range under [[ADR-COMPATIBILITY]].
-:::
+### Selection gets noisy as the baseline falls behind
 
-:::mara risk RISK-NAPI-TOOLING
-:mid: 01M78FHG7F2Q33HWV789RWB7T7
-:title: The napi CLI does not fit the two-step build
-:status: accepted
-:likelihood: possible
-:consequence: minor
-:threatens: REQ-ARTIFACT-TARGETS
+| Type        | Risk                                                          |
+| ----------- | ------------------------------------------------------------- |
+| ID          | RISK-BASELINE-DRIFT                                           |
+| Status      | Accepted                                                      |
+| Likelihood  | Possible                                                      |
+| Consequence | Minor                                                         |
+| Threatens   | [NEED-FAST-TESTS](product.mara.md#01M78FHG7FX5BYGF6N2SGWAV2D) |
 
-[[DES-NAPI]] keeps compiling in the batch and post-processes the build with functions that `@napi-rs/cli` exports, because `napi build` always runs cargo itself ([[EVD-NAPI-POSTPROCESS]]). The first assumption of this risk, that the napi CLI can post-process an existing cargo build, was checked on Linux with `@napi-rs/cli` 3.10.12 and holds in that form. Plain `cargo test` also compiles, links and runs Rust unit tests (including tests calling `#[napi]` functions) on Linux with `napi` 3.16.2 and `napi-sys` 3.4.1 without any special feature, because `napi-sys` enables `dyn-symbols` by default via `libloading` ([[EVD-NAPI-POSTPROCESS]]). What remains rests on contracts of napi-rs that its documentation does not promise: the exported functions `generateTypeDef` and `writeJsBinding` and their options, the variables `NAPI_TYPE_DEF_TMP_FOLDER` and `NAPI_FORCE_BUILD_<CRATE>`, and the `rerun-if-env-changed` lines of `napi_build::setup()`. A minor release can change them. The CLI's version is part of the key, so a change makes `napi-build` fail or write other files, and does not restore a wrong result; `napi-derive` is part of the lockfile.
-:::
+A pull request compared against an older baseline has a wider diff and selects more tests. How quickly that happens is inferred from how cargo-affected stores its data and will be observed during real-repository validation rather than blocking 1.0, because the consequence is only lost time (never a wrong result) and `affectedTests` is off by default. The full recollect threshold in [DES-BASELINE](ci.mara.md#01M78FHG7F1EWYSCPVF4MY7YGF), `fullCollectThreshold` (default 100 commits), is the user-tunable control.
 
-:::mara risk RISK-MACOS-UNVERIFIED
-:mid: 01M78KFPPYBZHRM9B41K0TG46Q
-:title: macOS support breaks without anyone noticing
-:status: accepted
-:likelihood: possible
-:consequence: moderate
-:threatens: REQ-COMPATIBILITY
+---
 
-While CI runs on Linux only, nothing runs the plugin on macOS. A change that works on Linux can fail there, for example through a case-insensitive file system, a different linker and library naming for Node addons, or different toolchain paths, and the failure reaches users first. Until macOS runs exist, the claim that macOS is supported rests on the design and not on test runs. [[ADR-CI-LINUX-ONLY]] accepts this for the moment.
-:::
+<a id="01M78FHG7F662HG5KVZQEN15Z3"></a>
 
-:::mara risk RISK-TEST-RUNNER-MACOS
-:mid: 01M7DMTE8WRK2WHQ2R4VXJTWQ3
-:title: The selecting test runner fails test binaries on macOS that pass under plain cargo
-:status: accepted
-:likelihood: possible
-:consequence: moderate
-:threatens: REQ-COMPATIBILITY
-:threatens: REQ-BATCHING
+### Unstable upstream interfaces change under the plugin
 
-The selecting runner of [[DES-TEST-RUN]] has run on Linux only, and CI runs on Linux only ([[ADR-CI-LINUX-ONLY]]). It runs test binaries only; doctests run without it. It is a Node script, also because macOS removes `DYLD_*` variables from the environment of a binary that System Integrity Protection protects, such as `/bin/sh` and `/usr/bin/env`, while cargo passes a test's library path in `DYLD_FALLBACK_LIBRARY_PATH` there ([[EVD-WORKSPACE-TEST-SELECTION]]). Not verified on macOS:
+| Type        | Risk                                                                |
+| ----------- | ------------------------------------------------------------------- |
+| ID          | RISK-UPSTREAM-CHANGES                                               |
+| Status      | Accepted                                                            |
+| Likelihood  | Likely                                                              |
+| Consequence | Moderate                                                            |
+| Threatens   | [NEED-EFFICIENT-BUILDS](product.mara.md#01M78FHG7F597HWJZPETAMWPQ4) |
+| Threatens   | [NEED-FAST-TESTS](product.mara.md#01M78FHG7FX5BYGF6N2SGWAV2D)       |
+
+Several things the plugin uses are not stable: Cargo's `resolver.feature-unification`, whose name or values could still change; the layout of the build directory, which changed in Cargo 1.100; cargo-affected's commands and report format; Nx's batch executor interface; how Nx copies the plugin for each entry of `nx.json` and calls its hooks, which links an entry's hooks to each other and which Nx does not document ([EVD-NX-24-PLUGIN-ENTRIES](#01M7WG05PX3BFMZEJB46K57FQE)); and the private `nx/src/*` modules that `init`, graph creation and executors load (`nx/src/devkit-internals`, `nx/src/project-graph/plugins/get-plugins`, `nx/src/project-graph/utils/retrieve-workspace-files`, `nx/src/project-graph/utils/project-configuration/project-nodes-manager`, `nx/src/plugins/package-json`, `nx/src/plugins/project-json/build-nodes/project-json`, `nx/src/utils/workspace-context`, `nx/src/native`, `nx/src/hasher/hash-plan-inspector`, `nx/src/hasher/task-hasher`, `nx/src/tasks-runner/task-env` and `nx/src/tasks-runner/create-task-graph`), which Nx does not count as public API. The plugin routes every private `nx/src/*` load and `nx/package.json` lookup through one internal bridge, which looks for the repository's Nx in `.nx/installation` and then at the repository root, and uses the plugin's own peer dependency only where the repository has no `nx` package at all. It never mixes the two: a private module that is missing from the repository's Nx is an error, not a reason to load the peer's, and a resolution error other than a missing module is reported as it is. The bridge checks the shape of each export that a caller uses before the caller calls it. For dotenv checking ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Dotenv files"), the plugin no longer pins an exact version of `dotenv-expand` at run time or re-implements its expansion loop; instead, its static reference check follows the recorded matching (`/(?<!\\)\${([^{}]+)}|(?<!\\)\$([A-Za-z_][A-Za-z0-9_]*)/g`), splitting (including `split(null)` on literal `"null"`), `(?<!\\)` escaping, and `String.prototype.replace` behaviour of Nx's `dotenv-expand`, guarded by a source-text tripwire test on `dotenv-expand`'s `lib/main.js` ([EVD-DOTENV-STATIC-CHECK](#01M7WZS4FNFKPT2TQQZ8T2KA3D), [VER-BATCHING](verification.mara.md#01M78FHG7FRB1N8C3QP3YJZZAM)). The plugin also avoids the build directory layout entirely, keeps the `cargo` strategy experimental and the selector replaceable, fails graph creation where it cannot tell which entry a hook belongs to ([DES-DISCOVERY](workspaces.mara.md#01M78FHG7FJ3Z6F0AX0K80EH9D)), and supports only the Nx majors it has been verified on ([ADR-COMPATIBILITY](#01M78FHG7FFBVZPZCQKJNXGT0P), which accepts this ongoing maintenance risk while tracking Cargo's stabilisation and later Nx majors).
+
+---
+
+<a id="01M78FHG7FMS3SAP65G9TME7FF"></a>
+
+### Two plugins describe one folder differently
+
+| Type        | Risk                                                                   |
+| ----------- | ---------------------------------------------------------------------- |
+| ID          | RISK-MIXED-PROJECT-MERGE                                               |
+| Status      | Accepted                                                               |
+| Likelihood  | Almost-certain                                                         |
+| Consequence | Moderate                                                               |
+| Threatens   | [NEED-JS-BRIDGE](product.mara.md#01M78FHG7F1RBZVPETF1K490S9)           |
+| Threatens   | [REQ-WORKSPACE-PROJECT](workspaces.mara.md#01M78FHG7FEH8W5X747EMPM5B1) |
+| Threatens   | [REQ-PROJECT-NAMES](workspaces.mara.md#01M78FHG7FHKQE34YBKH1C5WSN)     |
+
+A napi or wasm crate usually has `Cargo.toml` and `package.json` side by side, so this plugin and Nx's `package.json` plugin both create a project for the folder. Nx merges them into one project, and it applies `package.json` and `project.json` after every plugin listed in `nx.json` ([EVD-NX-PROJECT-MERGE](#01M7A0S43EXZZGRM5WND8Z0BBG)). The project is therefore named by `package.json`, or by a `project.json` that sets a name, and not after the crate. A script or `project.json` target that has the name of an inferred target, such as `build` or `test`, and runs something else replaces the inferred target, with its cache settings and inputs, without a message. The same happens to the workspace project when a Cargo workspace sits in a folder that already is an Nx project, such as a repository root with a `project.json` or with an `nx` key in its `package.json`. An edge that names such a project by its crate name is dropped without a message or fails graph creation, while a `dependsOn` entry that names it is rewritten to the new name. [REQ-MIXED-PROJECTS](artifacts.mara.md#01M78FHG7FJ88KAM4MK9SZ4FZH) mitigates it by making the outcome predictable rather than different: the plugin keeps its names, leaves replaced targets to the files that replace them, and documents the means Nx offers to keep a target, while a replaced lockfile task makes the crates' tasks fail rather than store a result ([ADR-MIXED-PROJECT-TARGETS](#01M7J4NJ5W2KQHV5E6A7CT2CS2)). Verified on Nx 24.0.6 ([EVD-NX-PROJECT-MERGE](#01M7A0S43EXZZGRM5WND8Z0BBG)); later Nx majors are verified before joining the peer range under [ADR-COMPATIBILITY](#01M78FHG7FFBVZPZCQKJNXGT0P).
+
+---
+
+<a id="01M78FHG7F2Q33HWV789RWB7T7"></a>
+
+### The napi CLI does not fit the two-step build
+
+| Type        | Risk                                                                 |
+| ----------- | -------------------------------------------------------------------- |
+| ID          | RISK-NAPI-TOOLING                                                    |
+| Status      | Accepted                                                             |
+| Likelihood  | Possible                                                             |
+| Consequence | Minor                                                                |
+| Threatens   | [REQ-ARTIFACT-TARGETS](artifacts.mara.md#01M78FHG7FP44K4K3TDR87ZFQS) |
+
+[DES-NAPI](artifacts.mara.md#01M78FHG7FRRT8J6Z5NYMT12A3) keeps compiling in the batch and post-processes the build with functions that `@napi-rs/cli` exports, because `napi build` always runs cargo itself ([EVD-NAPI-POSTPROCESS](#01M7J1ARJDN1WVK6PSCT84HJH1)). The first assumption of this risk, that the napi CLI can post-process an existing cargo build, was checked on Linux with `@napi-rs/cli` 3.10.12 and holds in that form. Plain `cargo test` also compiles, links and runs Rust unit tests (including tests calling `#[napi]` functions) on Linux with `napi` 3.16.2 and `napi-sys` 3.4.1 without any special feature, because `napi-sys` enables `dyn-symbols` by default via `libloading` ([EVD-NAPI-POSTPROCESS](#01M7J1ARJDN1WVK6PSCT84HJH1)). What remains rests on contracts of napi-rs that its documentation does not promise: the exported functions `generateTypeDef` and `writeJsBinding` and their options, the variables `NAPI_TYPE_DEF_TMP_FOLDER` and `NAPI_FORCE_BUILD_<CRATE>`, and the `rerun-if-env-changed` lines of `napi_build::setup()`. A minor release can change them. The CLI's version is part of the key, so a change makes `napi-build` fail or write other files, and does not restore a wrong result; `napi-derive` is part of the lockfile.
+
+---
+
+<a id="01M78KFPPYBZHRM9B41K0TG46Q"></a>
+
+### macOS support breaks without anyone noticing
+
+| Type        | Risk                                                          |
+| ----------- | ------------------------------------------------------------- |
+| ID          | RISK-MACOS-UNVERIFIED                                         |
+| Status      | Accepted                                                      |
+| Likelihood  | Possible                                                      |
+| Consequence | Moderate                                                      |
+| Threatens   | [REQ-COMPATIBILITY](setup.mara.md#01M78FHG7FES2FR7DNAAPSDVWE) |
+
+While CI runs on Linux only, nothing runs the plugin on macOS. A change that works on Linux can fail there, for example through a case-insensitive file system, a different linker and library naming for Node addons, or different toolchain paths, and the failure reaches users first. Until macOS runs exist, the claim that macOS is supported rests on the design and not on test runs. [ADR-CI-LINUX-ONLY](#01M78KFR0QP1XDDHMYRA2RTNET) accepts this for the moment.
+
+---
+
+<a id="01M7DMTE8WRK2WHQ2R4VXJTWQ3"></a>
+
+### The selecting test runner fails test binaries on macOS that pass under plain cargo
+
+| Type        | Risk                                                          |
+| ----------- | ------------------------------------------------------------- |
+| ID          | RISK-TEST-RUNNER-MACOS                                        |
+| Status      | Accepted                                                      |
+| Likelihood  | Possible                                                      |
+| Consequence | Moderate                                                      |
+| Threatens   | [REQ-COMPATIBILITY](setup.mara.md#01M78FHG7FES2FR7DNAAPSDVWE) |
+| Threatens   | [REQ-BATCHING](execution.mara.md#01M78FHG7FRS15ZD38BR42JSK7)  |
+
+The selecting runner of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) has run on Linux only, and CI runs on Linux only ([ADR-CI-LINUX-ONLY](#01M78KFR0QP1XDDHMYRA2RTNET)). It runs test binaries only; doctests run without it. It is a Node script, also because macOS removes `DYLD_*` variables from the environment of a binary that System Integrity Protection protects, such as `/bin/sh` and `/usr/bin/env`, while cargo passes a test's library path in `DYLD_FALLBACK_LIBRARY_PATH` there ([EVD-WORKSPACE-TEST-SELECTION](#01M7DMTE8WX7EFV63DCFSGAWWJ)). Not verified on macOS:
 
 - that macOS keeps those variables for the Node that runs Nx, which a build with the hardened runtime and without the entitlement that allows them may drop; the builds that users install, from the official installer and archives, Homebrew and version managers, were not checked;
 - that cargo's JSON messages name every test executable there as on Linux, and that exit statuses and signals pass through Node's child process as on Linux.
 
-What the evidence of [[DES-TEST-RUN]] guarantees does not rest on the host's terminal output: a test task passes the test binaries' step only where every test executable that cargo's messages name for its crate has a record that ends with the status 0 ([[EVD-TEST-STEPS-SPLIT]]). A lost library path therefore shows as failed test binaries, whatever status dyld gives, and never as a pass, as does a Node runner that does not start, that fails, or that a preload in `NODE_OPTIONS` ends before it records anything. A test binary that cannot load its libraries also fails by its own exit status under plain semantics, which cargo reports.
+What the evidence of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) guarantees does not rest on the host's terminal output: a test task passes the test binaries' step only where every test executable that cargo's messages name for its crate has a record that ends with the status 0 ([EVD-TEST-STEPS-SPLIT](#01M7DWK026HSWGJ537QZAN4GHV)). A lost library path therefore shows as failed test binaries, whatever status dyld gives, and never as a pass, as does a Node runner that does not start, that fails, or that a preload in `NODE_OPTIONS` ends before it records anything. A test binary that cannot load its libraries also fails by its own exit status under plain semantics, which cargo reports.
 
-The consequence is moderate: tests that need cargo's library path, such as one linked against a `dylib` member, fail under `workspace-build` on such a machine, with a message that shows the loader's error but not its cause, and nothing wrong is stored ([[GOAL-TRUSTED-CACHE]]). The likelihood is possible: few tests load dynamic libraries from the build folder, and whether common Node builds drop the variables is unknown. The remedy would be a runner program that keeps the variables. The maintainer accepted the risk when he chose the selecting runner ([[ADR-TEST-SELECTING-RUNNER]]).
-:::
+The consequence is moderate: tests that need cargo's library path, such as one linked against a `dylib` member, fail under `workspace-build` on such a machine, with a message that shows the loader's error but not its cause, and nothing wrong is stored ([GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7)). The likelihood is possible: few tests load dynamic libraries from the build folder, and whether common Node builds drop the variables is unknown. The remedy would be a runner program that keeps the variables. The maintainer accepted the risk when he chose the selecting runner ([ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV)).
 
-:::mara risk RISK-TERMINAL-ENVIRONMENT-MACOS
-:mid: 01M7F8NEP74P35FFBKMAVR6SXB
-:title: A task's environment in a terminal on macOS differs from the one that was verified
-:status: accepted
-:likelihood: unlikely
-:consequence: moderate
-:threatens: REQ-BATCHING
-:threatens: REQ-COMPATIBILITY
+---
 
-[[VER-BATCHING]] runs the ways of running a task in a terminal, where Nx starts a single task in its native pseudo-terminal, on Linux only: the test gives Nx a terminal through util-linux's `script -qfec`, whose arguments macOS's own `script` does not take, and stops it with coreutils' `timeout`, which macOS lacks. CI runs on Linux only ([[ADR-CI-LINUX-ONLY]]). On macOS the ways without a terminal run as on Linux, and what Nx sets in JavaScript for a task in its pseudo-terminal is the same code ([[EVD-NX-24-BATCHES]], "Task environment"). Not verified is whether the macOS build of Nx's native pseudo-terminal gives the task's process variables that the Linux build does not, such as `TERM`, `COLUMNS` or `LINES`, which no run on Linux showed. Such a variable would reach cargo for a task run on its own in a terminal and not in a batch or in another output style, so that two results could be stored under one key ([[GOAL-TRUSTED-CACHE]]), for a build script or test that reads it. The likelihood is unlikely, since the Linux build adds none; the remedy is to run the test with macOS's `script -q /dev/null` and a timeout of the harness's own once macOS runners are usable, and to leave out what it finds.
-:::
+<a id="01M7F8NEP74P35FFBKMAVR6SXB"></a>
 
-:::mara risk RISK-ARTIFACT-DIR-WRITERS
-:mid: 01M7DJ8QGM2WH33TJ7HBG7XRD0
-:title: Cargo calls that Nx does not order write the files that build stores
-:status: accepted
-:likelihood: possible
-:consequence: major
-:threatens: GOAL-TRUSTED-CACHE
-:threatens: NEED-CORRECT-CACHE
+### A task's environment in a terminal on macOS differs from the one that was verified
 
-The artifact directory is shared: `cargo build`, `cargo test`, `cargo bench` and `cargo run` all put a crate's executables at the same paths, and Nx stores what lies at the paths that `build` declares when its task ends ([[EVD-CARGO-ARTIFACT-WRITERS]]). [[ADR-TEST-AFTER-BUILD]] orders `test` after `build` within one command, and `bench` runs alone ([[DES-TARGETS]]). Four cases remain:
+| Type        | Risk                                                          |
+| ----------- | ------------------------------------------------------------- |
+| ID          | RISK-TERMINAL-ENVIRONMENT-MACOS                               |
+| Status      | Accepted                                                      |
+| Likelihood  | Unlikely                                                      |
+| Consequence | Moderate                                                      |
+| Threatens   | [REQ-BATCHING](execution.mara.md#01M78FHG7FRS15ZD38BR42JSK7)  |
+| Threatens   | [REQ-COMPATIBILITY](setup.mara.md#01M78FHG7FES2FR7DNAAPSDVWE) |
 
-- **The files after a run.** A `test` or `bench` batch puts back, when it ends, the files of the command's builds that its commands link again, so that after a batched command that ran `build` and then `test`, or restored `build` and ran `test`, the artifact directory holds what `build` stored ([[DES-BATCH]], "Files that a test batch puts back"). Two cases remain, which the maintainer accepted with that decision on 20 November 2026 ([[ADR-TEST-AFTER-BUILD]]): a task that reads such a file while the tests run, such as a continuous task or a script started beside the command, gets the executable of `cargo test`; and where tasks run on their own, as with `--batch=false`, the artifact directory holds the executables of `cargo test` after such a command, as plain `cargo build && cargo test` leaves them, until the next `build`, run or restored, puts its own back, so that a task outside the plugin that depends on `build` and starts after the `test` runs the test build and, where it is cached, stores what it made of it ([[EVD-BATCH-FILES-ON-DISK]]). The same holds for `bench` and a `build` in the release profile. The cache entries of `build` are right in every case. Builds no longer replace each other's files: a `build` of the whole workspace and the compile of `napi-build` and `wasm-build` build in a stage ([[ADR-STAGED-BUILDS]]).
+[VER-BATCHING](verification.mara.md#01M78FHG7FRB1N8C3QP3YJZZAM) runs the ways of running a task in a terminal, where Nx starts a single task in its native pseudo-terminal, on Linux only: the test gives Nx a terminal through util-linux's `script -qfec`, whose arguments macOS's own `script` does not take, and stops it with coreutils' `timeout`, which macOS lacks. CI runs on Linux only ([ADR-CI-LINUX-ONLY](#01M78KFR0QP1XDDHMYRA2RTNET)). On macOS the ways without a terminal run as on Linux, and what Nx sets in JavaScript for a task in its pseudo-terminal is the same code ([EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA), "Task environment"). Not verified is whether the macOS build of Nx's native pseudo-terminal gives the task's process variables that the Linux build does not, such as `TERM`, `COLUMNS` or `LINES`, which no run on Linux showed. Such a variable would reach cargo for a task run on its own in a terminal and not in a batch or in another output style, so that two results could be stored under one key ([GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7)), for a build script or test that reads it. The likelihood is unlikely, since the Linux build adds none; the remedy is to run the test with macOS's `script -q /dev/null` and a timeout of the harness's own once macOS runners are usable, and to leave out what it finds.
+
+---
+
+<a id="01M7DJ8QGM2WH33TJ7HBG7XRD0"></a>
+
+### Cargo calls that Nx does not order write the files that build stores
+
+| Type        | Risk                                                             |
+| ----------- | ---------------------------------------------------------------- |
+| ID          | RISK-ARTIFACT-DIR-WRITERS                                        |
+| Status      | Accepted                                                         |
+| Likelihood  | Possible                                                         |
+| Consequence | Major                                                            |
+| Threatens   | [GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7) |
+| Threatens   | [NEED-CORRECT-CACHE](product.mara.md#01M78FHG7FMWW59PS4KPRKVCEJ) |
+
+The artifact directory is shared: `cargo build`, `cargo test`, `cargo bench` and `cargo run` all put a crate's executables at the same paths, and Nx stores what lies at the paths that `build` declares when its task ends ([EVD-CARGO-ARTIFACT-WRITERS](#01M7DJ8QGMBPJSJHQ2BVBCHA1R)). [ADR-TEST-AFTER-BUILD](#01M7DJ8QGMASKGT057YS8Z9QBY) orders `test` after `build` within one command, and `bench` runs alone ([DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3)). Four cases remain:
+
+- **The files after a run.** A `test` or `bench` batch puts back, when it ends, the files of the command's builds that its commands link again, so that after a batched command that ran `build` and then `test`, or restored `build` and ran `test`, the artifact directory holds what `build` stored ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Files that a test batch puts back"). Two cases remain, which the maintainer accepted with that decision on 20 November 2026 ([ADR-TEST-AFTER-BUILD](#01M7DJ8QGMASKGT057YS8Z9QBY)): a task that reads such a file while the tests run, such as a continuous task or a script started beside the command, gets the executable of `cargo test`; and where tasks run on their own, as with `--batch=false`, the artifact directory holds the executables of `cargo test` after such a command, as plain `cargo build && cargo test` leaves them, until the next `build`, run or restored, puts its own back, so that a task outside the plugin that depends on `build` and starts after the `test` runs the test build and, where it is cached, stores what it made of it ([EVD-BATCH-FILES-ON-DISK](#01M7WVPS52WX44QPGQDNT5PQM5)). The same holds for `bench` and a `build` in the release profile. The cache entries of `build` are right in every case. Builds no longer replace each other's files: a `build` of the whole workspace and the compile of `napi-build` and `wasm-build` build in a stage ([ADR-STAGED-BUILDS](#01M7X59APKESA509GHH54BNQW7)).
 - **Two `nx` commands at once.** A task graph orders tasks of one command only. A `cargo test` or `cargo run` of another `nx` command, or plain cargo, that writes a crate's executable while a `build` of the same crate ends can put its file under the key of `build`, and a `build` of another command can replace the executable that a running test is about to run. Neither the executor nor the guard can see another command.
 - **`run` with other options.** `cargo run` writes the executable of `build` byte for byte where its options are those of `build`. With other features or another profile, a `run` beside a `build` or a `test` of the same crate in one command can change what Nx stores for `build` or what the tests run. `run` is not cached, and nothing orders it.
-- **Files of one name that graph creation does not see.** Two crates of one artifact directory whose final artifacts have one file name write one file; cargo warns of an output filename collision when one call builds both, and the file is that of the crate it wrote last, so that the `build` of one crate can store the other's file, whatever the order of tasks ([[EVD-CARGO-ARTIFACT-WRITERS]]). The control plane decided on 14 November 2026, and nxr-ew8kb3 implemented, that graph creation compares these names and leaves the `build` of such crates uncached, and the `test` of those whose tests run such an executable, with a project warning that the keys hold, which names the crates and the file and says to rename one binary or library; graph creation does not fail, because cargo builds such a workspace, with a warning of its own, and the plugin must not make a valid Cargo workspace unusable ([[REQ-CARGO-UNCHANGED]]), while an uncached task stores no wrong entry ([[GOAL-TRUSTED-CACHE]], [[DES-OUTPUTS]], "Files of one name"). Graph creation compares the workspaces of every entry of the plugin, and counts artifact directories that lie one inside the other as one, since the folder of a triple or a profile in one can be the other; that also covers a triple that only the command line names. What graph creation cannot see, such as the projects of another installation of the plugin registered under another name, a check covers when a cached task starts, which fails the task. What neither sees remains: a crate that no `cargo metadata --no-deps` report names, such as a registry crate whose `dylib` cargo copies into the artifact directory as a member's dependency, and, for the check, a `test` whose crate's artifact directory lies outside the repository, which no metadata records.
+- **Files of one name that graph creation does not see.** Two crates of one artifact directory whose final artifacts have one file name write one file; cargo warns of an output filename collision when one call builds both, and the file is that of the crate it wrote last, so that the `build` of one crate can store the other's file, whatever the order of tasks ([EVD-CARGO-ARTIFACT-WRITERS](#01M7DJ8QGMBPJSJHQ2BVBCHA1R)). The control plane decided on 14 November 2026, and nxr-ew8kb3 implemented, that graph creation compares these names and leaves the `build` of such crates uncached, and the `test` of those whose tests run such an executable, with a project warning that the keys hold, which names the crates and the file and says to rename one binary or library; graph creation does not fail, because cargo builds such a workspace, with a warning of its own, and the plugin must not make a valid Cargo workspace unusable ([REQ-CARGO-UNCHANGED](caching.mara.md#01M78FHG7F5VCD6HDS9R6HDS3Z)), while an uncached task stores no wrong entry ([GOAL-TRUSTED-CACHE](product.mara.md#01M78FHG7F44E8BAFK3ZZJRQT7), [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4), "Files of one name"). Graph creation compares the workspaces of every entry of the plugin, and counts artifact directories that lie one inside the other as one, since the folder of a triple or a profile in one can be the other; that also covers a triple that only the command line names. What graph creation cannot see, such as the projects of another installation of the plugin registered under another name, a check covers when a cached task starts, which fails the task. What neither sees remains: a crate that no `cargo metadata --no-deps` report names, such as a registry crate whose `dylib` cargo copies into the artifact directory as a member's dependency, and, for the check, a `test` whose crate's artifact directory lies outside the repository, which no metadata records.
 
-The likelihood is that of the second and third cases, which need a habit, such as building in one terminal while testing in another; the fourth needs a registry crate built as a `dylib` with the name of a member's `cdylib`, and is rare. The consequence is a wrong executable restored from the cache. The control plane kept this rating on 14 November 2026. Closing the case of the members' files in nxr-ew8kb3 leaves it as it is, since the second and third cases decide it. [[ADR-TEST-AFTER-BUILD]] accepts this.
-:::
+The likelihood is that of the second and third cases, which need a habit, such as building in one terminal while testing in another; the fourth needs a registry crate built as a `dylib` with the name of a member's `cdylib`, and is rare. The consequence is a wrong executable restored from the cache. The control plane kept this rating on 14 November 2026. Closing the case of the members' files in nxr-ew8kb3 leaves it as it is, since the second and third cases decide it. [ADR-TEST-AFTER-BUILD](#01M7DJ8QGMASKGT057YS8Z9QBY) accepts this.
 
-:::mara risk RISK-NX-RELEASE
-:mid: 01M7DBRA9111XN8TP1XDGJHS4C
-:title: Nx release does not drive the plugin as the release design reads it
-:status: accepted
-:likelihood: possible
-:consequence: moderate
-:threatens: REQ-RELEASE
+---
 
-[[DES-RELEASE]] rests on a reading of Nx 24.0.6 ([[EVD-NX-24-RELEASE]]) and, for versioning, on a run of version actions of this design through it ([[EVD-NX-24-VERSION-ACTIONS]]). The run confirmed that Nx takes a `release.version.versionActions` that the plugin's `createNodes` gives a project; that the version actions' `readDependencies` is Nx release's source of the dependents of a crate that Nx bumps on its own and of the order of release groups; that a failure while versions are worked out leaves every file on disk as it was; and that `afterAllProjectsVersioned` runs after the manifests are written and before the commit. It also showed ways in which Nx departs from the reading, which the design now takes into account: Nx decides two kinds of bump across release groups by the project graph or not at all (**Dependents** in [[DES-RELEASE]]); `nx release version` refuses a root `release.git`; and Nx formats each manifest that a run changes unless the version actions list it in their `manifestsToUpdate`.
+<a id="01M7DBRA9111XN8TP1XDGJHS4C"></a>
 
-Nx writes the changed files of a run one after another once every group is processed, with no way back. A review run on 14 November 2026, before the version actions checked that the files they change are writable, made one manifest read-only: the command exited with 1 and `EACCES` after ten other manifests had been written, which stayed changed and unstaged, without a commit or tag. The check now catches that case before Nx writes anything (**Writes** in [[DES-RELEASE]]); a failure that no check foresees, such as a full disk, or a file that another program changes or locks while Nx writes, can still leave files changed, and `git checkout` undoes them. The lockfile step runs after the writes by design, and a failure of cargo there leaves the files and the lockfiles updated before it changed in the same way (**Lockfile** in [[DES-RELEASE]]).
+### Nx release does not drive the plugin as the release design reads it
 
-That Nx hands the `nx-release-publish` tasks of one release group to one batch, which [[EVD-NX-24-BATCHES]] showed for `nx run-many`, was run under `nx release publish` and `nx release` on 15 November 2026, before the publish target was built ([[EVD-NX-24-PUBLISH-BATCHES]]): with `preferBatch`, each release group's runnable tasks formed one batch, the groups in the order of the reported dependencies, `--projects` and `--groups` narrowed each batch to the selected tasks, and `NX_BATCH_MODE=false` ran every task on its own, which the design covers (**Without a batch** in [[DES-RELEASE]]). What remains is that a later Nx changes this; the compatibility rule for a new Nx major covers it ([[REQ-COMPATIBILITY]]).
-:::
+| Type        | Risk                                                      |
+| ----------- | --------------------------------------------------------- |
+| ID          | RISK-NX-RELEASE                                           |
+| Status      | Accepted                                                  |
+| Likelihood  | Possible                                                  |
+| Consequence | Moderate                                                  |
+| Threatens   | [REQ-RELEASE](release.mara.md#01M78FHG7F358GRCJTK5Y6AQMR) |
 
-:::mara risk RISK-REGISTRY-BEHAVIOUR
-:mid: 01M7DBRA91P6HC1WYADGEPJJYD
-:title: crates.io treats a release differently from the registry it was tested against
-:status: accepted
-:likelihood: possible
-:consequence: moderate
-:threatens: REQ-RELEASE
+[DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) rests on a reading of Nx 24.0.6 ([EVD-NX-24-RELEASE](#01M7DBRA91S2P3MB401BJTKKH1)) and, for versioning, on a run of version actions of this design through it ([EVD-NX-24-VERSION-ACTIONS](#01M7DHY1AFJ7VWPDWR1P80GTR2)). The run confirmed that Nx takes a `release.version.versionActions` that the plugin's `createNodes` gives a project; that the version actions' `readDependencies` is Nx release's source of the dependents of a crate that Nx bumps on its own and of the order of release groups; that a failure while versions are worked out leaves every file on disk as it was; and that `afterAllProjectsVersioned` runs after the manifests are written and before the commit. It also showed ways in which Nx departs from the reading, which the design now takes into account: Nx decides two kinds of bump across release groups by the project graph or not at all (**Dependents** in [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)); `nx release version` refuses a root `release.git`; and Nx formats each manifest that a run changes unless the version actions list it in their `manifestsToUpdate`.
 
-The measurements behind the release design used a local registry ([[EVD-CARGO-PUBLISH]]), and the tests use one too, because no test publishes to crates.io. crates.io checks more when a crate is uploaded, for example perhaps that a dev-dependency names a crate it has, and its index can take longer than the 60 seconds that cargo waits for an upload to appear, after which cargo stops before the crates that depend on it. A release that passed its dry run can then fail part way. The versions uploaded so far stay in the registry and cannot be uploaded again, so the rest has to be published by a second run, which leaving out existing versions allows ([[DES-RELEASE]]). How often this happens shows only in real releases.
-:::
+Nx writes the changed files of a run one after another once every group is processed, with no way back. A review run on 14 November 2026, before the version actions checked that the files they change are writable, made one manifest read-only: the command exited with 1 and `EACCES` after ten other manifests had been written, which stayed changed and unstaged, without a commit or tag. The check now catches that case before Nx writes anything (**Writes** in [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)); a failure that no check foresees, such as a full disk, or a file that another program changes or locks while Nx writes, can still leave files changed, and `git checkout` undoes them. The lockfile step runs after the writes by design, and a failure of cargo there leaves the files and the lockfiles updated before it changed in the same way (**Lockfile** in [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)).
 
-:::mara risk RISK-UNCOMMITTED-PUBLISH
-:mid: 01M7G2R3TT6D60DVE2324A97BS
-:title: An older Cargo uploads uncommitted changes, which no later step takes back
-:status: accepted
-:likelihood: possible
-:consequence: major
-:threatens: REQ-RELEASE
+That Nx hands the `nx-release-publish` tasks of one release group to one batch, which [EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA) showed for `nx run-many`, was run under `nx release publish` and `nx release` on 15 November 2026, before the publish target was built ([EVD-NX-24-PUBLISH-BATCHES](#01M7FXG9X7C5B5336Q1GQW1KEK)): with `preferBatch`, each release group's runnable tasks formed one batch, the groups in the order of the reported dependencies, `--projects` and `--groups` narrowed each batch to the selected tasks, and `NX_BATCH_MODE=false` ran every task on its own, which the design covers (**Without a batch** in [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)). What remains is that a later Nx changes this; the compatibility rule for a new Nx major covers it ([REQ-COMPATIBILITY](setup.mara.md#01M78FHG7FES2FR7DNAAPSDVWE)).
 
-Publishing leaves the question whether a tree with uncommitted changes may be published to cargo: the executor never passes `--allow-dirty` and checks no working tree of its own (**Credentials and tree** in [[DES-RELEASE]]). Cargo 1.91.0, the oldest Cargo that the plugin supports, does not refuse uncommitted changes where the Cargo workspace lies in a subfolder of the git repository, the usual layout of an Nx monorepo, while Cargo 1.97.1 to 1.100.0 refuse them there; 1.92 to 1.96 were not tried ([[EVD-CARGO-PUBLISH]]). On such a Cargo, `nx release publish` after an edit that was not committed, or after `nx release version` without git settings, which only stages its changes, uploads code that no commit holds, and a version once in a registry cannot be uploaded again: it can only be yanked and followed by a new version.
+---
+
+<a id="01M7DBRA91P6HC1WYADGEPJJYD"></a>
+
+### crates.io treats a release differently from the registry it was tested against
+
+| Type        | Risk                                                      |
+| ----------- | --------------------------------------------------------- |
+| ID          | RISK-REGISTRY-BEHAVIOUR                                   |
+| Status      | Accepted                                                  |
+| Likelihood  | Possible                                                  |
+| Consequence | Moderate                                                  |
+| Threatens   | [REQ-RELEASE](release.mara.md#01M78FHG7F358GRCJTK5Y6AQMR) |
+
+The measurements behind the release design used a local registry ([EVD-CARGO-PUBLISH](#01M7DBRA912K68NXEN2P6KCWMW)), and the tests use one too, because no test publishes to crates.io. crates.io checks more when a crate is uploaded, for example perhaps that a dev-dependency names a crate it has, and its index can take longer than the 60 seconds that cargo waits for an upload to appear, after which cargo stops before the crates that depend on it. A release that passed its dry run can then fail part way. The versions uploaded so far stay in the registry and cannot be uploaded again, so the rest has to be published by a second run, which leaving out existing versions allows ([DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)). How often this happens shows only in real releases.
+
+---
+
+<a id="01M7G2R3TT6D60DVE2324A97BS"></a>
+
+### An older Cargo uploads uncommitted changes, which no later step takes back
+
+| Type        | Risk                                                      |
+| ----------- | --------------------------------------------------------- |
+| ID          | RISK-UNCOMMITTED-PUBLISH                                  |
+| Status      | Accepted                                                  |
+| Likelihood  | Possible                                                  |
+| Consequence | Major                                                     |
+| Threatens   | [REQ-RELEASE](release.mara.md#01M78FHG7F358GRCJTK5Y6AQMR) |
+
+Publishing leaves the question whether a tree with uncommitted changes may be published to cargo: the executor never passes `--allow-dirty` and checks no working tree of its own (**Credentials and tree** in [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)). Cargo 1.91.0, the oldest Cargo that the plugin supports, does not refuse uncommitted changes where the Cargo workspace lies in a subfolder of the git repository, the usual layout of an Nx monorepo, while Cargo 1.97.1 to 1.100.0 refuse them there; 1.92 to 1.96 were not tried ([EVD-CARGO-PUBLISH](#01M7DBRA912K68NXEN2P6KCWMW)). On such a Cargo, `nx release publish` after an edit that was not committed, or after `nx release version` without git settings, which only stages its changes, uploads code that no commit holds, and a version once in a registry cannot be uploaded again: it can only be yanked and followed by a new version.
 
 The maintainer accepted this on 15 November 2026 as a documented limit (nxr-rsaxx7): the release guide says what the runs showed and to commit before publishing, as `nx release` does by default. That is the mitigation; a check of the plugin's own with git and a newer minimum Cargo for publishing were rejected, because the plugin has nothing to do with git and a repository need not use it.
-:::
+
+---
 
 ## Evidence
 
-:::mara evidence EVD-NXRUST-GAPS
-:mid: 01M78FHG7F71QFJZNFBAATR6N4
-:title: Gaps found in nxrust v0.3.0
-:status: accepted
-:supports: ADR-NEW-PLUGIN
+---
+
+<a id="01M78FHG7F71QFJZNFBAATR6N4"></a>
+
+### Gaps found in nxrust v0.3.0
+
+| Type     | Evidence                                      |
+| -------- | --------------------------------------------- |
+| ID       | EVD-NXRUST-GAPS                               |
+| Status   | Accepted                                      |
+| Supports | [ADR-NEW-PLUGIN](#01M78FHG7FZFXQ6B84EG2CKHRS) |
 
 Reading eddacraft/nxrust at v0.3.0 (last commit 22 October 2026) on 12 November 2026, in particular its product specification, its cache and toolchain design, `src/graph.ts`, `src/utils/cache-inputs.ts` and `plans/issues.md`, showed:
 
@@ -1144,32 +1534,42 @@ Reading eddacraft/nxrust at v0.3.0 (last commit 22 October 2026) on 12 November 
 - `build` restores `rlib` files into Cargo's `target/`.
 
 This is a reading of source and documents, not a test of the plugin.
-:::
 
-:::mara evidence EVD-NXRUST-BUILD-DEPS
-:mid: 01M78FHG7FKCEAGRQKJ36NF8WZ
-:title: Inherited ^build turned a 52-second test run into 40 minutes
-:status: accepted
-:supports: ADR-NO-RUST-BUILD-DEPS
-:supports: RISK-TARGET-DEFAULTS
+---
+
+<a id="01M78FHG7FKCEAGRQKJ36NF8WZ"></a>
+
+### Inherited ^build turned a 52-second test run into 40 minutes
+
+| Type     | Evidence                                              |
+| -------- | ----------------------------------------------------- |
+| ID       | EVD-NXRUST-BUILD-DEPS                                 |
+| Status   | Accepted                                              |
+| Supports | [ADR-NO-RUST-BUILD-DEPS](#01M78FHG7FCE6NXVG4J9K82XME) |
+| Supports | [RISK-TARGET-DEFAULTS](#01M78FHG7FAJAK7K2EN2P4XE8C)   |
 
 nxrust's issue log records this as ISS-001, "Cross-language ^build inheritance amplifies cargo lock contention" (`plans/issues.md`, lines 8 to 31, in eddacraft/nxrust at commit 53572b2 of 22 October 2026). The measurement comes from nxrust's consumer workspace, eddacraft/anvil-001, pull request #1729. There, JS tests inherited `^build` across to the Rust crates, and `pnpm test` took 40m03s. After the script was split into `test:js && test:rust` it took 31 to 52 seconds, a 46-fold speedup. The entry states that the useful work was about 52 seconds and that the rest was cargo builds queued on the `target/` lock. The same figures are cited in `plans/modules/10-wasm-napi.aps.md`, under the cross-language `dependsOn` contract.
 
 This is a secondary record: what was read, on 12 November 2026, is nxrust's account of the measurement, not the anvil-001 pull request itself. The measurement was not reproduced here.
-:::
 
-:::mara evidence EVD-NX-24-INSPECTION
-:mid: 01M78FHG7F32NTNKGXVJT9QA2A
-:title: What Nx 24.0.6 declares about batching, inputs, cycles and affected
-:status: accepted
-:supports: ADR-ARTIFACT-TARGET-NAMES
-:supports: ADR-BATCH-EXECUTOR
-:supports: ADR-DECLARED-INPUTS
-:supports: ADR-ALL-DEP-KINDS
-:supports: ADR-COMPATIBILITY
-:supports: ADR-NO-RUST-BUILD-DEPS
-:supports: ADR-TEST-MODE-CHOICE
-:supports: RISK-TARGET-DEFAULTS
+---
+
+<a id="01M78FHG7F32NTNKGXVJT9QA2A"></a>
+
+### What Nx 24.0.6 declares about batching, inputs, cycles and affected
+
+| Type     | Evidence                                                 |
+| -------- | -------------------------------------------------------- |
+| ID       | EVD-NX-24-INSPECTION                                     |
+| Status   | Accepted                                                 |
+| Supports | [ADR-ARTIFACT-TARGET-NAMES](#01M78FHG7FYRNEHZNVW6V2DWJ0) |
+| Supports | [ADR-BATCH-EXECUTOR](#01M78FHG7F9MD0KQ68Y5CC4HK5)        |
+| Supports | [ADR-DECLARED-INPUTS](#01M78FHG7FGX22WZF138Z8K89G)       |
+| Supports | [ADR-ALL-DEP-KINDS](#01M78FHG7F89HNQ2GAMHTHFRC2)         |
+| Supports | [ADR-COMPATIBILITY](#01M78FHG7FFBVZPZCQKJNXGT0P)         |
+| Supports | [ADR-NO-RUST-BUILD-DEPS](#01M78FHG7FCE6NXVG4J9K82XME)    |
+| Supports | [ADR-TEST-MODE-CHOICE](#01M78NVF8E9Q5SD8FDP09ADE2D)      |
+| Supports | [RISK-TARGET-DEFAULTS](#01M78FHG7FAJAK7K2EN2P4XE8C)      |
 
 Inspection of the `nx` 24.0.6 package installed in this repository, on 12 November 2026:
 
@@ -1186,16 +1586,21 @@ Inspection of the `nx` 24.0.6 package installed in this repository, on 12 Novemb
 - **CI detection.** `isCI()` reports CI when `CI` is set to anything but `false`, or when one of the variables that the common CI systems set is present, such as `GITHUB_ACTIONS`, `GITLAB_CI` or `BUILDKITE` (`utils/is-ci.js`).
 
 This is a reading of type definitions, schemas and compiled source. It shows what Nx declares, not how it behaves in every case; behaviour is checked by the spikes named under the risks.
-:::
 
-:::mara evidence EVD-NX-TARGET-DEFAULTS
-:mid: 01M7A0NA0X5XDW6MEQNS90EWC2
-:title: How Nx 24.0.6 lays target defaults over inferred targets
-:status: accepted
-:supports: RISK-TARGET-DEFAULTS
-:supports: ADR-NX-TARGET-NAMES
+---
 
-An experiment on 13 November 2026 with `nx` 24.0.6, Node.js 26.12.0, pnpm 12.18.0 and rustc 1.100.0, in a throwaway pnpm workspace outside this repository. A stand-in plugin, listed in `nx.json` by its package name, made projects of two crates, `app` and its path dependency `core-lib`, and gave each the `build` and `test` targets that [[DES-TARGETS]] and [[DES-INPUTS]] describe: no `dependsOn`, `cache: true`, a named input for the crate folder with its `^` form, an `env` input for `RUSTFLAGS`, a `runtime` input for `rustc -Vv`, and an executor with `batchImplementation` and `preferBatch`. The executor ran no cargo; it recorded what it received and wrote a file into the declared output. Beside the crates were a JS project whose `build` is a `package.json` script and one whose `build` came from a second stand-in plugin. Each variant of `targetDefaults` was read back with `nx show project <name> --json`. Runs used `nx run <project>:build --output-style=static`, with `NX_DAEMON=false` and `NX_CACHE_DIRECTORY` set to a folder that was emptied before each variant. The Nx sources read alongside are `project-graph/utils/project-configuration-utils.js`, and `target-defaults.js` and `target-merging.js` in `project-graph/utils/project-configuration/`.
+<a id="01M7A0NA0X5XDW6MEQNS90EWC2"></a>
+
+### How Nx 24.0.6 lays target defaults over inferred targets
+
+| Type     | Evidence                                            |
+| -------- | --------------------------------------------------- |
+| ID       | EVD-NX-TARGET-DEFAULTS                              |
+| Status   | Accepted                                            |
+| Supports | [RISK-TARGET-DEFAULTS](#01M78FHG7FAJAK7K2EN2P4XE8C) |
+| Supports | [ADR-NX-TARGET-NAMES](#01M78FHG7FTBB2RVZTTTWPYG1P)  |
+
+An experiment on 13 November 2026 with `nx` 24.0.6, Node.js 26.12.0, pnpm 12.18.0 and rustc 1.100.0, in a throwaway pnpm workspace outside this repository. A stand-in plugin, listed in `nx.json` by its package name, made projects of two crates, `app` and its path dependency `core-lib`, and gave each the `build` and `test` targets that [DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3) and [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP) describe: no `dependsOn`, `cache: true`, a named input for the crate folder with its `^` form, an `env` input for `RUSTFLAGS`, a `runtime` input for `rustc -Vv`, and an executor with `batchImplementation` and `preferBatch`. The executor ran no cargo; it recorded what it received and wrote a file into the declared output. Beside the crates were a JS project whose `build` is a `package.json` script and one whose `build` came from a second stand-in plugin. Each variant of `targetDefaults` was read back with `nx show project <name> --json`. Runs used `nx run <project>:build --output-style=static`, with `NX_DAEMON=false` and `NX_CACHE_DIRECTORY` set to a folder that was emptied before each variant. The Nx sources read alongside are `project-graph/utils/project-configuration-utils.js`, and `target-defaults.js` and `target-merging.js` in `project-graph/utils/project-configuration/`.
 
 - **Precedence.** Nx merges the targets of the plugins listed in `nx.json` first, then target defaults, then the targets of `project.json` and `package.json` files. A target default therefore overrides an inferred target, and a project's own file overrides the target default.
 - **Replaced, not merged.** An entry keyed `build` with `dependsOn: ["^build"]`, `inputs: ["default", "^default"]`, `outputs: ["{projectRoot}/dist"]` and `cache: false` replaced each of these four values on both crates. A field the entry does not set kept its inferred value. `options` were merged key by key, and the executor received the entry's option beside the inferred ones.
@@ -1209,14 +1614,19 @@ An experiment on 13 November 2026 with `nx` 24.0.6, Node.js 26.12.0, pnpm 12.18.
 - **What a plugin sees.** `createNodes` receives `targetDefaults` as written in `nx.json`, not the merged targets. `createDependencies` receives `context.projects` with the merged targets. The batch executor found the merged target in `context.projectsConfigurations` and the added dependency in `context.taskGraph`. Nx's resolver for target defaults, `readTargetDefaultsForTarget`, is exported only from `nx/src/devkit-internals`.
 
 The stand-ins ran no cargo, so this shows how Nx merges, hashes and schedules targets of this shape, not what inherited builds cost in time.
-:::
 
-:::mara evidence EVD-NX-24-PLUGIN-NODES
-:mid: 01M7F6Z60PVYPTBT2264KKH65C
-:title: Nx 24.0.6 rewrites the project nodes that a plugin in its own process returns
-:status: accepted
-:supports: DES-TARGET-DEFAULT-GUARD
-:supports: RISK-GUARD-HASH-PLAN
+---
+
+<a id="01M7F6Z60PVYPTBT2264KKH65C"></a>
+
+### Nx 24.0.6 rewrites the project nodes that a plugin in its own process returns
+
+| Type     | Evidence                                                               |
+| -------- | ---------------------------------------------------------------------- |
+| ID       | EVD-NX-24-PLUGIN-NODES                                                 |
+| Status   | Accepted                                                               |
+| Supports | [DES-TARGET-DEFAULT-GUARD](targets.mara.md#01M7AT4GDP59EWQTMVSVR69G4M) |
+| Supports | [RISK-GUARD-HASH-PLAN](#01M7FQT51YQ82Y4SVCT9JATHDP)                    |
 
 A reading of the `nx` 24.0.6 package that this repository installs (paths under `dist/src/project-graph/utils/`), and runs on 15 November 2026 with it, Node.js 26.12.0 and cargo 1.100.0 on Linux, through the plugin's test harness (`nx-rust/test/harness`) in copies of the fixtures `binary-tests` and `subfolder-workspace`, with `NX_DAEMON=false` and the plugin once in Nx's own process (`NX_ISOLATE_PLUGINS=false`) and once in a plugin worker, Nx's default. A temporary line in the plugin printed, in `createDependencies`, the `dependsOn` that the plugin had inferred for `test` beside the merged one.
 
@@ -1226,43 +1636,53 @@ A reading of the `nx` 24.0.6 package that this repository installs (paths under 
 - **Which project.** A placeholder stands for the root of the project that has the name when the layer's results are merged, or else of the last project that had that name earlier; for a name that no project had yet, it waits, and the first project that later takes the name gives it its root. Each layer is merged before its placeholders are made, so the projects of the plugin's own results already carry the names that it gave them. At the end, a placeholder with a root becomes the final name of the project at that root, a `:target` part following as it was written, and one without becomes the name as written.
 - **Seen.** In `binary-tests`, with `targetDefaults: { test: { dependsOn: [{ projects: ["directory:rust"], target: "lockfile" }] } }` and the plugin in Nx's own process, the plugin's record of every crate's `test` held `{ projects: [<placeholder for directory:rust>], target: "lockfile" }`, while the merged `test` held the entry as written. Where an entry keeps the plugin's list with `"..."`, both share the object, so the final pass also wrote the name back into the plugin's record. In a plugin worker, the results cross to Nx as a copy and the plugin's record stayed as inferred.
 - **Renames.** In `subfolder-workspace`, where `rust/crates/model/project.json` names that crate `model-rs` and `api` declares `dependsOn = ["...", { projects = ["model"], target = "check" }]` for `check`, the merged `check` of `api` depended on `{ projects: ["model-rs"], target: "check" }` in both modes. With `targetDefaults: { check: { options: { quiet: true } } }`, the plugin warned in a worker that it could not tell which configuration changed the `dependsOn` of `api:check`, and in Nx's own process it did not, because the final pass had written `model-rs` into the plugin's record through the shared object. Once the plugin handed Nx a copy, it warned in both modes.
-- **The guard.** On 15 November 2026, the tests in `nx-rust/test/target-defaults.spec.ts` set up the configurations that the review of the plugin as of commit f03da7c ran, with the plugin in Nx's own process and in a plugin worker: in `subfolder-workspace`, with `model` renamed `model-rs` and `api`'s declared `dependsOn` for `check` naming `model` as a list of projects, as a `projects` string or as `model:check`, an entry `check: [{ filter: { projects: ["api"] }, inputs: ["default"] }]`, and the same entry with `dependsOn: []` where `api`'s declared inputs named `model`; in `binary-tests`, with `library` renamed `library-rs` and `app`'s declared `dependsOn` for `build` naming `library:check`, an entry filtered to `app` with `outputs: []`. On that commit, each test failed in both modes; the review saw `nx show projects` exit with 0 and only the warning that the plugin could not tell which configuration changed the target. With the references renamed as Nx renames them and each field judged on its own, each failed graph creation with the error that names the entry, and an entry that set only options drew nothing. Since nxr-yatbsx, these cases and those of an entry that writes out the dependency on the lockfile task run with the plugin in Nx's own process only, where a placeholder shared with the plugin's record would show; [[VER-TARGET-DEFAULT-GUARD]] names the cases that still run in both modes.
+- **The guard.** On 15 November 2026, the tests in `nx-rust/test/target-defaults.spec.ts` set up the configurations that the review of the plugin as of commit f03da7c ran, with the plugin in Nx's own process and in a plugin worker: in `subfolder-workspace`, with `model` renamed `model-rs` and `api`'s declared `dependsOn` for `check` naming `model` as a list of projects, as a `projects` string or as `model:check`, an entry `check: [{ filter: { projects: ["api"] }, inputs: ["default"] }]`, and the same entry with `dependsOn: []` where `api`'s declared inputs named `model`; in `binary-tests`, with `library` renamed `library-rs` and `app`'s declared `dependsOn` for `build` naming `library:check`, an entry filtered to `app` with `outputs: []`. On that commit, each test failed in both modes; the review saw `nx show projects` exit with 0 and only the warning that the plugin could not tell which configuration changed the target. With the references renamed as Nx renames them and each field judged on its own, each failed graph creation with the error that names the entry, and an entry that set only options drew nothing. Since nxr-yatbsx, these cases and those of an entry that writes out the dependency on the lockfile task run with the plugin in Nx's own process only, where a placeholder shared with the plugin's record would show; [VER-TARGET-DEFAULT-GUARD](verification.mara.md#01M7AT4WJM1BAH6G5R8Y0SNF9G) names the cases that still run in both modes.
 - **Source of a target.** The synthesis compares an element's `filter.plugin` with the plugin that the source map of the specified plugins names for the target's `executor`, or else its `command`, unless Nx's default plugins give the target an executor or a command, in which case no `filter.plugin` matches (`resolveSourcePlugin` in `project-configuration/target-defaults.js`). A plugin that later gives the same executor does not take that over: Nx records a source for a value only where the value changes (`getMergeValueResult` in `project-configuration/utils.js`). In `subfolder-workspace`, with a plugin named `other` listed before nx-rust that gave `api` the target `check` with the cargo executor, `targetDefaults: { check: [{ filter: { plugin: "other" }, inputs: ["default"] }] }` replaced the inputs of `api:check` in both modes, and the plugin as of commit 2488ff9 and on `main` created the graph with only the warning that it could not tell which configuration changed the target. The same tests fail on that code where a crate's Cargo metadata set `cache = false` for `check`, another plugin gave the crate the tag `extra` and an entry filtered to that tag turned on caching: graph creation went on with the warning, and where the other plugin cached `check` itself, `nx run api:check` ran cargo and succeeded with caching on, because a table's `cache = false` was not among the reasons the executor reads. The synthesis reads a project's name from the default plugins, or else from the specified plugins, and its tags from both (`buildProjectNodesAndRootToName` there), which are the name and tags of the merged project, since target defaults give neither.
 - **Which key.** For each target, the synthesis tries the key of the target's executor, then the key of its name, then the glob keys, longest first, and takes the first key with an element whose `filter` matches; a key whose elements all fail their filters falls through to the next (`resolveTargetDefaultMatches` and `orderedMatchingKeys` in `project-configuration/target-defaults.js`, lines 294–329). Which key applies therefore depends on the target's source where an element filters on `plugin`. In `subfolder-workspace`, with the plugin `other` listed before nx-rust giving `api` a `check` with the cargo executor, and `targetDefaults` holding `"@convesoft/nx-rust:cargo": [{ filter: { plugin: "other" }, inputs: ["default"] }]` and `check: [{ filter: { projects: ["api"] }, inputs: ["default"] }]`, the plugin as of commit 0016c40 failed graph creation naming only the entry keyed `check`, in both modes. With the entry keyed by the executor keeping the inputs with `"..."` instead, the merged inputs of `api:check` kept the plugin's, so Nx had applied that entry and not the one keyed `check`.
 - **Extra targets.** A target that a `targets.<name>` table of the Cargo metadata defines is part of the plugin's node, and Nx lays `targetDefaults` over it as over any target that a plugin infers. In `subfolder-workspace`, where `api`'s table defined `e2e` with `executor = "nx:run-commands"`, `"e2e": { "cache": true }` gave the merged `e2e` caching, and `e2e: { inputs: ["default"], outputs: [] }` replaced the table's `inputs` and `outputs`; the plugin as of commit 0016c40 failed graph creation for both, in both modes, and warned that it could not tell which configuration changed `e2e` where another plugin turned on its caching. A table in the `command` form gives the plugin's node no executor, and Nx gives the target `nx:run-commands` (`resolveCommandSyntacticSugar` in `project-configuration/target-merging.js`), so that the plugin's record and the merged target differed in their executor and the plugin compared nothing.
 - **Other layers.** Nx merges a later node's target into the target before it where at most one of them names an executor, or both name the same, and a list without `"..."` then replaces the earlier list; a target with another executor, or a `command`, replaces the earlier target whole (`mergeTargetConfigurations` and `isCompatibleTarget` in `project-configuration/target-merging.js`, lines 318–334 and 510–534). Runs on the same day, with `NX_DAEMON=false`: in `subfolder-workspace`, a plugin listed after nx-rust whose node gives `api` the target `check` with `inputs: ["default"]` and no executor, or with the cargo executor, left `api:check` with the cargo executor and the inputs `["default"]`, in both modes; so did a `project.json` in `rust/crates/api` written by hand, and the `nx` property of a `package.json` there that the root `package.json`'s `workspaces` enrols. In each, `nx run api:check` succeeded; after a `compile_error!` was added to `model`, which `api` depends on, the next `nx run api:check` was restored from the cache with exit status 0 and no cargo call, while `--skip-nx-cache` failed in cargo, as the same run does without the other layer. In `crate-shapes`, such a plugin's `outputs: []` on `cli`'s `build` left the executable missing after a cache hit, which Nx restores without it. The plugin as of commit 0016c40 reported nothing in each without `targetDefaults`; with the three empty entries that `nx add` writes, it warned that it could not tell which configuration changed the inputs of `api:check`, at graph creation and at the task's start, and the cache hit followed all the same. The same node from a plugin listed before nx-rust left the plugin's inputs, which replace it. The real `@nx/jest` 24.0.6, in a folder with a `package.json` that the `workspaces` enrol and a `jest.config.js`, infers `test` with `command: "jest"` (`src/plugins/plugin.js`, line 162): listed after nx-rust, it replaced `api:test` whole, so that the task ran `nx:run-commands` and no cargo, while the target kept the plugin's metadata, which only the plugin's executors read; listed before, the plugin's `test` replaced it whole. So only a node without an executor, or with the plugin's own, and a folder's `project.json` or `package.json`, change the lists of a target that still runs the plugin's executor. Graph creation sees no source map, but its rebuild gives what the folder's files do, so it can tell their changes from those of another plugin.
-- **What a list means.** The guard reads a target's inputs as the JS helpers of `dist/src/hasher/task-hasher.js` in Nx 24.0.6 expand them, which is not where Nx hashes them (below). `getNamedInputs` (lines 137–143) gives a project the named inputs `{ default: [{ fileset: "{projectRoot}/**/*" }], ...nxJson.namedInputs, ...project.namedInputs }`, so a project's own definition replaces that of `nx.json` whole. For a target without `inputs`, the helpers read `DEFAULT_INPUTS` (lines 128–136), `default` of itself and of its dependencies. `splitInputsIntoSelfAndDependencies` (lines 173–240) keeps `^name`, `{ input, dependencies: true }` and `{ input, projects }` for the dependencies and other projects, which read those projects' named inputs, and expands the rest with `expandSingleProjectInputs` (lines 247–279): a string that the named inputs hold stands for its definition, recursively, any other string is a file set, and an object with `fileset`, `env`, `runtime`, `externalDependencies`, `dependentTasksOutputFiles`, `workingDirectory` or `json` stays as it is. `filterUsingGlobPatterns` (from line 284) puts all of a project's own file sets into one list in which each pattern that starts with `!` excludes from every positive one, so that in these helpers a negated pattern anywhere among them, also inside a named input, leaves files out. These helpers are not what hashes a task: `InProcessTaskHasher` delegates to `NativeTaskHasherImpl` (`task-hasher.js`, about line 77), which hands `nx.json` and the project graph with its unexpanded inputs to the native `HashPlanner` (`native-task-hasher-impl.js`, line 37) and plans with `getPlansReference` (lines 72–74). The guard's reading is therefore an approximation of the native plan. In `subfolder-workspace` on 15 November 2026, with the plugin as of commit ce7a20e, the review saw a plugin listed after nx-rust that gave `api`'s `check` the inputs `["...", "!{projectRoot}/src/**/*"]` keep every inferred entry, and `nx run api:check` restored as a success after a `compile_error!` in `api/src/lib.rs`, while `--skip-nx-cache` failed; and the same for a plugin that gave `api` the named input `default` as `["{projectRoot}/Cargo.toml"]`, in both modes. With `@nx/js/typescript`, `@nx/jest/plugin` and `@nx/oxlint` 24.0.6 listed after nx-rust for `api`'s folder, which held a `package.json` that the root `package.json`'s workspaces enrol, a `tsconfig.json`, a `jest.config.js` and an `.oxlintrc.json`, the merged project kept the plugin's named inputs (only `default`, which the plugin defines), `lint` became `@nx/oxlint:lint` and `test` `nx:run-commands` with `jest`, `typecheck` and `nx-release-publish` were added, and `build`, `check`, `fmt` and `fmt-check` kept the plugin's executor and inputs, in both modes. A narrow re-check of the plugin as of commit 3e710b1, on 15 November 2026 with the real Nx 24.0.6 in both plugin modes, found where the native plan and the guard's reading differ; these are the review's runs, not repeated here. (1) A plugin listed after nx-rust that gave `api` `namedInputs: { narrow: ["!{projectRoot}/src/**/*"] }` and `check.inputs: ["...", { "input": "narrow", "dependencies": false }]` passed graph creation, because the guard expands an object input only where `dependencies` is absent, while Nx takes `false` as a self input and expands it: a change to the source left the key unchanged, and a `compile_error!` gave a cached success. (2) Where `model`'s `project.json` defined `selfFiles` and `model`'s targets read it in place of `default`, a later plugin that defined `default` for `model` as `["{projectRoot}/Cargo.toml"]` passed, because the guard keeps `api`'s `^default` as written and does not compare the definition in the project it names: a change to `model/src/lib.rs` left `api:check`'s key unchanged, with a cached success after a `compile_error!`. (3) A later plugin that added `"!{workspaceRoot}/rust/crates/api/src/**/*"` or `{ "fileset": "!{projectRoot}/src/**/*", "dependencies": true }` to `api:check` was refused, because the guard counts every added pattern that starts with `!`, while the native plan held the same file sets before and after and a change to the source still changed the key. (4) For a crate target without `inputs` from a later plugin, with a project-level `default` of `["{projectRoot}/Cargo.toml"]`, the native plan held `api:rust/crates/api/**/*`, and a change to the source still changed the key, which the JS helpers' expansion of `DEFAULT_INPUTS` through that `default` does not give ([[RISK-GUARD-HASH-PLAN]]).
+- **What a list means.** The guard reads a target's inputs as the JS helpers of `dist/src/hasher/task-hasher.js` in Nx 24.0.6 expand them, which is not where Nx hashes them (below). `getNamedInputs` (lines 137–143) gives a project the named inputs `{ default: [{ fileset: "{projectRoot}/**/*" }], ...nxJson.namedInputs, ...project.namedInputs }`, so a project's own definition replaces that of `nx.json` whole. For a target without `inputs`, the helpers read `DEFAULT_INPUTS` (lines 128–136), `default` of itself and of its dependencies. `splitInputsIntoSelfAndDependencies` (lines 173–240) keeps `^name`, `{ input, dependencies: true }` and `{ input, projects }` for the dependencies and other projects, which read those projects' named inputs, and expands the rest with `expandSingleProjectInputs` (lines 247–279): a string that the named inputs hold stands for its definition, recursively, any other string is a file set, and an object with `fileset`, `env`, `runtime`, `externalDependencies`, `dependentTasksOutputFiles`, `workingDirectory` or `json` stays as it is. `filterUsingGlobPatterns` (from line 284) puts all of a project's own file sets into one list in which each pattern that starts with `!` excludes from every positive one, so that in these helpers a negated pattern anywhere among them, also inside a named input, leaves files out. These helpers are not what hashes a task: `InProcessTaskHasher` delegates to `NativeTaskHasherImpl` (`task-hasher.js`, about line 77), which hands `nx.json` and the project graph with its unexpanded inputs to the native `HashPlanner` (`native-task-hasher-impl.js`, line 37) and plans with `getPlansReference` (lines 72–74). The guard's reading is therefore an approximation of the native plan. In `subfolder-workspace` on 15 November 2026, with the plugin as of commit ce7a20e, the review saw a plugin listed after nx-rust that gave `api`'s `check` the inputs `["...", "!{projectRoot}/src/**/*"]` keep every inferred entry, and `nx run api:check` restored as a success after a `compile_error!` in `api/src/lib.rs`, while `--skip-nx-cache` failed; and the same for a plugin that gave `api` the named input `default` as `["{projectRoot}/Cargo.toml"]`, in both modes. With `@nx/js/typescript`, `@nx/jest/plugin` and `@nx/oxlint` 24.0.6 listed after nx-rust for `api`'s folder, which held a `package.json` that the root `package.json`'s workspaces enrol, a `tsconfig.json`, a `jest.config.js` and an `.oxlintrc.json`, the merged project kept the plugin's named inputs (only `default`, which the plugin defines), `lint` became `@nx/oxlint:lint` and `test` `nx:run-commands` with `jest`, `typecheck` and `nx-release-publish` were added, and `build`, `check`, `fmt` and `fmt-check` kept the plugin's executor and inputs, in both modes. A narrow re-check of the plugin as of commit 3e710b1, on 15 November 2026 with the real Nx 24.0.6 in both plugin modes, found where the native plan and the guard's reading differ; these are the review's runs, not repeated here. (1) A plugin listed after nx-rust that gave `api` `namedInputs: { narrow: ["!{projectRoot}/src/**/*"] }` and `check.inputs: ["...", { "input": "narrow", "dependencies": false }]` passed graph creation, because the guard expands an object input only where `dependencies` is absent, while Nx takes `false` as a self input and expands it: a change to the source left the key unchanged, and a `compile_error!` gave a cached success. (2) Where `model`'s `project.json` defined `selfFiles` and `model`'s targets read it in place of `default`, a later plugin that defined `default` for `model` as `["{projectRoot}/Cargo.toml"]` passed, because the guard keeps `api`'s `^default` as written and does not compare the definition in the project it names: a change to `model/src/lib.rs` left `api:check`'s key unchanged, with a cached success after a `compile_error!`. (3) A later plugin that added `"!{workspaceRoot}/rust/crates/api/src/**/*"` or `{ "fileset": "!{projectRoot}/src/**/*", "dependencies": true }` to `api:check` was refused, because the guard counts every added pattern that starts with `!`, while the native plan held the same file sets before and after and a change to the source still changed the key. (4) For a crate target without `inputs` from a later plugin, with a project-level `default` of `["{projectRoot}/Cargo.toml"]`, the native plan held `api:rust/crates/api/**/*`, and a change to the source still changed the key, which the JS helpers' expansion of `DEFAULT_INPUTS` through that `default` does not give ([RISK-GUARD-HASH-PLAN](#01M7FQT51YQ82Y4SVCT9JATHDP)).
 
 So a plugin that compares the targets in `createDependencies` with what its `createNodes` returned has to hand Nx a copy; otherwise, in Nx's own process, its record depends on what the later layers did to its lists. And it has to give the references that it declares the names that Nx gives them before it compares: a reference to a project that a later layer renames reaches the merged graph with the new name in both modes. For a name that the plugin gave one of its own projects, that new name is the final name of the project at that root; for a name of another plugin's project, it depends on the names that projects had when each layer was merged, which `createDependencies` cannot see.
-:::
 
-:::mara evidence EVD-NX-24-PLUGIN-ENTRIES
-:mid: 01M7WG05PX3BFMZEJB46K57FQE
-:title: How Nx 24.0.6 loads the plugin for each entry and calls its hooks
-:status: accepted
-:supports: DES-DISCOVERY
-:supports: DES-PROJECT-GRAPH
-:supports: RISK-UPSTREAM-CHANGES
+---
+
+<a id="01M7WG05PX3BFMZEJB46K57FQE"></a>
+
+### How Nx 24.0.6 loads the plugin for each entry and calls its hooks
+
+| Type     | Evidence                                                           |
+| -------- | ------------------------------------------------------------------ |
+| ID       | EVD-NX-24-PLUGIN-ENTRIES                                           |
+| Status   | Accepted                                                           |
+| Supports | [DES-DISCOVERY](workspaces.mara.md#01M78FHG7FJ3Z6F0AX0K80EH9D)     |
+| Supports | [DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6) |
+| Supports | [RISK-UPSTREAM-CHANGES](#01M78FHG7F662HG5KVZQEN15Z3)               |
 
 A reading on 20 November 2026 (nxr-hjpc99) of the `nx` 24.0.6 package that this repository installs, paths under `dist/src/project-graph/`, checked the same day through the plugin's tests.
 
 - **One copy per entry.** For each entry of `nx.json`, `loadSpecifiedNxPlugins` in `plugins/get-plugins.js` loads the plugin once, with the entry's index. `loadResolvedNxPluginAsync` in `plugins/load-resolved-plugin.js` imports the module, which Node's module cache makes one module per process, copies its properties into a new object with object spread, which reads each getter once, gives the copy the entry's `plugin` string as `name` where the module has none, and wraps the copy in a `LoadedNxPlugin` with the entry's options, `include` and `exclude` (`plugins/loaded-nx-plugin.js`). With plugin isolation, each entry gets a worker of its own, keyed by the entry, the root and the index (`getCacheKey` in `plugins/isolation/load-isolated-plugin.js`), which loads it the same way and holds only that entry (`plugins/isolation/plugin-worker.js`). A worker reads the requests that reach its socket together and dispatches each as it reads it, without waiting for the reply to the one before.
 - **How the hooks are called.** The copy's `createNodes` is a tuple of a glob and a function; `LoadedNxPlugin` calls the function as an element of the tuple (`createNodesImpl[1](...)`, so that the function's `this` is the tuple and not the copy), with the files and the entry's options, and the copy's `createDependencies` and `createMetadata` as methods of the copy: `plugin.createDependencies(this.options, context)` and `plugin.createMetadata(graph, this.options, context)`. The options are the value of the entry's `options` in `nx.json`, which the `LoadedNxPlugin` keeps, so every hook of an entry receives the same object, and `undefined` where the entry has none.
-- **Across graph computations.** Nx keeps the loaded plugins while the hash of `plugins` in `nx.json` stays the same (`getPluginsSeparated`), so the daemon passes an entry the same copy and the same options object in every computation. A change to `plugins` loads the entries again: in Nx's own process, every entry gets a new copy, while plugin isolation keeps the worker, and with it the copy, of each entry whose configuration, root and index are unchanged (`loadIsolatedNxPlugin`). Each computation calls each entry's `createNodes` once, with all the files it receives, in one synchronous loop over the entries (`createProjectConfigurationsWithPlugins` in `utils/project-configuration-utils.js`), and then `createDependencies` and `createMetadata` once each (`build-project-graph.js`), unless the daemon drops the computation after `createNodes` because a newer one overtook it (`daemon/server/project-graph-incremental-recomputation.js`). The daemon's computations can overlap: one can start while an earlier one is still in `createNodes`, and a worker can then receive both `createNodes` requests in one read and start both calls before the plugin lets go of the reports of the first computation ([[DES-METADATA-REPORT]]). The review of commit 404f1b6 of nxr-hjpc99 showed it with one entry, an edit to a Rust source and `nx show project app --json`, with the plugin's worker stopped until both requests waited at its socket: a guard that took two calls sharing those reports for two calls of one computation failed the newer computation, which Nx had started correctly, and the guard was removed.
+- **Across graph computations.** Nx keeps the loaded plugins while the hash of `plugins` in `nx.json` stays the same (`getPluginsSeparated`), so the daemon passes an entry the same copy and the same options object in every computation. A change to `plugins` loads the entries again: in Nx's own process, every entry gets a new copy, while plugin isolation keeps the worker, and with it the copy, of each entry whose configuration, root and index are unchanged (`loadIsolatedNxPlugin`). Each computation calls each entry's `createNodes` once, with all the files it receives, in one synchronous loop over the entries (`createProjectConfigurationsWithPlugins` in `utils/project-configuration-utils.js`), and then `createDependencies` and `createMetadata` once each (`build-project-graph.js`), unless the daemon drops the computation after `createNodes` because a newer one overtook it (`daemon/server/project-graph-incremental-recomputation.js`). The daemon's computations can overlap: one can start while an earlier one is still in `createNodes`, and a worker can then receive both `createNodes` requests in one read and start both calls before the plugin lets go of the reports of the first computation ([DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E)). The review of commit 404f1b6 of nxr-hjpc99 showed it with one entry, an edit to a Rust source and `nx show project app --json`, with the plugin's worker stopped until both requests waited at its socket: a guard that took two calls sharing those reports for two calls of one computation failed the newer computation, which Nx had started correctly, and the guard was removed.
 - **What tells the entries apart.** Nothing in the contexts: the contexts of `createNodes` and `createMetadata` hold `nxJsonConfiguration` and `workspaceRoot`, and that of `createDependencies` adds the merged projects, the external nodes and the file maps. `name` is the same for every entry of one plugin, so a key such as the workspace root and the entry's name cannot tell two entries apart. The options tell an entry only where it has them. The entry's `index` stays on the `LoadedNxPlugin` and does not reach the copy. The copy, on which Nx calls the later hooks, is therefore the only object of an entry that reaches its hooks, and the copy's own `createNodes`, read from the getter, links it to what that entry's `createNodes` found.
 - **Seen.** `nx-rust/test/plugin-entries.spec.ts` gave two entries of the plugin `include` lists that split `two-workspaces` between them and different `targetNames`. Each entry's projects had the target names of its own entry, and the graph had each entry's edges, in plugin workers, in Nx's own process, with the daemon and its plugin workers, and with the daemon running the plugins in its own process, there also in a second computation after a manifest changed. The reproduction of the review succeeded after the guard was removed.
 
-So the link between an entry's hooks rests on how Nx calls them, which Nx documents nowhere: a later Nx that called a hook other than as a method of the copy, shared one copy between entries or split an entry's files between `createNodes` calls of one computation would break it, the last two undetected where the entries' options are one object or absent, and one that passed each call a new copy of the options would make every graph creation fail with the plugin's message ([[DES-DISCOVERY]], "Entries") until the plugin follows it. The end-to-end suite on that Nx is where such a change shows before it counts as supported ([[REQ-COMPATIBILITY]]).
-:::
+So the link between an entry's hooks rests on how Nx calls them, which Nx documents nowhere: a later Nx that called a hook other than as a method of the copy, shared one copy between entries or split an entry's files between `createNodes` calls of one computation would break it, the last two undetected where the entries' options are one object or absent, and one that passed each call a new copy of the options would make every graph creation fail with the plugin's message ([DES-DISCOVERY](workspaces.mara.md#01M78FHG7FJ3Z6F0AX0K80EH9D), "Entries") until the plugin follows it. The end-to-end suite on that Nx is where such a change shows before it counts as supported ([REQ-COMPATIBILITY](setup.mara.md#01M78FHG7FES2FR7DNAAPSDVWE)).
 
-:::mara evidence EVD-NX-OPTION-VALIDATION
-:mid: 01M7A93PSWDSC2D81P6MX8WZZ7
-:title: How Nx 24.0.6 checks, hashes and reports options of a batch executor
-:status: accepted
-:supports: ADR-UNKNOWN-OPTIONS
-:supports: DES-UNKNOWN-OPTIONS
-:supports: RISK-TARGET-DEFAULTS
-:supports: DES-TARGET-COMMANDS
+---
+
+<a id="01M7A93PSWDSC2D81P6MX8WZZ7"></a>
+
+### How Nx 24.0.6 checks, hashes and reports options of a batch executor
+
+| Type     | Evidence                                                                |
+| -------- | ----------------------------------------------------------------------- |
+| ID       | EVD-NX-OPTION-VALIDATION                                                |
+| Status   | Accepted                                                                |
+| Supports | [ADR-UNKNOWN-OPTIONS](#01M7A93PSWEZZPRGCDQCJ8DHE4)                      |
+| Supports | [DES-UNKNOWN-OPTIONS](configuration.mara.md#01M7A93PSWW34M2MF0BAD1S6PJ) |
+| Supports | [RISK-TARGET-DEFAULTS](#01M78FHG7FAJAK7K2EN2P4XE8C)                     |
+| Supports | [DES-TARGET-COMMANDS](targets.mara.md#01M78FHG7F9X4M34PB2MP9Y7S8)       |
 
 An experiment on 13 November 2026 with the `nx` 24.0.6 package that this repository installs, Node 26.12.0, on Linux, in a throwaway workspace outside this repository, together with a reading of that package (paths below are under `dist/src/`). A stand-in plugin, listed in `nx.json` by its package name, made projects of two crates, `core-lib` and `app`, from their `Cargo.toml` files, tagged `lang:rust`, each with `build` and `test` targets that had `cache: true`, the crate's folder as their only input, an output folder and empty `options`. Their executor ran no cargo: it wrote the options it received, the task's overrides and the `targetDefaults` in its context into the task's output. It came in four variants, each with a schema that declared `features` (a list of strings) and `profile` (a string): with `batchImplementation` and `preferBatch: true`, or without them, and in each case once with `additionalProperties` unset and once with `additionalProperties: false`. `createNodes` and `createDependencies` recorded what they received, and could throw or warn. Unless a case says otherwise, commands ran with `NX_DAEMON=false`, `NX_TUI=false` and an emptied `NX_CACHE_DIRECTORY`: `nx run core-lib:test` and `nx run-many -t test build`, with `--output-style=static`, and with `--batch=false`, `--verbose` or flags such as `--coverage --ci` where stated, as well as `nx show projects` and `nx show project core-lib --json`. Hashes were read with `HashPlanInspector.inspectTask` and with `hashTask` of the in-process task hasher (`hasher/hash-plan-inspector.js`, `hasher/create-task-hasher.js`). The `targetDefaults` entry was `test: { options: { passWithNoTests: true } }` unless a case says otherwise. For the reviews of the same day, these were added: a `project.json` or `package.json` in a crate's folder, a `preTasksExecution` hook in the stand-in plugin, `nx show target core-lib:test --json`, `dependsOn` entries with `options` and `params` set to `"forward"` or left at `"ignore"`, a target that starts another through devkit's `runExecutor`, and an `args` option declared as a string, as a list of strings or as either. The executor computed for each unknown key whether it was a flag both in the task's own `__overrides_unparsed__` and in the `argv` that the hook recorded, and printed the result.
 
@@ -1299,25 +1719,30 @@ An experiment on 13 November 2026 with the `nx` 24.0.6 package that this reposit
   - a requested configuration that the target lacks: `-c missing` ran with the `defaultConfiguration`;
   - options forwarded from a dependent task.
 
-  The second review also named entries that Nx applies only to targets from a matching plugin or with a compatible executor. Nx records the plugin that inferred a target only in its source maps, and drops an entry that names another executor ([[EVD-NX-TARGET-DEFAULTS]]). The executor's context holds the merged target and `nx.json`, but not Nx's record of sources, and the options it receives no longer show which source gave them.
+  The second review also named entries that Nx applies only to targets from a matching plugin or with a compatible executor. Nx records the plugin that inferred a target only in its source maps, and drops an entry that names another executor ([EVD-NX-TARGET-DEFAULTS](#01M7A0NA0X5XDW6MEQNS90EWC2)). The executor's context holds the merged target and `nx.json`, but not Nx's record of sources, and the options it receives no longer show which source gave them.
 
 - **Known options.** An entry that set `features` replaced the `features` that the stand-in had inferred for `test`.
 - **Conversion.** `coerceTypesInOptions` (`utils/params.js`) converts string values from the command line by the type that the schema declares for the option. This was read, not tried.
 
 The stand-ins ran no cargo, so this shows how Nx checks, hashes and reports options for an executor of this shape, not what the plugin's executor will print. Other Nx versions were not tried.
-:::
 
-:::mara evidence EVD-NX-24-INPUT-SEMANTICS
-:mid: 01M7A0X81J8XAG79EE2DFXFEZD
-:title: How Nx 24.0.6 evaluates runtime inputs, selects affected tasks and hashes a cycle
-:status: accepted
-:supports: ADR-WORKSPACE-ROOT
-:supports: ADR-TEST-MODE-CHOICE
-:supports: ADR-ALL-DEP-KINDS
-:supports: DES-INPUTS
-:supports: RISK-NX-INPUT-SEMANTICS
+---
 
-Experiments on 13 November 2026 with `nx` 24.0.6, the version this repository installs, cargo and rustc 1.100.0, rustup with the toolchains 1.97.1, 1.98 and 1.100.0, Node 26.12.0 and git 2.56.0, on Linux x86-64 with bash as `/bin/sh`. The throwaway workspace lay outside this repository and had the default task-based affected. It held two Cargo workspaces: `rs`, whose `rust-toolchain.toml` selects 1.98, with the members `a`, `b` and `d`, where `b` depends on `a`, `a` has `b` as a dev-dependency and `d` depends on `b`; and `rs2`, with the member `c` and no toolchain file. A local plugin made each crate a project, with an edge for every dependency kind from `cargo metadata --no-deps`, and gave it two cached targets with the inputs of [[DES-INPUTS]]: the crate's folder as a named input and `^` over it, the workspace's `Cargo.toml` and `rust-toolchain.toml`, the runtime input `cd <workspace> && rustc -Vv`, a runtime input running a Node script that logged each evaluation with its working directory, `$0` and environment, and one `env` input. `probe` (`nx:run-commands`) logged `NX_TASK_HASH`. `test` used an executor with `batchImplementation` and `preferBatch: true` that ran `cargo test` once per Cargo workspace and logged its environment. The commands were `nx run-many -t probe --skip-nx-cache`, also with `-p` for subsets and from a crate's folder, `nx run-many -t test` with and without `--batch=false`, `nx affected -t probe --base=main --head=HEAD --explain=stdout` and `nx affected -t test --base=main --head=HEAD --skip-nx-cache` with and without `--batch=false`. Each case ran with `NX_DAEMON=false` and again with `NX_DAEMON=true`, the daemon started by `nx daemon --start` with variables that later commands did not set. Both modes gave the same results and the same hashes:
+<a id="01M7A0X81J8XAG79EE2DFXFEZD"></a>
+
+### How Nx 24.0.6 evaluates runtime inputs, selects affected tasks and hashes a cycle
+
+| Type     | Evidence                                                 |
+| -------- | -------------------------------------------------------- |
+| ID       | EVD-NX-24-INPUT-SEMANTICS                                |
+| Status   | Accepted                                                 |
+| Supports | [ADR-WORKSPACE-ROOT](#01M78NVF8ENATA4CGDH3PMYVSF)        |
+| Supports | [ADR-TEST-MODE-CHOICE](#01M78NVF8E9Q5SD8FDP09ADE2D)      |
+| Supports | [ADR-ALL-DEP-KINDS](#01M78FHG7F89HNQ2GAMHTHFRC2)         |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP) |
+| Supports | [RISK-NX-INPUT-SEMANTICS](#01M78FHG7FWVEHYKF3KRPQYTWN)   |
+
+Experiments on 13 November 2026 with `nx` 24.0.6, the version this repository installs, cargo and rustc 1.100.0, rustup with the toolchains 1.97.1, 1.98 and 1.100.0, Node 26.12.0 and git 2.56.0, on Linux x86-64 with bash as `/bin/sh`. The throwaway workspace lay outside this repository and had the default task-based affected. It held two Cargo workspaces: `rs`, whose `rust-toolchain.toml` selects 1.98, with the members `a`, `b` and `d`, where `b` depends on `a`, `a` has `b` as a dev-dependency and `d` depends on `b`; and `rs2`, with the member `c` and no toolchain file. A local plugin made each crate a project, with an edge for every dependency kind from `cargo metadata --no-deps`, and gave it two cached targets with the inputs of [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP): the crate's folder as a named input and `^` over it, the workspace's `Cargo.toml` and `rust-toolchain.toml`, the runtime input `cd <workspace> && rustc -Vv`, a runtime input running a Node script that logged each evaluation with its working directory, `$0` and environment, and one `env` input. `probe` (`nx:run-commands`) logged `NX_TASK_HASH`. `test` used an executor with `batchImplementation` and `preferBatch: true` that ran `cargo test` once per Cargo workspace and logged its environment. The commands were `nx run-many -t probe --skip-nx-cache`, also with `-p` for subsets and from a crate's folder, `nx run-many -t test` with and without `--batch=false`, `nx affected -t probe --base=main --head=HEAD --explain=stdout` and `nx affected -t test --base=main --head=HEAD --skip-nx-cache` with and without `--batch=false`. Each case ran with `NX_DAEMON=false` and again with `NX_DAEMON=true`, the daemon started by `nx daemon --start` with variables that later commands did not set. Both modes gave the same results and the same hashes:
 
 - **Evaluation.** Nx evaluated a runtime input once per task, not once per run: four tasks with the same command gave four evaluations. Every run evaluated it again, also when the daemon reused its cached project graph, and a changed output of the command, read from a file outside the workspace, changed the hashes of the next run.
 - **Shell and folder.** The command ran through `sh -c` (`$0` was `sh`), in the repository root, also when `nx` was started in a crate's folder. `cd rs && rustc -Vv` worked. The hash of `a` was the same with and without `RUSTUP_TOOLCHAIN=1.98`, that of `c` was not, and `RUSTUP_TOOLCHAIN=1.97.1` changed every hash: the toolchain file of the folder the command changed into applied.
@@ -1329,14 +1754,19 @@ Experiments on 13 November 2026 with `nx` 24.0.6, the version this repository in
 
 One evaluation of `rustc -Vv` took about 6 ms on this machine, and one of the Node script about 14 ms.
 
-These results support [[ADR-WORKSPACE-ROOT]], [[ADR-TEST-MODE-CHOICE]], [[ADR-ALL-DEP-KINDS]] and the toolchain, environment and `^` inputs of [[DES-INPUTS]]. They contradicted an assumption of [[DES-TEST-MODE]] and [[DES-BATCH]] as first written: in a batch, the executor and cargo can run with other values than the key was computed with, through a per-task dotenv file, through the different priority of `.env.local` and `.local.env`, or through an unloaded shell value. A toolchain set in one crate's `.env` also shows that the tasks of one Cargo workspace need not share a toolchain. [[RISK-NX-INPUT-SEMANTICS]] records what remains. The workspace was a toy and ran on one machine, so this says nothing about the cost of per-task evaluation in a large workspace or about macOS.
-:::
+These results support [ADR-WORKSPACE-ROOT](#01M78NVF8ENATA4CGDH3PMYVSF), [ADR-TEST-MODE-CHOICE](#01M78NVF8E9Q5SD8FDP09ADE2D), [ADR-ALL-DEP-KINDS](#01M78FHG7F89HNQ2GAMHTHFRC2) and the toolchain, environment and `^` inputs of [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP). They contradicted an assumption of [DES-TEST-MODE](testing.mara.md#01M78FHG7F7NZT1HQM98QHVY34) and [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) as first written: in a batch, the executor and cargo can run with other values than the key was computed with, through a per-task dotenv file, through the different priority of `.env.local` and `.local.env`, or through an unloaded shell value. A toolchain set in one crate's `.env` also shows that the tasks of one Cargo workspace need not share a toolchain. [RISK-NX-INPUT-SEMANTICS](#01M78FHG7FWVEHYKF3KRPQYTWN) records what remains. The workspace was a toy and ran on one machine, so this says nothing about the cost of per-task evaluation in a large workspace or about macOS.
 
-:::mara evidence EVD-CARGO-NO-DEPS
-:mid: 01M78RC7T7182TG80N949GFTTC
-:title: What cargo metadata --no-deps reports, offline and without a lockfile
-:status: accepted
-:supports: ADR-METADATA-NO-DEPS
+---
+
+<a id="01M78RC7T7182TG80N949GFTTC"></a>
+
+### What cargo metadata --no-deps reports, offline and without a lockfile
+
+| Type     | Evidence                                            |
+| -------- | --------------------------------------------------- |
+| ID       | EVD-CARGO-NO-DEPS                                   |
+| Status   | Accepted                                            |
+| Supports | [ADR-METADATA-NO-DEPS](#01M78RC7T7GK1RSH8S11ZV38EZ) |
 
 An experiment with cargo 1.99.1 on 12 November 2026. The workspace had two members, a path dependency between them, a path dependency on a crate outside the workspace, two registry dependencies, `nx` metadata tables and no `Cargo.lock`. Cargo ran with an empty Cargo home and `--offline`.
 
@@ -1346,14 +1776,19 @@ An experiment with cargo 1.99.1 on 12 November 2026. The workspace had two membe
 - The crate outside the workspace was not among the packages. It appeared only as the path in its dependent's entry.
 - Run in a crate that lies inside the workspace folder without being a member, the command failed with Cargo's message "current package believes it's in a workspace when it's not", which names both manifests and the remedies.
 
-The workspace was a toy, so this says nothing about how long the call takes on a large one; [[EVD-METADATA-TIMING]] measures that.
-:::
+The workspace was a toy, so this says nothing about how long the call takes on a large one; [EVD-METADATA-TIMING](#01M7AY6TM7M03TJ2XKFHTP6R4A) measures that.
 
-:::mara evidence EVD-METADATA-TIMING
-:mid: 01M7AY6TM7M03TJ2XKFHTP6R4A
-:title: How long cargo metadata --no-deps takes on large workspaces, and what its report depends on
-:status: accepted
-:supports: ADR-NO-METADATA-CACHE
+---
+
+<a id="01M7AY6TM7M03TJ2XKFHTP6R4A"></a>
+
+### How long cargo metadata --no-deps takes on large workspaces, and what its report depends on
+
+| Type     | Evidence                                             |
+| -------- | ---------------------------------------------------- |
+| ID       | EVD-METADATA-TIMING                                  |
+| Status   | Accepted                                             |
+| Supports | [ADR-NO-METADATA-CACHE](#01M7AY77VPMGWNN9SVRD56JAPH) |
 
 Measurements on 13 November 2026 on Linux x86-64 (AMD Ryzen 9 9950X3D, NVMe SSD with btrfs) with rustup 1.29.3, Node 26.12.0 and the `nx` 24.0.6 package of this repository, in throwaway folders outside it. A time is the wall-clock time of `cargo metadata --format-version 1 --no-deps` started in the workspace root through rustup's proxy, process start included: the median of 20 runs with a warm page cache (10 for cargo 1.98.1), and of 3 to 5 runs after the page cache of the workspace, `~/.cargo/bin` and `~/.rustup/toolchains` was dropped with `posix_fadvise`, which leaves the kernel's directory caches warm. The first call in zed and ruff installed the toolchain each pins; the timed runs came after. No CI runner was measured.
 
@@ -1368,20 +1803,25 @@ Measurements on 13 November 2026 on Linux x86-64 (AMD Ryzen 9 9950X3D, NVMe SSD 
 - **A stored report.** For polkadot-sdk, reading the report back and parsing it took 10 ms, listing its 9,894 files and hashing its 603 manifests 18 ms, Nx's `hashWithWorkspaceContext` over its manifests 1 ms once Nx had hashed the files, and `cargo -V` through the proxy 4 ms.
 - **What the report depends on**, with cargo 1.100.0 in the fixture. It changed with a member's or the root manifest; with a member added through a glob; with whether `src/main.rs`, `build.rs`, `tests/*.rs`, `examples/*.rs` or `README.md` exist, also for a gitignored file, which Nx's file map leaves out; with `build.target-dir` in a `.cargo/config.toml` or `.cargo/config` above the workspace root or in the Cargo home's `config.toml`; with `CARGO_TARGET_DIR` and `CARGO_BUILD_BUILD_DIR`; with the Cargo version, as 1.89 reports no `build_directory`; and with the checkout's folder, as every path in it is absolute. A broken manifest of a path dependency outside the workspace failed the call, while a change of its version or dependencies left the report as it was. `Cargo.lock`, the contents of a source file and of `README.md`, a member's own `.cargo/config.toml` and `RUSTFLAGS` changed nothing. No `rustc` was started and nothing was written to the Cargo home.
 - **Nx.** Nx turns the daemon off in CI and in Docker unless `NX_DAEMON=true` (`daemon/client/client.js`), and without it every command calls each plugin's `createNodes` (`project-graph/project-graph.js`). The helpers that Nx's own plugins use to keep results on disk, `PluginCache` and `workspaceDataDirectory`, come from `@nx/devkit/internal`, not from the public `@nx/devkit`.
-:::
 
-:::mara evidence EVD-NX-PROJECT-MERGE
-:mid: 01M7A0S43EXZZGRM5WND8Z0BBG
-:title: How Nx 24.0.6 merges two plugins' projects at one root
-:status: accepted
-:supports: RISK-MIXED-PROJECT-MERGE
-:supports: REQ-WORKSPACE-PROJECT
-:supports: REQ-PROJECT-NAMES
-:supports: ADR-PROJECT-NAMES
-:supports: DES-PROJECT-GRAPH
-:supports: REQ-INFERRED-PROJECTS
-:supports: REQ-METADATA-OVERRIDES
-:supports: DES-METADATA-TABLES
+---
+
+<a id="01M7A0S43EXZZGRM5WND8Z0BBG"></a>
+
+### How Nx 24.0.6 merges two plugins' projects at one root
+
+| Type     | Evidence                                                                   |
+| -------- | -------------------------------------------------------------------------- |
+| ID       | EVD-NX-PROJECT-MERGE                                                       |
+| Status   | Accepted                                                                   |
+| Supports | [RISK-MIXED-PROJECT-MERGE](#01M78FHG7FMS3SAP65G9TME7FF)                    |
+| Supports | [REQ-WORKSPACE-PROJECT](workspaces.mara.md#01M78FHG7FEH8W5X747EMPM5B1)     |
+| Supports | [REQ-PROJECT-NAMES](workspaces.mara.md#01M78FHG7FHKQE34YBKH1C5WSN)         |
+| Supports | [ADR-PROJECT-NAMES](#01M78FHG7FAG0YENBEH7FQ7WX1)                           |
+| Supports | [DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6)         |
+| Supports | [REQ-INFERRED-PROJECTS](workspaces.mara.md#01M78FHG7FTJGK8AM848F0DHR4)     |
+| Supports | [REQ-METADATA-OVERRIDES](configuration.mara.md#01M78FHG7FJ4E8DDDAMXCG8AKF) |
+| Supports | [DES-METADATA-TABLES](configuration.mara.md#01M78FHG7FX2K81MEQEY7YQHTN)    |
 
 An experiment on 13 November 2026 with `nx` and `@nx/js` 24.0.6, TypeScript 6.0.3, pnpm 12.18.0, Node 26.12.0 and cargo 1.100.0 on Linux, together with a reading of the same `nx` package (`project-graph/utils/project-configuration-utils.js`, `project-configuration/project-nodes-manager.js` and `target-merging.js`, `plugins/package-json/create-nodes.js`).
 
@@ -1395,41 +1835,51 @@ The throwaway pnpm workspace, outside this repository, had a Cargo workspace at 
 - **Workspace project at the root.** Without a root `project.json` and without an `nx` key in the root `package.json`, the workspace project stood alone under the stand-in's name. With either, it merged into the root project and took that file's name. The root scripts `audit` and `lint` and a `project.json` target `fmt` replaced or joined the workspace targets by the rules above, and the merged project depended on every member.
 - **Collisions.** A crate and a JS package with one name in different folders made Nx fail with its own message, "The following projects are defined in multiple locations", which lists both folders and recommends a `project.json`. A lookup by root in `context.projects` finds only one of two projects that share a name. When the stand-in returned an edge with the missing end undefined, Nx failed with "Cannot read properties of undefined (reading '1')" instead.
 
-For a crate folder that also is a JS project, no plugin listed in `nx.json` can set the project's name. [[REQ-PROJECT-NAMES]], [[ADR-PROJECT-NAMES]] and [[DES-PROJECT-GRAPH]] therefore name such a project by its `package.json` or `project.json`; until 13 November 2026 they named every project after its crate or its `name` override. For the review of 13 November 2026, the following were re-run in the same workspace, with `outputs` added to the stand-in's `build`: the target merges and replacements, both edge orders, the dropped edges, the `dependsOn` rewrite, the names given by `nx.name` with and without a named `project.json`, and the TypeScript `build`. The other outcomes are from the first run. The stand-in modelled the planned plugin; the plugin itself and other Nx versions were not tested.
-:::
+For a crate folder that also is a JS project, no plugin listed in `nx.json` can set the project's name. [REQ-PROJECT-NAMES](workspaces.mara.md#01M78FHG7FHKQE34YBKH1C5WSN), [ADR-PROJECT-NAMES](#01M78FHG7FAG0YENBEH7FQ7WX1) and [DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6) therefore name such a project by its `package.json` or `project.json`; until 13 November 2026 they named every project after its crate or its `name` override. For the review of 13 November 2026, the following were re-run in the same workspace, with `outputs` added to the stand-in's `build`: the target merges and replacements, both edge orders, the dropped edges, the `dependsOn` rewrite, the names given by `nx.name` with and without a named `project.json`, and the TypeScript `build`. The other outcomes are from the first run. The stand-in modelled the planned plugin; the plugin itself and other Nx versions were not tested.
 
-:::mara evidence EVD-NX-MIXED-CONSUMER
-:mid: 01M7J4NJ5W34WWBCND0ZSB4ZN7
-:title: How Nx 24.0.6 connects a JS consumer to a crate that is also a JS package
-:status: accepted
-:supports: REQ-MIXED-PROJECTS
-:supports: DES-MIXED-PROJECTS
-:supports: ADR-MIXED-PROJECT-TARGETS
-:supports: ADR-NO-RUST-BUILD-DEPS
-:supports: REQ-NO-RUST-TASK-DEPS
-:supports: DES-LOCKFILE-HASHING
+---
+
+<a id="01M7J4NJ5W34WWBCND0ZSB4ZN7"></a>
+
+### How Nx 24.0.6 connects a JS consumer to a crate that is also a JS package
+
+| Type     | Evidence                                                              |
+| -------- | --------------------------------------------------------------------- |
+| ID       | EVD-NX-MIXED-CONSUMER                                                 |
+| Status   | Accepted                                                              |
+| Supports | [REQ-MIXED-PROJECTS](artifacts.mara.md#01M78FHG7FJ88KAM4MK9SZ4FZH)    |
+| Supports | [DES-MIXED-PROJECTS](artifacts.mara.md#01M7J4NJ5WGAAQEBVGQCFFCQ02)    |
+| Supports | [ADR-MIXED-PROJECT-TARGETS](#01M7J4NJ5W2KQHV5E6A7CT2CS2)              |
+| Supports | [ADR-NO-RUST-BUILD-DEPS](#01M78FHG7FCE6NXVG4J9K82XME)                 |
+| Supports | [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN)   |
+| Supports | [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D) |
 
 An experiment on 16 November 2026 with `nx`, `@nx/js` and `@nx/js/typescript` 24.0.6, TypeScript 6.0.3, Node 26.12.0 and cargo 1.100.0 on Linux, with the plugin as of commit b2063b0 loaded from its source into Nx's own process (`NX_DAEMON=false`, `NX_ISOLATE_PLUGINS=false`, `NX_CACHE_PROJECT_GRAPH=false`), in a copy of the fixture `mixed-folders` outside this repository. The copy had a root `package.json` and a `pnpm-workspace.yaml` that enrols `libs/rust/crates/addon`, the folder of the crate `napi-addon`, whose `package.json` names it `@mixed/napi-addon` (the fixture's `project.json` there was removed), and `apps/*`. A package `web` in `apps/web` depends on `@mixed/napi-addon` with `workspace:*` and defines, under the `nx` key of its `package.json`, a cached `build` that runs `echo` with `dependsOn: ["^build"]`. Nothing was installed and there was no `pnpm-lock.yaml`. `napi-addon` depends on `engine`, which its `project.json` names `rust-engine`, and the workspace project in `libs/rust` is `libs-rust`. Graphs were read with `nx graph --file=<file>`, task graphs with `nx run web:build --graph=<file>`, and hashes with the test harness's `inspect-workspace.cjs`, which calls the functions that `nx run` hashes with.
 
 - **Edge.** The graph had an edge of type `static` from `web` to `@mixed/napi-addon`, which Nx derived from the `workspace:*` dependency, and the plugin's edges named the crates by their merged names, `@mixed/napi-addon` and `rust-engine`.
 - **The plugin's `build`.** Without scripts in the crate's `package.json`, the task graph of `web:build` held `web:build`, `@mixed/napi-addon:build`, the plugin's cargo build, and `libs-rust:lockfile`, which that build depends on, and nothing else.
-- **A script.** With the scripts `build` and `test` in the crate's `package.json`, both targets ran `nx:run-script`, while the plugin's `cargo` record stayed in their metadata beside the script's; `check`, `lint` and the other targets stayed the plugin's. The task graph of `web:build` held the script `build` and nothing else. With `targetDefaults` holding the empty entries keyed by the plugin's executors that `init` writes and `build: { dependsOn: ["^build"], cache: true }`, the script `build` took `^build`, and the task graph held `web:build`, `@mixed/napi-addon:build`, `rust-engine:build`, the plugin's cargo build, and `libs-rust:lockfile`. Without the entries keyed by the executors, graph creation failed with the guard's error for the crates' `build` targets ([[DES-TARGET-DEFAULT-GUARD]]).
+- **A script.** With the scripts `build` and `test` in the crate's `package.json`, both targets ran `nx:run-script`, while the plugin's `cargo` record stayed in their metadata beside the script's; `check`, `lint` and the other targets stayed the plugin's. The task graph of `web:build` held the script `build` and nothing else. With `targetDefaults` holding the empty entries keyed by the plugin's executors that `init` writes and `build: { dependsOn: ["^build"], cache: true }`, the script `build` took `^build`, and the task graph held `web:build`, `@mixed/napi-addon:build`, `rust-engine:build`, the plugin's cargo build, and `libs-rust:lockfile`. Without the entries keyed by the executors, graph creation failed with the guard's error for the crates' `build` targets ([DES-TARGET-DEFAULT-GUARD](targets.mara.md#01M7AT4GDP59EWQTMVSVR69G4M)).
 - **`includedScripts`.** With `"nx": { "includedScripts": ["artifacts"] }` beside the scripts `build`, `test` and `artifacts`, the crate kept the plugin's `build` and `test` and gained only `artifacts`.
 - **Another plugin.** With `@nx/js/typescript` listed after nx-rust with its `typecheck` and `build` options, a `tsconfig.json` and a `tsconfig.lib.json` in the crate's folder and the `main` of its `package.json` under the `outDir` of `tsconfig.lib.json`, the merged `build` ran `nx:run-commands` with `dependsOn: ["^build"]`, beside the TypeScript plugin's `typecheck`, `build-deps` and `watch-deps`, and the task graph of `web:build` held `web:build`, `@mixed/napi-addon:build`, `rust-engine:build` and `libs-rust:lockfile`. With `main` outside the `outDir`, the TypeScript plugin inferred no `build`. Listed before nx-rust, it left the plugin's `build` and added its other targets.
 - **Keys.** The hash plan of `web:build` held the files of `@mixed/napi-addon` and of `rust-engine` and the workspace's root `Cargo.toml`, through `web`'s `^default` and the crates' named input `default`, which the plugin defines as the crate's folder and its workspace's root manifest. It held no lockfile digest and none of the variables, toolchain or tool versions that the crates' own keys hold: with `RUSTFLAGS=-Cdebuginfo=0` the hash of `@mixed/napi-addon:build` changed and that of `web:build` did not.
-- **The lockfile task replaced.** With `libs/rust/project.json` defining `lockfile` with the command `echo replaced-lockfile`, the merged `lockfile` ran `nx:run-commands` and the graph showed no metadata on it, and graph creation passed without a message. `nx run @mixed/napi-addon:check --skip-nx-cache`, also with `--batch=false`, ran the `echo`, then cargo's check, and then failed the task with the message of the check after cargo ([[DES-LOCKFILE-HASHING]], "Post-check") that the digest which this command's lockfile task wrote is missing, which goes on to blame a change of `Cargo.lock` while the run went on. Nx stored no result. Why the executor took the replaced target for the lockfile task, rather than failing before cargo because the task has no dependency on it, was not examined. With a `package.json` named `rust-root` beside that `project.json`, outside the package manager's workspaces, whose script `lockfile` replaced the target instead, Nx failed the script's own task with `Could not find project "rust-root"`, and the crate's task did not run.
+- **The lockfile task replaced.** With `libs/rust/project.json` defining `lockfile` with the command `echo replaced-lockfile`, the merged `lockfile` ran `nx:run-commands` and the graph showed no metadata on it, and graph creation passed without a message. `nx run @mixed/napi-addon:check --skip-nx-cache`, also with `--batch=false`, ran the `echo`, then cargo's check, and then failed the task with the message of the check after cargo ([DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D), "Post-check") that the digest which this command's lockfile task wrote is missing, which goes on to blame a change of `Cargo.lock` while the run went on. Nx stored no result. Why the executor took the replaced target for the lockfile task, rather than failing before cargo because the task has no dependency on it, was not examined. With a `package.json` named `rust-root` beside that `project.json`, outside the package manager's workspaces, whose script `lockfile` replaced the target instead, Nx failed the script's own task with `Could not find project "rust-root"`, and the crate's task did not run.
 
 So the edge from a JS consumer to a crate that is also a JS package comes from Nx's own analysis of the consumer's `package.json`, and the consumer's `^build` runs whatever `build` the merged project ends up with, under that target's own `dependsOn`. A consumer's key follows the crate's files and those of the crates behind it, but not what only the crates' own keys hold. A replaced lockfile task makes the crates' cached tasks fail without storing a result. The plugin as of b2063b0 has no artifact targets yet, so neither `napi-build` nor `wasm-build` was part of these runs.
-:::
 
-:::mara evidence EVD-WORKSPACE-PROJECT-NAMES
-:mid: 01M7A8AKF5NT40CMP6236AFA2V
-:title: How Cargo 1.100.0 and Nx 24.0.6 treat names for a workspace project
-:status: accepted
-:supports: ADR-WORKSPACE-PROJECT-NAME
-:supports: REQ-PROJECT-NAMES
-:supports: DES-PROJECT-GRAPH
-:supports: DES-METADATA-TABLES
+---
+
+<a id="01M7A8AKF5NT40CMP6236AFA2V"></a>
+
+### How Cargo 1.100.0 and Nx 24.0.6 treat names for a workspace project
+
+| Type     | Evidence                                                                |
+| -------- | ----------------------------------------------------------------------- |
+| ID       | EVD-WORKSPACE-PROJECT-NAMES                                             |
+| Status   | Accepted                                                                |
+| Supports | [ADR-WORKSPACE-PROJECT-NAME](#01M7A8AKF5KKZ457ED2PX0NX4D)               |
+| Supports | [REQ-PROJECT-NAMES](workspaces.mara.md#01M78FHG7FHKQE34YBKH1C5WSN)      |
+| Supports | [DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6)      |
+| Supports | [DES-METADATA-TABLES](configuration.mara.md#01M78FHG7FX2K81MEQEY7YQHTN) |
 
 Experiments on 13 November 2026 with cargo 1.100.0, `nx` 24.0.6 and Node 26.12.0 on Linux, in throwaway folders outside this repository, together with a reading of the same `nx` package. The Nx workspaces linked the `node_modules` of this repository, had a root `package.json` and listed one stand-in plugin in `nx.json`. Its `createNodesV2` matched `**/name.txt` and returned a project at that file's folder, named by the file's content, with targets `fmt` and `audit` that echo the folder. Commands ran with `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false NX_NO_CLOUD=true NX_TUI=false`, and runs with `--output-style=static --skip-nx-cache`.
 
@@ -1445,13 +1895,18 @@ Experiments on 13 November 2026 with cargo 1.100.0, `nx` 24.0.6 and Node 26.12.0
 - **Checkouts.** The checkout of this repository in which the work was done is a folder named `t3-978a6461-ca0fb10813ae42be`, not `nx-rust`.
 
 How often a workspace folder has the name of one of its own crates was not measured, and macOS was not tested.
-:::
 
-:::mara evidence EVD-NX-FORMAT
-:mid: 01M78JWQAZK1MDJ6GC4M70ZCXX
-:title: nx format cannot run rustfmt in Nx 24.0.6
-:status: accepted
-:supports: ADR-NX-TARGET-NAMES
+---
+
+<a id="01M78JWQAZK1MDJ6GC4M70ZCXX"></a>
+
+### nx format cannot run rustfmt in Nx 24.0.6
+
+| Type     | Evidence                                           |
+| -------- | -------------------------------------------------- |
+| ID       | EVD-NX-FORMAT                                      |
+| Status   | Accepted                                           |
+| Supports | [ADR-NX-TARGET-NAMES](#01M78FHG7FTBB2RVZTTTWPYG1P) |
 
 Inspection of the `nx` 24.0.6 package installed in this repository, and two experiments, on 12 November 2026:
 
@@ -1462,14 +1917,19 @@ Inspection of the `nx` 24.0.6 package installed in this repository, and two expe
 - **oxfmt.** Given a `.rs` file and a `Cargo.toml`, oxfmt 0.78.0 ignored the `.rs` file and reported the `Cargo.toml` as unformatted. Its configuration schema has no setting for plugins or external formatters. In a workspace that uses oxfmt, `nx format:write` therefore reformats `Cargo.toml` files and leaves Rust sources alone.
 
 The prototype was not run through `nx format` itself; that Nx filters `.rs` out is read from its source, and that the filter excludes plugin languages was tested against prettier directly. Covering Rust in `nx format` would need Nx to pass the configured plugins to its filter, and would still not reach workspaces that use oxfmt.
-:::
 
-:::mara evidence EVD-CARGO-NEW
-:mid: 01M7A66QH6W8544G03RW7GAX0G
-:title: What cargo new does inside a repository and a workspace
-:status: accepted
-:supports: DES-GENERATORS
-:supports: DES-DIAGNOSTICS
+---
+
+<a id="01M7A66QH6W8544G03RW7GAX0G"></a>
+
+### What cargo new does inside a repository and a workspace
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-CARGO-NEW                                               |
+| Status   | Accepted                                                    |
+| Supports | [DES-GENERATORS](setup.mara.md#01M78FHG7FWY1P7FPVC6ZYA9ND)  |
+| Supports | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG) |
 
 Experiments with cargo 1.100.0 (3acc79c0c 2026-11-05) on Linux, on 13 November 2026, in throwaway git repositories (`git init`, no commit) outside this repository. No folder pinned a toolchain.
 
@@ -1483,15 +1943,20 @@ Experiments with cargo 1.100.0 (3acc79c0c 2026-11-05) on Linux, on 13 November 2
 - **Options.** `cargo new --help` lists `--vcs` (`git`, `hg`, `pijul`, `fossil`, `none`), `--bin` (the default), `--lib`, `--edition` (2015, 2018, 2021, 2024), `--name` and `--registry`.
 
 Apart from the exclude bullet, only one Cargo version was tried, on Linux. The messages observed carried no error codes.
-:::
 
-:::mara evidence EVD-CARGO-DIRECTORIES
-:mid: 01M7A6739R6CSCWVAQ2JJWDHF2
-:title: Where Cargo puts its two directories, and which versions report them
-:status: accepted
-:supports: DES-GENERATORS
-:supports: DES-DIAGNOSTICS
-:supports: DES-OUTPUTS
+---
+
+<a id="01M7A6739R6CSCWVAQ2JJWDHF2"></a>
+
+### Where Cargo puts its two directories, and which versions report them
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-CARGO-DIRECTORIES                                       |
+| Status   | Accepted                                                    |
+| Supports | [DES-GENERATORS](setup.mara.md#01M78FHG7FWY1P7FPVC6ZYA9ND)  |
+| Supports | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG) |
+| Supports | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)   |
 
 Experiments on Linux on 13 November 2026, in throwaway folders outside this repository, with `cargo metadata --no-deps --format-version 1`. No folder pinned a toolchain, and the older toolchains were already installed and selected with `cargo +<version>` under `RUSTUP_AUTO_INSTALL=0`.
 
@@ -1501,14 +1966,19 @@ Experiments on Linux on 13 November 2026, in throwaway folders outside this repo
 - **Versions.** For a one-crate package, the report of cargo 1.89 had no `build_directory` key, and the reports of cargo 1.97.1 and 1.100.0 had it. The other top-level keys were the same in all three: `metadata`, `packages`, `resolve`, `target_directory`, `version`, `workspace_default_members`, `workspace_members` and `workspace_root`.
 
 Cargo's source settles where the field begins. It was added to `cargo metadata` by rust-lang/cargo pull request #15377, merged on 2 April 2025, while `build.build-dir` was unstable. In the Cargo that Rust 1.90.0 ships (rust-lang/cargo commit 840b83a, package version 0.91.0), `src/cargo/ops/cargo_output_metadata.rs` writes `build_directory` only when the unstable `-Zbuild-dir` flag is on, and leaves the key out otherwise; unstable flags work only on nightly. In the Cargo that Rust 1.91.0 ships (commit ea2d978, package version 0.92.0), it always writes the field, and Cargo's changelog lists the stabilisation of `build.build-dir` under 1.91. The report of a stable Cargo therefore has `build_directory` from 1.91 on. The source was read through GitHub, at the cargo commits that the `src/tools/cargo` submodule of rust-lang/rust names at the tags `1.90.0` and `1.91.0`. Cargo 1.90 and 1.91 were not run here, because no toolchain was downloaded.
-:::
 
-:::mara evidence EVD-RUNTIME-INPUT-SCRIPTS
-:mid: 01M7WNEMK2SMVT1W9WM5JWK113
-:title: What Nx 24.0.6 does with a failing runtime input, what the variables of the toolchain command lost to multi-line values, and what the artifact folder input costs
-:status: accepted
-:supports: DES-INPUTS
-:supports: DES-TEST-MODE
+---
+
+<a id="01M7WNEMK2SMVT1W9WM5JWK113"></a>
+
+### What Nx 24.0.6 does with a failing runtime input, what the variables of the toolchain command lost to multi-line values, and what the artifact folder input costs
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-RUNTIME-INPUT-SCRIPTS                                   |
+| Status   | Accepted                                                    |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)    |
+| Supports | [DES-TEST-MODE](testing.mara.md#01M78FHG7F7NZT1HQM98QHVY34) |
 
 Experiments on 20 November 2026 in nxr-aqgka5, with `nx` 24.0.6, Node 26.12.0, cargo 1.100.0 through rustup, GNU awk 5.4.1 and bash as `/bin/sh`, on Linux x86-64.
 
@@ -1519,16 +1989,21 @@ Experiments on 20 November 2026 in nxr-aqgka5, with `nx` 24.0.6, Node 26.12.0, c
 - **Cost.** With `hyperfine`, 40 runs each, in a copy of the `two-workspaces` fixture: starting Node took 12.5 ± 0.9 ms; Node loading the modules of `print-artifact-folders.js` 20.1 ± 1.4 ms, and loading `child_process` alone 14.2 ± 1.6 ms; `cargo metadata --no-deps --format-version 1` 6.6 ± 0.4 ms; the script 29.9 ± 1.9 ms and, run again, 28.8 ± 1.7 ms; the script through the runtime input's `sh -c` command 29.6 ± 1.9 ms; and the script with `NODE_COMPILE_CACHE` filled beforehand 30.4 ± 2.5 ms. Replacing the module that `directories.js` loaded for one function with that function left the loading time as it was.
 
 So Nx gives a failing runtime input no voice and keys its task on whatever it prints, and the plugin's random value is the only way to keep such a task from being restored, while the reason can only show where the plugin's own executor runs. A key that took the lines of `env` lost the end of a multi-line value. The artifact folder input spends its time in Node and cargo, which no exact change of the script removes.
-:::
 
-:::mara evidence EVD-RUSTUP-MISSING-TOOLCHAIN
-:mid: 01M7AN00P9TZ5VQQT8SSXTHC4V
-:title: What rustup 1.29.3 and Nx 24.0.6 do when a pinned toolchain is missing
-:status: accepted
-:supports: DES-METADATA-REPORT
-:supports: RISK-NX-INPUT-SEMANTICS
-:supports: ADR-GRAPH-NO-TOOLCHAIN-INSTALL
-:supports: DES-INPUTS
+---
+
+<a id="01M7AN00P9TZ5VQQT8SSXTHC4V"></a>
+
+### What rustup 1.29.3 and Nx 24.0.6 do when a pinned toolchain is missing
+
+| Type     | Evidence                                                             |
+| -------- | -------------------------------------------------------------------- |
+| ID       | EVD-RUSTUP-MISSING-TOOLCHAIN                                         |
+| Status   | Accepted                                                             |
+| Supports | [DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E) |
+| Supports | [RISK-NX-INPUT-SEMANTICS](#01M78FHG7FWVEHYKF3KRPQYTWN)               |
+| Supports | [ADR-GRAPH-NO-TOOLCHAIN-INSTALL](#01M7AN094P6S3K7M62DNC8P15H)        |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)             |
 
 Experiments on 13 November 2026 on Linux x86-64 with rustup 1.29.3, whose proxies came first on `PATH`, and with `nx` 24.0.6, in throwaway folders outside this repository. A folder's `rust-toolchain.toml` named the toolchain `1.92.0`, which was not installed. Every command that could reach rustup ran with `RUSTUP_AUTO_INSTALL=0`, and rustup listed the same toolchains afterwards.
 
@@ -1540,14 +2015,19 @@ Experiments on 13 November 2026 on Linux x86-64 with rustup 1.29.3, whose proxie
 - **A value per evaluation.** With the runtime input `cd ../pinned && RUSTUP_AUTO_INSTALL=0 rustc -Vv 2>/dev/null || od -An -N16 -tx1 /dev/urandom`, three runs of the task gave three different task hashes, each a cache miss. Pointed at a folder that pinned nothing, the same command gave the hash that plain `rustc -Vv` gave there, and the next two runs restored the task from the cache.
 
 So `RUSTUP_AUTO_INSTALL=0` turns rustup's download of a pinned toolchain into a failure whose message names the toolchain, and it changes nothing where cargo is no rustup proxy. Nx 24.0.6 does not fail a task whose runtime input fails: it keys the task on the command's output and runs the task. Keyed on rustup's message, the task would name the toolchain only as the toolchain file does, for a channel such as `stable` not the release that cargo would install. A random value printed in its place, with rustup's message discarded, gives each evaluation a key of its own and leaves the key of an installed toolchain as it was.
-:::
 
-:::mara evidence EVD-NX-24-SETUP
-:mid: 01M7A67N99XVQ7ZV6NVRJB0W8N
-:title: How Nx 24.0.6 adds a plugin, runs generators and shows plugin output
-:status: accepted
-:supports: DES-GENERATORS
-:supports: DES-DIAGNOSTICS
+---
+
+<a id="01M7A67N99XVQ7ZV6NVRJB0W8N"></a>
+
+### How Nx 24.0.6 adds a plugin, runs generators and shows plugin output
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-NX-24-SETUP                                             |
+| Status   | Accepted                                                    |
+| Supports | [DES-GENERATORS](setup.mara.md#01M78FHG7FWY1P7FPVC6ZYA9ND)  |
+| Supports | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG) |
 
 Inspection of the `nx`, `@nx/devkit` and `@nx/js` 24.0.6 packages installed in this repository, and experiments with that `nx` package, on 13 November 2026. Paths are relative to `nx/dist/src/` unless another package is named.
 
@@ -1578,16 +2058,21 @@ Observed on 14 November 2026 in a third throwaway repository, with that `nx` pac
 - In a git repository whose `.git/info/exclude` named `/a/target/` and whose global excludes file, `$XDG_CONFIG_HOME/git/ignore`, named `b/target/`, as `git check-ignore -v` confirmed, Nx listed only `c/target/junk.rs`, while `isIgnoredDirectory` returned `false` for all three folders.
 - With `.git` removed, Nx listed `a/target/junk.rs` and `c/target/junk.rs`: the global excludes file still kept `b/target` out, and so it did in a copy of the repository that never had `.git`. With `XDG_CONFIG_HOME` naming an empty folder instead, Nx listed all three files.
 - With `core.excludesFile` in `$XDG_CONFIG_HOME/git/config` naming a file that listed `c/target/`, Nx left out `c/target` and no longer `b/target`, so it reads the excludes file that git's configuration names in place of the default one.
-:::
 
-:::mara evidence EVD-NX-24-VERSION-CHECK
-:mid: 01M7AR5NQ71CB4YNT6NRTYWHJZ
-:title: How Nx 24.0.6 and pnpm 12.18.0 treat a plugin that checks the Nx version
-:status: accepted
-:supports: DES-DIAGNOSTICS
-:supports: DES-GENERATORS
+---
 
-Inspection of the `nx` 24.0.6 package installed in this repository, and experiments with it and with pnpm 12.18.0, on 13 November 2026, while implementing the version checks of [[DES-DIAGNOSTICS]]. Paths are relative to `nx/dist/src/`.
+<a id="01M7AR5NQ71CB4YNT6NRTYWHJZ"></a>
+
+### How Nx 24.0.6 and pnpm 12.18.0 treat a plugin that checks the Nx version
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-NX-24-VERSION-CHECK                                     |
+| Status   | Accepted                                                    |
+| Supports | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG) |
+| Supports | [DES-GENERATORS](setup.mara.md#01M78FHG7FWY1P7FPVC6ZYA9ND)  |
+
+Inspection of the `nx` 24.0.6 package installed in this repository, and experiments with it and with pnpm 12.18.0, on 13 November 2026, while implementing the version checks of [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG). Paths are relative to `nx/dist/src/`.
 
 Read in the compiled source:
 
@@ -1606,41 +2091,51 @@ Observed in a throwaway git repository outside this one, with one `Cargo.toml` a
 Observed with pnpm 12.18.0 in a second throwaway repository that installed `nx` 24.0.6 from pnpm's store: adding a local package whose peer dependency range on `nx` was `^23` printed "Issues with peer dependencies found" and exited with status 0, with the package installed. `pnpm peers check` then listed the unmet peer with the installed and wanted versions and exited with status 1. pnpm linked the repository's `nx` into the package's folder in its store, so that `nx` resolves from the package. With the range `^24`, neither printed anything about peers.
 
 So a plugin that checks the version only when its module loads misses a change of `NX_RUST_ALLOW_UNSUPPORTED_NX` while a daemon runs it in Nx's own process, and a check in `createNodes` runs on every graph computation, also in a repository without a `Cargo.toml`. The peer dependency range does not stop an install with another Nx major; only the plugin's own check stops it.
-:::
 
-:::mara evidence EVD-NX-24-WARNING-CHANNELS
-:mid: 01M7CN8CQT805NSVGPERYK9BAK
-:title: Where Nx 24.0.6 shows what a plugin prints, and how a project's warnings can reach its keys
-:status: accepted
-:supports: DES-DIAGNOSTICS
-:supports: DES-INPUTS
-:supports: DES-TARGET-DEFAULT-GUARD
+---
+
+<a id="01M7CN8CQT805NSVGPERYK9BAK"></a>
+
+### Where Nx 24.0.6 shows what a plugin prints, and how a project's warnings can reach its keys
+
+| Type     | Evidence                                                               |
+| -------- | ---------------------------------------------------------------------- |
+| ID       | EVD-NX-24-WARNING-CHANNELS                                             |
+| Status   | Accepted                                                               |
+| Supports | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG)            |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)               |
+| Supports | [DES-TARGET-DEFAULT-GUARD](targets.mara.md#01M7AT4GDP59EWQTMVSVR69G4M) |
 
 An investigation on 14 November 2026 with the `nx` 24.0.6 package that this repository installs, Node.js 26.12.0 and cargo 1.100.0 on Linux, in a copy of the `patched-workspaces` fixture outside this repository. `nx.json` listed the compiled plugin and, after it, a probe plugin that recorded where each of its hooks ran and printed through each channel a plugin has. The `model` line of the root manifest's `[patch]` was removed, as the redirection tests remove it. Commands ran without the variables from which Nx concludes that an agent runs it, with `CI` set only where stated, with one private `NX_CACHE_DIRECTORY`, a private Cargo home, `CARGO_NET_OFFLINE=true` and `RUSTUP_AUTO_INSTALL=0`; the terminal UI ran in a pseudo-terminal of 120×40. Paths are relative to `nx/dist/src/`. The same day, the rows marked "Rerun" were repeated through this repository's test harness, in its fixed environment, with a probe plugin that printed from `createNodes`, `preTasksExecution` and `postTasksExecution` and gave `util` a named input or a metadata value taken from an environment variable; keys were computed with Nx's own task hasher.
 
 - **The hooks around a command's tasks.** `preTasksExecution` and `postTasksExecution` run for `nx run`, `nx run-many` and `nx affected`, also when no task runs, and not for `nx show`, `nx graph` or `nx exec`. Without the daemon they run in a plugin worker whose standard streams are piped to `nx` (`project-graph/plugins/isolation/isolated-plugin.js`), or in `nx` itself with `NX_ISOLATE_PLUGINS=false`, and what they print reached the terminal in every output style, also with `CI=true`. With the daemon they run in a worker that the daemon started, or in the daemon itself without isolation, and what they print goes to the daemon's log; a line sent with `emitPluginWorkerLog` is dropped there, because no client listens (`daemon/server/client-socket-context.js`). The pre hook receives the workspace root, `nx.json` and the command's arguments, but no project graph or task graph; the post hook adds each task's result, which says whether the cache restored it. Rerun: `nx run plain:fmt-check` and `nx run-many -t fmt-check --projects=plain,api`, each with `--output-style=static` and `stream`, printed the lines of both hooks without the daemon, with plugin workers and in Nx's own process, and printed neither with `NX_DAEMON=true`, where the daemon's log held them.
-- **Graph creation.** Rerun: what `createNodes` printed with `console.warn` reached the terminal without the daemon and only the daemon's log with it, as [[EVD-NX-24-SETUP]] found. A line that a plugin worker sends to the daemon's clients reaches only a command that waits for that graph computation: it was printed when the daemon started and when `nx` ran right after an edit, and not when the command started 8 seconds after the edit, by which time the daemon had created the graph in the background (`daemon/server/project-graph-incremental-recomputation.js`).
+- **Graph creation.** Rerun: what `createNodes` printed with `console.warn` reached the terminal without the daemon and only the daemon's log with it, as [EVD-NX-24-SETUP](#01M7A67N99XVQ7ZV6NVRJB0W8N) found. A line that a plugin worker sends to the daemon's clients reaches only a command that waits for that graph computation: it was printed when the daemon started and when `nx` ran right after an edit, and not when the command started 8 seconds after the edit, by which time the daemon had created the graph in the background (`daemon/server/project-graph-incremental-recomputation.js`).
 - **How fresh the graph is.** Without the daemon, every command created the graph again. The daemon creates it again when its file watcher reports a change in the repository, when a client's environment changes and when it starts, never for a change outside the repository. After a `[patch]` was added to the Cargo home's `config.toml`, a cache hit printed no warning, and the graph had none, until a file in the repository changed. After the `[patch]` was removed, the graph kept the warning until a file in the repository changed again.
 - **What a hit replays.** Nx stores only what a task's own process writes, and replays it on a cache hit. Of 19 stored outputs, none held a line of a hook, and the two that held the warning had it from the plugin's executor. Without the daemon, after the `[patch]` was removed, a hit replayed the warning that neither the graph nor the hooks had any more. The terminal UI's summary of several tasks shows only failed or stopped tasks, and its summary of a single task shows it whole (`tasks-runner/life-cycles/tui-summary-life-cycle.js`); with `CI=true`, Nx left out the output of a dependency that succeeded.
-- **What reaches a key.** Rerun: the probe gave the project `util` a named input that no target names, holding `{ "runtime": "echo <value>" }`. Changing the value from `a` to `b` changed the keys of `util:fmt-check` and `util:check`, and of `model:check`, whose crate depends on `util`. It changed none of the keys of `api:check`, `plain:fmt-check`, `plain:check` and `types:check`. Giving `util` the value as project metadata instead changed none of these seven keys. In Nx's native hasher, `hash_project_config` sorts a project's named inputs by name and hashes their entries, as the hasher's symbols show; [[EVD-NX-OPTION-VALIDATION]] lists the named inputs among the parts of the project's configuration that every key holds.
+- **What reaches a key.** Rerun: the probe gave the project `util` a named input that no target names, holding `{ "runtime": "echo <value>" }`. Changing the value from `a` to `b` changed the keys of `util:fmt-check` and `util:check`, and of `model:check`, whose crate depends on `util`. It changed none of the keys of `api:check`, `plain:fmt-check`, `plain:check` and `types:check`. Giving `util` the value as project metadata instead changed none of these seven keys. In Nx's native hasher, `hash_project_config` sorts a project's named inputs by name and hashes their entries, as the hasher's symbols show; [EVD-NX-OPTION-VALIDATION](#01M7A93PSWDSC2D81P6MX8WZZ7) lists the named inputs among the parts of the project's configuration that every key holds.
 - **The lockfile task's output, and `--skip-nx-cache`.** Observed on 14 November 2026 through this repository's test harness with the daemon on, in a copy of `patched-workspaces` whose ignored `rust/.cargo/config.toml` set `[env]`, so that the lockfile task of `rust` printed the warning about that file. For `nx run plain:build`, the default output style without a terminal, with `CI` false and true, showed "✔ nx run rust:lockfile" and "Output of 1 successful task was not shown. Run with --verbose or --output-style=static to see it."; so did a pseudo-terminal with `CI=true`. In a pseudo-terminal without `CI`, Nx showed "1/1 dependent project tasks succeeded" and "Hint: you can run the command with --verbose to see the full dependent project outputs". The warning appeared in none of these outputs. Once `plain:build` printed the warning itself, it appeared under that task's header in each of these modes, when the task ran and when the cache restored it. A run with `--skip-nx-cache` stored nothing: a run without the flag after it restored the result stored before it, and after `nx reset` the task ran. In the source, the task orchestrator passes `doNotSkipCache`, false with `--skip-nx-cache`, as the `shouldCache` argument of `postRunSteps`, which writes to the cache only where it is true (`tasks-runner/task-orchestrator.js`).
 - **Other channels.** A custom hasher runs in `nx` for every task, cache hits included, but Nx marks it for removal in Nx 25 (`hasher/hash-task.js`), and it runs after the terminal UI has started, which drops what `nx` prints. The task runner's life cycles are fixed, unless a custom tasks runner in `nx.json` replaces Nx's own. `createMetadata` runs during graph creation, in the same process as the other graph hooks.
 - **`createMetadata`.** Read in the source: Nx calls a plugin's `createMetadata` after `createDependencies`, with the project graph as Nx merged it, as a method of its copy of the plugin for the entry (`project-graph/plugins/loaded-nx-plugin.js`), in the same worker, whose graph phase is `createNodes`, `createDependencies` and `createMetadata` (`project-graph/plugins/isolation/plugin-lifecycle-manager.js`). It merges the metadata returned for each project into the project's own: an object under a key key by key, a list onto a list (`applyProjectMetadata` in `project-graph/build-project-graph.js`, `mergeMetadata` in `project-graph/utils/project-configuration/target-merging.js`). Observed the same day through the plugin's tests: warnings that `createMetadata` put under `cargo.targetWarnings` reached the executor's context, with the daemon on and off, and each task of the target concerned printed them.
-- **A file that `nx.json` extends.** Observed the same day with Nx's own hasher: with `nx.json` extending `./base.json` in `patched-workspaces`, giving `base.json` an entry of `targetDefaults` left the hash of the file input `{workspaceRoot}/nx.json, .gitignore, .nxignore` of `api:fmt-check` and `plain:fmt-check` as it was. Only the projects' configuration changed, through the plugin's digest. Nx hashes `nx.json` itself into every key ([[EVD-NX-OPTION-VALIDATION]]), but not the file that it extends.
+- **A file that `nx.json` extends.** Observed the same day with Nx's own hasher: with `nx.json` extending `./base.json` in `patched-workspaces`, giving `base.json` an entry of `targetDefaults` left the hash of the file input `{workspaceRoot}/nx.json, .gitignore, .nxignore` of `api:fmt-check` and `plain:fmt-check` as it was. Only the projects' configuration changed, through the plugin's digest. Nx hashes `nx.json` itself into every key ([EVD-NX-OPTION-VALIDATION](#01M7A93PSWDSC2D81P6MX8WZZ7)), but not the file that it extends.
 
 So with the daemon, nothing that a plugin prints outside a task reaches the terminal of a command; only a task's own output does, and a hit replays it as stored. A hit therefore shows the warnings of the graph that the command uses only where the warnings are part of the task's key, which a named input of the project can make them without any target naming it. macOS, Nx Console and the batch implementation's replay were not tried.
-:::
 
-:::mara evidence EVD-CARGO-TARGET-COMMANDS
-:mid: 01M7A4FCEFVN0W56WPDHWWW88N
-:title: What cargo, rustfmt and rust-analyzer 1.100 do with the commands of the inferred targets
-:status: accepted
-:supports: DES-TARGET-COMMANDS
-:supports: DES-WORKSPACE-TARGETS
-:supports: ADR-NX-TARGET-NAMES
-:supports: DES-INPUTS
-:supports: DES-INVOCATION
-:supports: DES-BATCH
+---
+
+<a id="01M7A4FCEFVN0W56WPDHWWW88N"></a>
+
+### What cargo, rustfmt and rust-analyzer 1.100 do with the commands of the inferred targets
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-CARGO-TARGET-COMMANDS                                           |
+| Status   | Accepted                                                            |
+| Supports | [DES-TARGET-COMMANDS](targets.mara.md#01M78FHG7F9X4M34PB2MP9Y7S8)   |
+| Supports | [DES-WORKSPACE-TARGETS](targets.mara.md#01M78FHG7FDHZMAH480DED8M6W) |
+| Supports | [ADR-NX-TARGET-NAMES](#01M78FHG7FTBB2RVZTTTWPYG1P)                  |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)            |
+| Supports | [DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB)        |
+| Supports | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)           |
 
 Experiments on 13 November 2026 with cargo 1.100.0 (3acc79c0c 2026-11-05), rustc 1.100.0, clippy 0.1.100, rustfmt 1.11.0 and rust-analyzer 1.100.0, all from one rustup toolchain, in a throwaway virtual workspace outside this repository. Its members were `a`, a library with a `harness = false` bench and a deliberate unused variable, and `b`, a crate with two binaries, `b` and `second`, that depends on `a`. `a` also depended on `ext`, a path dependency outside the workspace. For one check cargo 1.89.0, 1.91.0, 1.96.0, 1.97.0, 1.97.1 and 1.98.1 were used as well, each with a target directory of its own; 1.91.0, 1.96.0 and 1.97.0 were installed with the minimal profile into a rustup home of their own.
 
@@ -1657,14 +2152,19 @@ Experiments on 13 November 2026 with cargo 1.100.0 (3acc79c0c 2026-11-05), rustc
 - **update.** After a new path dependency was added to a manifest, `cargo update --locked` failed with "cannot update the lock file … because --locked was passed to prevent this", and `cargo update` then updated `Cargo.lock`. Without such a change, `cargo update --locked` succeeded.
 
 The workspace was a toy, so nothing here says how long these commands take on a large one.
-:::
 
-:::mara evidence EVD-CARGO-AUDIT-DENY
-:mid: 01M7A4FCEFMBYHR6YR0ZANHNS3
-:title: What cargo-audit 0.23.0 and cargo-deny 0.20.2 read, fetch and write
-:status: accepted
-:supports: DES-WORKSPACE-TARGETS
-:supports: DES-INVOCATION
+---
+
+<a id="01M7A4FCEFMBYHR6YR0ZANHNS3"></a>
+
+### What cargo-audit 0.23.0 and cargo-deny 0.20.2 read, fetch and write
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-CARGO-AUDIT-DENY                                                |
+| Status   | Accepted                                                            |
+| Supports | [DES-WORKSPACE-TARGETS](targets.mara.md#01M78FHG7FDHZMAH480DED8M6W) |
+| Supports | [DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB)        |
 
 Experiments on 13 November 2026 with cargo-deny 0.20.2 and cargo-audit 0.23.0, installed with `cargo install --locked` into a throwaway folder, and cargo 1.100.0, with a Cargo home of their own that started empty. The workspace, outside this repository, had one member `x` with `license = "MIT"` that depended on the registry crate `itoa`, whose license is `MIT OR Apache-2.0`. Every command ran in the workspace root.
 
@@ -1674,16 +2174,21 @@ Experiments on 13 November 2026 with cargo-deny 0.20.2 and cargo-audit 0.23.0, i
 - **cargo-audit configuration.** An invalid `.cargo/audit.toml` in the workspace root made `cargo audit --no-fetch` fail with a TOML parse error. The same file as `audit.toml` in the workspace root, or as `.cargo/audit.toml` in the member's folder, was ignored.
 
 What these tools report thus depends on the advisory database at the time they run, not only on files in the repository.
-:::
 
-:::mara evidence EVD-NX-24-TARGETS
-:mid: 01M7A4FCEFW4N06285629BJCB1
-:title: What Nx 24.0.6 does with continuous, sequential and overlapping targets
-:status: accepted
-:supports: DES-TARGET-COMMANDS
-:supports: DES-WORKSPACE-TARGETS
-:supports: DES-OUTPUTS
-:supports: ADR-NX-TARGET-NAMES
+---
+
+<a id="01M7A4FCEFW4N06285629BJCB1"></a>
+
+### What Nx 24.0.6 does with continuous, sequential and overlapping targets
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-NX-24-TARGETS                                                   |
+| Status   | Accepted                                                            |
+| Supports | [DES-TARGET-COMMANDS](targets.mara.md#01M78FHG7F9X4M34PB2MP9Y7S8)   |
+| Supports | [DES-WORKSPACE-TARGETS](targets.mara.md#01M78FHG7FDHZMAH480DED8M6W) |
+| Supports | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)           |
+| Supports | [ADR-NX-TARGET-NAMES](#01M78FHG7FTBB2RVZTTTWPYG1P)                  |
 
 An experiment and a reading of the `nx`, `@nx/js` and `@nx/workspace` 24.0.6 packages installed in this repository, on 13 November 2026, with Node.js 26.12.0. The experiment used a throwaway workspace outside this repository with two projects, `a` and `b`, whose targets ran shell commands through `nx:run-commands`. Nx ran as `node <repository>/node_modules/nx/dist/bin/nx.js` with `NX_DAEMON=false`, `NX_NO_CLOUD=true` and `NX_TUI=false`.
 
@@ -1698,15 +2203,20 @@ An experiment and a reading of the `nx`, `@nx/js` and `@nx/workspace` 24.0.6 pac
 - **typecheck.** `@nx/js` adds its TypeScript plugin with the target name `typecheck` (`src/utils/typescript/add-typescript-plugin.js`), and the CI workflow generator of `@nx/workspace` writes `nx affected -t lint test build typecheck` when a workspace has that target (`src/generators/ci-workflow/ci-workflow.js`).
 
 The targets of the experiment ran no cargo. The points marked with a source file were read, not run.
-:::
 
-:::mara evidence EVD-NX-24-EXTERNAL-NODES
-:mid: 01M7ACCPE3NW5Z2SMKCY08AV3H
-:title: What Nx 24.0.6 does with external nodes, externalDependencies and a lockfile it does not parse
-:status: accepted
-:supports: ADR-LOCKFILE-TASK
-:supports: DES-INPUTS
-:supports: DES-LOCKFILE-HASHING
+---
+
+<a id="01M7ACCPE3NW5Z2SMKCY08AV3H"></a>
+
+### What Nx 24.0.6 does with external nodes, externalDependencies and a lockfile it does not parse
+
+| Type     | Evidence                                                              |
+| -------- | --------------------------------------------------------------------- |
+| ID       | EVD-NX-24-EXTERNAL-NODES                                              |
+| Status   | Accepted                                                              |
+| Supports | [ADR-LOCKFILE-TASK](#01M7ACCPE3JYNPZCK42RZG5H3H)                      |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)              |
+| Supports | [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D) |
 
 Experiments on 13 November 2026 with `nx` 24.0.6, pnpm 12.18.0, Node 26.12.0 and git 2.56.0 on Linux x86-64. The throwaway workspace lay outside this repository, was installed with `pnpm install --offline` and had the default task-based affected. A local plugin made the projects `a`, `b` and `c` from `rust/crates/*/Cargo.toml` and read a hand-written `rust/Cargo.lock` in Cargo's version 4 format, in which `a` depended on `serde`, `serde` on `serde_derive`, `b` on `itoa` and `c` on `a`. It turned every package with a `source` into an external node `cargo:<name>@<version>` of type `cargo`, with the package's checksum as `data.hash`. Its `createDependencies` returned an edge from each crate to its direct external dependencies, an edge from each external node to those its lockfile entry lists, and the project edge from `c` to `a`. The targets used `nx:run-commands`, `nx:noop` and an executor from a package installed with `file:`; a JS project listed in `pnpm-workspace.yaml` added a `package.json` script. Hashes came from Nx's own hasher: a script built the graph with `createProjectGraphAsync` and the task graph with `createTaskGraph`, called `InProcessTaskHasher.hashTask` and printed each task's hash with its parts, all with `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false`; `HashPlanInspector` printed the plans. Selection came from `nx affected -t <target> --base=HEAD~1 --head=HEAD --explain=stdout` after a commit.
 
@@ -1716,21 +2226,26 @@ Experiments on 13 November 2026 with `nx` 24.0.6, pnpm 12.18.0, Node 26.12.0 and
 - **The `hash` field.** A changed checksum with the version unchanged changed the keys of exactly the tasks that reached the node. Without `data.hash`, a changed checksum changed no key, while a changed version, which renamed the node, did.
 - **One name twice.** When two `createNodes` results declared one node name with different hashes, the graph kept the last one, without a message.
 - **Affected.** After a commit that changed only `rust/Cargo.lock`, and with it the hash of `cargo:serde@1.0.0`, `nx affected` selected no task that reached that node, whether through a `^` input, `externalDependencies` or `AllExternalDependencies`. Only tasks with the lockfile as a file input were selected. Adding `Cargo.lock` to the plugin's `createNodes` pattern changed nothing. Neither did a per-crate digest that the plugin put into a target option, although the option changed the task's key through the project's configuration. As read in the installed source, Nx works out which external nodes moved only from the JS lockfiles and `package.json` (`dependencyChanges` in `project-graph/affected/affected-tasks.js`, `plugins/js/project-graph/affected/lock-file-changes.js`), and the plugin interface has no hook through which a plugin could report moved nodes (`project-graph/plugins/public-api.d.ts`).
-- **A JS lockfile.** After a commit that changed one integrity entry of `pnpm-lock.yaml`, with Nx's default `projectsAffectedByDependencyUpdates`, `nx affected` selected every crate target without an `externalDependencies` input, with the reason `external-dependencies`, and none of those with an empty one. A target that names an npm package fares otherwise, and the setting decides how ([[EVD-NX-24-PLUGIN-VERSION]]).
+- **A JS lockfile.** After a commit that changed one integrity entry of `pnpm-lock.yaml`, with Nx's default `projectsAffectedByDependencyUpdates`, `nx affected` selected every crate target without an `externalDependencies` input, with the reason `external-dependencies`, and none of those with an empty one. A target that names an npm package fares otherwise, and the setting decides how ([EVD-NX-24-PLUGIN-VERSION](#01M7AEAST02RW3QQS2PRMN6R21)).
 - **Graph creation.** With the project graph cache on and the daemon off, a change to `Cargo.lock` alone made the next command create the graph again, and the node's hash followed the file.
 
 The daemon was off throughout, the lockfile was written by hand and no cargo ran.
-:::
 
-:::mara evidence EVD-NX-24-PLUGIN-VERSION
-:mid: 01M7AEAST02RW3QQS2PRMN6R21
-:title: How Nx 24.0.6 hashes a plugin's package, its dependencies and a project's configuration
-:status: accepted
-:supports: DES-INPUTS
-:supports: DES-PLUGIN-OPTIONS
-:supports: DES-LOCKFILE-HASHING
+---
 
-Experiments on 13 November 2026 with `nx` 24.0.6, pnpm 12.18.0, Node 26.12.0 and git 2.56.0 on Linux x86-64, in a throwaway workspace outside this repository installed with `pnpm install --offline`. An executor package `@exp/executor`, installed with `file:`, depended on `tslib` 2.9.1. A stand-in plugin, listed in `nx.json` by its path and not installed as a package, gave two crate projects `a` and `b` the targets `t` and `u` with that executor, their own files as input, and an `externalDependencies` input naming the plugin's package, the executor's package or nothing, as each case required. Hashes came from `InProcessTaskHasher.hashTask` as in [[EVD-NX-24-EXTERNAL-NODES]], with `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false`, and the selection from `nx affected -t t --base=HEAD~1 --head=HEAD --explain=stdout` after a commit.
+<a id="01M7AEAST02RW3QQS2PRMN6R21"></a>
+
+### How Nx 24.0.6 hashes a plugin's package, its dependencies and a project's configuration
+
+| Type     | Evidence                                                               |
+| -------- | ---------------------------------------------------------------------- |
+| ID       | EVD-NX-24-PLUGIN-VERSION                                               |
+| Status   | Accepted                                                               |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)               |
+| Supports | [DES-PLUGIN-OPTIONS](configuration.mara.md#01M78FHG7F0KD92ZFBVS6GS65H) |
+| Supports | [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D)  |
+
+Experiments on 13 November 2026 with `nx` 24.0.6, pnpm 12.18.0, Node 26.12.0 and git 2.56.0 on Linux x86-64, in a throwaway workspace outside this repository installed with `pnpm install --offline`. An executor package `@exp/executor`, installed with `file:`, depended on `tslib` 2.9.1. A stand-in plugin, listed in `nx.json` by its path and not installed as a package, gave two crate projects `a` and `b` the targets `t` and `u` with that executor, their own files as input, and an `externalDependencies` input naming the plugin's package, the executor's package or nothing, as each case required. Hashes came from `InProcessTaskHasher.hashTask` as in [EVD-NX-24-EXTERNAL-NODES](#01M7ACCPE3NW5Z2SMKCY08AV3H), with `NX_DAEMON=false NX_CACHE_PROJECT_GRAPH=false`, and the selection from `nx affected -t t --base=HEAD~1 --head=HEAD --explain=stdout` after a commit.
 
 - **No node for the plugin.** Naming the path-loaded plugin's own package, which the lockfile did not list, failed the hash: "The externalDependency '@exp/nxr' for 'a:t' could not be found". The executor's package, which `pnpm-lock.yaml` lists, had a node, but no longer once `pnpm-lock.yaml` was listed in `.gitignore` and taken out of the index, and naming it then failed in the same way. As read in the installed source, Nx creates npm nodes only from a lockfile in its file map, and its lockfile analysis is off when `pluginsConfig["@nx/js"].analyzeLockfile` is `false`, and by default, unless `nx.json` sets it, without a root `package.json` or with a `lerna.json` and no `nx.json` (`plugins/js/index.js`, `plugins/js/utils/config.js`).
 - **What of a project's configuration Nx hashes.** A changed value in the options of `t` changed the key of `a:t`, and so did one in the options of `u`, in the configurations of `t`, in the project's tags and in `parallelism` of `t`. A change in the `metadata` of `t` or of the project, a named input that no target used, `dependsOn` or `cache` did not. With `externalDependencies: []`, a value standing for the plugin's version in the options of `t` changed the key from one version to the next, and hashing did not fail.
@@ -1739,18 +2254,23 @@ Experiments on 13 November 2026 with `nx` 24.0.6, pnpm 12.18.0, Node 26.12.0 and
 - **nx affected after a JS lockfile change.** Under Nx's default `projectsAffectedByDependencyUpdates`, which is `all` (`plugins/js/utils/config.js`), the commit that changed `@clack/core` selected `a:t` and `b:t` with the reason `moved-ecosystem` for `npm`, although their keys had not changed; with `externalDependencies: []` it selected neither. With `"projectsAffectedByDependencyUpdates": "auto"` in the `@nx/js` section of `pluginsConfig`, that commit selected neither, and a commit that changed `tslib` selected both, with `npm:tslib@2.9.1` as the reason.
 - **Uncached targets and a project at the repository root.** Checked on the same day in this repository's fixture harness, in `two-workspaces` with a root `package.json` and `pnpm-lock.yaml`: one workspace lies at the repository root, with its workspace project at root `.`, the other in `tools/`. After a commit that changed only the integrity of `left-pad`, on which the plugin's package does not depend, `nx affected -t test --explain=stdout` reported both lockfile tasks, which then had no `externalDependencies` input, as touched with the reason `external-dependencies`, under `all` and `auto` and whatever the crate targets declared, and every crate's `test` task as affected through their outputs (`dependent-output`). With an `externalDependencies` input on the lockfile tasks, nothing of `tools/` was selected. The lockfile task at the root stayed touched, with the reason `project-configuration` for `pnpm-lock.yaml`, which matches the `createNodes` pattern of Nx's own `nx/js/dependencies-and-lockfile` plugin and lies in that project's folder, and so did that project's `audit`, `update` and `doc`.
 - **Keys of a project at the repository root.** Checked on 14 November 2026 with Nx's own task hasher in this repository's fixture harness, in `two-workspaces` with a root `package.json` and `pnpm-lock.yaml`: once as the fixture is, with the virtual workspace's project `cargo-workspace` at root `.`, and once with a package `rootpkg` added to the root manifest, whose project at `.` then holds the workspace's targets. Nx's JS plugin had drawn a static edge from the project at `.` to `npm:left-pad`, which the root `package.json` lists. A change of only the integrity of `left-pad` changed the keys of `cargo-workspace:doc` and of every cached target of `rootpkg`, with the plugin's package listed in the lockfile and without it; the hash details named the project's fileset `{projectRoot}/**/*` without `Cargo.lock`, and `npm:left-pad`. A change of only the `description` of the root `package.json` changed the same keys, through the fileset alone. The lockfile task at the root, `app:test`, `util:test`, `tools:test` and `tools:doc` kept their keys in every case, and so did `app:build`, `app:check`, `app:lint`, `app:fmt-check` and `scaffold:test` in the first layout. In the review of the same day, with `app` depending on `rootpkg` by path, a change of only the integrity of `left-pad` also changed the keys of `app:test` and `app:build`, whose `^default` holds `rootpkg`'s fileset, while the lockfile task at the root, `util:test`, `tools:test` and `tools:doc` kept theirs. Changing only `targets.test.metadata.description` in a `project.json` in `crates/app` changed the keys of `app:test` and `app:build`, and the hash details named only the project's fileset, which holds that file, and not its configuration.
-:::
 
-:::mara evidence EVD-NX-24-LOCKFILE-TASK
-:mid: 01M7ACCPE3Z4TVZ0EBZZVXR4PP
-:title: How a lockfile task keys crates and drives nx affected in Nx 24.0.6
-:status: accepted
-:supports: ADR-LOCKFILE-TASK
-:supports: DES-LOCKFILE-HASHING
-:supports: DES-INPUTS
-:supports: REQ-NO-RUST-TASK-DEPS
+---
 
-Experiments on 13 November 2026 with the versions of [[EVD-NX-24-EXTERNAL-NODES]] and cargo 1.100.0, in throwaway workspaces outside this repository. In these runs the lockfile task was cached and wrote its digests without running cargo; [[EVD-NX-24-LOCKFILE-UPDATE]] has the task as it is now.
+<a id="01M7ACCPE3Z4TVZ0EBZZVXR4PP"></a>
+
+### How a lockfile task keys crates and drives nx affected in Nx 24.0.6
+
+| Type     | Evidence                                                              |
+| -------- | --------------------------------------------------------------------- |
+| ID       | EVD-NX-24-LOCKFILE-TASK                                               |
+| Status   | Accepted                                                              |
+| Supports | [ADR-LOCKFILE-TASK](#01M7ACCPE3JYNPZCK42RZG5H3H)                      |
+| Supports | [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D) |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)              |
+| Supports | [REQ-NO-RUST-TASK-DEPS](targets.mara.md#01M78FHG7FGDP772BSP1FSAYKN)   |
+
+Experiments on 13 November 2026 with the versions of [EVD-NX-24-EXTERNAL-NODES](#01M7ACCPE3NW5Z2SMKCY08AV3H) and cargo 1.100.0, in throwaway workspaces outside this repository. In these runs the lockfile task was cached and wrote its digests without running cargo; [EVD-NX-24-LOCKFILE-UPDATE](#01M7ANS8X2BSA42J4X4E6QFP0R) has the task as it is now.
 
 The first was the workspace of that item without its external nodes. A project at `rust/` had a cached `nx:run-commands` target that read `rust/Cargo.lock` and wrote, into a git-ignored folder, one file per crate holding a SHA-256 over the name, version, source and checksum of every package the crate's lockfile entry reaches. Each crate had a cached target that depended on it and declared `{ "dependentTasksOutputFiles": "<folder>/<crate>.digest" }` and `externalDependencies: []` besides its own files and a `^` input over them.
 
@@ -1763,17 +2283,22 @@ The second held a Cargo workspace at `rust/` whose root manifest also is the pac
 - **Root package.** Without `!{projectRoot}/Cargo.lock`, the files of `root` included `rust/Cargo.lock` and no file of a member, and a bump of `ryu`, which only `b` reaches, ran `root` and `c`, which depends on `root`, besides `b`. With it, only `b` ran.
 - **Git-ignored lockfile.** With `Cargo.lock` listed in `rust/.gitignore` and removed from the index, a plain file input did not see a bump: the lockfile task was restored from the cache with the old digests, and every crate task with it. With `{ "fileset": "{projectRoot}/Cargo.lock", "includeIgnored": true }`, the lockfile task ran again, and `a` and `c` after it.
 
-A third workspace on the same day tried a comparison, written by the plugin, of each lockfile entry with the dependencies that the manifests declare, with one digest over the whole lockfile and the declarations for every crate whenever they differed. It ran `a`, `b` and `c` where digests over the stale lockfile alone had restored `a` and `c` after a member's new requirement. The review of pull request #14 then found states it missed, and cargo's own check replaced it ([[EVD-CARGO-LOCK-CHECK]]). In that workspace, with the task still cached, a deleted or overwritten digest folder came back with the task from the cache.
+A third workspace on the same day tried a comparison, written by the plugin, of each lockfile entry with the dependencies that the manifests declare, with one digest over the whole lockfile and the declarations for every crate whenever they differed. It ran `a`, `b` and `c` where digests over the stale lockfile alone had restored `a` and `c` after a member's new requirement. The review of pull request #14 then found states it missed, and cargo's own check replaced it ([EVD-CARGO-LOCK-CHECK](#01M7ANS8X2N5DQ2844PTFSYCA0)). In that workspace, with the task still cached, a deleted or overwritten digest folder came back with the task from the cache.
 
 `nx init` writes `.nx/workspace-data` into `.gitignore` (`command-line/init/implementation/utils.js`), and a comment in `daemon/server/restart-checks.js` calls that folder hardcoded-ignored by the daemon's file watcher; both were read, not run. No cargo build ran inside Nx: the executors only logged.
-:::
 
-:::mara evidence EVD-CARGO-LOCKFILE
-:mid: 01M7ACCPE3XWH5NE1AJ970AVQH
-:title: What Cargo.lock records, and how a build of the whole workspace unifies features
-:status: accepted
-:supports: DES-LOCKFILE-HASHING
-:supports: DES-INPUTS
+---
+
+<a id="01M7ACCPE3XWH5NE1AJ970AVQH"></a>
+
+### What Cargo.lock records, and how a build of the whole workspace unifies features
+
+| Type     | Evidence                                                              |
+| -------- | --------------------------------------------------------------------- |
+| ID       | EVD-CARGO-LOCKFILE                                                    |
+| Status   | Accepted                                                              |
+| Supports | [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D) |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)              |
 
 An experiment on 13 November 2026 with cargo and rustc 1.100.0 on Linux x86-64, outside this repository, with crates.io reachable. The workspace had the members `a`, `b`, `f1` and `f2`. `a` had a normal dependency on `itoa = "1"`, an optional one on `smallvec` that no feature enabled, `ryu` as a dev-dependency, `cfg-if` as a build dependency and `memchr` under `[target.'cfg(windows)'.dependencies]`. `b` depended on `itoa = "0.4"`, on a crate in a local git repository and by path on `v`, a crate outside the workspace that depends on `ryu`. `f1` and `f2` depended by path on `x`, a crate outside the workspace with a feature `f` and a function that returns `cfg!(feature = "f")`. `f2` enabled `f` and `f1` did not; `f1` was a binary that printed the function's result. `cargo generate-lockfile` wrote the lockfile.
 
@@ -1790,16 +2315,21 @@ A second experiment on the same day used a workspace with the members `a`; `b`, 
 - **Dev-dependencies of other path packages.** The entry of `v` listed `cfg-if` and not `ryu`, and no `ryu` was locked: a lockfile records the dev-dependencies of workspace members only.
 - **Stale lockfile.** With `itoa = "1"` added to the manifest of `a` and either lockfile in place, the entry of `a` listed nothing. `cargo build -p a` rewrote the lockfile, gave `a` an `itoa` dependency and kept the version that lockfile had locked, 1.0.17 or 1.0.19.
 - **A sibling.** With `itoa = "=1.0.10"` in the manifest of `a` and the lockfile with 1.0.19, whose entry for `b` matched `b`'s manifest, `cargo build -p b` resolved the workspace again, and `cargo tree -p b` then showed `itoa` 1.0.10.
-:::
 
-:::mara evidence EVD-CARGO-LOCK-CHECK
-:mid: 01M7ANS8X2N5DQ2844PTFSYCA0
-:title: How cargo judges and updates Cargo.lock, and what a current lockfile fixes
-:status: accepted
-:supports: DES-LOCKFILE-HASHING
-:supports: ADR-LOCKFILE-TASK
+---
 
-Experiments on 13 November 2026 with cargo 1.100.0 and 1.91.0 on Linux x86-64, crates.io reachable, re-run in the fixtures of the lockfile research for this issue. One workspace has the members `a` (`smallvec`, `itoa = "1"`), `b` (`serde`, `ryu`, a git dependency and `v`, a path crate outside the workspace) and `c` (`a`); each case was applied to its committed, current state. Another uses a local registry in which versions can be published. The digest is the closure of [[DES-LOCKFILE-HASHING]], computed by a script from `Cargo.lock`, and the packages compiled for a crate came from `cargo check -p <crate> --message-format json`.
+<a id="01M7ANS8X2N5DQ2844PTFSYCA0"></a>
+
+### How cargo judges and updates Cargo.lock, and what a current lockfile fixes
+
+| Type     | Evidence                                                              |
+| -------- | --------------------------------------------------------------------- |
+| ID       | EVD-CARGO-LOCK-CHECK                                                  |
+| Status   | Accepted                                                              |
+| Supports | [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D) |
+| Supports | [ADR-LOCKFILE-TASK](#01M7ACCPE3JYNPZCK42RZG5H3H)                      |
+
+Experiments on 13 November 2026 with cargo 1.100.0 and 1.91.0 on Linux x86-64, crates.io reachable, re-run in the fixtures of the lockfile research for this issue. One workspace has the members `a` (`smallvec`, `itoa = "1"`), `b` (`serde`, `ryu`, a git dependency and `v`, a path crate outside the workspace) and `c` (`a`); each case was applied to its committed, current state. Another uses a local registry in which versions can be published. The digest is the closure of [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D), computed by a script from `Cargo.lock`, and the packages compiled for a crate came from `cargo check -p <crate> --message-format json`.
 
 - **The verdict.** In each state, `cargo update --workspace --locked`, `cargo metadata --locked` and `cargo check --workspace --locked` agreed. All three exited 0 for the committed state and for a removed member. They exited 101 for a requirement in `b` that moves a version `a` shares (`itoa = "=1.0.10"`), a feature in `a` that adds packages (`smallvec` with `serde`), an added `[replace]`, a same-version `[patch]` in `$CARGO_HOME/config.toml` and an unsatisfied requirement, on 1.100.0 and, for the first three, on 1.91.0. The message contains "--locked was passed to prevent this" on both. The research found the same agreement in 27 states on both toolchains, and that the check needs only the index entries of the locked packages, writes nothing to the repository or the build directory, and took 22 to 250 ms on a warm cargo home and up to 1.7 s, 4.5 s with 1.91.0, on a cold one with 493 locked packages.
 - **The update.** For 14 stale states and a missing lockfile, `cargo update --workspace` wrote the same bytes as plain `cargo check --workspace`. The stale states were a removed dependency, an unsatisfied requirement, the sibling's requirement, the feature, `[patch]` in the root manifest, in the repository's and in the cargo home's configuration, a newer-version `[patch]`, `[replace]`, a new version and a new dependency of `v`, a `branch` on the git dependency, and an added member. On the current lockfile it wrote nothing and kept the file's modification time.
@@ -1809,15 +2339,20 @@ Experiments on 13 November 2026 with cargo 1.100.0 and 1.91.0 on Linux x86-64, c
 - **Edges.** In a local registry with `zzlib` 1.0.0 and 2.0.0 and a `wrapper` that depends on `zzlib >=1, <3`, a binary depending on both `zzlib` versions and on `wrapper` was locked once with `wrapper` on `zzlib` 2.0.0 and once, by editing that entry, on 1.0.0. `cargo update --workspace --locked` exited 0 in both states with both toolchains, `cargo run --locked` printed `1 2 2` and `1 2 1`, and a digest over the packages alone was the same in both. The digest that also covers each entry's dependency strings differed. With it, the cases above changed the same digests as before.
 
 The research also found that a `paths` override in `.cargo/config.toml` is compiled while cargo calls the lockfile current and leaves no trace in it; that was not re-run.
-:::
 
-:::mara evidence EVD-NX-24-LOCKFILE-UPDATE
-:mid: 01M7ANS8X2BSA42J4X4E6QFP0R
-:title: How Nx 24.0.6 runs an uncached lockfile task that lets cargo update Cargo.lock
-:status: accepted
-:supports: DES-LOCKFILE-HASHING
-:supports: ADR-LOCKFILE-TASK
-:supports: DES-INPUTS
+---
+
+<a id="01M7ANS8X2BSA42J4X4E6QFP0R"></a>
+
+### How Nx 24.0.6 runs an uncached lockfile task that lets cargo update Cargo.lock
+
+| Type     | Evidence                                                              |
+| -------- | --------------------------------------------------------------------- |
+| ID       | EVD-NX-24-LOCKFILE-UPDATE                                             |
+| Status   | Accepted                                                              |
+| Supports | [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D) |
+| Supports | [ADR-LOCKFILE-TASK](#01M7ACCPE3JYNPZCK42RZG5H3H)                      |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)              |
 
 Experiments on 13 November 2026 with `nx` 24.0.6, Node 26.12.0 and cargo 1.100.0, with `NX_DAEMON=false`, re-run in the Nx workspace of the lockfile research for this issue. Its Cargo workspace `rust/` has the members `a` (`smallvec`, `itoa = "1"`), `b` (`serde`, `ryu`, `itoa = "=1.0.10"`, `memchr`) and `c` (`a`). The project `rust` had an uncached `lockfile` target that ran `cargo update --workspace`, with `--locked` under `NX_RUST_LOCKED=true`, and then wrote the closure digest of each member into `.nx/workspace-data/nx-rust/lockfile/rust`, declared as its outputs. Its inputs were `Cargo.lock` with `includeIgnored`, the root manifest and `{workspaceRoot}/rust/*/Cargo.toml`. Each crate had a cached `check` target that depended on it, ran `cargo check -p`, and hashed its digest through `dependentTasksOutputFiles`. With `POSTCHECK=digest`, it computed the crate's digest again after its call and failed when that differed from the digest file.
 
@@ -1831,15 +2366,20 @@ Experiments on 13 November 2026 with `nx` 24.0.6, Node 26.12.0 and cargo 1.100.0
 - **What Nx stores.** As read in `tasks-runner/task-orchestrator.js`, Nx stores a result only when the task is cached and its exit code is 0, or with `NX_CACHE_FAILURES=true` whatever the code. Failing is the only way for a task to keep its result out of the cache.
 
 The research also reported, without a re-run here: inputs written as `{projectRoot}/*/Cargo.toml` missed the members' manifests, which belong to nested projects; and with the task cached and its inputs complete, a `[patch]` in `$CARGO_HOME/config.toml` let the task, `a` and `c` be restored although cargo called the lockfile stale.
-:::
 
-:::mara evidence EVD-CARGO-DEP-INFO
-:mid: 01M7ACMK1Q7ATJKRRHC2WPJE1Z
-:title: Where Cargo records the files that build scripts and macros read
-:status: accepted
-:supports: ADR-DECLARED-FILE-INPUTS
-:supports: DES-BUILD-INPUT-CHECK
-:supports: RISK-UNDECLARED-INPUTS
+---
+
+<a id="01M7ACMK1Q7ATJKRRHC2WPJE1Z"></a>
+
+### Where Cargo records the files that build scripts and macros read
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-CARGO-DEP-INFO                                                  |
+| Status   | Accepted                                                            |
+| Supports | [ADR-DECLARED-FILE-INPUTS](#01M7ACMK1QTQXRJFFNXHPB53FS)             |
+| Supports | [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) |
+| Supports | [RISK-UNDECLARED-INPUTS](#01M78FHG7F7QAFW6P09CQYEPJA)               |
 
 Experiments on 13 November 2026 with cargo and rustc 1.100.0 (cargo 3acc79c0c 2026-11-05) and, where named, cargo 1.98.1, 1.97.1 and 1.91.0, on Linux x86-64, in throwaway folders outside this repository, with no Cargo configuration in the home folder and no toolchain pinned. The fixture was a virtual workspace `ws` with the members `app` and `dep`, beside the folders `proto`, `shared` and `assets` outside it. `app` depended on `dep` by path. Its build script printed `cargo::rerun-if-changed` for `../../../proto/app.proto`, for the folder `../../../assets` and for `build.rs`, read the proto file and set a variable with `cargo::rustc-env`; its library used `include_str!` on `shared/data.txt`, its binary called the library, and an integration test used `include_bytes!` on `shared/test-data.bin`. `dep`'s build script named `../../../proto/dep.proto`, and its library included `shared/dep.txt`. Later steps added `pm`, a proc-macro crate whose macro read `shared/pm.txt` with `std::fs`, used by `app2`, which also depended on the registry crate `libc` (built with `--offline` from the local registry cache); `gen`, whose build script wrote a file into `OUT_DIR`, which its library included with `include!`, and named `/etc/hostname`; and `cd`, with the crate types `cdylib`, `rlib` and `staticlib`, whose library included a file with a space in its name.
 
@@ -1861,15 +2401,20 @@ Experiments on 13 November 2026 with cargo and rustc 1.100.0 (cargo 3acc79c0c 20
 - **Documentation.** The Cargo book of the 1.100.0 toolchain (`reference/build-cache.html`, "Dep-info files") says that the file with the `.d` suffix next to each compiled artifact indicates the files the artifact depends on, that these files are "intended to be used with external build systems", and that their paths are absolute unless `build.dep-info-basedir` is set. The same page calls the intermediate artifacts in the build directory "internal to Cargo and the Rust compiler".
 
 The workspace was a toy on Linux, so the names of macOS libraries, such as `.dylib`, were not seen.
-:::
 
-:::mara evidence EVD-NX-24-FILE-INPUTS
-:mid: 01M7ACMK1QCT1DZYXHK8C0D50R
-:title: How Nx 24.0.6 treats files outside a project and stores task results
-:status: accepted
-:supports: ADR-DECLARED-FILE-INPUTS
-:supports: DES-INPUTS
-:supports: DES-BUILD-INPUT-CHECK
+---
+
+<a id="01M7ACMK1QCT1DZYXHK8C0D50R"></a>
+
+### How Nx 24.0.6 treats files outside a project and stores task results
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-NX-24-FILE-INPUTS                                               |
+| Status   | Accepted                                                            |
+| Supports | [ADR-DECLARED-FILE-INPUTS](#01M7ACMK1QTQXRJFFNXHPB53FS)             |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)            |
+| Supports | [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) |
 
 Experiments on 13 November 2026 with the `nx` 24.0.6 package installed in this repository, linked into a throwaway git repository outside it, with Node.js 26.12.0 and git 2.56.0, and a reading of that package. Nx ran as `node node_modules/nx/dist/bin/nx.js` with `NX_DAEMON=false`, `NX_NO_CLOUD=true` and `NX_TUI=false`. The repository had two projects whose cached `build` target ran `echo` through `nx:run-commands`: `a`, with the inputs `{projectRoot}/**/*` and the runtime input `sha256sum shared/a.txt`, and `b`, with `{projectRoot}/**/*` and a fileset for `{workspaceRoot}/shared/b.txt`. Both files lay outside the projects' folders.
 
@@ -1882,33 +2427,43 @@ Experiments on 13 November 2026 with the `nx` 24.0.6 package installed in this r
 - **Recorded reads.** A target accepts an `ultracache` setting whose modes record the files a task reads and let the recording stand in for the declared inputs (`on`, the default), report undeclared reads (`warn`, and `error`, which behaves as `warn` for now), or record nothing (`off`). The typings call it Nx Cloud only and say that "nothing in the OSS runner records or applies IO" (`UltracacheMode` in `native/index.d.ts`, `ultracache/config.d.ts`).
 
 The targets of the experiment ran no cargo. The points marked with a source file were read, not run.
-:::
 
-:::mara evidence EVD-NX-24-FILESET-SCOPE
-:mid: 01M7CH4GX6F2REGP5T284NW0DB
-:title: Which files Nx 24.0.6 matches a fileset with includeIgnored against
-:status: accepted
-:supports: ADR-DECLARED-FILE-INPUTS
-:supports: DES-INPUTS
-:supports: DES-BUILD-INPUT-CHECK
+---
 
-A reading of the source of Nx 24.0.6, the tag `24.0.6` of the Nx repository from which the `nx` package installed in this repository was built, and experiments on 14 November 2026 with that package, with Node.js 26.12.0, git 2.56.0 and cargo 1.100.0. The experiments loaded copies of the `declared-files` and `undeclared-files` fixtures through the plugin, without the daemon, and listed the files of a task's key with Nx's `HashPlanInspector` (`hasher/hash-plan-inspector.js`), as the check of [[DES-BUILD-INPUT-CHECK]] does. In `declared-files`, `rust` is the folder of the workspace project `rust`, and `app` and `other` are crates beside `api` that `api` does not depend on.
+<a id="01M7CH4GX6F2REGP5T284NW0DB"></a>
+
+### Which files Nx 24.0.6 matches a fileset with includeIgnored against
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-NX-24-FILESET-SCOPE                                             |
+| Status   | Accepted                                                            |
+| Supports | [ADR-DECLARED-FILE-INPUTS](#01M7ACMK1QTQXRJFFNXHPB53FS)             |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)            |
+| Supports | [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) |
+
+A reading of the source of Nx 24.0.6, the tag `24.0.6` of the Nx repository from which the `nx` package installed in this repository was built, and experiments on 14 November 2026 with that package, with Node.js 26.12.0, git 2.56.0 and cargo 1.100.0. The experiments loaded copies of the `declared-files` and `undeclared-files` fixtures through the plugin, without the daemon, and listed the files of a task's key with Nx's `HashPlanInspector` (`hasher/hash-plan-inspector.js`), as the check of [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) does. In `declared-files`, `rust` is the folder of the workspace project `rust`, and `app` and `other` are crates beside `api` that `api` does not depend on.
 
 - **Source.** The hash planner hashes every fileset with `includeIgnored` among a project's inputs as one group read from the disk (`gather_self_inputs` and `FileSetStore` in `native/tasks/hash_planner.rs`). It splits each brace group whose alternatives are plain names into entries of their own, and reads each entry from its literal prefix, the segments before the first one with glob syntax (`expand_literal_braces` and `partition_glob` in `native/glob/glob_transform.rs`). An entry belongs to the deepest project whose folder is or holds that prefix, the project at the repository root not counted, and it takes only the files whose deepest project is that project, so the files of a project in a folder below are left out, as from a `{projectRoot}` fileset. An entry whose prefix no project's folder holds takes every file it names (`ProjectScope` and `scope_roots` in `native/tasks/hashers/disk_expansion/scope.rs`). `nx affected` matches changed files against such a group with the same rule (`ScopedMatcher`, used in `native/affected/tasks/touched.rs`), and `HashPlanInspector` expands it with the same rule (`native/tasks/hash_plan_inspector.rs`). A fileset under `{workspaceRoot}` without `includeIgnored` is matched against every file that Nx tracks, whatever project holds it (`hash_workspace_files` in `native/tasks/hashers/hash_workspace_files.rs`). A plugin's `createNodes` receives only `nx.json` and the repository root besides its own files, while `createDependencies` receives the merged projects of every plugin (`CreateNodesContext` and `CreateDependenciesContext` in `project-graph/plugins/public-api.d.ts`).
 - **Glob matching.** Nx builds every glob of a fileset with globset, with `literal_separator`, so that `*` never crosses a `/`, and with backslash escapes, after converting extended groups into globset's syntax: `*(…)` before another segment becomes `*`, `!(…)` there becomes `*` with an exclusion of the group, and `+(…)` reads as one of its alternatives (`build_glob_set` in `native/glob.rs`, `convert_glob` in `native/glob/glob_transform.rs`). A glob that ends in `/` gets `**` after it in Nx's glob of the workspace's files, while the disk expansion of a fileset with `includeIgnored` and `nx affected` first drop the trailing `/` (`normalize_glob`), so that `rust/crates/*/` names only the files directly in `rust/crates` there. The native module exports this engine to JavaScript as `matchGlobPaths` (`native/glob.rs`). Called with a segment followed by one more, it matched `app` and `other` but not `web` for `@(app|other)`, `web` but not `app` for `!(app)`, every name for `*(a|b)`, `a` but neither `ab` nor `web` for `+(a|b)`, `app` and `bpp` for `[ab]pp`, `bpp` but not `app` for `[!a]pp`, no name for `[[:alpha:]]*`, and only `a*b` for `a\*b`.
 - **Cargo's directories.** On 14 November 2026, in `declared-files` with `rust/target/debug/out.txt` in place, which the fixture's `.gitignore` leaves out of Git, `api` declared `../../**` and then `../../..`, which became the filesets `rust/**` and `**/*` with `includeIgnored`. `HashPlanInspector` listed `rust/target/debug/out.txt` among the files of `api:check` for both, and the key of `api:check` changed after only that file changed: the disk walk of such a fileset enters the folders that Git ignores, and skips only Nx's fixed exclusions such as `node_modules` (`native/walker.rs`).
 - **Before nxr-1by7h4.** `api` declared one pattern at a time, which became one fileset. `../app/src/main.rs` and `../app/**` reached `rust/crates/app/src/main.rs`. `../*/**`, `../*/**/*`, `../*/src/**`, `../*/src/main.rs`, `../a*/src/main.rs`, `../../*/*/src/main.rs` and `../../../rust/crates/*/src/main.rs`, read from `rust/crates` or `rust`, reached no file of `app` or `other`. `../../../*/crates/*/src/main.rs` and `../../../[r]ust/crates/*/src/main.rs`, read from the repository root, reached `rust/crates/app/src/main.rs`, and `../../../*/banner.txt` reached `docs/banner.txt`, a file of no project. With a `project.json` in `rust/crates/app/web`, `../app/**` left out the file beside it, while `../app/web/**` reached it. `../app/**` reached a file that a `.gitignore` in `rust/crates/app` ignored. In `undeclared-files`, `../**` from `reader` reached no source of a crate that `reader` does not depend on. The patterns that missed the files of other crates thus started inside the folder of the project `rust`; that they reach only files of no project, as nxr-1by7h4 first read them, holds only where `rust` is a project.
-- **After nxr-1by7h4.** With the filesets that [[DES-INPUTS]] gives the folders of the plugin's projects below where a pattern starts, each of these patterns reached the files that it names in `app` and `other`, and `../**` those of the crates of `undeclared-files`. For each pattern of the declared-files and build input check tests, links, ignored files and a crate without a project among them, the files listed for the tasks of the crates that declare it or depend on it before the change were all listed after it; only the patterns over the folders of crates gained the files of those crates. In the review of the change, `../{app,other}/` left out a member in `rust/crates/other/nested`, and graph creation failed for `../{app,web}/src/**` and `../@(app|other)/src/**` beside a project from a `project.json` in `rust/crates/web`, although Nx hashed the first's files there and the second reaches none. With each alternative of braces read as a pattern of its own and segments matched through `matchGlobPaths`, for 24 patterns with braces, nested ones included, classes, the extended groups above, `**` between segments, folders and the repository root, in a layout with members in `rust/crates/other/nest` and `rust/crates/other/nest/deep` and that project in `rust/crates/web`, every file that Nx's glob finds for the pattern, with `/**` after it where it names folders, was in the key of `api:check`, and graph creation failed exactly for the patterns that reach `rust/crates/web`, and passed with the patterns that the message gives.
+- **After nxr-1by7h4.** With the filesets that [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP) gives the folders of the plugin's projects below where a pattern starts, each of these patterns reached the files that it names in `app` and `other`, and `../**` those of the crates of `undeclared-files`. For each pattern of the declared-files and build input check tests, links, ignored files and a crate without a project among them, the files listed for the tasks of the crates that declare it or depend on it before the change were all listed after it; only the patterns over the folders of crates gained the files of those crates. In the review of the change, `../{app,other}/` left out a member in `rust/crates/other/nested`, and graph creation failed for `../{app,web}/src/**` and `../@(app|other)/src/**` beside a project from a `project.json` in `rust/crates/web`, although Nx hashed the first's files there and the second reaches none. With each alternative of braces read as a pattern of its own and segments matched through `matchGlobPaths`, for 24 patterns with braces, nested ones included, classes, the extended groups above, `**` between segments, folders and the repository root, in a layout with members in `rust/crates/other/nest` and `rust/crates/other/nest/deep` and that project in `rust/crates/web`, every file that Nx's glob finds for the pattern, with `/**` after it where it names folders, was in the key of `api:check`, and graph creation failed exactly for the patterns that reach `rust/crates/web`, and passed with the patterns that the message gives.
 
 The points marked with a source file were read, not run.
-:::
 
-:::mara evidence EVD-NX-24-OPTION-SEMANTICS
-:mid: 01M7AD4BCYERDMG40D5WH2XMAK
-:title: What Nx 24.0.6 does with dependency inputs, target merges and its own flags
-:status: accepted
-:supports: DES-PLUGIN-OPTIONS
-:supports: DES-INPUTS
+---
+
+<a id="01M7AD4BCYERDMG40D5WH2XMAK"></a>
+
+### What Nx 24.0.6 does with dependency inputs, target merges and its own flags
+
+| Type     | Evidence                                                               |
+| -------- | ---------------------------------------------------------------------- |
+| ID       | EVD-NX-24-OPTION-SEMANTICS                                             |
+| Status   | Accepted                                                               |
+| Supports | [DES-PLUGIN-OPTIONS](configuration.mara.md#01M78FHG7F0KD92ZFBVS6GS65H) |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)               |
 
 An experiment and a reading of the `nx` 24.0.6 package installed in this repository, on 13 November 2026, with Node.js 26.12.0.
 
@@ -1920,47 +2475,62 @@ A second experiment, after the review of the option reference the same day, used
 - **Negated patterns.** `a/docs/readme.md` was not in the plan of `a:test`, and a change to it was a cache hit. A negated pattern in a target's inputs takes out files that another entry of the same list brings in. In the second experiment a test of crate `a` compared `include_str!("../docs/value.txt")` with `1`, and the crate's `project.json` set the `inputs` of `test` to `["...", "!{projectRoot}/docs/**"]`. After `nx run a:test` passed and the file was changed to `2`, `nx run a:test` restored the passing result from the cache, while `cargo test -p a` in the workspace root failed with exit code 101. With `["..."]` alone, the same change made `nx run a:test` run and fail. An excluded file that a macro reads therefore gives a stale result.
 - **`nx.json`.** `nx.json` was among the files of every task's plan, although no input named it.
 - **Merging two configurations of one target.** `mergeTargetConfigurations` in `project-graph/utils/project-configuration/target-merging.js`, with `getMergeValueResult` and `mergeArrayValue` in `utils.js` beside it: a field that the later configuration sets replaces the earlier value; `options` and `configurations` are merged key by key; a list without the element `"..."` replaces the earlier list, and `"..."` stands for the earlier entries at its place. When both configurations name an executor and the executors differ, or both run `nx:run-commands` with different commands, the targets are incompatible (`isCompatibleTarget`): the later one is used in place of the earlier one, and the earlier options are discarded. A `command` becomes `nx:run-commands` with that command (`resolveCommandSyntacticSugar`). In the second experiment, a `probe` target in `project.json` with the inferred executor and an option `x` kept the inferred inputs and options and added `x`; with the executor `nx:noop`, or with a `command`, the target had no inputs left and only the options of `project.json`.
-- **Nx's own flags.** In the second experiment each flag was passed to `nx run b:probe`, `nx run-many -t probe -p b` and `nx affected -t probe --files=<a file of b>`, and the probe recorded whether the option arrived. `--target`, `--configuration`, `--exclude` and `--parallel` never reached the executor, under any of the three commands, and `--runner=zzz` made all three fail. `--projects` reached it under `run` and `affected` but not under `run-many`, which selects projects with it, and `--project` reached it under `run-many` and `affected` but not under `run`, which takes it as the project to run (`command-line/yargs-utils/shared-options.js`). `--profile=release` reached it under all three: Nx switches its own task profiling on with the environment variable `NX_PROFILE` (`tasks-runner/run-command.js`), not with a flag. So did `--features`, `--allFeatures`, `--noDefaultFeatures`, `--targetTriple`, `--allTargets`, `--noDeps`, `--bin` and `--affectedTests`, the option names of [[DES-PLUGIN-OPTIONS]]. An option named `target`, `configuration`, `exclude`, `parallel` or `runner` could not be given on the command line at all.
+- **Nx's own flags.** In the second experiment each flag was passed to `nx run b:probe`, `nx run-many -t probe -p b` and `nx affected -t probe --files=<a file of b>`, and the probe recorded whether the option arrived. `--target`, `--configuration`, `--exclude` and `--parallel` never reached the executor, under any of the three commands, and `--runner=zzz` made all three fail. `--projects` reached it under `run` and `affected` but not under `run-many`, which selects projects with it, and `--project` reached it under `run-many` and `affected` but not under `run`, which takes it as the project to run (`command-line/yargs-utils/shared-options.js`). `--profile=release` reached it under all three: Nx switches its own task profiling on with the environment variable `NX_PROFILE` (`tasks-runner/run-command.js`), not with a flag. So did `--features`, `--allFeatures`, `--noDefaultFeatures`, `--targetTriple`, `--allTargets`, `--noDeps`, `--bin` and `--affectedTests`, the option names of [DES-PLUGIN-OPTIONS](configuration.mara.md#01M78FHG7F0KD92ZFBVS6GS65H). An option named `target`, `configuration`, `exclude`, `parallel` or `runner` could not be given on the command line at all.
 - **`--verbose`.** All three commands consume `--verbose` as Nx's own flag: it is not among a task's overrides. Nx then supplies verbosity to the executor of a single task itself: it adds `verbose: true` to the options when the executor's schema declares a `verbose` property or sets `additionalProperties: true` (`applyVerbosity` in `utils/params.js`). In a third experiment on 13 November 2026, with a stand-in executor recording its options, `nx run`, `nx run-many` and `nx affected` with `--verbose` delivered `"verbose": true` under a schema with `additionalProperties: true` and under one that declares a boolean `verbose`, and no `verbose` under a schema that does neither. A batch implementation with the schema that declares `verbose` and `preferBatch` set received no `verbose` in its tasks' options under any of the three commands. In the same runs `--affectedTests=true` reached the executor under all three commands, as `true` among the options and as `"true"` among the task's overrides in the task graph, in a batch as well.
 - **`env` of `nx:run-commands`.** That executor's `env` option holds "Environment variables that will be made available to the commands" (`executors/run-commands/schema.json`).
 
 In the first experiment the projects came from `project.json` files, not from a plugin. That a plugin's named inputs are hashed in the same way is read from the source, where both reach the hasher as project configuration.
-:::
 
-:::mara evidence EVD-CARGO-NX-TABLES
-:mid: 01M7AD4BCY1KGNGB0BSH140SNV
-:title: How cargo 1.100.0 reports the nx tables of the option reference
-:status: accepted
-:supports: DES-PLUGIN-OPTIONS
-:supports: DES-METADATA-TABLES
+---
+
+<a id="01M7AD4BCY1KGNGB0BSH140SNV"></a>
+
+### How cargo 1.100.0 reports the nx tables of the option reference
+
+| Type     | Evidence                                                                |
+| -------- | ----------------------------------------------------------------------- |
+| ID       | EVD-CARGO-NX-TABLES                                                     |
+| Status   | Accepted                                                                |
+| Supports | [DES-PLUGIN-OPTIONS](configuration.mara.md#01M78FHG7F0KD92ZFBVS6GS65H)  |
+| Supports | [DES-METADATA-TABLES](configuration.mara.md#01M78FHG7FX2K81MEQEY7YQHTN) |
 
 An experiment with cargo 1.100.0 and rustc 1.100.0 on 13 November 2026, with an empty Cargo home and `--offline`, in a throwaway workspace outside this repository. Its root `Cargo.toml` listed the members `crates/*` and excluded `tools/x`, and its `[workspace.metadata.nx]` table set `tags`, `namePrefix`, `envInputs` and a `project` sub-table with `name`. The member `api` set `name` and `implicitDependencies` in `[package.metadata.nx]`, `inputs = ["...", { env = "DATABASE_URL" }, "!{projectRoot}/docs/**"]` in `[package.metadata.nx.targets.test]`, and `affectedTests = false` and `features` among that target's options. The excluded crate `tools/x` had a `[workspace.metadata.nx]` table of its own with `testRunner`.
 
 - `cargo metadata --format-version 1 --no-deps --offline` in the workspace root reported both tables as written: the `"..."` string, the inline table inside the list and the booleans kept their types and order, under `metadata.nx` of the workspace and of the package. A member without a table had `null` there.
 - `cargo build --offline` built the workspace without a warning about any of the keys.
 - In `tools/x`, the report named that folder as the workspace root, with one member and the crate's `[workspace.metadata.nx]` table as the workspace's metadata, and `cargo build --offline` built it. A standalone crate can therefore carry workspace settings in its own manifest.
-:::
 
-:::mara evidence EVD-CARGO-LOCKED-CHECK
-:mid: 01M7AD4BCY0KKX34EHF23320MQ
-:title: cargo metadata --locked fails on an outdated lockfile without changing it
-:status: accepted
-:supports: DES-INVOCATION
+---
 
-An experiment with cargo 1.100.0 on 13 November 2026, in the workspace of [[EVD-CARGO-NX-TABLES]] with two members and no registry dependencies, an empty Cargo home and `--offline`. After `cargo generate-lockfile`, a path dependency of `api` on `core` was added to `api`'s manifest, so that `Cargo.lock` was out of date.
+<a id="01M7AD4BCY0KKX34EHF23320MQ"></a>
+
+### cargo metadata --locked fails on an outdated lockfile without changing it
+
+| Type     | Evidence                                                     |
+| -------- | ------------------------------------------------------------ |
+| ID       | EVD-CARGO-LOCKED-CHECK                                       |
+| Status   | Accepted                                                     |
+| Supports | [DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB) |
+
+An experiment with cargo 1.100.0 on 13 November 2026, in the workspace of [EVD-CARGO-NX-TABLES](#01M7AD4BCY1KGNGB0BSH140SNV) with two members and no registry dependencies, an empty Cargo home and `--offline`. After `cargo generate-lockfile`, a path dependency of `api` on `core` was added to `api`'s manifest, so that `Cargo.lock` was out of date.
 
 - `cargo metadata --format-version 1 --no-deps --locked --offline` succeeded: the report that builds the graph does not notice an outdated lockfile.
 - `cargo metadata --format-version 1 --locked --offline` exited with code 101 and the message "cannot update the lock file … because --locked was passed to prevent this". `Cargo.lock` was byte for byte unchanged.
 - After `cargo generate-lockfile`, the same command succeeded.
 
-`cargo metadata` without `--no-deps` resolves the dependencies, so in a workspace with registry dependencies it needs what the full report needs, the registry or a filled Cargo home ([[EVD-CARGO-NO-DEPS]]). That case was not run here.
-:::
+`cargo metadata` without `--no-deps` resolves the dependencies, so in a workspace with registry dependencies it needs what the full report needs, the registry or a filled Cargo home ([EVD-CARGO-NO-DEPS](#01M78RC7T7182TG80N949GFTTC)). That case was not run here.
 
-:::mara evidence EVD-NX-PLUGIN-ENTRIES
-:mid: 01M7ABYX5EADNXFRHAA2F17VBK
-:title: How Nx 24.0.6 runs several entries of one plugin
-:status: accepted
-:supports: DES-METADATA-REPORT
+---
+
+<a id="01M7ABYX5EADNXFRHAA2F17VBK"></a>
+
+### How Nx 24.0.6 runs several entries of one plugin
+
+| Type     | Evidence                                                             |
+| -------- | -------------------------------------------------------------------- |
+| ID       | EVD-NX-PLUGIN-ENTRIES                                                |
+| Status   | Accepted                                                             |
+| Supports | [DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E) |
 
 A reading of the `nx` 24.0.6 package and an experiment on 13 November 2026 with cargo 1.100.0 and Node 26.12.0 on Linux. The experiment ran through the plugin's own tests (`nx-rust/test/discovery.spec.ts`), which list a stand-in that behaves as the plugin twice in `nx.json`, with `include` filters that split the manifests between the two entries, and build the graph with plugin isolation on and off.
 
@@ -1970,13 +2540,18 @@ A reading of the `nx` 24.0.6 package and an experiment on 13 November 2026 with 
 - **Measured.** With a workspace's root manifest given to one entry and its members to the other, the workspace was reported twice with isolation on, once in each worker. With isolation off it was reported once, when the second entry reused the report that the first had requested in the same computation. The version of the plugin reviewed on 13 November 2026 kept the result of `createNodes` in one module-level variable: with isolation off, both entries' `createDependencies` then received the discovery of the second entry.
 
 The plugin therefore makes each entry's copy carry a `createNodes` of its own and finds the entry in `createDependencies` through that copy. These are Nx internals, which the tests check in both modes and which have to be checked again for another Nx major.
-:::
 
-:::mara evidence EVD-NX-EDGE-CACHE
-:mid: 01M7AE241Y0VGGYCNWWR01WR7T
-:title: How Nx 24.0.6 keeps a plugin's edges from one graph to the next
-:status: accepted
-:supports: DES-PROJECT-GRAPH
+---
+
+<a id="01M7AE241Y0VGGYCNWWR01WR7T"></a>
+
+### How Nx 24.0.6 keeps a plugin's edges from one graph to the next
+
+| Type     | Evidence                                                           |
+| -------- | ------------------------------------------------------------------ |
+| ID       | EVD-NX-EDGE-CACHE                                                  |
+| Status   | Accepted                                                           |
+| Supports | [DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6) |
 
 A reading of the `nx` 24.0.6 package and experiments on 13 November 2026 with cargo 1.100.0 and Node 26.12.0 on Linux: the review of pull request #17 ran the plugin through real Nx with the daemon on and off, and runs through the plugin's test harness (`nx-rust/test/harness`), with the edge type switched by a temporary change, repeated the first case below and tried one alternative. The source files named are in `nx/dist/src`.
 
@@ -2002,13 +2577,18 @@ A reading of the `nx` 24.0.6 package and experiments on 13 November 2026 with ca
 - **Other readers of the type.** Nx's task graph, `affected` and the task hasher follow edges of every type. In the rest of the `nx` package, leaving out the graph viewer and the JS plugin, which were not read, only Nx release tells the types apart: the default `readDependencies` of its `VersionActions` leaves out `implicit` edges, and an implementation can override it (`command-line/release/version/version-actions.js`). In `@nx/eslint-plugin` 24.0.6, read and not run, the rule `enforce-module-boundaries` follows edges of every type when it looks for circular dependencies, for projects reachable under tag constraints and for transitive external dependencies (`buildMatrix` in `dist/src/utils/graph-utils.js`). It reads the type only to find lazy-loaded imports, from `dynamic` edges (`hasDynamicImport` in `dist/src/utils/runtime-lint-utils.js`), and it names the files along a circular path from the files' records, which hold nothing for an `implicit` edge (`findFilesInCircularPath`).
 
 A crate's edges depend on more than its own manifest: on the `[workspace.dependencies]` of its workspace's root manifest, on the ignore files and the plugin entry's options, which decide which crates are projects, and on the members that a glob matches. The plugin therefore returns its edges as `implicit`, and Nx recomputes them on every graph computation. These are Nx internals, to be checked again for another Nx major.
-:::
 
-:::mara evidence EVD-NEXTEST-CARGO-FLAGS
-:mid: 01M7AH88BCFA99QFV4EGE16JHW
-:title: cargo-nextest takes the Cargo profile as --cargo-profile
-:status: accepted
-:supports: DES-PLUGIN-OPTIONS
+---
+
+<a id="01M7AH88BCFA99QFV4EGE16JHW"></a>
+
+### cargo-nextest takes the Cargo profile as --cargo-profile
+
+| Type     | Evidence                                                               |
+| -------- | ---------------------------------------------------------------------- |
+| ID       | EVD-NEXTEST-CARGO-FLAGS                                                |
+| Status   | Accepted                                                               |
+| Supports | [DES-PLUGIN-OPTIONS](configuration.mara.md#01M78FHG7F0KD92ZFBVS6GS65H) |
 
 An experiment on 13 November 2026 with cargo-nextest 0.9.151, the prebuilt binary from `https://get.nexte.st/latest/linux`, and cargo and rustc 1.100.0, in a throwaway crate with a unit test, a doctest, a feature `extra` and a Cargo profile `custom` that inherits from `dev`. No `.config/nextest.toml` existed.
 
@@ -2016,15 +2596,20 @@ An experiment on 13 November 2026 with cargo-nextest 0.9.151, the prebuilt binar
 - `cargo nextest run --cargo-profile custom` built with Cargo's profile `custom`, into `target/custom`, and ran the test under nextest's profile `default`.
 - `cargo test --doc --profile custom` built with the profile `custom` and ran the doctest.
 - `cargo nextest run` accepted `--features`, `--all-features`, `--no-default-features` and `--target` as cargo does; its help lists them beside `--cargo-profile`.
-:::
 
-:::mara evidence EVD-CARGO-TEST-TARGET-SELECTOR
-:mid: 01M81Q6JXEKKG19E0HAXAW0Q6W
-:title: What cargo and nextest do with --test <name>
-:status: accepted
-:supports: DES-TEST-RUN
-:supports: DES-BATCH
-:supports: DES-PLUGIN-OPTIONS
+---
+
+<a id="01M81Q6JXEKKG19E0HAXAW0Q6W"></a>
+
+### What cargo and nextest do with --test <name>
+
+| Type     | Evidence                                                               |
+| -------- | ---------------------------------------------------------------------- |
+| ID       | EVD-CARGO-TEST-TARGET-SELECTOR                                         |
+| Status   | Accepted                                                               |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ)             |
+| Supports | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)              |
+| Supports | [DES-PLUGIN-OPTIONS](configuration.mara.md#01M78FHG7F0KD92ZFBVS6GS65H) |
 
 Experiments on 22 November 2026 with cargo 1.100.0 (3acc79c0c 2026-11-05) and cargo 1.91.0 (ea2d97820 2025-10-10), each with its rustc, and cargo-nextest 0.9.152, in a throwaway virtual workspace outside this repository, for nxr-k5y74e. Its members were `a`, a library with a unit test and a doctest, a binary `a` with a test of its own and the integration tests `performance`, which asserts that `CARGO_BIN_EXE_a` exists, and `other`; `b`, a library with a unit test and a doctest and the integration tests `bonly` and `performance`; and `c`, a library without tests. No `.config/nextest.toml` existed. Both versions gave the same results, apart from the case of one word in an error message.
 
@@ -2034,30 +2619,40 @@ Experiments on 22 November 2026 with cargo 1.100.0 (3acc79c0c 2026-11-05) and ca
 - **Doctests.** `cargo test -p a --test performance --doc` failed with 101 and `can't mix --doc with other target selecting options`, while `cargo test -p a --doc` ran the doctest.
 - **nextest.** `cargo nextest run -p a --test performance --no-tests=pass` passed `--test=performance` to the `cargo test --no-run` that it builds with and ran the one test of that binary, also with `--cargo-profile release`. An unknown name, the empty one included, failed with 101 and cargo's error. With `-p a -p c` it ran `a`'s test and exited with 0, and with `--workspace --test bonly` it ran `b`'s, as cargo does. `cargo nextest run` rejected `--doc` as an unexpected argument; nextest runs no doctests.
 - **A target with `test = false`.** In this repository's `binary-tests` fixture, whose crate `untested` has a binary that prints `plain`, or `extra` with the feature that its dev-dependency turns on, and one `[[test]]` named `skipped` with `test = false`: after `cargo build -p untested`, a plain `cargo test -p untested` left `target/debug/untested` as it was, the same inode, while `cargo test -p untested --test skipped` built and ran `skipped` and replaced the executable with one that prints `extra`, on both versions.
-:::
 
-:::mara evidence EVD-TEST-MODE-READING
-:mid: 01M7JW7PCJ272NSR2P2F6GTVJ4
-:title: How the mode command can read cargo-affected's database without writing beside it
-:status: accepted
-:supports: DES-TEST-MODE
+---
 
-Experiments on 16 November 2026 on Linux x86-64 with Node 26.12.0 and its `node:sqlite`, in throwaway folders, and a reading of cargo-affected 0.4.1's `src/db.rs`, the version of [[EVD-CARGO-AFFECTED-REPORT]].
+<a id="01M7JW7PCJ272NSR2P2F6GTVJ4"></a>
+
+### How the mode command can read cargo-affected's database without writing beside it
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-TEST-MODE-READING                                       |
+| Status   | Accepted                                                    |
+| Supports | [DES-TEST-MODE](testing.mara.md#01M78FHG7F7NZT1HQM98QHVY34) |
+
+Experiments on 16 November 2026 on Linux x86-64 with Node 26.12.0 and its `node:sqlite`, in throwaway folders, and a reading of cargo-affected 0.4.1's `src/db.rs`, the version of [EVD-CARGO-AFFECTED-REPORT](#01M7J4YJXH9M7KNRM19MJPWS7H).
 
 - **The schema.** cargo-affected opens `target/affected/coverage.db` in WAL mode with `synchronous=NORMAL` and keeps one row per test and covered range in `test_regions`, whose column `collect_sha` names the commit of the collection, beside `env_fingerprint`; it reads a fingerprint's commits with `SELECT DISTINCT collect_sha FROM test_regions WHERE env_fingerprint = ?1` and keeps the rows of up to ten earlier fingerprints. An older schema without these columns is dropped when cargo-affected opens the database.
 - **A read-only connection writes beside the database.** A database in WAL mode that its writer had closed, so that only `coverage.db` was left, opened with `readOnly: true` and read, left `coverage.db-shm` of 32 KiB and an empty `coverage.db-wal` behind after the connection closed. Opened through a `file:` URL with `immutable=1` and `readOnly: true`, the same database was read and no file was created; the database's modification time and bytes stayed the same.
 - **A `-wal` file and the reader.** An immutable connection ignores the `-wal` file and takes no lock, so with a writer's connection open and automatic checkpoints off, the rows that lay only in the `-wal` file are not in what it reads. An ordinary read-only connection reads them, but where the writer closed between a look for the `-wal` file and the open, as a collection ending does, it found the database closed and created new `-wal` and `-shm` files, and a database restored with its `-wal` file but without `-shm` got a `-shm` file the same way (the review of nxr-539qtw). With the plugin's tests, which put a step between the look and the open: a database restored with its `-wal` file, with or without `-shm`, a collection that opens the database in between, one that is open at the first look and closes afterwards, and a database replaced in between each gave no commits and left every file as it was, and a closed database gave its commits and left nothing behind.
 - **Cost.** `SELECT DISTINCT collect_sha FROM test_regions` on a database of cargo-affected's schema and index with 700,000 rows, 203 MB, three commits and two fingerprints took 39 to 46 ms, opening and closing included, with the file in the page cache. A start of Node that loads `node:sqlite` took 15 to 19 ms, as one without it.
 
-So the command reads the commits only through an immutable, read-only connection, which writes nothing, and only where no `-wal` file lies beside the database before and after the read and the database file stayed the same; otherwise the mode is `full`. A database that cargo-affected 0.4.1 itself wrote gave its commit in nxr-tabkjx, and no file beside it changed ([[EVD-AFFECTED-RUNS]]). Not run: a cold page cache, macOS, and Node 22, whose `node:sqlite` needs 22.13 or later without a flag.
-:::
+So the command reads the commits only through an immutable, read-only connection, which writes nothing, and only where no `-wal` file lies beside the database before and after the read and the database file stayed the same; otherwise the mode is `full`. A database that cargo-affected 0.4.1 itself wrote gave its commit in nxr-tabkjx, and no file beside it changed ([EVD-AFFECTED-RUNS](#01M7K5MZ99V4PW1R98G8XMGQVY)). Not run: a cold page cache, macOS, and Node 22, whose `node:sqlite` needs 22.13 or later without a flag.
 
-:::mara evidence EVD-NEXTEST-RUNNER-STEPS
-:mid: 01M7JJZMG61K9MHV5XRK94E3Y1
-:title: What the nextest runner's steps rest on: exit statuses, the JUnit report and plain commands
-:status: accepted
-:supports: DES-TEST-RUN
-:supports: DES-TEST-PHASES
+---
+
+<a id="01M7JJZMG61K9MHV5XRK94E3Y1"></a>
+
+### What the nextest runner's steps rest on: exit statuses, the JUnit report and plain commands
+
+| Type     | Evidence                                                      |
+| -------- | ------------------------------------------------------------- |
+| ID       | EVD-NEXTEST-RUNNER-STEPS                                      |
+| Status   | Accepted                                                      |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ)    |
+| Supports | [DES-TEST-PHASES](testing.mara.md#01M78FHG7F64P52Y7055J0MYAC) |
 
 Experiments on 16 November 2026 on Linux x86-64 with cargo-nextest 0.9.152 (26ebeda79 2026-11-13), installed with `cargo install --locked` into a folder of its own, and cargo and rustc 1.100.0, in a throwaway workspace with the members `a`, a library with a passing and a failing unit test and a doctest, `b`, with a passing unit test, and `e`, a library without tests; then the tests of nxr-jb6g5y in `nx-rust/test/nextest-runs.spec.ts` on the `workspace-tests` fixture with cargo 1.100.0 and 1.91.0.
 
@@ -2075,13 +2670,18 @@ Further experiments and reading of nextest's source the same day (cargo-nextest 
 - **Its version.** `cargo nextest --version` in the workspace root printed nextest's version, commit and host, and found a stand-in for `cargo-nextest` on `PATH` as cargo finds the subcommand for a run.
 
 So the plugin can decide each task from the status and the report alone, a failed build reads as for `cargo test`, and a group of one crate needs `--no-tests=pass` for a crate without tests to pass as it does under `cargo test`. After 100, only nextest's list shows which tests of a crate were to run, and a crate passes only where all of them ran and passed.
-:::
 
-:::mara evidence EVD-NX-24-ENTRY-CONTEXT
-:mid: 01M7AH88BCK4ZK4JY2X0N7C9C0
-:title: What each entry of a plugin sees of the others in Nx 24.0.6
-:status: accepted
-:supports: DES-PLUGIN-OPTIONS
+---
+
+<a id="01M7AH88BCK4ZK4JY2X0N7C9C0"></a>
+
+### What each entry of a plugin sees of the others in Nx 24.0.6
+
+| Type     | Evidence                                                               |
+| -------- | ---------------------------------------------------------------------- |
+| ID       | EVD-NX-24-ENTRY-CONTEXT                                                |
+| Status   | Accepted                                                               |
+| Supports | [DES-PLUGIN-OPTIONS](configuration.mara.md#01M78FHG7F0KD92ZFBVS6GS65H) |
 
 An experiment on 13 November 2026 with `nx` 24.0.6 and Node.js 26.12.0, in a throwaway Git repository outside this one. A Cargo workspace in `rust/` had the members `a`, `b` and `hidden`, and `.nxignore` named `rust/crates/hidden`. `nx.json` listed a stand-in plugin twice: one entry with `include` set to `rust/Cargo.toml` and `rust/crates/a/**` and the option `testRunner` set to `cargo`, the other with `include` set to `rust/crates/b/**` and `rust/crates/hidden/**` and `testRunner` set to `nextest`. The stand-in's `createNodes` for `**/Cargo.toml` recorded the files it received, the `plugins` of `context.nxJsonConfiguration`, and, for every entry naming the stand-in, the result of `findMatchingConfigFiles` applied with that entry's `include` and `exclude` to the output of `globWithWorkspaceContext(workspaceRoot, ["**/Cargo.toml"])`. `nx show projects` ran with plugin isolation on (the default), with `NX_ISOLATE_PLUGINS=false`, and with the Nx daemon on.
 
@@ -2090,17 +2690,22 @@ An experiment on 13 November 2026 with `nx` 24.0.6 and Node.js 26.12.0, in a thr
 - **The whole pipeline.** The review of nxr-v1b7rc on 15 November 2026 found, and a reading of the installed `nx` 24.0.6 (`dist/src`) confirmed, that Nx chooses an entry's files in two steps. `retrieveProjectConfigurations` (`project-graph/utils/retrieve-workspace-files.js`, lines 46–60), which graph creation calls without the daemon (`project-graph/project-graph.js`, line 104) and in it (`daemon/server/project-graph-incremental-recomputation.js`, line 459), takes each entry's files from `globPluginFiles` (lines 111–122). For an entry whose `include` is not empty and has no pattern with `**`, `!`, `(` or `)` (`canGlobInclude`, lines 125–128), that globs the `include` patterns natively in the workspace context and keeps the files that the entry's `createNodes` pattern matches by minimatch with `dot: true`; for every other entry, a plain string included, it globs the `createNodes` pattern natively. Then `createProjectConfigurationsWithPlugins` (`project-graph/utils/project-configuration-utils.js`, line 37) applies `findMatchingConfigFiles(files, include, exclude)` (line 63; lines 287–325, minimatch with `dot: true`) and hands the result to the entry's `createNodes`. The `include` and `exclude` are those of the entry in `nx.json` as written (`project-graph/plugins/loaded-nx-plugin.js`, lines 18–22; in a plugin worker, `project-graph/plugins/isolation/isolated-plugin.js`, line 229).
 - **The native glob differs.** Measured the same day with a stand-in that recorded, for every entry, the files Nx handed it and two recomputations, in a copy of the fixture `shared-executables` (a workspace in `rust/` with three members, a standalone crate in `tools/`, and a crate in `.hidden/` added), with plugin isolation on and off and with the Nx daemon. The `include` patterns `rust/[[:upper:]]argo.toml`, `rust//Cargo.toml` and `rust/../rust/Cargo.toml` match `rust/Cargo.toml` by minimatch but not natively, so Nx handed that manifest to no entry with such an `include`, while `findMatchingConfigFiles` applied to every `Cargo.toml` of the workspace context gave it to the entry. For every other `include` measured, `rust/crates/*/Cargo.toml`, `rust/{Cargo,Other}.toml`, `rust/Cargo.tom?`, `.hidden/Cargo.toml`, patterns with `**` and none, both gave the same files. That recomputation gave a superset of Nx's files in every case, never fewer: Nx's narrow step only removes files before the step that both share, as long as the native glob of `**/Cargo.toml` holds every file that its minimatch matches, which it did for the root manifest, nested manifests and the one in a dot folder.
 - **The pipeline can be called.** `retrieveProjectConfigurationPaths` (lines 72–75) runs `globPluginFiles` for the entries it is given and flattens the result, and the module resolves as `nx/src/project-graph/utils/retrieve-workspace-files` through the `./src/*` export of the `nx` package. Called with one entry, as `{ createNodes: [pattern], include, exclude }`, and followed by `findMatchingConfigFiles`, it gave exactly the files that Nx handed that entry in every case above, in every mode, and through the daemon also for a manifest added after the daemon had created the graph once.
-- **Source.** Nx passes the whole `nx.json` as `nxJsonConfiguration` to each entry's `createNodes`. `findMatchingConfigFiles` and `globWithWorkspaceContext` are exported from `nx/src/devkit-internals` only, and `retrieveProjectConfigurationPaths` from its own module; these are interfaces that can change between majors ([[RISK-UPSTREAM-CHANGES]]).
+- **Source.** Nx passes the whole `nx.json` as `nxJsonConfiguration` to each entry's `createNodes`. `findMatchingConfigFiles` and `globWithWorkspaceContext` are exported from `nx/src/devkit-internals` only, and `retrieveProjectConfigurationPaths` from its own module; these are interfaces that can change between majors ([RISK-UPSTREAM-CHANGES](#01M78FHG7F662HG5KVZQEN15Z3)).
 
-The stand-in was not the plugin; how the plugin's two entries share reports is [[EVD-NX-PLUGIN-ENTRIES]].
-:::
+The stand-in was not the plugin; how the plugin's two entries share reports is [EVD-NX-PLUGIN-ENTRIES](#01M7ABYX5EADNXFRHAA2F17VBK).
 
-:::mara evidence EVD-CARGO-REDIRECTIONS
-:mid: 01M7AQ4FBNBJZK6DKFSMS2793S
-:title: What cargo does with [patch], [replace] and paths, and what the plugin can see of them
-:status: accepted
-:supports: ADR-REDIRECTION-EDGES
-:supports: ADR-SKIP-VENDORED-CRATES
+---
+
+<a id="01M7AQ4FBNBJZK6DKFSMS2793S"></a>
+
+### What cargo does with [patch], [replace] and paths, and what the plugin can see of them
+
+| Type     | Evidence                                                |
+| -------- | ------------------------------------------------------- |
+| ID       | EVD-CARGO-REDIRECTIONS                                  |
+| Status   | Accepted                                                |
+| Supports | [ADR-REDIRECTION-EDGES](#01M7AQ58FTSJX0AWN2BGZF4TND)    |
+| Supports | [ADR-SKIP-VENDORED-CRATES](#01M7AXAXTJ5B3ZF3AQ7X1BXVSE) |
 
 Experiments on 13 November 2026 with cargo 1.100.0, the main cases repeated with 1.91.0, on Linux, and a reading of the `nx` 24.0.6 package. Each experiment ran in a throwaway repository with a `CARGO_HOME` of its own, in which `[source.crates-io] replace-with` replaced crates.io by a local registry, a `file://` git index holding `model 0.1.0` and `wrapper 0.1.0`, which depends on `model ^0.1`. The workspace had the members `api`, with `model = "0.1"`, `viaw`, with `wrapper = "0.1"`, and `model 0.1.5`. The commands were `cargo metadata --format-version 1 --no-deps --offline`, `cargo metadata --format-version 1 --offline` with and without `--locked`, `cargo tree --offline -e normal,build,dev` and `cargo generate-lockfile`, and `Cargo.lock` was read after each. Both versions gave the same results except for `include`.
 
@@ -2121,15 +2726,20 @@ Experiments on 13 November 2026 with cargo 1.100.0, the main cases repeated with
 - **Ignored configuration and the keys.** In other copies of `patched-workspaces`, with the root manifest as committed, whose `[patch]` redirects `fork` to `third_party/fork`, and with the daemon and `api:build` cached, a `[patch]` of `fork` to `third_party/fork-b` written into a `rust/.cargo/config.toml` that `.gitignore` left out, where `fork-b` is a crate of the same name, version and dependencies, left `Cargo.lock` unchanged after the lockfile task, and `nx run api:build` restored the result built with `third_party/fork`, "existing outputs match the cache, left as is", while `cargo tree -p api` showed `third_party/fork-b`. The same `[patch]` in the Cargo home's `config.toml` gave the same hit. Without the daemon, the graph followed the change and the task ran and compiled `fork-b`. Without the daemon too, an `[env]` value that `env!` read in `plain`, changed in a `rust/.cargo/config.toml` that `.gitignore` left out, gave a cache hit, where the same change in a file that Nx reads made `plain:build` run.
 
 The fixture `patched-workspaces` keeps the cases that need no registry, and `nx-rust/test/redirections.spec.ts` checks with `cargo tree --offline --locked` that every crate with a project that cargo builds for a member is reachable from it in the graph. The workspaces were toys, so this says nothing about how long reading the files takes in a large repository.
-:::
 
-:::mara evidence EVD-NX-24-INPUTS-OUTPUTS
-:mid: 01M7AT8XZ93BXDYFHRTR7WF434
-:title: What Nx 24.0.6 does with the plugin's inputs, outputs and dotenv files
-:status: accepted
-:supports: DES-INPUTS
-:supports: DES-OUTPUTS
-:supports: DES-DIAGNOSTICS
+---
+
+<a id="01M7AT8XZ93BXDYFHRTR7WF434"></a>
+
+### What Nx 24.0.6 does with the plugin's inputs, outputs and dotenv files
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-NX-24-INPUTS-OUTPUTS                                    |
+| Status   | Accepted                                                    |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)    |
+| Supports | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)   |
+| Supports | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG) |
 
 Experiments on 13 November 2026 with the `nx` 24.0.6 package that this repository installs, cargo and rustc 1.100.0, Node 26.12.0 and rustup 1.29.3, on Linux x86-64, through the cache-key harness of `nx-rust/test` (`nx-rust/test/README.md`): in a copy of a fixture, Nx's own `createProjectGraphAsync`, `createTaskGraph` and task hasher built the graph and the task hashes with `NX_DAEMON=false`, `RUSTUP_AUTO_INSTALL=0` and the plugin loaded from source. A reading of that package went with them; paths below are under `dist/src/`, and a point marked "read" was not run.
 
@@ -2142,13 +2752,18 @@ Experiments on 13 November 2026 with the `nx` 24.0.6 package that this repositor
 - **Files that Nx sees.** `globWithWorkspaceContext` (`utils/workspace-context.js`), which Nx's own plugins call in `createNodes`, returned the manifest of a path dependency only while no `.gitignore` listed its folder; it asks the daemon where one serves the command (read).
 
 No executor of the plugin ran: this shows what Nx hashes and declares for targets of this shape, not what a run stores or restores.
-:::
 
-:::mara evidence EVD-CARGO-DEPENDENCY-SIDE
-:mid: 01M7AXS7AZFTFJX9Y61GK0Z37B
-:title: What cargo applies from a dependency's side when another workspace builds it
-:status: accepted
-:supports: DES-INPUTS
+---
+
+<a id="01M7AXS7AZFTFJX9Y61GK0Z37B"></a>
+
+### What cargo applies from a dependency's side when another workspace builds it
+
+| Type     | Evidence                                                 |
+| -------- | -------------------------------------------------------- |
+| ID       | EVD-CARGO-DEPENDENCY-SIDE                                |
+| Status   | Accepted                                                 |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP) |
 
 Experiments on 13 November 2026 with cargo 1.100.0 and repeated with 1.91.0, on Linux x86-64, in a copy of the fixture `cross-workspace-path`: `server`, a member of the workspace in `backend/`, depends by path on `model`, a member of the workspace in `shared/`, and `cargo check -p server --offline` ran in `backend/` with `RUSTUP_AUTO_INSTALL=0` and an artifact directory of its own. Each case changed one file on `model`'s side and made `model`'s source fail to compile exactly when the change applied.
 
@@ -2157,13 +2772,18 @@ Experiments on 13 November 2026 with cargo 1.100.0 and repeated with 1.91.0, on 
 - **Nor do its profiles.** `[profile.dev] debug-assertions = false` in `shared/Cargo.toml`, and in `model`'s own manifest, left `#[cfg(not(debug_assertions))] compile_error!` unseen: cargo applies the profiles of the workspace it builds.
 
 So what decides a dependency when another workspace builds it is its folder and its workspace's root manifest; the configuration, toolchain and profiles come from the consumer's own context.
-:::
 
-:::mara evidence EVD-CARGO-UNREPORTED-CRATES
-:mid: 01M7B1MZ86KN4JWTFJCVPWY64E
-:title: Which path dependencies cargo builds but does not report
-:status: accepted
-:supports: DES-METADATA-REPORT
+---
+
+<a id="01M7B1MZ86KN4JWTFJCVPWY64E"></a>
+
+### Which path dependencies cargo builds but does not report
+
+| Type     | Evidence                                                             |
+| -------- | -------------------------------------------------------------------- |
+| ID       | EVD-CARGO-UNREPORTED-CRATES                                          |
+| Status   | Accepted                                                             |
+| Supports | [DES-METADATA-REPORT](workspaces.mara.md#01M78FHG7FMJF63PW3D02BH53E) |
 
 Experiments on 13 November 2026 with cargo 1.100.0 and 1.91.0 on Linux, which gave the same results. In each, a workspace `w1` had a member `app` with a path dependency on a crate `x` outside `w1`'s folder. The commands were `cargo check --offline` and `cargo metadata --format-version 1 --no-deps --offline` in `w1`, and the same report for `x`'s manifest through `--manifest-path`, also started in `w1`.
 
@@ -2175,15 +2795,20 @@ Experiments on 13 November 2026 with cargo 1.100.0 and 1.91.0 on Linux, which ga
 - **Redirections through it.** In a copy of the fixture `patched-workspaces` in which the member `plain` depended by path on a non-member of another workspace's folder that declared `model = "0.1"`, `cargo tree -p plain --offline` showed that crate using the `model` to which `rust/Cargo.toml` redirects. In the reproduction of the review of pull request #42, a workspace whose root manifest redirected its members `server` and `b` to themselves, with `server` depending on a vendored registry crate `wrapper` that depends on `b`, and `b` depending by path only on a vendored crate `leaf` without a report, `cargo check -p server` succeeded and `cargo tree -p server` showed `server -> wrapper -> b -> leaf`.
 
 So the membership message says by itself that the failure is one that cargo does not make for a crate it builds as a dependency, and so do "root of a workspace inferred but wasn't a root" and "failed to read" for a manifest other than `x`'s own as cargo's error itself; below another error they come where cargo rejects `x` as a dependency too. The message about a workspace member also comes when cargo rejects a crate that `x` needs.
-:::
 
-:::mara evidence EVD-CARGO-TRIPLE-FOLDERS
-:mid: 01M7BGGY6GSG8M0H26G1H71RVN
-:title: Where cargo puts artifacts and documentation for each way a triple is picked, and how Nx names them
-:status: accepted
-:supports: ADR-TRIPLE-OUTPUTS
-:supports: DES-OUTPUTS
-:supports: DES-BUILD-INPUT-CHECK
+---
+
+<a id="01M7BGGY6GSG8M0H26G1H71RVN"></a>
+
+### Where cargo puts artifacts and documentation for each way a triple is picked, and how Nx names them
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-CARGO-TRIPLE-FOLDERS                                            |
+| Status   | Accepted                                                            |
+| Supports | [ADR-TRIPLE-OUTPUTS](#01M7BGFY4YPWXVSM78SMPJJV3Y)                   |
+| Supports | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)           |
+| Supports | [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) |
 
 Experiments on 13 November 2026 with cargo 1.100.0 (3acc79c0c 2026-11-05) and 1.91.0 (ea2d97820 2025-10-10), and where named 1.89, 1.97.1, 1.98 and 1.99.0, on Linux x86-64 with `RUSTUP_AUTO_INSTALL=0`, in a throwaway workspace outside this repository with a Cargo home of its own: a crate `app` with a library and a binary, a crate `cd` with the crate types `cdylib` and `staticlib`, and a profile `fast` that inherits `release`. The 1.100.0 toolchain had the targets `x86_64-unknown-linux-gnu`, the host's (H below), and `x86_64-unknown-linux-musl` (M) installed, among others, and 1.91.0 only the host's. `aarch64-unknown-linux-gnu` (A), installed for neither, stood for a triple that cargo cannot build for, so that a failure showed that cargo had picked it. Each case started without a `target` folder and ran `cargo build -p app` or `cargo doc --no-deps --workspace`. Both versions gave the same results unless one is named.
 
@@ -2193,19 +2818,24 @@ Experiments on 13 November 2026 with cargo 1.100.0 (3acc79c0c 2026-11-05) and 1.
 - **include.** Cargo 1.89 and 1.91.0 ignored `include = ["extra.toml"]`: a triple set only in the included file left the artifacts in `target/debug`. Cargo 1.97.1, 1.98, 1.99.0 and 1.100.0 applied it. With 1.100.0, the including file's string won over the included file's, a later include over an earlier one, an included list joined the including file's list, and a file that the folder above includes applied where the workspace set nothing; the string `include = "extra.toml"` failed with "expected a list of strings or a list of tables". The Cargo book of the 1.100.0 toolchain gives the same order ("Including extra configuration files"); that of 1.91.0 has no `include`.
 - **Asking cargo.** No stable command reports the triples. `cargo config get build.target` failed with both versions: "the `cargo config` command is unstable, and only available on the nightly channel". The `cargo metadata` report has no triple among its keys.
 - **Nx 24.0.6.** In this repository's harness, with `NX_DAEMON=false`, a change of nothing but the literal in `{options.t ?? aaa}` in one target's `outputs` changed the hash of the project's configuration, and with it the key of every task of the project. Read in the installed package (paths under `dist/src/`): `getOutputsForTargetAndConfiguration` (`tasks-runner/utils.js`) collects the interpolated outputs in a set, so equal outputs count once; a fallback after `??` applies to an empty option as to a missing one (`resolveToken` in `tasks-runner/tokens.js`); and in an output `env.` stays text, so no output reads an environment variable (`interpolate` in `tasks-runner/utils.js`). The `nx` command loads the root `.env`, `.local.env` and `.env.local` into its own environment before it creates the graph (`bin/workspace-env.js`, `loadRootEnvFiles` in `utils/dotenv.js`), and the other dotenv files of a task only for the task (`getEnvFilesForTask` in `tasks-runner/task-env.js`).
-- **The daemon.** On 14 November 2026, in `crate-shapes` with `NX_DAEMON=true`, plugins in workers and `CARGO_HOME` a folder beside the repository copy, with the outputs of [[DES-OUTPUTS]] but no triple input: `build.target` was set to H in the Cargo home's `config.toml`, or in a `.cargo/config.toml` above the repository, and `cli:build` and `rust:doc` ran. The setting was then changed to M, or removed, and `rust/target` deleted. The next runs were cache hits that put back the artifacts of H, and the outputs still named H, while a plain cargo wrote to `target/M`. The daemon kept its graph because it watches no file outside the repository, and deleting the ignored `rust/target` woke no watcher. A change through the environment, or through a configuration file inside the repository, gave a new key. With the triple input of [[DES-INPUTS]], each of those runs was no hit and failed before cargo ran. After `nx daemon --stop`, the tasks built into the folder of M, or of no triple, and were restored from there.
+- **The daemon.** On 14 November 2026, in `crate-shapes` with `NX_DAEMON=true`, plugins in workers and `CARGO_HOME` a folder beside the repository copy, with the outputs of [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4) but no triple input: `build.target` was set to H in the Cargo home's `config.toml`, or in a `.cargo/config.toml` above the repository, and `cli:build` and `rust:doc` ran. The setting was then changed to M, or removed, and `rust/target` deleted. The next runs were cache hits that put back the artifacts of H, and the outputs still named H, while a plain cargo wrote to `target/M`. The daemon kept its graph because it watches no file outside the repository, and deleting the ignored `rust/target` woke no watcher. A change through the environment, or through a configuration file inside the repository, gave a new key. With the triple input of [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP), each of those runs was no hit and failed before cargo ran. After `nx daemon --stop`, the tasks built into the folder of M, or of no triple, and were restored from there.
 - **Runtime inputs.** Two runtime inputs whose commands differed only in their text, `echo same` and `echo   same`, gave the same key, and one with other output gave another: Nx hashes what the command prints and not the command, and a target's `inputs` are no part of the project's hashed configuration. In `crate-shapes`, `nx run-many -t build doc` evaluated the triple input, one command for all six tasks, six times, with the daemon and without, in plugin workers and in Nx's own process. One evaluation took about 16 ms, 12 to 14 ms of which was the start of Node. A fully cached `nx run-many -t build doc` over `two-workspaces`, six tasks, took a median of 493 and 502 ms with the input against 464 and 458 ms without it, in two rounds on a shared machine.
-- **Runs.** With the outputs that [[DES-OUTPUTS]] names and the cargo first on `PATH` (1.100.0), in the `crate-shapes` fixture with `NX_DAEMON=false`: `cli:build` and `rust:doc` were run, the binary and the doc folders deleted, and the tasks run again. Nx restored them without a cargo call, each file byte for byte as cargo had written it, for `build.target` set to H, to `["H", "H"]` and to `["H", "M"]`, both folders, and for `CARGO_BUILD_TARGET=H` in the environment of the `nx` command; and `cli:build` with H configured, where a configuration of the target names a triple or clears the triple of its options. A list of two triples was not built with 1.91.0, which has no second target installed.
-:::
+- **Runs.** With the outputs that [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4) names and the cargo first on `PATH` (1.100.0), in the `crate-shapes` fixture with `NX_DAEMON=false`: `cli:build` and `rust:doc` were run, the binary and the doc folders deleted, and the tasks run again. Nx restored them without a cargo call, each file byte for byte as cargo had written it, for `build.target` set to H, to `["H", "H"]` and to `["H", "M"]`, both folders, and for `CARGO_BUILD_TARGET=H` in the environment of the `nx` command; and `cli:build` with H configured, where a configuration of the target names a triple or clears the triple of its options. A list of two triples was not built with 1.91.0, which has no second target installed.
 
-:::mara evidence EVD-NX-24-MOVED-ARTIFACT-DIRS
-:mid: 01M7CKYHWJGAN6S9J3GRE4PKWV
-:title: What Nx stores and restores when a task's artifact directory moves after graph creation, and what following it costs
-:status: accepted
-:supports: ADR-ARTIFACT-DIR-OUTPUTS
-:supports: DES-OUTPUTS
-:supports: DES-INPUTS
-:supports: DES-BUILD-INPUT-CHECK
+---
+
+<a id="01M7CKYHWJGAN6S9J3GRE4PKWV"></a>
+
+### What Nx stores and restores when a task's artifact directory moves after graph creation, and what following it costs
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-NX-24-MOVED-ARTIFACT-DIRS                                       |
+| Status   | Accepted                                                            |
+| Supports | [ADR-ARTIFACT-DIR-OUTPUTS](#01M7CKYHWJVN634GVV0818HP11)             |
+| Supports | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)           |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)            |
+| Supports | [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) |
 
 Experiments on 14 November 2026 with Nx 24.0.6 and cargo 1.100.0 on Linux x86-64, with `RUSTUP_AUTO_INSTALL=0` and a Cargo home of their own.
 
@@ -2217,15 +2847,20 @@ Experiments on 14 November 2026 with Nx 24.0.6 and cargo 1.100.0 on Linux x86-64
 - **Cost.** `cargo metadata --no-deps --format-version 1` through the rustup proxy took about 6 ms in `two-workspaces`, and starting Node about 12 ms. A fully cached `nx run-many -t build doc` over `two-workspaces`, six tasks, with the rustup proxy on `PATH`, took medians of 606, 514, 434, 416 and 413 ms without the artifact folder input, and 565, 552, 553, 442 and 429 ms with it, in five alternating rounds on a shared machine whose load fell over the rounds; the two quietest pairs differ by 13 and 26 ms. With the harness's cargo wrapper, a Node script that logs each call, it took 491 and 504 ms against 705 and 741 ms.
 - **A change during a command.** In the review of this change on 14 November 2026, under the Nx daemon with `build.target-dir` in the Cargo home's configuration, the configuration was changed from one folder to another before a run, and a cargo wrapper changed it back just before the executor's `cargo metadata` call, after Nx had computed the task's key with the second folder. The task passed the check, built into the first folder, and Nx stored those artifacts under the key computed for the second.
 - **What Nx offers.** Nx 24.0.6 exports `getGraphTimeDotEnvForTask` from `nx/src/devkit-internals`, which its source describes for plugins whose inferred targets depend on a task's dotenv files, and its daemon creates the graph afresh when a dotenv file under the root or a project's folder changes (`daemon/server/dotenv-graph-changes.js`). No installed `@nx` plugin uses it.
-:::
 
-:::mara evidence EVD-CARGO-COMPILER-SELECTION
-:mid: 01M7CMKMP5A6X62T5HNG5582R3
-:title: Which compiler and rustdoc cargo runs when a setting names one, and what the key held for them
-:status: accepted
-:supports: DES-INPUTS
-:supports: ADR-WORKSPACE-ROOT
-:supports: REQ-TOOLCHAIN-KEY
+---
+
+<a id="01M7CMKMP5A6X62T5HNG5582R3"></a>
+
+### Which compiler and rustdoc cargo runs when a setting names one, and what the key held for them
+
+| Type     | Evidence                                                        |
+| -------- | --------------------------------------------------------------- |
+| ID       | EVD-CARGO-COMPILER-SELECTION                                    |
+| Status   | Accepted                                                        |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)        |
+| Supports | [ADR-WORKSPACE-ROOT](#01M78NVF8ENATA4CGDH3PMYVSF)               |
+| Supports | [REQ-TOOLCHAIN-KEY](caching.mara.md#01M78FHG7FRC3KSSDACETE745J) |
 
 Experiments on 14 November 2026 on Linux x86-64 with rustup 1.29.3, cargo 1.100.0 (3acc79c0c 2026-11-05) of the default toolchain, and the toolchains 1.97.1 and 1.91.0, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own and nothing downloaded. A throwaway repository outside this one held a Cargo workspace `rust/` with one crate, `app`, a library with a doctest and a binary. Compilers were named through symbolic links to the toolchains' `rustc` and `rustdoc`; moving a link to another toolchain stood for `rustup update` replacing the compiler of a channel's path. Which compiler built the binary came from its ELF `.comment` section, which rustdoc wrote the pages from their `data-rustdoc-version`. A researcher ran the same cases that morning with the plugin at d633767; the rows below were run again for this item at 2d02d59, and those marked † come from that first run only.
 
@@ -2257,7 +2892,7 @@ Experiments on 14 November 2026 on Linux x86-64 with rustup 1.29.3, cargo 1.100.
 - **Asking cargo.** † No stable command reports the compiler: `cargo config get` and `cargo rustc --print sysroot` are nightly-only, and `cargo rustc -- -vV` builds the crate first. The plugin's executor starts `cargo` without `+toolchain`, so only `RUSTUP_TOOLCHAIN` chooses a toolchain that way.
 - **The old toolchain command.** `rustc -Vv` in `rust/` with `RUSTC` naming 1.97.1 printed `release: 1.100.0`.
 
-**What the key held before** (the plugin's inferred targets, Nx 24.0.6's own hasher, the daemon off): `RUSTC` and `CARGO_BUILD_RUSTC` reached the key only as the text of their `env` inputs, and `build.rustc` only through the text of a configuration file inside the repository; the researcher found the keys the same for `build.rustc` in the Cargo home and above the repository. The cases of [[VER-CACHE-KEYS]] for these settings were then run as tests of this repository at 2d02d59, with a toolchain command that printed what the one of that commit prints, and each failed:
+**What the key held before** (the plugin's inferred targets, Nx 24.0.6's own hasher, the daemon off): `RUSTC` and `CARGO_BUILD_RUSTC` reached the key only as the text of their `env` inputs, and `build.rustc` only through the text of a configuration file inside the repository; the researcher found the keys the same for `build.rustc` in the Cargo home and above the repository. The cases of [VER-CACHE-KEYS](verification.mara.md#01M78FHG7FR5BWJMDVC9GHC213) for these settings were then run as tests of this repository at 2d02d59, with a toolchain command that printed what the one of that commit prints, and each failed:
 
 | Change, with every file and variable the same                                                                                                                                                           | Keys                                                             |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
@@ -2271,17 +2906,22 @@ Experiments on 14 November 2026 on Linux x86-64 with rustup 1.29.3, cargo 1.100.
 
 **A shape the first version missed.** A review of pull request #66 found that the first version of the reading recorded a file of the walk that a deeper file had already included only as included, so the compiler that Cargo 1.91 runs there was not asked. In `two-workspaces`, with the repository's `.cargo/config.toml` naming a link to 1.91.0, `tools/.cargo/config.toml` including it and then an `extra.toml` naming 1.100.0, `RUSTUP_TOOLCHAIN=1.91.0` and an empty Cargo home, moving the link to 1.97.1 left all six cached keys of `tools` the same, and `tools:build` restored a 1.91.0 binary where plain cargo compiled with 1.97.1. The reading of `build.target` at 2d02d59 has the same flaw: for the shape above with the Cargo home also naming `aarch64-unknown-linux-gnu`, it named that triple, the folder cargo 1.91.0 does not write to; with an empty Cargo home it named none, rightly, the two readings differing; and with the include of the repository's file alone it named none where both versions build for `x86_64-unknown-linux-gnu`. Read as cargo reads it, with a record of included files for each file of the walk, the input asks both compilers, and the triple reading names `x86_64-unknown-linux-gnu` for the include alone and none for the other two; tests of both readers, of the keys with the real hasher and a real run of `tools:build` failed on the first version and pass.
 
-**With the toolchain input of [[DES-INPUTS]]**, which runs `rustc -Vv` and then `-Vv` of the compiler, and on `doc` and `test` of the rustdoc, that a setting names, the same tests passed: each change gave other keys, a crate's `.env` only those of its crate, `RUSTDOC` only those of `doc` and `test`, and the failing cases a new key at each evaluation; another toolchain through `RUSTUP_TOOLCHAIN` changed the keys while `RUSTC` named a compiler. Both runs above built again with the new compiler and restored nothing. Without any of these settings, the hasher gave each of the 43 cached tasks of `subfolder-workspace` and `two-workspaces`, with and without a `CARGO_PROFILE_` variable, the same value for every input as at 2d02d59, apart from the `nx.json` that the harness writes for each test run, among them the toolchain input, whose command text had changed: Nx keys a runtime input on what it prints.
+**With the toolchain input of [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)**, which runs `rustc -Vv` and then `-Vv` of the compiler, and on `doc` and `test` of the rustdoc, that a setting names, the same tests passed: each change gave other keys, a crate's `.env` only those of its crate, `RUSTDOC` only those of `doc` and `test`, and the failing cases a new key at each evaluation; another toolchain through `RUSTUP_TOOLCHAIN` changed the keys while `RUSTC` named a compiler. Both runs above built again with the new compiler and restored nothing. Without any of these settings, the hasher gave each of the 43 cached tasks of `subfolder-workspace` and `two-workspaces`, with and without a `CARGO_PROFILE_` variable, the same value for every input as at 2d02d59, apart from the `nx.json` that the harness writes for each test run, among them the toolchain input, whose command text had changed: Nx keys a runtime input on what it prints.
 
-**When each part is known**, as read in Nx 24.0.6 (paths under `dist/src/`) and in [[EVD-NX-24-INPUT-SEMANTICS]]: graph creation sees the `nx` command's environment with the root `.env`, `.local.env` and `.env.local` (`bin/workspace-env.js`), which the daemon takes from the client, and reads configuration files from disk; a runtime input and the task's cargo see the task's environment with its dotenv files (`getTaskSpecificEnv` in `tasks-runner/task-env.js`). A researcher's run showed `RUSTC` in a crate's git-ignored `.env` reach both. So the variables reach the command at hash time, while what graph creation resolves from configuration files outside the repository can be out of date under the daemon, which watches no file there ([[EVD-CARGO-TRIPLE-FOLDERS]]).
+**When each part is known**, as read in Nx 24.0.6 (paths under `dist/src/`) and in [EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD): graph creation sees the `nx` command's environment with the root `.env`, `.local.env` and `.env.local` (`bin/workspace-env.js`), which the daemon takes from the client, and reads configuration files from disk; a runtime input and the task's cargo see the task's environment with its dotenv files (`getTaskSpecificEnv` in `tasks-runner/task-env.js`). A researcher's run showed `RUSTC` in a crate's git-ignored `.env` reach both. So the variables reach the command at hash time, while what graph creation resolves from configuration files outside the repository can be out of date under the daemon, which watches no file there ([EVD-CARGO-TRIPLE-FOLDERS](#01M7BGGY6GSG8M0H26G1H71RVN)).
 
 One `rustc -vV` took 5 to 6 ms through a direct path and 7 to 13 ms through the rustup proxy. Not covered: a daemon run with these settings, macOS, the cost in a large workspace, and `rustup update` itself, which the moved links stood for.
-:::
 
-:::mara evidence EVD-NX-24-PROCESS-STATE
-:mid: 01M7D46BY7J43Y6H0X99D5V5N0
-:title: What Nx 24.0.6 keeps in a process between two graph or hash computations, and what one test session per fixture saves and costs
-:status: accepted
+---
+
+<a id="01M7D46BY7J43Y6H0X99D5V5N0"></a>
+
+### What Nx 24.0.6 keeps in a process between two graph or hash computations, and what one test session per fixture saves and costs
+
+| Type   | Evidence                |
+| ------ | ----------------------- |
+| ID     | EVD-NX-24-PROCESS-STATE |
+| Status | Accepted                |
 
 A reading of the `nx` 24.0.6 package that this repository installs (paths under `dist/src/`), and experiments on 14 November 2026 with it, Node.js 26.12.0, cargo 1.100.0 and git 2.56.0 on Linux, on a machine with 32 cores and 14 GB of memory that other test runs shared. The experiments asked the questions of the harness's `inspect-workspace.cjs`, the project graph, task hashes with their details, the files of a task's key and Nx's glob, in fixture copies that load the compiled plugin into Nx's own process (`NX_ISOLATE_PLUGINS=false`) without the daemon: once in a fresh process per request, as the harness does, and once in one process that stayed up in the copy's root and answered request after request, a session. The session's code is the first commit of pull request #76.
 
@@ -2294,34 +2934,44 @@ A reading of the `nx` 24.0.6 package that this repository installs (paths under 
 - **Where the time of the unit tests goes.** A full unit run on e8958bb with fresh processes only took 223 s with three Jest workers, 588 s summed over the files. Of that, 867 graph, hash, file and glob requests took 205 s, 223 and 176 of them in the two files above, and 799 `nx` commands, runs of tasks among them, took 360 s; spec files that run no Nx in a fixture took 6 s. Beside the Nx processes, the run started Node 4680 times for the harness's cargo wrapper, about 17 ms each before cargo starts (a wrapped `cargo --version` took 23 ms against 4 ms), and 1179 times for the plugin's artifact folder input, which took about 53 ms with its cargo call through the wrapper.
 
 The points marked with a source file were read, not run.
-:::
 
-:::mara evidence EVD-NX-24-WORKSPACE-CONTEXT
-:mid: 01M7X4A8Z2V6GGBB2XEZEHF1HC
-:title: How long the workspace context of Nx 24.0.6 lists a process's files, and what clears it
-:status: accepted
-:supports: DES-BUILD-INPUT-CHECK
+---
+
+<a id="01M7X4A8Z2V6GGBB2XEZEHF1HC"></a>
+
+### How long the workspace context of Nx 24.0.6 lists a process's files, and what clears it
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-NX-24-WORKSPACE-CONTEXT                                         |
+| Status   | Accepted                                                            |
+| Supports | [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) |
 
 A reading of the `nx` 24.0.6 package that this repository installs (paths under `dist/src/`), and experiments on 20 November 2026 for nxr-1tmme6 with it, Node.js 26.12.0 and cargo 1.100.0 on Linux: throwaway repositories under the temporary folder, and runs of `nx` through the test harness in copies of the fixture `batch-groups`, with a module loaded through `NODE_OPTIONS` that logged each native `WorkspaceContext` made and each of its methods called, with the caller. They check a second opinion of the same day, which had read and run the same package, before the plugin relies on it.
 
-- **One list per process.** `globWithWorkspaceContextSync` and `HashPlanInspector.init`, which calls `getNxWorkspaceFilesFromContext` with `useDaemonProcess` false, read the context that `utils/workspace-context.js` keeps at module level; neither asks the daemon. The context is made on first use (`ensureContextAvailable`, line 270) and kept. After a glob, a file written and a second glob, the second listed only the files of the first, also 1.5 seconds and another process's walk later; an inspector made after the write gave the input files of the first for `{projectRoot}/**/*`. A fileset with `includeIgnored` gave the new file, because Nx reads those from the disk ([[EVD-NX-24-FILESET-SCOPE]]), so a file that a crate's `fileInputs` declare does not depend on the context.
+- **One list per process.** `globWithWorkspaceContextSync` and `HashPlanInspector.init`, which calls `getNxWorkspaceFilesFromContext` with `useDaemonProcess` false, read the context that `utils/workspace-context.js` keeps at module level; neither asks the daemon. The context is made on first use (`ensureContextAvailable`, line 270) and kept. After a glob, a file written and a second glob, the second listed only the files of the first, also 1.5 seconds and another process's walk later; an inspector made after the write gave the input files of the first for `{projectRoot}/**/*`. A fileset with `includeIgnored` gave the new file, because Nx reads those from the disk ([EVD-NX-24-FILESET-SCOPE](#01M7CH4GX6F2REGP5T284NW0DB)), so a file that a crate's `fileInputs` declare does not depend on the context.
 - **`refreshWorkspaceContext`** walks again only where the daemon is not enabled for the process: it returns at once while `daemonClient.enabled()` is true, and also for the root `/virtual` and inside the daemon's own process (line 260), neither of which the check meets. With `NX_DAEMON=true`, a file written before it was missing after it; without the daemon, the walk listed it. A graph made without the daemon calls it (`project-graph/project-graph.js`, line 97).
 - **`updateFilesInContext`** hands the paths to the native `incrementalUpdate` as they are: `ign/x.txt`, below a folder that `.gitignore` lists, then appeared in the glob, which the walk leaves out.
 - **`resetWorkspaceContext`** stops a watching context, drops it and makes it again at once only where it watched, which only the daemon's does (line 275); otherwise the next read makes a new one, which gets its files then, as the next point says. After a write and the reset, the glob and a new inspector listed the file; the walk still left out what `.gitignore` and `.git/info/exclude` list. Nx calls it after it wrote files in `command-line/import/import.js` (line 201); the daemon calls it in `resetInternalState` (`daemon/server/project-graph-incremental-recomputation.js`, line 655), after an error while it recomputes the project file map (line 377) and when the cached graph it persisted has gone (line 667), which need no write of Nx's. `devkit-internals.js` exports it as well.
 - **One walk shared between processes.** Read in the source of the tag `24.0.6` (`packages/nx/src/native/workspace/context.rs`) and not run: the installed package ships the native module compiled, whose trace messages for this path are those of that source. A new context, and `refresh`, get their files through `acquire_files` (lines 195 to 295). A process that finds `nx_files.lock` in the workspace data folder held by another process's walk waits, up to `NX_WORKSPACE_WALK_WAIT_MS` (60 seconds by default), and takes the archive that walk writes, where it was written after the wait began; otherwise it walks under the lock itself and writes the archive (lines 419 to 449). The process that walked can have listed a folder before a file was written into it, so a context made after the write can still lack the file. `setupWorkspaceContext` passes only `watch` and `alwaysWatch`, neither of which turns this off. Processes that walk are an nx command's main process when it starts (`bin/nx.js`, line 130) and when it builds a graph without the daemon (`refreshWorkspaceContext`), the daemon when it starts (`daemon/server/server.js`, line 382) and after `resetInternalState`, which makes its watching context again at once, every task or batch process that makes a context, the checks of other tasks among them, and a plugin worker that finds no archive to load. An inspector initialised before a reset keeps the files it took and still answers; the context holds no other reader in a task's process.
-- **A batch process.** `tasks-runner/batch/run-batch.js` gets the project graph in its message and builds none, and nothing between two groups of the plugin's batch read the context again: the log showed one context made, by the first group's check, and only that check's and the later checks' reads. With two crates of one workspace whose `build` targets give each its own feature set, `nx run-many -t build` ran a group of one crate for each in one batch process; each build script wrote a file during its own build. Without a reset, the check of the group that ran second missed the file that its build had written into a folder its script names with `rerun-if-changed`, and failed for a file written into its crate's own folder that its library includes, which the crate's inputs cover. Two `build` groups of one workspace under `workspace-build`, of which the batch leaves the second for a following batch ([[DES-BATCH]]), and two groups of different workspaces, whose lockfile tasks finished at different times, each ran in a process of their own.
+- **A batch process.** `tasks-runner/batch/run-batch.js` gets the project graph in its message and builds none, and nothing between two groups of the plugin's batch read the context again: the log showed one context made, by the first group's check, and only that check's and the later checks' reads. With two crates of one workspace whose `build` targets give each its own feature set, `nx run-many -t build` ran a group of one crate for each in one batch process; each build script wrote a file during its own build. Without a reset, the check of the group that ran second missed the file that its build had written into a folder its script names with `rerun-if-changed`, and failed for a file written into its crate's own folder that its library includes, which the crate's inputs cover. Two `build` groups of one workspace under `workspace-build`, of which the batch leaves the second for a following batch ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)), and two groups of different workspaces, whose lockfile tasks finished at different times, each ran in a process of their own.
 - **A task run on its own.** `bin/run-executor.js` calls `run` of `command-line/run/run.js`, which reads the cached graph (`readCachedProjectGraph`, line 175) and makes no context. With `--batch=false`, the only context made in the task's process was made by the check, after cargo. `nx run <crate>:build` without that flag ran in a batch process.
 - **Cost.** The reset and the first glob after it took 2.8 to 5.7 ms, median 3.4 ms, over 20 runs in a copy of `batch-groups` after a build, whose 20 listed files leave its `target` out; 5.6 to 9.3 ms in this repository, 1048 files; and 21 to 43 ms with about 10,000 more files, where a glob on a kept context took about 3 ms. On 21 November 2026, for nxr-ffjvc9, a Node.js script loaded the installed Nx's `HashPlanInspector` and workspace context and timed three rounds of a reset, an inspector made and initialized, which builds the context, a second one, and a glob of every file from the built context. In this repository, 1,078 files and 7 projects, they took 10.5 to 14.4 ms, 1.4 to 1.6 ms and 0.8 to 0.9 ms; in a throwaway repository of 30,001 files and one project, 66 to 125 ms, 16 to 26 ms and 10 to 16 ms. A build of the plugin in which the checks of a group shared one inspector ran `build-input-check.spec.ts` (1 min 26 s, against 1 min 23 s and 1 min 35 s before), `napi-build.spec.ts` (57.1 s, against 58.6 s) and a batched build of three crates measured alone (1.77 s and 2.15 s, against 1.87 s) no faster than with an inspector per check, within the noise of a machine that other processes share.
-:::
 
-:::mara evidence EVD-CARGO-PUBLISH-REGISTRIES
-:mid: 01M7DMCC1WD0BE0TJ7BB161T31
-:title: Which registry cargo publishes a crate to, and where it looks up the crate's path dependencies
-:status: accepted
-:supports: DES-RELEASE
-:supports: ADR-BATCHED-PUBLISH
-:supports: ADR-PUBLISH-REGISTRY-OPTION
-:supports: ADR-PUBLISH-REPLACED-CRATES-IO
+---
+
+<a id="01M7DMCC1WD0BE0TJ7BB161T31"></a>
+
+### Which registry cargo publishes a crate to, and where it looks up the crate's path dependencies
+
+| Type     | Evidence                                                      |
+| -------- | ------------------------------------------------------------- |
+| ID       | EVD-CARGO-PUBLISH-REGISTRIES                                  |
+| Status   | Accepted                                                      |
+| Supports | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)     |
+| Supports | [ADR-BATCHED-PUBLISH](#01M7DBRA91K5CG1Y1FKGKQMMC4)            |
+| Supports | [ADR-PUBLISH-REGISTRY-OPTION](#01M7DMCC1WYYNB0EBYZSH53KKT)    |
+| Supports | [ADR-PUBLISH-REPLACED-CRATES-IO](#01M7DS8KTYRE7ND0ZYRGPMFPTS) |
 
 Experiments on 14 November 2026 for nxr-fwxn1r, which repeated the cargo results of that issue's research, with cargo 1.100.0 (3acc79c0c 2026-11-05) and 1.91.0 (ea2d97820 2025-10-10) on Linux x86-64, `RUSTUP_AUTO_INSTALL=0`, a Cargo home per version and throwaway git repositories outside this repository with `Cargo.lock` committed. Every run was in a network namespace with only loopback, where a script served local sparse registries with a publish endpoint and logged each upload with its `Authorization` header and the registry that the upload gave each dependency. The Cargo homes named three of them `alpha`, `beta` and `cio`. Where a case says that crates.io is replaced, `--config` replaced it either through a `[source]` table, `cio-src`, with `cio`'s index, or with `replace-with = "cio"`, naming the registry itself, as the test harness's Cargo home does. Every call passed `--locked`, and the results were the same on both versions unless a version is named. No experiment passed `--registry crates-io`, and each run that went for crates.io failed to connect.
 
@@ -2355,35 +3005,45 @@ A third session the same day, after a second review, used the same versions, nam
 A fourth session on 15 November 2026, for nxr-m8evx2, used the same two versions against the test harness's server, which served the registries `nx-rust-test`, `alpha` and `beta` on one port of the loopback interface, each under a path of its own, through a Cargo home that named all three, replaced crates.io with `nx-rust-test` and made the server its proxy, with each registry's index, token and the provider `cargo:token` also in the environment, and in throwaway git repositories outside this repository.
 
 - **What cargo prints.** An upload printed ``Uploaded <name> v<version> to registry `<name>` `` on both versions. Every status line, ``Updating `<name>` index`` among them, went to standard error, and `cargo info` wrote the crate's description with ``version: <version> (from registry `<name>`)`` to standard output; it downloads a version that it finds, so a version that the index lists without a `.crate` file fails the lookup. For an entry with `registry = "alpha"`, also one inherited from `[workspace.dependencies]`, the report gave `alpha`'s index as the configuration spells it, `sparse+http://…/alpha/index/`, and for `registry = "crates-io"` `https://github.com/rust-lang/crates.io-index`. A crate with `publish = false` had `"publish": []`, one without the key `null`.
-- **A second name for one index.** With `CARGO_REGISTRIES_ALIAS_INDEX` set to `alpha`'s index, beside `alpha` in the Cargo home and in the environment, in the Cargo home alone or in the environment alone, before or after `alpha` among the variables, with `registry.default = "alpha"` or `[source.crates-io] replace-with = "alpha"` given with `--config`, with `alias` given with `--config` instead, and with a member whose entry names `alias`, the probe of a crate with `publish = ["alpha"]` and `cargo info --registry alpha` showed `alpha` in every line, ``Updating `alpha` index`` and ``from registry `alpha` ``: the display of `alias` that the third session saw did not appear. A real upload with `--registry alpha` failed with "multiple registries are configured with the same index url '<alpha's index>': alias, alpha" where both names came from the environment, and in the harness, where the Cargo home names `alpha`, with `alias` in the environment; so did an upload with `--registry shared` where a workspace's configuration gave `shared` `alpha`'s index. Which of two names cargo shows for one index therefore depends on the configuration in a way that these runs did not settle; the rule of **Registries** in [[DES-RELEASE]], which reads only what cargo shows, does not depend on it.
+- **A second name for one index.** With `CARGO_REGISTRIES_ALIAS_INDEX` set to `alpha`'s index, beside `alpha` in the Cargo home and in the environment, in the Cargo home alone or in the environment alone, before or after `alpha` among the variables, with `registry.default = "alpha"` or `[source.crates-io] replace-with = "alpha"` given with `--config`, with `alias` given with `--config` instead, and with a member whose entry names `alias`, the probe of a crate with `publish = ["alpha"]` and `cargo info --registry alpha` showed `alpha` in every line, ``Updating `alpha` index`` and ``from registry `alpha` ``: the display of `alias` that the third session saw did not appear. A real upload with `--registry alpha` failed with "multiple registries are configured with the same index url '<alpha's index>': alias, alpha" where both names came from the environment, and in the harness, where the Cargo home names `alpha`, with `alias` in the environment; so did an upload with `--registry shared` where a workspace's configuration gave `shared` `alpha`'s index. Which of two names cargo shows for one index therefore depends on the configuration in a way that these runs did not settle; the rule of **Registries** in [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T), which reads only what cargo shows, does not depend on it.
 
-Not repeated: `cargo publish --registry crates-io` while crates.io is replaced, which the research for nxr-fwxn1r saw go for `index.crates.io` in its network namespace, because no experiment passes `--registry crates-io`. Not established: what cargo and crates.io do with a crate for crates.io whose dependency names another registry ([[RISK-REGISTRY-BEHAVIOUR]]), and a lookup that asks crates.io itself while the configuration replaces it.
-:::
+Not repeated: `cargo publish --registry crates-io` while crates.io is replaced, which the research for nxr-fwxn1r saw go for `index.crates.io` in its network namespace, because no experiment passes `--registry crates-io`. Not established: what cargo and crates.io do with a crate for crates.io whose dependency names another registry ([RISK-REGISTRY-BEHAVIOUR](#01M7DBRA91P6HC1WYADGEPJJYD)), and a lookup that asks crates.io itself while the configuration replaces it.
 
-:::mara evidence EVD-NX-24-PUBLISH-OPTIONS
-:mid: 01M7DMCC1WD0EPQSF9J0N6DEA8
-:title: What Nx 24.0.6 hands a publish task, and what @nx/js does with the registry option
-:status: accepted
-:supports: DES-RELEASE
-:supports: ADR-PUBLISH-REGISTRY-OPTION
+---
+
+<a id="01M7DMCC1WD0EPQSF9J0N6DEA8"></a>
+
+### What Nx 24.0.6 hands a publish task, and what @nx/js does with the registry option
+
+| Type     | Evidence                                                   |
+| -------- | ---------------------------------------------------------- |
+| ID       | EVD-NX-24-PUBLISH-OPTIONS                                  |
+| Status   | Accepted                                                   |
+| Supports | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)  |
+| Supports | [ADR-PUBLISH-REGISTRY-OPTION](#01M7DMCC1WYYNB0EBYZSH53KKT) |
 
 The research for nxr-fwxn1r on 14 November 2026 read `nx` 24.0.6 and `@nx/js` 24.0.6, which this repository installs (paths under `dist/src/`), and ran a stand-in Nx workspace outside this repository with both linked from it, `NX_DAEMON=false` and a cache of its own. The stand-in executor had a batch implementation, `preferBatch: true` and a schema that declared `dryRun`, `registry` and `firstRelease`, and printed what it received. One project's `nx-release-publish` came from its `project.json` and another's from a stand-in plugin's `createNodesV2`, the shape that nx-rust's has. The lines named here were read again for this record; the runs were not repeated.
 
 - **The flags.** `nx release publish` declares `--registry` and `--tag` as strings, `--access` with the choices `public` and `restricted`, and `--otp` as a number (`command-line/release/command-object.js`, lines 196 to 214). The combined `nx release` declares only `--otp` (line 94) and takes no unknown option (line 20): `nx release 0.2.0 --registry my-reg --dry-run` printed its help and "Unknown argument: registry".
 - **What a task receives.** `runPublishOnProjects` copies `registry`, `tag`, `otp`, `access`, `dryRun` and `firstRelease` into the overrides of every task of the run when the command has them, sets `NX_DRY_RUN=true` for a dry run, and adds `nxReleaseVersionData` under `nx release` (`command-line/release/publish.js`, lines 138 to 169). `nx release publish --registry https://registry.example.test/ --tag next --otp 123456 --access public --first-release --dry-run` gave both tasks of the batch the options `{"registry":"https://registry.example.test/","tag":"next","otp":123456,"access":"public","dryRun":true,"firstRelease":true}`, the same values among the overrides that the task graph holds for each task, and an empty `__overrides_unparsed__`: the raw string, the same for every project, and `otp` as a number. With `NX_BATCH_MODE=false` each task received the same. An unknown flag such as `--index sparse+http://x/`, also after `--`, reached every task as an option.
-- **Configuration.** A `registry` among a target's options in `project.json` reached the task, and `--registry` on the command line replaced it. A `targetDefaults` entry keyed by `nx-release-publish` with an npm URL in `options.registry` reached the target of the stand-in plugin, and an empty entry keyed by the stand-in's executor beside it kept it away, as [[EVD-NX-TARGET-DEFAULTS]] found for other targets. `release.groups.<group>.registry` was accepted and passed to no task. The `nx-release-publish` that Nx itself gives a package with `@nx/js` runs `@nx/js:release-publish` and takes the target defaults for that executor before those for the target name (`utils/package-json.js`, lines 145 to 163).
+- **Configuration.** A `registry` among a target's options in `project.json` reached the task, and `--registry` on the command line replaced it. A `targetDefaults` entry keyed by `nx-release-publish` with an npm URL in `options.registry` reached the target of the stand-in plugin, and an empty entry keyed by the stand-in's executor beside it kept it away, as [EVD-NX-TARGET-DEFAULTS](#01M7A0NA0X5XDW6MEQNS90EWC2) found for other targets. `release.groups.<group>.registry` was accepted and passed to no task. The `nx-release-publish` that Nx itself gives a package with `@nx/js` runs `@nx/js:release-publish` and takes the target defaults for that executor before those for the target name (`utils/package-json.js`, lines 145 to 163).
 - **@nx/js.** Its publish executor takes the registry from the package's `publishConfig`, else from the option `registry`, else from npm's configuration (`utils/npm-config.js`, lines 34 to 38), passes it as `--registry=<value>`, or `--<scope>:registry=<value>` for a scoped package, and passes `otp` and `access` as `--otp` and `--access` (`executors/release-publish/release-publish.impl.js`, lines 158 and 348 to 353), to the workspace's package manager. Offline, npm 12.2.1's `npm publish --dry-run --registry alpha` warned "Must be full url with "http://"" and published, as a dry run, to `https://registry.npmjs.org/`; pnpm 12.18.0 failed with "ERR_PNPM_PUBLISH_UNSUPPORTED_REGISTRY_PROTOCOL".
 
-Not run: nx-rust's own target under `nx release publish` ([[RISK-NX-RELEASE]]), and yarn and bun.
-:::
+Not run: nx-rust's own target under `nx release publish` ([RISK-NX-RELEASE](#01M7DBRA9111XN8TP1XDGJHS4C)), and yarn and bun.
 
-:::mara evidence EVD-NX-24-PUBLISH-BATCHES
-:mid: 01M7FXG9X7C5B5336Q1GQW1KEK
-:title: How Nx 24.0.6 hands the nx-release-publish tasks of a release group to a batch
-:status: accepted
-:supports: DES-RELEASE
-:supports: ADR-BATCHED-PUBLISH
-:supports: RISK-NX-RELEASE
+---
+
+<a id="01M7FXG9X7C5B5336Q1GQW1KEK"></a>
+
+### How Nx 24.0.6 hands the nx-release-publish tasks of a release group to a batch
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-NX-24-PUBLISH-BATCHES                                 |
+| Status   | Accepted                                                  |
+| Supports | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
+| Supports | [ADR-BATCHED-PUBLISH](#01M7DBRA91K5CG1Y1FKGKQMMC4)        |
+| Supports | [RISK-NX-RELEASE](#01M7DBRA9111XN8TP1XDGJHS4C)            |
 
 A run on 15 November 2026 for nxr-m8evx2, with `nx` 24.0.6, the version this repository installs, Node.js 26.12.0 and git 2.56.0 on Linux x86-64, in a throwaway Nx workspace outside this repository, with `NX_DAEMON=false`, a private `NX_CACHE_DIRECTORY`, `NX_NO_CLOUD=true`, and without `CI`, `GITHUB_ACTIONS` and the variables by which Nx detects an AI agent. A local plugin's `createNodesV2`, the shape that nx-rust's has, gave four projects `a`, `b`, `c` and `d` a target `nx-release-publish` that ran a local executor with an `implementation` and a `batchImplementation`, and gave each project `release.version.versionActions` naming a local module whose `readDependencies` reported `c → a` and `d → b`. `nx.json` put `a` and `b` into the independent release group `g1` and `c` and `d` into `g2`. The batch implementation logged the tasks, roots and options it received and `NX_DRY_RUN`, and reported each task successful from an async generator; the single implementation logged its task.
 
@@ -2393,27 +3053,32 @@ A run on 15 November 2026 for nxr-m8evx2, with `nx` 24.0.6, the version this rep
 - **Without batches.** With `NX_BATCH_MODE=false`, each of the four tasks ran on its own.
 - **nx release.** In a git repository with `release.git` set to commit and tag nothing and changelogs off, `nx release 0.2.0 --yes --first-release` gave the same two batches after versioning, each task with `firstRelease` and `nxReleaseVersionData`, which held each project's current and new version and its dependents.
 
-The tests of [[VER-RELEASE]] then ran nx-rust's own target in the fixture `publish-crates`, with the same version of Nx. With `pub-base` alone in one release group and `pub-core` and `pub-tool`, which depend on it, in another, `nx release publish --projects pub-base` and `nx release publish --groups base` each ran the tasks of `pub-core` and `pub-tool` after that of `pub-base`, in a batch of their group: Nx's release graph adds the dependents of a selected project ([[EVD-NX-24-RELEASE]], "Dependents"), while `--groups` naming the dependents' group alone ran their tasks only. `nx run pub-base:nx-release-publish` ran that one task.
+The tests of [VER-RELEASE](verification.mara.md#01M7DBRA91BFN6ZT26YC6HPMGD) then ran nx-rust's own target in the fixture `publish-crates`, with the same version of Nx. With `pub-base` alone in one release group and `pub-core` and `pub-tool`, which depend on it, in another, `nx release publish --projects pub-base` and `nx release publish --groups base` each ran the tasks of `pub-core` and `pub-tool` after that of `pub-base`, in a batch of their group: Nx's release graph adds the dependents of a selected project ([EVD-NX-24-RELEASE](#01M7DBRA91S2P3MB401BJTKKH1), "Dependents"), while `--groups` naming the dependents' group alone ran their tasks only. `nx run pub-base:nx-release-publish` ran that one task.
 
-This settles the point of [[RISK-NX-RELEASE]] that was still unseen: under `nx release publish` and `nx release`, Nx hands the runnable `nx-release-publish` tasks of one release group to one batch when their executor has a batch implementation and sets `preferBatch`, as [[EVD-NX-24-BATCHES]] found for `nx run-many`, and a filter by project or group narrows the batch to the selected tasks of each group.
-:::
+This settles the point of [RISK-NX-RELEASE](#01M7DBRA9111XN8TP1XDGJHS4C) that was still unseen: under `nx release publish` and `nx release`, Nx hands the runnable `nx-release-publish` tasks of one release group to one batch when their executor has a batch implementation and sets `preferBatch`, as [EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA) found for `nx run-many`, and a filter by project or group narrows the batch to the selected tasks of each group.
 
-:::mara evidence EVD-CARGO-PUBLISH
-:mid: 01M7DBRA912K68NXEN2P6KCWMW
-:title: How Cargo reports, locks and publishes a workspace after a version bump
-:status: accepted
-:supports: DES-RELEASE
-:supports: ADR-BATCHED-PUBLISH
-:supports: ADR-RELEASE-DEPENDENTS
-:supports: RISK-REGISTRY-BEHAVIOUR
-:supports: RISK-UNCOMMITTED-PUBLISH
+---
+
+<a id="01M7DBRA912K68NXEN2P6KCWMW"></a>
+
+### How Cargo reports, locks and publishes a workspace after a version bump
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-CARGO-PUBLISH                                         |
+| Status   | Accepted                                                  |
+| Supports | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
+| Supports | [ADR-BATCHED-PUBLISH](#01M7DBRA91K5CG1Y1FKGKQMMC4)        |
+| Supports | [ADR-RELEASE-DEPENDENTS](#01M7DBRA91HC8EJYF8D7XME1FV)     |
+| Supports | [RISK-REGISTRY-BEHAVIOUR](#01M7DBRA91P6HC1WYADGEPJJYD)    |
+| Supports | [RISK-UNCOMMITTED-PUBLISH](#01M7G2R3TT6D60DVE2324A97BS)   |
 
 Experiments on 14 November 2026 with cargo 1.100.0 (3acc79c0c 2026-11-05) and 1.91.0 (ea2d97820 2025-10-10), and 1.89 where named, on Linux x86-64 with `RUSTUP_AUTO_INSTALL=0`, in throwaway git repositories outside this repository with a Cargo home of their own. Its `config.toml` replaced crates.io with a local sparse registry (`[source.crates-io] replace-with`), which `python3 -m http.server` served from a folder holding only an index, and named the same index as the registry `probe`. Nothing was uploaded anywhere. The first workspace had four members: `relprobe-a` and `relprobe-b`, which inherit `version.workspace = true` (0.1.0), `relprobe-b` depending on `relprobe-a` through `[workspace.dependencies] relprobe-a = { path = "a", version = "0.1.0" }` and on the registry crate `regdep = "1"`; `relprobe-c` (0.3.0), with a renamed optional dependency on `relprobe-a` with `version = "0.1.0"`, a build-dependency on it for `cfg(unix)` with `version = "0.1"` and a dev-dependency on `relprobe-b` without a version; and `relprobe-d` with `publish = false` and a path dependency on `relprobe-a` without a version. The second workspace had `relprobe-a` and `relprobe-b` inheriting 0.2.0, the second depending on the first through `[workspace.dependencies]` with `version = "0.2.0"`, all committed.
 
 - **The report's dependencies.** `cargo metadata --no-deps --format-version 1` gave each dependency the fields `name`, the package name also for a renamed one, `rename`, `kind` (`null` for a normal dependency, `build`, `dev`), `optional`, `target` (`cfg(unix)`), `path` (absolute), `req`, `source`, `registry`, `features` and `uses_default_features`, on both versions. `req` is normalised: `version = "0.1.0"` gave `^0.1.0`, `"0.1"` gave `^0.1`, and a path dependency without `version` gave `*`. A dependency inherited with `workspace = true` looked like one written in the member's manifest, so the report does not say where a requirement is written. `publish = false` gave `publish: []`.
 - **An inherited version bumped alone.** With `[workspace.package].version` set to 0.2.0 and `[workspace.dependencies]` left at `version = "0.1.0"`, `cargo metadata` and `cargo update --workspace` failed on both versions with exit code 101: "failed to select a version for the requirement `relprobe-a = "^0.1.0"`", "candidate versions found which didn't match: 0.2.0", "required by package `relprobe-b v0.2.0`". `cargo metadata --no-deps`, with and without `--locked`, still succeeded. The project graph is then still created, while every cargo command that resolves the workspace fails, the lockfile task's among them.
 - **The lockfile after a bump.** With the requirements rewritten as well, in `[workspace.dependencies]` and in both entries of `relprobe-c`, and `regdep` 1.0.1 added to the index, `cargo update --workspace` printed "Updating relprobe-a v0.1.0 (…) -> v0.2.0" and the same for `relprobe-b`. In this fixture, where each package name is locked once, it changed only those two `version` lines of `Cargo.lock` and left `regdep` at 1.0.0, on both versions, and `cargo update --workspace --locked` passed afterwards; the second session below shows a lockfile in which more lines change. `cargo update -p relprobe-a` changed the same two lines.
-- **Several crates against one.** In the second workspace, with neither crate in the registry, `cargo publish --dry-run --registry probe -p relprobe-a -p relprobe-b` packaged and verified both and stopped before the upload with exit code 0 on both versions, also with `-p relprobe-b` first. `cargo publish --dry-run --registry probe -p relprobe-b` failed with exit code 101, "failed to prepare local package for uploading", "no matching package named `relprobe-a` found"; with `relprobe-a` 0.1.0 in the index it failed with "failed to select a version for the requirement `relprobe-a = "^0.2.0"`", "candidate versions found which didn't match: 0.1.0", while the multi-crate dry run still succeeded. `--no-verify` changed neither failure. Cargo 1.89 rejected several `-p` on `cargo publish`: "the `--package (multiple occurrences)` flag is unstable". Cargo 1.90 was not tried; it is older than the 1.91 that the plugin requires ([[ADR-COMPATIBILITY]]).
+- **Several crates against one.** In the second workspace, with neither crate in the registry, `cargo publish --dry-run --registry probe -p relprobe-a -p relprobe-b` packaged and verified both and stopped before the upload with exit code 0 on both versions, also with `-p relprobe-b` first. `cargo publish --dry-run --registry probe -p relprobe-b` failed with exit code 101, "failed to prepare local package for uploading", "no matching package named `relprobe-a` found"; with `relprobe-a` 0.1.0 in the index it failed with "failed to select a version for the requirement `relprobe-a = "^0.2.0"`", "candidate versions found which didn't match: 0.1.0", while the multi-crate dry run still succeeded. `--no-verify` changed neither failure. Cargo 1.89 rejected several `-p` on `cargo publish`: "the `--package (multiple occurrences)` flag is unstable". Cargo 1.90 was not tried; it is older than the 1.91 that the plugin requires ([ADR-COMPATIBILITY](#01M78FHG7FFBVZPZCQKJNXGT0P)).
 - **Which registry.** With crates.io replaced, `cargo publish --dry-run` without `--registry` failed: "crates-io is replaced with non-remote-registry source registry `probe-src`". With `CARGO_REGISTRY_DEFAULT=probe` in place of `--registry`, the multi-crate dry run succeeded on both versions, so a test registry can be set up in a Cargo home alone.
 
 The research for the release design measured these on the same day with the same two versions, against a local sparse registry with a publish endpoint to which it uploaded, and they were not repeated:
@@ -2424,7 +3089,7 @@ The research for the release design measured these on the same day with the same
 - **Dependencies when publishing.** A normal path dependency without `version` stops `cargo publish` ("all dependencies must have a version requirement specified when publishing"); a dev-dependency without `version` is left out of the published crate. In a cycle through a dev-dependency without `version`, cargo leaves it out and publishes both crates; with a `version`, the first publish is impossible, per crate and with `--workspace` ("no matching package named `cycx` found"). A path dependency is looked up on crates.io when packaged, also with `--registry` and `registry.default` set, unless its entry names a `registry`. A crate without `version` is reported as 0.0.0 with `publish = []`.
 - **The lockfile.** `cargo update -p a -p e`, and each form with `--offline` on a filled Cargo home, changed only the bumped members' lines; `--offline` fails with an empty Cargo home.
 - **cargo-release 1.1.7**, read: it treats crates that inherit the version as one version, writes it once, and rewrites requirements on a bumped crate over every member and the workspace root (`upgrade_dependency_req`).
-- **cargo-hakari 0.9.39**, read, not run: from dep-format-version 2 the hack crate's dependency is written as `workspace-hack = { version = "0.1", path = … }`, before that with `path` only. crates.io has a crate `workspace-hack` 0.1.0 of another author with no dependencies, to which such a requirement resolves there. cargo-hakari offers `cargo hakari publish -p <crate>`, which takes the dependency out, runs `cargo publish --allow-dirty`, puts it back and regenerates the lockfile, one crate per call, and a stub of the hack crate published once under a unique name, after which plain `cargo publish` works. A run of the same version, which found `hakari-package` in `.config/hakari.toml` naming the hack crate, is recorded in [[EVD-HAKARI-UNIFICATION]]. A run of the same version on 16 November 2026 confirmed the forms of the dependency and found `publish = false` in the hack crate that `cargo hakari init` writes ([[EVD-HAKARI-PUBLISHING]]).
+- **cargo-hakari 0.9.39**, read, not run: from dep-format-version 2 the hack crate's dependency is written as `workspace-hack = { version = "0.1", path = … }`, before that with `path` only. crates.io has a crate `workspace-hack` 0.1.0 of another author with no dependencies, to which such a requirement resolves there. cargo-hakari offers `cargo hakari publish -p <crate>`, which takes the dependency out, runs `cargo publish --allow-dirty`, puts it back and regenerates the lockfile, one crate per call, and a stub of the hack crate published once under a unique name, after which plain `cargo publish` works. A run of the same version, which found `hakari-package` in `.config/hakari.toml` naming the hack crate, is recorded in [EVD-HAKARI-UNIFICATION](#01M7D9EQW8FQW9BAEZSHQ37116). A run of the same version on 16 November 2026 confirmed the forms of the dependency and found `publish = false` in the hack crate that `cargo hakari init` writes ([EVD-HAKARI-PUBLISHING](#01M7JRNDYF9P89B48NFK03QP5M)).
 
 A second session the same day, after a review of the release design, repeated each point below with cargo 1.100.0 and 1.91.0, in throwaway git repositories with a Cargo home per version. A script outside this repository served a local sparse registry with a publish endpoint, to which cargo uploaded for real; the Cargo home replaced crates.io with it and named it in `registry.default`. Nothing left the machine.
 
@@ -2448,16 +3113,21 @@ A third session the same day, while the test harness's registry was built (nxr-5
 
 A fourth session on 15 November 2026, while the publish target was built (nxr-m8evx2), ran the plugin's executor against the harness registry with cargo 1.100.0 and 1.91.0, and `cargo package --no-verify` in throwaway git repositories with a Cargo home of their own, offline.
 
-- **Uncommitted changes in a subfolder.** In the fixture `publish-crates`, whose Cargo workspaces lie in the folders `rust` and `tools` of the git repository, an unstaged change to `rust/crates/base/src/lib.rs` made `cargo publish --locked --registry nx-rust-test -p pub-base` fail on 1.100 with "1 files in the working directory contain changes that were not yet committed into git", while 1.91 packaged, verified and uploaded the crate with the change. `cargo package --no-verify` behaved the same: in a repository whose workspace root is the folder `rust`, 1.91 packaged the changed crate, and in one whose workspace root is the repository root, it refused as 1.100 did. 1.97.1, 1.98.1 and 1.99.0 refused in the first layout too; 1.92 to 1.96 were not tried. So on 1.91, cargo's refusal of uncommitted changes, on which publishing relies (**Credentials and tree** in [[DES-RELEASE]]), does not hold for a crate of a Cargo workspace below the repository root (nxr-rsaxx7).
+- **Uncommitted changes in a subfolder.** In the fixture `publish-crates`, whose Cargo workspaces lie in the folders `rust` and `tools` of the git repository, an unstaged change to `rust/crates/base/src/lib.rs` made `cargo publish --locked --registry nx-rust-test -p pub-base` fail on 1.100 with "1 files in the working directory contain changes that were not yet committed into git", while 1.91 packaged, verified and uploaded the crate with the change. `cargo package --no-verify` behaved the same: in a repository whose workspace root is the folder `rust`, 1.91 packaged the changed crate, and in one whose workspace root is the repository root, it refused as 1.100 did. 1.97.1, 1.98.1 and 1.99.0 refused in the first layout too; 1.92 to 1.96 were not tried. So on 1.91, cargo's refusal of uncommitted changes, on which publishing relies (**Credentials and tree** in [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T)), does not hold for a crate of a Cargo workspace below the repository root (nxr-rsaxx7).
 
-Not established: what crates.io itself checks on upload and how long its index takes ([[RISK-REGISTRY-BEHAVIOUR]]).
-:::
+Not established: what crates.io itself checks on upload and how long its index takes ([RISK-REGISTRY-BEHAVIOUR](#01M7DBRA91P6HC1WYADGEPJJYD)).
 
-:::mara evidence EVD-CARGO-PATCH-AFTER-BUMP
-:mid: 01M7DP39E02408304AK7NARRH7
-:title: What Cargo makes of [patch], [replace] and profile entries that name a member after its version changes
-:status: accepted
-:supports: DES-RELEASE
+---
+
+<a id="01M7DP39E02408304AK7NARRH7"></a>
+
+### What Cargo makes of [patch], [replace] and profile entries that name a member after its version changes
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-CARGO-PATCH-AFTER-BUMP                                |
+| Status   | Accepted                                                  |
+| Supports | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
 
 Experiments on 14 November 2026 with cargo 1.100.0 and 1.91.0 on Linux x86-64, with `RUSTUP_AUTO_INSTALL=0`, in a throwaway folder outside this repository with a Cargo home of its own, whose `config.toml` replaced crates.io with a directory source that held `base` 0.1.0 as a stand-in for the registry. The workspace had the members `base` 0.1.0 and `user`, which asked the registry for `base = "0.1"`. Each case ran `cargo metadata --format-version 1 --offline` before and after the member `base` was bumped to 0.2.0, and `cargo tree -p user` where it shows which `base` cargo took. Both versions behaved alike, apart from the wording of one message.
 
@@ -2470,15 +3140,20 @@ A second session the same day, in the same way, with a registry `private` whose 
 
 - **Keys of `[patch]` for a registry.** `cargo metadata --offline` resolved `user`'s `base` to the member through `[patch.private]`, through `[patch."sparse+https://example.invalid/"]`, and through `[patch.private]` also where the dependency named the registry by `registry-index = "sparse+https://example.invalid/"`. With `[patch."https://example.invalid/"]`, the index URL without `sparse+`, cargo applied no patch and failed: "no matching package named `base` found". So for a sparse registry the key has to keep `sparse+`.
 - **Specifications in a profile's package table.** With `user` depending on the member by path, `cargo build` warned of no unmatched specification before the bump and warned "profile package spec … has a version or URL that does not match any of the packages" after it for each of `base@0.1.0`, `base:0.1.0`, `base@0.1`, `path+file://<folder>#base@0.1.0`, `path+file://<folder>#0.1.0`, `file://<folder>#base@0.1.0` and `file://<folder>#0.1.0`, where `<folder>` was the member's folder; `path+file://<folder>#base` and `file://<folder>`, without a version, matched before and after.
-:::
 
-:::mara evidence EVD-CARGO-LOCKFILE-UPDATE
-:mid: 01M7DYSVZ3E0N3ADZZKQJNDK6Z
-:title: Which lockfiles a version bump makes stale, what the lockfile step of nx release version leaves, and which files cargo cannot read
-:status: accepted
-:supports: DES-RELEASE
+---
 
-Experiments on 14 November 2026 with cargo 1.100.0 and 1.91.0, with `RUSTUP_AUTO_INSTALL=0` and a Cargo home of their own, on copies of the fixture `release-crates`, and runs of the plugin's lockfile step through Nx 24.0.6 in the tests of group 4 of [[VER-RELEASE]], each against a harness registry of its own that stood in for crates.io.
+<a id="01M7DYSVZ3E0N3ADZZKQJNDK6Z"></a>
+
+### Which lockfiles a version bump makes stale, what the lockfile step of nx release version leaves, and which files cargo cannot read
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-CARGO-LOCKFILE-UPDATE                                 |
+| Status   | Accepted                                                  |
+| Supports | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
+
+Experiments on 14 November 2026 with cargo 1.100.0 and 1.91.0, with `RUSTUP_AUTO_INSTALL=0` and a Cargo home of their own, on copies of the fixture `release-crates`, and runs of the plugin's lockfile step through Nx 24.0.6 in the tests of group 4 of [VER-RELEASE](verification.mara.md#01M7DBRA91BFN6ZT26YC6HPMGD), each against a harness registry of its own that stood in for crates.io.
 
 - **A lockfile outside the changed workspaces.** With `xtask` in `tools/` depending on `base` in `rust/` by path without a version requirement, `tools/` kept its manifests when `base` went from 0.1.0 to 0.2.0, while its `Cargo.lock` still locked `base` 0.1.0: `cargo metadata --locked` there failed with exit code 101 on both versions, 1.100 with "cannot update the lock file … because --locked was passed to prevent this", 1.91 with "the lock file … needs to be updated but --locked was passed to prevent this". `cargo update --workspace` there printed "Updating base v0.1.0 (…) -> v0.2.0" and changed only that version line. A lockfile names no path for a path package, only its name and version.
 - **A workspace without a lockfile.** `cargo update --workspace` in `tools/` without a `Cargo.lock` exited with 0 on both versions and wrote one, as every resolving cargo command does.
@@ -2487,41 +3162,51 @@ Experiments on 14 November 2026 with cargo 1.100.0 and 1.91.0, with `RUSTUP_AUTO
 - **Ignored files.** Nx's `gitAdd`, through which it stages and commits, leaves out each file that `git check-ignore` reports (`command-line/release/utils/git.js`, lines 243 to 281 and 297 to 303), so a lockfile that git ignores and that the step returned would not be staged either.
 - **A linked lockfile.** With `tools/Cargo.lock` a symbolic link to `locks/tools.lock` in the same repository, the step's `cargo update --workspace` in `tools/` wrote the new lockfile into `locks/tools.lock` and left the link as it was, on both versions, and `cargo update --workspace --locked` passed there afterwards; the link's path stayed unchanged for git.
 - **Files that cannot be read.** In a single-crate workspace with a `.cargo/config.toml`, `cargo metadata --no-deps` exited with 0 on both versions while the `.cargo` folder had mode 000, so that cargo could not look into it, and read no configuration from it; with the folder searchable and the file at mode 000, it failed with exit code 101, "could not load Cargo configuration". A lockfile that cannot be read, as `tools/Cargo.lock` at mode 200, says nothing about whether the run makes it stale.
-:::
 
-:::mara evidence EVD-NX-24-RELEASE
-:mid: 01M7DBRA91S2P3MB401BJTKKH1
-:title: What Nx 24.0.6 release asks of a plugin and does with its version actions and publish target
-:status: accepted
-:supports: DES-RELEASE
-:supports: ADR-BATCHED-PUBLISH
-:supports: ADR-RELEASE-DEPENDENTS
-:supports: RISK-NX-RELEASE
+---
 
-A reading, not a run, of the `nx` 24.0.6 package that this repository installs (paths under `dist/src/`), on 14 November 2026: by the research for the release design, and again for the lines named here. The research also read `@nx/js` 24.0.6, a devDependency of this repository that is installed with it, and the published tarball of `@monodon/rust` 3.0.0. This item said until 14 November 2026 that `@nx/js` was not installed here; that was wrong, and none of the facts below rested on it ([[EVD-NX-24-PUBLISH-OPTIONS]] reads it again).
+<a id="01M7DBRA91S2P3MB401BJTKKH1"></a>
+
+### What Nx 24.0.6 release asks of a plugin and does with its version actions and publish target
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-NX-24-RELEASE                                         |
+| Status   | Accepted                                                  |
+| Supports | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
+| Supports | [ADR-BATCHED-PUBLISH](#01M7DBRA91K5CG1Y1FKGKQMMC4)        |
+| Supports | [ADR-RELEASE-DEPENDENTS](#01M7DBRA91HC8EJYF8D7XME1FV)     |
+| Supports | [RISK-NX-RELEASE](#01M7DBRA9111XN8TP1XDGJHS4C)            |
+
+A reading, not a run, of the `nx` 24.0.6 package that this repository installs (paths under `dist/src/`), on 14 November 2026: by the research for the release design, and again for the lines named here. The research also read `@nx/js` 24.0.6, a devDependency of this repository that is installed with it, and the published tarball of `@monodon/rust` 3.0.0. This item said until 14 November 2026 that `@nx/js` was not installed here; that was wrong, and none of the facts below rested on it ([EVD-NX-24-PUBLISH-OPTIONS](#01M7DMCC1WD0EPQSF9J0N6DEA8) reads it again).
 
 - **The interface.** A plugin's version actions extend `VersionActions` (`command-line/release/version/version-actions.d.ts`) and write `validManifestFilenames`, `readCurrentVersionFromSourceManifest`, `readCurrentVersionFromRegistry`, `readCurrentVersionOfDependency`, `updateProjectVersion` and `updateProjectDependencies`; they may override `readDependencies`, `calculateNewVersion`, `init` and `validate`. `excludeManifestsFromFormatting` is `false` unless they set it (`version-actions.js`, line 96). The module may export `afterAllProjectsVersioned(cwd, { dryRun })`, which Nx calls once per module after it has written its changes and whose returned files it stages (`version-actions.js`, lines 50 to 81; `version.js`, line 190).
 - **Registration.** A project's `release.version` may carry `versionActions` (`config/workspace-json-project-json.d.ts`, line 102), which wins over the release group's setting, so a plugin can give it to the projects it creates, as `@monodon/rust` does; the group's default is `@nx/js/src/release/version-actions`.
-- **Dependents.** The release graph takes each project's dependencies only from `readDependencies` (`utils/release-graph.js`, lines 212 to 220), and orders release groups and the projects in a group by them (`topologicallySortReleaseGroups` and `topologicallySortProjects`, lines 483 to 505). The default `readDependencies` leaves out `implicit` edges: "Skip implicit dependencies for now to match legacy versioning behavior" (`version-actions.js`, lines 215 to 219). Under `updateDependents`, whose default is `always` (`release-group-processor.js`, line 616), a dependent gets a patch bump "because a dependency was bumped". Requirements are updated only for dependents that are configured for release. A run showed one exception: a fixed group without a bump of its own is bumped through the project graph's edges, `implicit` ones included ([[EVD-NX-24-VERSION-ACTIONS]]).
+- **Dependents.** The release graph takes each project's dependencies only from `readDependencies` (`utils/release-graph.js`, lines 212 to 220), and orders release groups and the projects in a group by them (`topologicallySortReleaseGroups` and `topologicallySortProjects`, lines 483 to 505). The default `readDependencies` leaves out `implicit` edges: "Skip implicit dependencies for now to match legacy versioning behavior" (`version-actions.js`, lines 215 to 219). Under `updateDependents`, whose default is `always` (`release-group-processor.js`, line 616), a dependent gets a patch bump "because a dependency was bumped". Requirements are updated only for dependents that are configured for release. A run showed one exception: a fixed group without a bump of its own is bumped through the project graph's edges, `implicit` ones included ([EVD-NX-24-VERSION-ACTIONS](#01M7DHY1AFJ7VWPDWR1P80GTR2)).
 - **Order.** `validate` runs before the bumps; Nx writes the changed files after it has processed every project, formats them except the manifests that version actions exclude (`version.js`, line 182), calls `afterAllProjectsVersioned`, and then commits and tags.
 - **Defaults.** `currentVersionResolver` is `disk` (`utils/release-graph.js`, lines 575 to 577), `preserveMatchingDependencyRanges` is `true`, as it has been since Nx 22 (lines 603 to 609), and `adjustSemverBumpsForZeroMajorVersion` is `true`, which matches Cargo's caret rule for 0.x versions. `@nx/js` keeps a range that the new version satisfies and fails on one that it leaves.
 - **Publishing.** `nx release publish` runs the target named `nx-release-publish` and no other (`command-line/release/publish.js`, line 170), one release group after another in the order of the release graph, over every project of a group, bumped or not (lines 98 to 130). It passes `nxIgnoreCycles: true`, and with `--projects` or `--groups` it excludes task dependencies (lines 89 to 91). As overrides it passes `registry`, `tag`, `otp`, `access`, `dryRun`, which also sets `NX_DRY_RUN=true`, and `firstRelease` when they are given, and `nxReleaseVersionData` from `nx release` (lines 139 to 168). The research found that Nx breaks a task cycle in an arbitrary direction (`tasks-runner/run-command.js`, `task-graph-utils.js`) and that `@nx/js`'s publish executor skips versions that the registry already has.
-- **Commit and tag.** `nx release version` defaults to `commit: false`, `tag: false` and `stageChanges: true` (`command-line/release/config/config.js`, lines 106 to 120), and commits only where its git settings ask for it (`version.js`, line 263). A root `release.git` is merged into those settings (`config.js`, lines 346 to 355), but `nx release version` refuses it and stops unless `--git-commit`, `--git-tag` and `--stage-changes` are all given (`version.js`, lines 66 to 80; [[EVD-NX-24-VERSION-ACTIONS]]). The combined `nx release` commits and tags unless `release.git` says otherwise (`release.js`, lines 74 to 76), refuses granular `release.version.git` and `release.changelog.git` (lines 36 to 47), and publishes after asking, or at once with `--yes` (lines 261 to 266).
+- **Commit and tag.** `nx release version` defaults to `commit: false`, `tag: false` and `stageChanges: true` (`command-line/release/config/config.js`, lines 106 to 120), and commits only where its git settings ask for it (`version.js`, line 263). A root `release.git` is merged into those settings (`config.js`, lines 346 to 355), but `nx release version` refuses it and stops unless `--git-commit`, `--git-tag` and `--stage-changes` are all given (`version.js`, lines 66 to 80; [EVD-NX-24-VERSION-ACTIONS](#01M7DHY1AFJ7VWPDWR1P80GTR2)). The combined `nx release` commits and tags unless `release.git` says otherwise (`release.js`, lines 74 to 76), refuses granular `release.version.git` and `release.changelog.git` (lines 36 to 47), and publishes after asking, or at once with `--yes` (lines 261 to 266).
 - **Batches.** A publish task joins a batch as any task does: its executor has a batch implementation and sets `preferBatch` (`tasks-runner/tasks-schedule.js`, lines 219 to 232), and `NX_BATCH_MODE=false` turns batching off (line 119). `nx release publish` has no `--batch` flag.
 - **@monodon/rust 3.0.0.** It sets `release.version.versionActions` and a target `nx-release-publish` with `dependsOn: ["^nx-release-publish"]` on each crate whose `publish` is not `[]`, with `static` edges from all dependencies. It reads `[package].version` only and throws "Ensure [package].version is set" for an inherited version, never reads a registry, and finds a dependency by its Nx project name in `dependencies` and `dev-dependencies` only, missing build-dependencies, `[target.*]` tables, renamed dependencies, `workspace = true` and Nx names that differ from the crate's. It writes manifests through `@ltd/j-toml`, which keeps comments and reformats the file; runs `cargo update --workspace` in the Nx root only, swallows its failure and skips it in a dry run; and publishes with `cargo publish --allow-dirty -p <crate>`, one crate per task.
 
-A run of version actions that a plugin's `createNodes` gives its projects is recorded in [[EVD-NX-24-VERSION-ACTIONS]], and a run of a publish target whose executor sets `preferBatch`, which showed that Nx hands the publish tasks of a group to one batch, in [[EVD-NX-24-PUBLISH-BATCHES]].
-:::
+A run of version actions that a plugin's `createNodes` gives its projects is recorded in [EVD-NX-24-VERSION-ACTIONS](#01M7DHY1AFJ7VWPDWR1P80GTR2), and a run of a publish target whose executor sets `preferBatch`, which showed that Nx hands the publish tasks of a group to one batch, in [EVD-NX-24-PUBLISH-BATCHES](#01M7FXG9X7C5B5336Q1GQW1KEK).
 
-:::mara evidence EVD-NX-24-VERSION-ACTIONS
-:mid: 01M7DHY1AFJ7VWPDWR1P80GTR2
-:title: What Nx 24.0.6 does at run time with version actions that a plugin gives its projects
-:status: accepted
-:supports: DES-RELEASE
-:supports: RISK-NX-RELEASE
-:supports: ADR-RELEASE-DEPENDENTS
+---
 
-A run, on 14 November 2026, of `nx` 24.0.6, the version this repository installs, with Node.js 26.12.0, git 2.56.0, cargo 1.100.0 and oxfmt 0.78.0 on Linux x86-64, in a throwaway git repository outside this repository, with the Nx daemon off; paths under `dist/src/command-line/release/` name the lines read beside it. A local plugin stood in for nx-rust: it made a project of each crate of one Cargo workspace, `a` 0.1.0, `b` 0.1.0 with a normal dependency on `a` that carries a version requirement, and `c` 0.3.0 with a dev-dependency on `a`, set `release.version.versionActions` on each to a local module, and returned the edges `b → a` and `c → a`, both `implicit`, as nx-rust does ([[DES-PROJECT-GRAPH]]). The module extended Nx's `VersionActions`, logged each call and reported from `readDependencies` only `b → a`, which is what the manifests give under [[ADR-RELEASE-DEPENDENTS]]. The repository root had an oxfmt configuration.
+<a id="01M7DHY1AFJ7VWPDWR1P80GTR2"></a>
+
+### What Nx 24.0.6 does at run time with version actions that a plugin gives its projects
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-NX-24-VERSION-ACTIONS                                 |
+| Status   | Accepted                                                  |
+| Supports | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
+| Supports | [RISK-NX-RELEASE](#01M7DBRA9111XN8TP1XDGJHS4C)            |
+| Supports | [ADR-RELEASE-DEPENDENTS](#01M7DBRA91HC8EJYF8D7XME1FV)     |
+
+A run, on 14 November 2026, of `nx` 24.0.6, the version this repository installs, with Node.js 26.12.0, git 2.56.0, cargo 1.100.0 and oxfmt 0.78.0 on Linux x86-64, in a throwaway git repository outside this repository, with the Nx daemon off; paths under `dist/src/command-line/release/` name the lines read beside it. A local plugin stood in for nx-rust: it made a project of each crate of one Cargo workspace, `a` 0.1.0, `b` 0.1.0 with a normal dependency on `a` that carries a version requirement, and `c` 0.3.0 with a dev-dependency on `a`, set `release.version.versionActions` on each to a local module, and returned the edges `b → a` and `c → a`, both `implicit`, as nx-rust does ([DES-PROJECT-GRAPH](workspaces.mara.md#01M78FHG7F2S7FX77PNWS621D6)). The module extended Nx's `VersionActions`, logged each call and reported from `readDependencies` only `b → a`, which is what the manifests give under [ADR-RELEASE-DEPENDENTS](#01M7DBRA91HC8EJYF8D7XME1FV). The repository root had an oxfmt configuration.
 
 - **Registration.** Nx took the `versionActions` that the plugin's `createNodes` gave each project: it loaded the module once, constructed its class for every project configured for release and called `init` on each.
 - **Order of calls.** `nx release version 0.2.0 --projects a`, with the three crates in one independent group, called `init` for every configured project; `readDependencies` for every configured project, `c` too, which the run did not version; `readCurrentVersionFromSourceManifest` for the projects of the run; `readCurrentVersionOfDependency` for the dependents that `readDependencies` gave; `validate` for each project of the run; `calculateNewVersion` and `updateProjectVersion` for `a` and then for `b`; `updateProjectDependencies` for `a`, and for `b` with `{ "a": "0.2.0" }`; and last `afterAllProjectsVersioned`.
@@ -2532,21 +3217,26 @@ A run, on 14 November 2026, of `nx` 24.0.6, the version this repository installs
 - **Hooks for what Nx decides across groups.** Nx bumps a fixed group without a bump of its own through `bumpVersionForProject` with the reason `DEPENDENCY_ACROSS_GROUPS_WAS_BUMPED` for each of its projects with such an edge (line 262), which calls the project's `calculateNewVersion` with that reason and then its `updateProjectVersion` (lines 584 to 596). It judges whether a group was bumped by the first of its projects in the run (`getFixedReleaseGroupBumpType`, lines 647 to 664). It calls `updateProjectDependencies` for no project before it has decided every version of the run: `updateDependenciesForProject` defers each call until `finalizeAllVersionDecisions`, which runs after the last group and then makes the deferred calls (lines 138, 486 to 495 and 533 to 545); every project whose version a run writes gets one.
 - **Failures.** A throw in `validate`, in `updateProjectVersion` or in `updateProjectDependencies` made the command exit with 1 and left every file as it was, without a commit or tag: Nx keeps the changes in its tree and writes them once every group is processed (`version.js`, lines 155 to 189). A throw in `afterAllProjectsVersioned` exited with 1 after the manifests were written, and left them changed and unstaged, without a commit or tag. Nx replaces an error that `readCurrentVersionFromSourceManifest` throws with its own message, "The project … does not have a Cargo.toml file available in …", and an error or `null` from `readCurrentVersionFromRegistry` with "Unable to resolve the current version from the registry. Please ensure that the package exists in the registry …", or with the version on disk where `fallbackCurrentVersionResolver` is `disk` (`version/resolve-current-version.js`, lines 34 to 54 and 57 to 122).
 - **After the writes.** `afterAllProjectsVersioned` ran once, after the new versions were on disk and before the commit, and returned files that Nx would stage. With `release.version.git` set to `{ "commit": true, "tag": true }`, Nx then committed and tagged `a@0.2.0` and `b@0.1.1`. Under `nx release 0.2.0 --projects a --skip-publish --first-release`, with `release.git` set to the same, it ran before Nx staged, committed and tagged. With `--dry-run` it ran with `dryRun: true`, and Nx wrote nothing.
-- **Root `release.git`.** With `release.git` in `nx.json`, `nx release version` stopped with exit code 1 before it read any version: "The "release.git" property in nx.json may not be used with the "nx release version" subcommand or programmatic API. Instead, configure git options for subcommands directly with "release.version.git" and "release.changelog.git"." With `--git-commit --git-tag --stage-changes` it ran, committed and tagged: the check passes only when all three are given (`version.js`, lines 66 to 80). `nx release` refuses `release.version.git` in turn ([[EVD-NX-24-RELEASE]]).
+- **Root `release.git`.** With `release.git` in `nx.json`, `nx release version` stopped with exit code 1 before it read any version: "The "release.git" property in nx.json may not be used with the "nx release version" subcommand or programmatic API. Instead, configure git options for subcommands directly with "release.version.git" and "release.changelog.git"." With `--git-commit --git-tag --stage-changes` it ran, committed and tagged: the check passes only when all three are given (`version.js`, lines 66 to 80). `nx release` refuses `release.version.git` in turn ([EVD-NX-24-RELEASE](#01M7DBRA91S2P3MB401BJTKKH1)).
 - **Formatting.** Nx formats the files that a run changed with the repository's formatter, here oxfmt, which formats TOML, apart from the manifests in the `manifestsToUpdate` of version actions that set `excludeManifestsFromFormatting` (`version.js`, lines 180 to 187). An edit to `rust/Cargo.toml`, which no `manifestsToUpdate` held, was formatted back, while after the module had added that path to its `manifestsToUpdate` in `init` the edit stayed byte for byte. Nx reads `manifestsToUpdate` only there and in the default `validate`, which checks that each file exists.
-- **Symbolic links.** Rerun on the same day in the tests of groups 3 and 4 of [[VER-RELEASE]], on copies of `release-crates` in which `normal-user`'s `Cargo.toml` and `rust/.cargo/config.toml` were symbolic links to files in another folder of the repository, and in which `tools/Cargo.lock` was one: with the version actions writing through the links' paths and `afterAllProjectsVersioned` returning the lockfile's, Nx wrote the new versions into the files that the links lead to and staged and committed the links' paths, which git saw unchanged, so the commit left out the three changed files and the tree stayed dirty. Nx stages the paths that its tree changed and those that `afterAllProjectsVersioned` returns, as they are (`version.js`, lines 250 to 252), and leaves a file out of formatting only by the path in `manifestsToUpdate`: oxfmt reformatted the linked manifest where `manifestsToUpdate` named it by the link. Nx's tree answers `null` from `read` for every file that it cannot read, a missing one and one without read permission alike (`generators/tree.js`, lines 26 to 44).
+- **Symbolic links.** Rerun on the same day in the tests of groups 3 and 4 of [VER-RELEASE](verification.mara.md#01M7DBRA91BFN6ZT26YC6HPMGD), on copies of `release-crates` in which `normal-user`'s `Cargo.toml` and `rust/.cargo/config.toml` were symbolic links to files in another folder of the repository, and in which `tools/Cargo.lock` was one: with the version actions writing through the links' paths and `afterAllProjectsVersioned` returning the lockfile's, Nx wrote the new versions into the files that the links lead to and staged and committed the links' paths, which git saw unchanged, so the commit left out the three changed files and the tree stayed dirty. Nx stages the paths that its tree changed and those that `afterAllProjectsVersioned` returns, as they are (`version.js`, lines 250 to 252), and leaves a file out of formatting only by the path in `manifestsToUpdate`: oxfmt reformatted the linked manifest where `manifestsToUpdate` named it by the link. Nx's tree answers `null` from `read` for every file that it cannot read, a missing one and one without read permission alike (`generators/tree.js`, lines 26 to 44).
 
-This answers [[RISK-NX-RELEASE]] for versioning. Whether Nx hands the `nx-release-publish` tasks of one group to one batch under `nx release publish` was run later ([[EVD-NX-24-PUBLISH-BATCHES]]).
-:::
+This answers [RISK-NX-RELEASE](#01M7DBRA9111XN8TP1XDGJHS4C) for versioning. Whether Nx hands the `nx-release-publish` tasks of one group to one batch under `nx release publish` was run later ([EVD-NX-24-PUBLISH-BATCHES](#01M7FXG9X7C5B5336Q1GQW1KEK)).
 
-:::mara evidence EVD-NX-24-BATCHES
-:mid: 01M7DA96ZTW4EQHXFWV0VTGNEA
-:title: What Nx 24.0.6 does with the tasks, results, terminal output and cache entries of a batch
-:status: accepted
-:supports: ADR-BATCH-EXECUTOR
-:supports: RISK-BATCH-BEHAVIOUR
-:supports: RISK-TERMINAL-ENVIRONMENT-MACOS
-:supports: ADR-CACHED-FAILURES
+---
+
+<a id="01M7DA96ZTW4EQHXFWV0VTGNEA"></a>
+
+### What Nx 24.0.6 does with the tasks, results, terminal output and cache entries of a batch
+
+| Type     | Evidence                                                       |
+| -------- | -------------------------------------------------------------- |
+| ID       | EVD-NX-24-BATCHES                                              |
+| Status   | Accepted                                                       |
+| Supports | [ADR-BATCH-EXECUTOR](#01M78FHG7F9MD0KQ68Y5CC4HK5)              |
+| Supports | [RISK-BATCH-BEHAVIOUR](#01M78FHG7FARJNEMM2EFX7XFY9)            |
+| Supports | [RISK-TERMINAL-ENVIRONMENT-MACOS](#01M7F8NEP74P35FFBKMAVR6SXB) |
+| Supports | [ADR-CACHED-FAILURES](#01M7DCSFF6ECEJBD0RE8ZDQRF9)             |
 
 Experiments on 14 November 2026 with `nx` 24.0.6, the version this repository installs, Node.js 26.12.0, git 2.56.0 and cargo 1.100.0 on Linux x86-64 with 32 cores, and a reading of that package (paths under `dist/src/`). A throwaway Nx workspace outside the repository held four projects, `a`, `b`, `c` and `d`, where `b` depends on `a` and `d` on `b`, and a local executor `probe:t` with an `implementation`, a `batchImplementation` and `preferBatch: true`, beside `probe:u`, the same without `preferBatch`. Its target `bt` was cached, with the project's `src` folder and `^` over it as inputs, the project's `out` folder as output and `dependsOn: ["^bt"]`. The batch implementation logged what it received, wrote `out/result.txt` for each task and returned for each task `{ success, terminalOutput, startTime, endTime }`, either as one object keyed by task id or from an async generator that yielded `{ task, result }` as each task finished; variables made it fail a task, leave one out, throw, call `process.exit`, report another status or put a warning line at the top of each `terminalOutput`. A local plugin with only the `preTasksExecution` and `postTasksExecution` hooks set a variable and logged the results that it got. Every command ran with `NX_USE_LOCAL=true` and a private `NX_CACHE_DIRECTORY`, without `CI`, `GITHUB_ACTIONS`, `NX_CACHE_FAILURES` and the variables by which Nx detects an AI agent, and with `NX_DAEMON=false`, where a point does not say otherwise. The commands were `nx run-many -t bt`, with the options that each point names, `nx run b:bt`, `nx run c:bt` and `nx affected -t bt --base=main --head=HEAD`.
 
@@ -2556,9 +3246,9 @@ Experiments on 14 November 2026 with `nx` 24.0.6, the version this repository in
 - **Tasks left out.** A task that the batch did not report stayed incomplete. Nx stored the three others and started a new batch process for that task alone, and another for as long as it was left out, three times in a row in the experiment; the loop has no limit (`task-orchestrator.js`, lines 708 to 728). `d:bt` had succeeded and been stored before `b:bt`, on which it depends, ran. Read and run again on 20 November 2026 (nxr-k63csj): Nx runs a batch in waves (`applyFromCacheOrRunBatch`, `task-orchestrator.js`, lines 708 to 738), whose comment names tasks "left out by the executor". Each wave hashes the remaining tasks that have no hash yet (`hashBatchTasks`, line 697, and `hasher/hash-task.js`, line 131) and looks up level by level those whose hash is not already a known miss (`fetchCacheHits`, lines 506 to 523, and `cacheMissedHashes`, lines 153 to 158), so that a task left out keeps the hash of the first wave; Nx does not look a known miss up again, and a task left out that it had not looked up before is first looked up in a later wave, as `pc` in the three-wave fixture, which Nx first asked the cache for after it had stored `pb`; a task whose inputs read other tasks' outputs and that runs behind a miss is hashed again only once a batch process has reported it (lines 663 to 667 and 763 to 776). It runs the tasks that it does not restore in one new batch process, stores the results that the process reported and schedules what they unblock (`postRunSteps`, lines 1834 to 1874), and removes the completed tasks; the waves go on while tasks remain and the run has neither bailed nor been stopped. Continuous tasks start in a loop of their own (`executeContinuousTaskLoop`, line 361), which the waves do not hold up. Nx gives the terminal UI the batch's status once, after the last wave, and registers a task against its check for recursive invocations once per `nx` process (`detectTaskInvocationLoop`, lines 445 to 479), so that a task that comes back in a later wave is not taken for a loop. With the plugin compiled from that issue's branch and cargo 1.100.0, in copies of the `workspace-tests` fixture with the binary crates `pa` and `pb`, whose builds differ in environment through `pb`'s `.env`, so that the plugin left `pb`'s whole-workspace group unreported: in the styles `static`, `stream`, `stream-without-prefixes` and `static` with `GITHUB_ACTIONS=true`, and with `dynamic` in a pseudo-terminal through util-linux's `script` without a size, where Nx does not start its terminal UI, the run passed, cargo built the workspace twice, and restoring each crate's build alone gave the executable that its own command had built; with `--skip-nx-cache` it passed and stored nothing. Under the terminal UI, which stayed open for want of `TERM` (below), both tasks showed as done after two builds, and both entries were right. A crate `pc` that depends on `pb`, whose `build` a target default gave `^build`, was left out of the first and second batch processes and ran in a third, and each of the three entries was right. A JS task that depended on both builds ran after the second, and in `nx run-many -t build test` every cargo command of the `test` batch came after both builds. With a compile error in `pa`, `pa:build` failed, `pb`'s group ran in the following process and was stored, and the run exited with status 1; with `--nx-bail`, Nx started no following process, listed `pb:build` under "Tasks not run because their dependencies failed, --nx-bail=true, or their batch ended before reaching them", stored nothing for it and exited with status 1. In the static styles, Nx announced a following process of one task by that task's command, `> nx run pb:build`, before the task's own header. After each run, `pa`'s executable in the artifact directory was the one that `pb`'s build of the whole workspace had linked last, with the flag, while its entry held its own. `script` gives its terminal no size, with which Nx does not start the terminal UI that `--tui` asks for ("Nx Terminal UI was not enabled as it is not supported in this environment", `tasks-runner/is-tui-enabled.js`, lines 27 to 38), and with `NX_TUI_SKIP_CAPABILITY_CHECK=true` its pseudo-terminal panicked before any task ran; given 160 columns and 48 rows with `stty`, the terminal UI ran, and `dynamic` became it, and showed every task done, but did not exit with `--tui-auto-exit=true`, with a task left out or without one, until `timeout` ended it. Run again on 21 November 2026 (nxr-h411yj): those runs had no `TERM`, as the agent's shell that started them had none. In a minimal workspace of two `nx:run-commands` tasks and a terminal of 120 by 35, `nx run-many --tui --tui-auto-exit=true` showed both tasks done and stayed open until `timeout` ended it, after 25 seconds, with `TERM` unset and with `TERM=dumb`; with `TERM=xterm` or `xterm-256color` it closed by itself and exited with status 0 about 2.4 seconds after it started, with `--tui-auto-exit=true`, with a bare `--tui-auto-exit` and with `--output-style=dynamic`, and without `--tui-auto-exit` 3 seconds later, the default countdown of `tui.autoExit` (`schemas/nx-schema.json`). Where in Nx's native terminal UI `TERM` decides this was not read. With `TERM=xterm-256color` and that size, the plugin compiled from `main` ran the builds of `pa` and `pb`, two groups of one batch, under the terminal UI, which closed by itself; cargo built the workspace twice and each restored crate printed what its own command built. A batch that leaves a task out, which the plugin no longer makes (nxr-yfh7zh), was not run again. A bare `--tui-auto-exit` sets a countdown of 0 seconds, not `true` (`command-line/yargs-utils/shared-options.js`, lines 411 to 423). A review of nxr-k63csj on 20 November 2026 ran, with the same Nx and cargo, what these runs left out. A continuous `watch` target that depends on `pa:build`, run through a consumer beside both builds with `--parallel=3`, started between the wave of `pa` and that of `pb`, while discrete dependents waited through both waves. A cached `pack:pack` that depends only on `pa:build`, with the inputs `default` and `^default`, and writes `dist/pa.txt` from the output of `rust/target/debug/pa`, ran in `nx run-many -t build pack -p pa pb pack --parallel=3` after the wave of `pb` had linked `pa` again, and stored `flag`; after `dist` was deleted, `nx run pack:pack` restored a `dist/pa.txt` with `flag` beside a restored `pa` that prints `plain` (nxr-yfh7zh). Each build's own entry held its own files byte for byte, also through a remote cache that stored with a delay. With `{ "dependentTasksOutputFiles": "**/pb" }` added to the inputs of `build` in the fixture of `pa`, `pb` and `pc`, a repeated command restored `pa` and `pb` and ran cargo again for `pc`, whose first-wave key the next command computed differently: a miss. A cache trace of the cold run shows Nx asking for and storing `pc` under the hash it computed before `pb` ran; whether that key can match a result built from another output of `pb` was not run (nxr-f04xen).
 - **A throw or an exit.** When the batch implementation threw while it ran `d:bt`, Nx printed the error's message; when it called `process.exit(7)` there, Nx printed nothing about it. Either way it marked all four tasks failed, `a:bt` and `b:bt` too, which the generator had already reported successful and whose output Nx had already printed, and it stored nothing (`run-batch.js`, lines 62 to 69, and `task-orchestrator.js`, lines 845 to 858), unless `NX_CACHE_FAILURES` was `true` (next point).
 - **`NX_CACHE_FAILURES`.** With `NX_CACHE_FAILURES=true`, Nx stores failed tasks too (`task-orchestrator.js`, lines 2097 to 2099). A batch that threw stored a failure for each of its four tasks, and the next run printed the four stored failures, with the message `"probe:t" exited unexpectedly with code: 1`, and exited with status 1 without starting a batch. A task that the batch reported failed was stored and replayed in the same way, beside the three that succeeded. Outside batches, the plugin as it is on `main`, compiled from `nx-rust/src` at 3445ae7, which runs one cargo command per task, does the same under this setting. A failing integration test of `a` was stored, and the next run printed the same panic line, thread id included, while `target/`, deleted in between, stayed absent. A cached `build` that the executor failed before cargo ran, because a `CARGO_BUILD_TARGET` in `a/.env` picked a triple that its outputs did not name, left a cache entry, which it did not without the variable, and the next run printed a line that had been added to the stored output.
-- **Restoring.** With every task stored and the source of `b` changed, Nx restored `a:bt` and `c:bt` and printed their stored output before it started the batch, which received only `b:bt` and `d:bt`, without the edge from `b:bt` to `a:bt`. Nx hashes each task of a batch with that task's own environment, and looks each level of the batch's graph up in the cache before it runs what is left (`task-orchestrator.js`, lines 630 to 707). A run with `--batch=false` restored all four tasks that a batch had stored, as [[EVD-NX-24-INPUT-SEMANTICS]] found.
+- **Restoring.** With every task stored and the source of `b` changed, Nx restored `a:bt` and `c:bt` and printed their stored output before it started the batch, which received only `b:bt` and `d:bt`, without the edge from `b:bt` to `a:bt`. Nx hashes each task of a batch with that task's own environment, and looks each level of the batch's graph up in the cache before it runs what is left (`task-orchestrator.js`, lines 630 to 707). A run with `--batch=false` restored all four tasks that a batch had stored, as [EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD) found.
 - **Storing.** Nx stores the results of a batch when the batch process has returned them all, not as each task finishes (`task-orchestrator.js`, lines 739 to 780 and 1834 to 1874). With a generator that reported the four tasks 700 ms apart, the cache folder held no entry while the batch ran, and the four entries were written within 3 ms of its end. The stored terminal output of a task was exactly its result's `terminalOutput`; what the batch process printed itself was in no entry. The stored outputs are the files at the task's declared outputs when the batch ends, whoever wrote them: in a batch where `d:bt` wrote `a`'s `out/result.txt` after `a:bt` had been reported, the entry of `a:bt` held what `d:bt` had written, and a later run restored that into `a`'s folder.
-- **Cargo in one batch.** In a Cargo workspace whose member `a` has a binary and an integration test, depends on a path crate `f` and enables `f`'s feature `extra` as a dev-dependency, `cargo test -p a` replaced the binary `target/debug/a` that `cargo build -p a` had written with one built with `extra`, and `cargo build -p a` wrote the first one back. An executor whose batch implementation ran a `build` group and then a `test` group, `build` declaring `target/debug/a` as its output, made Nx store the binary built with `extra` under the key of `a:build`, and `nx run a:build` restored it after the binary had been deleted. With `--batch=false --parallel=1`, the same two tasks stored and restored the binary built without `extra`. A restored result is no protection either, and that does not depend on batching. With a fresh cache, `nx run a:build`, the deletion of `target/debug/a` and `nx run a:test`, `test` depending on `build`, restored `a:build`, ran only `a:test` in the batch and left on disk the binary built with `extra`; the entry of `a:build` stayed right, for deleting the binary and restoring it again gave the binary built without `extra`. The same sequence with `--batch=false` left the same binary on disk, and so did the plugin as it is on `main`, whose `test` does not depend on `build`, for `nx run a:build`, the deletion and `nx run-many -t build test -p a`, after which its entry for `a:build` also restored the binary built without `extra`. Plain `cargo build -p a` followed by `cargo test -p a` leaves that binary as well: after a command that runs both, the artifact directory held what cargo wrote last, with a batch or without one, in the plugin of that day; since nxr-5hzxra a `test` batch puts back what `build` stored ([[DES-BATCH]], "Files that a test batch puts back").
+- **Cargo in one batch.** In a Cargo workspace whose member `a` has a binary and an integration test, depends on a path crate `f` and enables `f`'s feature `extra` as a dev-dependency, `cargo test -p a` replaced the binary `target/debug/a` that `cargo build -p a` had written with one built with `extra`, and `cargo build -p a` wrote the first one back. An executor whose batch implementation ran a `build` group and then a `test` group, `build` declaring `target/debug/a` as its output, made Nx store the binary built with `extra` under the key of `a:build`, and `nx run a:build` restored it after the binary had been deleted. With `--batch=false --parallel=1`, the same two tasks stored and restored the binary built without `extra`. A restored result is no protection either, and that does not depend on batching. With a fresh cache, `nx run a:build`, the deletion of `target/debug/a` and `nx run a:test`, `test` depending on `build`, restored `a:build`, ran only `a:test` in the batch and left on disk the binary built with `extra`; the entry of `a:build` stayed right, for deleting the binary and restoring it again gave the binary built without `extra`. The same sequence with `--batch=false` left the same binary on disk, and so did the plugin as it is on `main`, whose `test` does not depend on `build`, for `nx run a:build`, the deletion and `nx run-many -t build test -p a`, after which its entry for `a:build` also restored the binary built without `extra`. Plain `cargo build -p a` followed by `cargo test -p a` leaves that binary as well: after a command that runs both, the artifact directory held what cargo wrote last, with a batch or without one, in the plugin of that day; since nxr-5hzxra a `test` batch puts back what `build` stored ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Files that a test batch puts back").
 - **Terminal output.** The batch process's standard output and error are pipes, and Nx writes what arrives on them to the terminal at once in every style that prints task output, apart from GitHub Actions' grouping and the terminal UI (`tasks-runner/forked-process-task-runner.js`, line 43, and `tasks-runner/running-tasks/batch-process.js`, lines 113 to 131). Nx prints a task's own `terminalOutput` while the batch runs only for a result that an async generator streams, as it arrives (`task-orchestrator.js`, lines 795 to 821, and `run-batch.js`, lines 42 to 58). With one object of results, `--output-style=static` showed the batch's own lines and the output of no task, not even of the failed `b:bt`. With a generator, in a run that restored `a:bt` and `c:bt` and ran `b:bt` and `d:bt`, each with a warning line at the top of its `terminalOutput`:
   - `static`, `stream` and `stream-without-prefixes` printed the stored output of `a:bt` and `c:bt` under `[local cache]`, warning line included, then the batch's own lines and, as each task was reported, its block with the warning line first; `stream` put no project prefix on the batch's lines.
   - `static-failures-only`, the style of a run that names none and has no terminal, showed one line for each successful task, restored or run, the full block of a failed one, and the batch's own lines in full.
@@ -2575,9 +3265,9 @@ Experiments on 14 November 2026 with `nx` 24.0.6, the version this repository in
   - Cargo writes to a pipe or a file in a batch, so it shows no colours and no progress bar there; cargo also hides its progress bar wherever `CI` is set, `CI=false` included.
 
 - **Other tasks.** The coordinator awaits a batch before it dispatches anything else (`task-orchestrator.js`, lines 329 to 347). The published reproduction, at commit `90cdbe8`, with its implicit dependencies written `batch-a` in place of `:batch-a`, which Nx 24.0.6 rejects as pointing to no project, ran `nx run-many -t build --skip-nx-cache --parallel=2 --output-style=static` twice. Its batch of `batch-a` and `batch-b` ran for 10 s, and `independent`, which depends on nothing, started 21 ms and 22 ms after the batch ended, within 5 ms of `dependent`, which depends on `batch-a` only and still waited for the whole batch, though the generator had reported `batch-a` 5 s before its end. Nx 24.0.6 has no `batchParallelismCost`, which the reproduction's executor declares. In the workspace above, with each `bt` task depending on an uncached task `lock:lockfile` that took 1 s, beside four tasks `js` of `nx:run-commands` that took 3 s each, `nx run-many -t bt js --parallel=3` started the lockfile task and two `js` tasks together, the batch 65 ms after the lockfile task ended, and the two other `js` tasks 20 ms and 22 ms after the batch ended, 8 s later. The two `js` tasks that had started before the batch ran on beside it, and for the last 6 s of the batch no other task ran.
-- **Environment.** The batch process got the environment of the `nx` command with the repository's root `.env` files, which Nx builds once per command (`task-orchestrator.js`, line 144, and `tasks-runner/task-env.js`, lines 36 to 51), as [[EVD-NX-24-INPUT-SEMANTICS]] found: with `PROBE_VAR` set in `libs/d/.env`, the process of `d:bt` run alone had it, and the batch process had not. A variable that `preTasksExecution` assigned reached the batch process, with and without the daemon, because Nx calls that hook before it creates the orchestrator (`tasks-runner/run-command.js`, lines 355 to 385, and `project-graph/plugins/tasks-execution-hooks.js`, lines 17 to 54). With `--skip-nx-cache`, the batch received every task, those stored before too, its process had `NX_SKIP_NX_CACHE=true`, and Nx stored nothing. The batch process's standard output is a pipe in every style, so cargo started from it sees no terminal.
+- **Environment.** The batch process got the environment of the `nx` command with the repository's root `.env` files, which Nx builds once per command (`task-orchestrator.js`, line 144, and `tasks-runner/task-env.js`, lines 36 to 51), as [EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD) found: with `PROBE_VAR` set in `libs/d/.env`, the process of `d:bt` run alone had it, and the batch process had not. A variable that `preTasksExecution` assigned reached the batch process, with and without the daemon, because Nx calls that hook before it creates the orchestrator (`tasks-runner/run-command.js`, lines 355 to 385, and `project-graph/plugins/tasks-execution-hooks.js`, lines 17 to 54). With `--skip-nx-cache`, the batch received every task, those stored before too, its process had `NX_SKIP_NX_CACHE=true`, and Nx stored nothing. The batch process's standard output is a pipe in every style, so cargo started from it sees no terminal.
 - **Task environment.** Read in that package on 14 November 2026 (nxr-s12cpg), and run with the plugin's batch executor. For a task run on its own, Nx builds the environment in this order. First `getTaskSpecificEnv` (`tasks-runner/task-env.js`): a copy of the `nx` process's environment without each variable whose value the repository's root `.env`, `.local.env` or `.env.local` gives, with the task's dotenv files loaded, those of the project's folder first and then those of the root, each for the target and configuration and then the plain ones. Then `getEnvVariablesForTask`, as `task-orchestrator.js` (lines 1169 to 1171) calls it with the task's hash, its output path in the cache folder and whether its output streams, or, where Nx pipes the task's output, without the last two and with `getForceColorForChild()`: it lays over that `FORCE_COLOR`, which is undefined where Nx writes the output to a file, so that Node leaves it out of the child's environment, `NX_WORKSPACE_ROOT`, `NX_SKIP_NX_CACHE`, `NX_INVOCATION_ANCESTOR_PIDS` with the `nx` process's id appended, with an output path `NX_TERMINAL_OUTPUT_PATH`, `NX_TERMINAL_CAPTURE_STDERR` and `NX_STREAM_OUTPUT`, then `NX_TASK_TARGET_PROJECT`, `NX_TASK_TARGET_TARGET`, `NX_TASK_TARGET_CONFIGURATION`, `NX_TASK_HASH`, `LERNA_PACKAGE_NAME`, `NX_TERMINAL_CAPTURE_STDERR=true` for a target named `test`, and `NX_TUI=false`; it deletes `NX_TERMINAL_OUTPUT_PATH`, `NX_STREAM_OUTPUT` and `NX_PREFIX_OUTPUT` where there is no output path, and always `NX_SET_CLI`, `NX_ORIGINAL_FORCE_COLOR`, `NX_READY_SIGNAL_SOCKET`, `NX_READY_SIGNAL_TASK` and `NX_READY_URL`. The orchestrator then adds `NX_READY_URL` where exactly one continuous task that the task depends on has reported ready at a URL (`getReadyUrlEnv`), the fork adds `NX_FORKED_TASK_EXECUTOR=true` (`forked-process-task-runner.js`), and the task's process sets `NX_CLI_SET=true` (`bin/run-executor.js`). A batch process gets the `nx` process's environment with `FORCE_COLOR` from `getForceColorForChild()`, `NX_WORKSPACE_ROOT`, `NX_SKIP_NX_CACHE` and `NX_INVOCATION_ANCESTOR_PIDS` as a task gets them, without `NX_ORIGINAL_FORCE_COLOR` and the ready-signal variables (`getEnvVariablesForBatchProcess`), with `NX_FORKED_TASK_EXECUTOR=true` and, set by `batch/run-batch.js`, `NX_CLI_SET=true`. Read on 15 November 2026 after a second review, the places that change the environment on the way from the `nx` command to a task, beyond those: the `nx` process itself sets `NX_CLI_SET=true` (`bin/init-local.js`, line 19); turns `FORCE_COLOR=0` into `NX_ORIGINAL_FORCE_COLOR=0` and `NO_COLOR=1` (`bin/nx.js`, lines 7 to 10); sets `NX_DAEMON=false` only for commands that run no task, such as `nx new`, `nx init` and `nx graph` outside a workspace (lines 77 and 123); sets `NX_VERBOSE_LOGGING` to `true` or `false` from `--verbose` in every command (`command-line/yargs-utils/shared-options.js`, line 172, and `command-line/run-many/run-many.js`, line 24), `NX_TUI_AUTO_EXIT` from `--tui-auto-exit` (line 52) and `NX_TUI` from the output style and the terminal UI (line 335, and `tasks-runner/run-command.js`, line 89); sets `NX_STREAM_OUTPUT` and `NX_PREFIX_OUTPUT` for the style `stream`, for `stream-without-prefixes`, for `--batch` and for the terminal UI, and `NX_LOAD_DOT_ENV_FILES=true` (`run-command.js`, lines 669 to 691); sets `NX_ANALYTICS_SESSION_ID` once per command where its analytics are on (`analytics/analytics.js`, line 108); and takes over the variables that a `preTasksExecution` hook sets, with the daemon as without it (`project-graph/plugins/tasks-execution-hooks.js`, line 51). The daemon changes only its own environment (`daemon/client/daemon-environment.js`). Each way of forking a task adds `NX_FORKED_TASK_EXECUTOR=true` after the task's environment, and so does the batch's fork (`forked-process-task-runner.js`, lines 33 to 46, 130 to 139, 169 to 179 and 212 to 222). Nx runs a single task in its native pseudo-terminal where the terminal UI is on, or where the output streams without prefixes, as with `dynamic-legacy` and `stream-without-prefixes` in a terminal (`forkProcess`, lines 92 to 128); the pseudo-terminal starts `tasks-runner/fork.js` with `NX_PSEUDO_IPC_PATH`, `NX_PSEUDO_IPC_FORK_ID` and `NX_PSEUDO_TERMINAL_EXEC_ARGV`, Nx's own `execArgv` joined by `|`, and `fork.js` deletes the first two, and the third only where it is not empty (lines 7 to 16), so that a task in the pseudo-terminal of an `nx` process without `execArgv` gets `NX_PSEUDO_TERMINAL_EXEC_ARGV` empty. In a terminal, Nx 24.0.6 also asks whether to share usage data and waits, unless `nx.json` sets `analytics` to a boolean or Nx detects CI (`utils/analytics-prompt.js`, lines 21 to 38). An integration test and a build script that wrote their whole environment, in the plugin's batch-groups fixture with dotenv files in the crate's folder and at the root, ran through the plugin with these layers rebuilt in the batch: alone and with `--batch`, each in the styles `static`, `stream` and `static` with `--verbose`, and, in a pseudo-terminal through util-linux's `script` with `analytics: false`, `static`, `stream-without-prefixes`, `dynamic-legacy`, `dynamic` with `--tui-auto-exit` and the terminal UI with `--tui --tui-auto-exit`, each without the daemon and with it, chosen in `nx.json`. With only `NX_TASK_HASH`, the output variables and `FORCE_COLOR` left out, all 32 runs gave the same environment apart from `NX_INVOCATION_ANCESTOR_PIDS`, `NX_RUST_COMMAND_ID` and `NX_RUST_NX_COMMAND`, which differ between any two `nx` commands, and three variables: `NX_PSEUDO_TERMINAL_EXEC_ARGV`, empty, in the four single tasks in Nx's pseudo-terminal, `NX_TUI_AUTO_EXIT=0` where the command had `--tui-auto-exit`, alone and batched, and `NX_VERBOSE_LOGGING=true` where it had `--verbose`, against `false`. No run differed in `TERM`, `COLUMNS`, `LINES` or `CI`, by the daemon, or in the dotenv values. With those three, the pseudo-terminal's other two and `NX_ANALYTICS_SESSION_ID` left out as well, the same ways of running give the same environment apart from the three per-command variables. The runs of `dynamic` and of the terminal UI had a terminal without a size, in which Nx 24.0.6 does not start its terminal UI ("Tasks left out"); run again on 21 November 2026 (nxr-h411yj) with those two in a terminal of 120 by 35, where Nx started its terminal UI, every way with `TERM=xterm-256color`, and the plugin leaving out only `NX_TASK_HASH`, the output variables, `FORCE_COLOR` and the four variables that the pseudo-terminal gives back, the 22 runs of the plugin's test, alone and with `--batch`, without the daemon and, for `static`, `stream-without-prefixes` and the terminal UI, with it, differed in the same three variables and nothing else: `NX_PSEUDO_TERMINAL_EXEC_ARGV`, empty, in the six single tasks in Nx's pseudo-terminal, `NX_TUI_AUTO_EXIT=0` where the command had `--tui-auto-exit`, and `NX_VERBOSE_LOGGING=true` with `--verbose`. Under the terminal UI no other variable reached the test or the build script, and no run differed in `COLUMNS` or `LINES`. With only `getTaskSpecificEnv`, as the batch first rebuilt it, the batched test lacked `NX_TASK_TARGET_PROJECT` and the other per-task variables. Read and run on 15 November 2026 after a third review: Nx's native pseudo-terminal builds a task's process with portable_pty's `CommandBuilder` from the `nx` process's own environment and sets each variable of the environment that Nx built for the task over it (`native/pseudo_terminal`). A variable that `getEnvVariablesForTask` deletes or leaves without a value therefore comes back with the `nx` process's value for a task in a terminal: with `NX_SET_CLI` set, `FORCE_COLOR=0` and `NX_TASK_TARGET_CONFIGURATION=outer` in the command's environment, a task alone in `stream-without-prefixes` or the terminal UI got `NX_SET_CLI`, `NX_ORIGINAL_FORCE_COLOR=0` and `NX_TASK_TARGET_CONFIGURATION=outer`, which the same task alone in `static` and in a batch lacked; `NX_SKIP_NX_CACHE`, which the layer leaves without a value where the run does not skip the cache, comes back the same way. With the root `.env` holding `NX_FORKED_TASK_EXECUTOR=true` and `NX_CLI_SET=true` and the task's `.env.test` holding both as `false`, the task alone got `true` for both, which the fork and `bin/run-executor.js` set after the dotenv layer, while the batch, whose process has both from its start, got `false`: `getTaskSpecificEnv` removed the root values, which equal the process's, and the task's file gave its own. Whether Nx loads a task's files at all comes from the `nx` process's environment: `nx run`, `run-many`, `affected` and `release publish` load them unless `NX_LOAD_DOT_ENV_FILES` is `false` (`command-line/run/run-one.js`, line 22, and the others), after the `nx` process has loaded the root `.local.env`, `.env.local` and `.env`, the first that defines a variable giving its value, without changing a variable that the command sets (`utils/dotenv.js`, `loadRootEnvFiles`, called from `bin/workspace-env.js` when the process starts); the run then sets the variable to `true` (`run-command.js`, line 690), and `getTaskSpecificEnv` reads it when it builds the task's layer. Without loading, `getTaskSpecificEnv` still removes the root files' values from the task (lines 68 to 72) and loads none back. `nxArgs.skipNxCache` is also on where `NX_SKIP_NX_CACHE` or `NX_DISABLE_NX_CACHE` is `true` (`utils/command-line-utils.js`, lines 117 to 121).
-- **Dotenv expansion.** Read on 15 November 2026 (nxr-s12cpg) in dotenv 16.4.7 and dotenv-expand 12.0.3, the versions that Nx 24.0.6 pins exactly, and checked against them in the plugin's tests. `getTaskSpecificEnv` copies the environment of the process it runs in, deletes each variable whose value equals the one that the root `.env`, `.local.env` or `.env.local` gives, parsed on its own with only its own variables in scope, and loads the task's files with `loadAndExpandDotEnvFile`. dotenv's `config` parses the files in order and keeps for each variable the first file's value, sets in the environment only variables that it lacks, also where the environment's value is empty, and reads a `.vault` file instead where `DOTENV_KEY` is set and a vault lies beside the last file that exists, or beside a root file for the deletion (`lib/main.js`, `config`, `_vaultPath` and `populate`). dotenv-expand then takes, for each variable of the files, the environment's value where that is not empty and differs from the file's, and else expands the file's value (`lib/main.js`, `expand`): it finds the leftmost `${…}` or `$NAME` not preceded by a backslash, takes the name before the first of `:+`, `+`, `:-` and `-`, splitting and joining with `null` where there is none, which JavaScript turns into the separator `null`, puts in the environment's value, which wins over earlier variables of the files, or the default, with `String.prototype.replace`, and searches again from the start (`expandValue`). It therefore expands what it put in: a value of the command's environment such as `${FORCE_COLOR}` that a file refers to, or the raw value of another file's variable, brings references of its own, and a reference can be assembled from a substituted value and the file's text, as `${FORCE_${PART}}` with `PART=COLOR` or `$${NAME}` with `NAME=FORCE_COLOR` look up `FORCE_COLOR`. A rule that looks only for the names written in a task's files misses these. Within one call, each name has one value in dotenv-expand's environment, since `expand` writes its results only after it has expanded every variable. dotenv-expand has no limit, and does not end in two ways: where the substituted value refers to the variable that it came from with text around the reference, as `A=x${A}` read through `B=${A}z`, no result ever equals one seen before and the value grows with every step; where values refer to each other without text, as `x${A}` with `A=${B}` and `B=${A}`, it comes back to a result that it had and repeats the same steps without growing. Only a result that holds a reference enters its set of earlier results, so only a value with `$` is ever blocked. On 15 November 2026 (nxr-s12cpg, fourth review), cases of the seeded test of random files that the check stopped were replayed through Nx's `loadAndExpandDotEnvFile` in worker threads, with 1.5 seconds and 256 MB each. That a name is put in again inside the text of its own earlier insertion is necessary for an expansion that grows without end, but not sufficient: of 316 cases that a bound on the first such repetition stopped, 250 ran out of memory, 50 out of time and 16 ended with short values, through a value equal to an earlier result or the stop on a result equal to the variable's value. Of 1,012 cases that the former `dotenv-expand` 12.0.3 follower's bounds stopped (a cycle, more than 64 nestings, 131,072 characters or 1,000,000 steps; replaced by the static check of [[DES-BATCH]], "Dotenv files", see [[EVD-DOTENV-STATIC-CHECK]]), sampled from the 2,500 default seeds and from 10,000 others, none ended: 837 ran out of memory and 175 out of time. In 12,500 generated cases, the expansions that ended nested a name at most five times. One regular expression for each earlier result that holds a placeholder exhausted the heap on 373 references to a command variable whose value refers to two variables of the files. With `DOTENV_KEY` set, dotenv reads the root files' vaults where Nx removes their values from a task, `.env.vault` beside a root `.env` that does not exist included, whether or not Nx loads the task's files, and writes to the console that it reads a vault, or a warning where it finds none. A batch process lacks `NX_ORIGINAL_FORCE_COLOR`: a root `.env.local` with `NX_ORIGINAL_FORCE_COLOR=${CMD}z`, with `FORCE_COLOR=0` and `CMD=x${CMD}` in the command, made dotenv-expand run out of heap in the batch, while the `nx` process, which has `NX_ORIGINAL_FORCE_COLOR=0` from `FORCE_COLOR=0`, takes its own value and does not expand the file's. That a file defines a variable that can differ between the processes changes nothing that cargo sees only where each such variable is left out of cargo's environment, set by Nx after the files for every task, or set after them in a batch as Nx sets it after them for a task run on its own: the first reading of 15 November 2026 overlooked `NX_FORKED_TASK_EXECUTOR` and `NX_CLI_SET`, which a batch process has before the batch lays the task's files over it, and which a third review found ("Task environment").
+- **Dotenv expansion.** Read on 15 November 2026 (nxr-s12cpg) in dotenv 16.4.7 and dotenv-expand 12.0.3, the versions that Nx 24.0.6 pins exactly, and checked against them in the plugin's tests. `getTaskSpecificEnv` copies the environment of the process it runs in, deletes each variable whose value equals the one that the root `.env`, `.local.env` or `.env.local` gives, parsed on its own with only its own variables in scope, and loads the task's files with `loadAndExpandDotEnvFile`. dotenv's `config` parses the files in order and keeps for each variable the first file's value, sets in the environment only variables that it lacks, also where the environment's value is empty, and reads a `.vault` file instead where `DOTENV_KEY` is set and a vault lies beside the last file that exists, or beside a root file for the deletion (`lib/main.js`, `config`, `_vaultPath` and `populate`). dotenv-expand then takes, for each variable of the files, the environment's value where that is not empty and differs from the file's, and else expands the file's value (`lib/main.js`, `expand`): it finds the leftmost `${…}` or `$NAME` not preceded by a backslash, takes the name before the first of `:+`, `+`, `:-` and `-`, splitting and joining with `null` where there is none, which JavaScript turns into the separator `null`, puts in the environment's value, which wins over earlier variables of the files, or the default, with `String.prototype.replace`, and searches again from the start (`expandValue`). It therefore expands what it put in: a value of the command's environment such as `${FORCE_COLOR}` that a file refers to, or the raw value of another file's variable, brings references of its own, and a reference can be assembled from a substituted value and the file's text, as `${FORCE_${PART}}` with `PART=COLOR` or `$${NAME}` with `NAME=FORCE_COLOR` look up `FORCE_COLOR`. A rule that looks only for the names written in a task's files misses these. Within one call, each name has one value in dotenv-expand's environment, since `expand` writes its results only after it has expanded every variable. dotenv-expand has no limit, and does not end in two ways: where the substituted value refers to the variable that it came from with text around the reference, as `A=x${A}` read through `B=${A}z`, no result ever equals one seen before and the value grows with every step; where values refer to each other without text, as `x${A}` with `A=${B}` and `B=${A}`, it comes back to a result that it had and repeats the same steps without growing. Only a result that holds a reference enters its set of earlier results, so only a value with `$` is ever blocked. On 15 November 2026 (nxr-s12cpg, fourth review), cases of the seeded test of random files that the check stopped were replayed through Nx's `loadAndExpandDotEnvFile` in worker threads, with 1.5 seconds and 256 MB each. That a name is put in again inside the text of its own earlier insertion is necessary for an expansion that grows without end, but not sufficient: of 316 cases that a bound on the first such repetition stopped, 250 ran out of memory, 50 out of time and 16 ended with short values, through a value equal to an earlier result or the stop on a result equal to the variable's value. Of 1,012 cases that the former `dotenv-expand` 12.0.3 follower's bounds stopped (a cycle, more than 64 nestings, 131,072 characters or 1,000,000 steps; replaced by the static check of [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Dotenv files", see [EVD-DOTENV-STATIC-CHECK](#01M7WZS4FNFKPT2TQQZ8T2KA3D)), sampled from the 2,500 default seeds and from 10,000 others, none ended: 837 ran out of memory and 175 out of time. In 12,500 generated cases, the expansions that ended nested a name at most five times. One regular expression for each earlier result that holds a placeholder exhausted the heap on 373 references to a command variable whose value refers to two variables of the files. With `DOTENV_KEY` set, dotenv reads the root files' vaults where Nx removes their values from a task, `.env.vault` beside a root `.env` that does not exist included, whether or not Nx loads the task's files, and writes to the console that it reads a vault, or a warning where it finds none. A batch process lacks `NX_ORIGINAL_FORCE_COLOR`: a root `.env.local` with `NX_ORIGINAL_FORCE_COLOR=${CMD}z`, with `FORCE_COLOR=0` and `CMD=x${CMD}` in the command, made dotenv-expand run out of heap in the batch, while the `nx` process, which has `NX_ORIGINAL_FORCE_COLOR=0` from `FORCE_COLOR=0`, takes its own value and does not expand the file's. That a file defines a variable that can differ between the processes changes nothing that cargo sees only where each such variable is left out of cargo's environment, set by Nx after the files for every task, or set after them in a batch as Nx sets it after them for a task run on its own: the first reading of 15 November 2026 overlooked `NX_FORKED_TASK_EXECUTOR` and `NX_CLI_SET`, which a batch process has before the batch lays the task's files over it, and which a third review found ("Task environment").
 - **Hooks.** Each command called `preTasksExecution` once before its first task and `postTasksExecution` once after its last, with the status and code of every task, batched or not, apart from a task that a batch reported as `skipped`.
 - **Daemon and affected.** With the daemon started and `NX_DAEMON=true`, the batches, the tasks they received and the restoring were the same; a restored task whose outputs were already on disk was reported as "existing outputs match the cache, left as is". After a commit that changed `b`, `nx affected -t bt --base=main --head=HEAD` ran `a:bt`, `b:bt` and `d:bt` in one batch.
 - **Dependents of a failed task.** Read, not run, on 14 November 2026 after an independent review: when a task completes as failed, skipped or stopped, Nx marks every task that depends on it, and is not already running, as skipped (`complete`, `task-orchestrator.js`, lines 2039 to 2058), and the results it stores leave out every skipped task before `shouldCacheTaskResult` decides on `NX_CACHE_FAILURES` (`resultsToCache`, lines 1880 to 1898, and lines 2097 to 2100). A skipped task is therefore never stored, also with `NX_CACHE_FAILURES=true`, and its key gets no entry.
@@ -2586,14 +3276,19 @@ Experiments on 14 November 2026 with `nx` 24.0.6, the version this repository in
   - Nx gives a task run on its own `NX_READY_URL` only through an edge with `waitFor: "ready"` to a continuous task whose `readyWhen` reports ready by `signal`, the only check that reports a URL, and only where exactly one such task reported one (`getReadyUrlEnv`, `task-orchestrator.js`, lines 1638 to 1643, and `mayReportReadyUrl`, `readiness/ready-when.js`): the test saw `http://127.0.0.1:<port>/` with the port that the server chose, and `<unset>` through an edge to the plain `serve`, which has no check. Checks by `url`, `port`, `command` or `logMatches` report no URL. The batch process gets the environment that Nx builds once per command and never a task's URL (`task-orchestrator.js`, line 144, and `task-env.js`, lines 36 to 50), and in the batch the test saw `<unset>` where the task alone had the URL.
   - A plugin cannot keep such a task out of a batch within Nx 24: `preferBatch` belongs to the whole executor, Nx rejects `parallelism: false` on a task with a continuous dependency ("The following tasks do not support parallelism but depend on continuous tasks"), and a task that the batch does not report runs again in another batch process. `--batch=false` turns batching off for one command, and `NX_BATCH_MODE=false` in the root `.env` for every command of the repository, the batches of other plugins included: with it, both tests ran alone and the test saw its URL.
 
-These results confirm on Nx 24.0.6 what [[ADR-BATCH-EXECUTOR]] relies on: each task of a batch has its own key, its own restore, its own stored result and its own terminal output, and a restored task takes no part in the batch. They confirm the waiting that [[RISK-BATCH-BEHAVIOUR]] records. They contradict an assumption of [[DES-BATCH]], that the groups of a batch can run one after another while Nx stores each task's result as it would for the task run alone: Nx stores the declared outputs of every task only when the whole batch has ended, so a later group that writes them changes what Nx stores under an earlier task's key, as `cargo test` does with the executables that `build` declares. That a later `cargo test` replaces on disk the executable that a restored `build` put back is not a matter of batching: it happens without a batch too. The experiments of 14 November 2026 used stand-in executors and a small Cargo workspace on one machine, and the plugin compiled from `main` only for the checks outside batches; the later runs dated in the points above ran the plugin's own batch executor, compiled from the branch or `main` that each names, such as the batches of the builds of `pa` and `pb` and the environment comparison under the terminal UI on 21 November 2026 (nxr-h411yj); other Nx versions and macOS were not tried, and the terminal UI was read from a captured screen only.
-:::
+These results confirm on Nx 24.0.6 what [ADR-BATCH-EXECUTOR](#01M78FHG7F9MD0KQ68Y5CC4HK5) relies on: each task of a batch has its own key, its own restore, its own stored result and its own terminal output, and a restored task takes no part in the batch. They confirm the waiting that [RISK-BATCH-BEHAVIOUR](#01M78FHG7FARJNEMM2EFX7XFY9) records. They contradict an assumption of [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), that the groups of a batch can run one after another while Nx stores each task's result as it would for the task run alone: Nx stores the declared outputs of every task only when the whole batch has ended, so a later group that writes them changes what Nx stores under an earlier task's key, as `cargo test` does with the executables that `build` declares. That a later `cargo test` replaces on disk the executable that a restored `build` put back is not a matter of batching: it happens without a batch too. The experiments of 14 November 2026 used stand-in executors and a small Cargo workspace on one machine, and the plugin compiled from `main` only for the checks outside batches; the later runs dated in the points above ran the plugin's own batch executor, compiled from the branch or `main` that each names, such as the batches of the builds of `pa` and `pb` and the environment comparison under the terminal UI on 21 November 2026 (nxr-h411yj); other Nx versions and macOS were not tried, and the terminal UI was read from a captured screen only.
 
-:::mara evidence EVD-HAKARI-UNIFICATION
-:mid: 01M7D9EQW8FQW9BAEZSHQ37116
-:title: What cargo-hakari unifies between the crates of a workspace, and what still depends on the crates built together
-:status: accepted
-:supports: RISK-HAKARI-GAPS
+---
+
+<a id="01M7D9EQW8FQW9BAEZSHQ37116"></a>
+
+### What cargo-hakari unifies between the crates of a workspace, and what still depends on the crates built together
+
+| Type     | Evidence                                        |
+| -------- | ----------------------------------------------- |
+| ID       | EVD-HAKARI-UNIFICATION                          |
+| Status   | Accepted                                        |
+| Supports | [RISK-HAKARI-GAPS](#01M78FHG7F2NTRC9DZ1NMXWY7V) |
 
 Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0, the central case repeated with cargo 1.91.0, and cargo-hakari 0.9.39 (library `hakari` 0.18.0), installed for the experiment into a folder of its own, in throwaway folders outside this repository. The workspace, with resolver 2, had the members `a`, `b`, `c` and `d`. Three path crates outside it stood in for third-party crates: `x`, `y`, and `z`, which depends on the member `c` with its feature `fz`. `c` has the default feature `cdef` and the features `fa`, `fb`, which enables `x/fb`, and `fz`. `a` depends on `c` with `default-features = false` and `fa`, on `x` with `fa`, on `smallvec = "=1.15.1"` from crates.io with `write`, and on `y` with `h1` as a build dependency. `b` depends on `c` with `fb`, on `smallvec` with `union`, on `y` with `h2` as a build dependency, on `x` with `fdev` as a dev-dependency and on `x` with `funix` under `[target.'cfg(unix)'.dependencies]`. `d` depends on `z`. `cargo hakari init`, `generate` and `manage-deps` set up the hack crate with the configuration that `init` writes, whose `platforms` list is empty. Each selection was built with `cargo build -v` in an empty target directory, whose rustc lines show the features of each crate, and the binaries `a`, `b` and `d` printed the features that their crates were compiled with.
 
@@ -2612,7 +3307,7 @@ Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0, the central 
 - **What cargo-hakari's commands report.** `cargo hakari verify` reported "workspace-hack works correctly" for each setup in the table, also while `x/funix` and the features of `c` and `z` followed the selection, and `cargo hakari generate --diff` passed. `verify` resolves each member with no, default and all features, with and without dev-dependencies, with the hack crate added, for the dependencies that hold on every platform and on each platform that the configuration lists, and checks third-party crates only (`hakari/src/verify/mod.rs`). Adding the host's triple to `platforms` without generating again made both commands fail.
 - **A stale hack crate.** With `b` asking for `x/fstale` and the hack crate not generated again, `generate --diff` printed the changed line and failed, `verify` failed, `manage-deps --dry-run` passed, and `x` had `fstale` with `-p a -p b` and not with `-p a`. With a new member `f` that asks for `x/fa` and has no dependency on the hack crate, `manage-deps --dry-run` failed and named `f`, while `generate --diff` and `verify` passed, and `cargo build -p f` compiled `x` with `fa` only. With `a` no longer asking for `x/fa`, so that the hack crate gave more than the members ask for, `generate --diff` failed, `verify` passed, and the features were the same in every selection. Each command reads the full package graph through `cargo metadata`: with an empty Cargo home and `CARGO_NET_OFFLINE=true`, `generate --diff` failed with "no matching package named `smallvec` found". cargo-hakari's documentation asks for `Cargo.lock` under version control, because a patch release of a dependency can change its features or dependencies (`cargo-hakari/src/lib.rs`).
 - **Finding the hack crate.** `cargo hakari init` wrote `.config/hakari.toml`, whose `hakari-package` names the hack crate, added that crate to `members`, and gave its `Cargo.toml` a generated part between `### BEGIN HAKARI SECTION` and `### END HAKARI SECTION`. `manage-deps` gave every other member a path dependency on it.
-- **The `cargo metadata` reports.** The `--no-deps` report lists the members only. Each dependency has `features`, `uses_default_features`, `optional`, `kind`, `target` with the `cfg(…)` expression or triple, `rename` and, for a path dependency, `path`, which for a dependency on a member is the member's folder. In a copy with a further member `e`, a dependency on `c` with `workspace = true` showed the features of `[workspace.dependencies]` and of `e` merged, a renamed optional one showed `rename` and `optional`, one under `cfg(windows)` showed that `target`, and `e`'s `features` table showed `c/fz`, `dep:cc` and `cc?/fa` as written. The report showed neither `z` nor what `z` asks of `c`. The full report also lists `z` with its dependency on `c` and `fz`, and its `resolve` gives each package the features of one resolution of the whole workspace with dev-dependencies, for all platforms: `c` had `cdef`, `default`, `fa`, `fb` and `fz`. On that copy with a warm Cargo home, the `--no-deps` report took 7 to 8 ms and the full report 18 to 21 ms. The full report needs every package's manifest, so without network in an empty Cargo home it fails ([[EVD-CARGO-NO-DEPS]]).
+- **The `cargo metadata` reports.** The `--no-deps` report lists the members only. Each dependency has `features`, `uses_default_features`, `optional`, `kind`, `target` with the `cfg(…)` expression or triple, `rename` and, for a path dependency, `path`, which for a dependency on a member is the member's folder. In a copy with a further member `e`, a dependency on `c` with `workspace = true` showed the features of `[workspace.dependencies]` and of `e` merged, a renamed optional one showed `rename` and `optional`, one under `cfg(windows)` showed that `target`, and `e`'s `features` table showed `c/fz`, `dep:cc` and `cc?/fa` as written. The report showed neither `z` nor what `z` asks of `c`. The full report also lists `z` with its dependency on `c` and `fz`, and its `resolve` gives each package the features of one resolution of the whole workspace with dev-dependencies, for all platforms: `c` had `cdef`, `default`, `fa`, `fb` and `fz`. On that copy with a warm Cargo home, the `--no-deps` report took 7 to 8 ms and the full report 18 to 21 ms. The full report needs every package's manifest, so without network in an empty Cargo home it fails ([EVD-CARGO-NO-DEPS](#01M78RC7T7182TG80N949GFTTC)).
 - **Two workspaces that use cargo-hakari.** In shallow clones of guppy at `3f2cb12` and nextest at `8f2d970`, whose authors maintain cargo-hakari, `platforms` lists triples of Linux, macOS and Windows. Of the dependencies between members in their `--no-deps` reports, 10 of 26 in guppy and 3 of 15 in nextest ask for features of the other member or turn off its default features, such as `cargo-hakari` asking `hakari` for `cli-support` and `integration-tests` depending on `cargo-nextest` with `default-features = false`.
 - **The whole workspace without a hack crate.** With `d` also depending on `g`, a crate in a local git repository whose second commit asks for `smallvec`'s `const_generics`, `cargo update -p g` changed only the `source` line of `g` in `Cargo.lock`. The next `cargo build --workspace` compiled `smallvec` with `const_generics`, `union` and `write`, and compiled `a` again, though no package that `a` reaches changed in the lockfile and no member's manifest changed. Changing the feature that `z` asks of `c` from `fz` to `fa` made `cargo build --workspace` compile `c`, `z`, `a`, `b` and `d` again, and `a` printed `c` without `fz`.
 - **Flags that act on the selected crates.** Reruns on 14 November 2026 with cargo 1.100.0 and 1.91.0, which gave the same results, offline in an empty Cargo home, each selection built in an empty target directory and a crate's features read from its rustc line. In a workspace with resolver 2 and the members `a`, with the features `d`, `x` and `default = ["d"]`, `b`, with the features `x` and `y` and a dependency on `a` with default features, and `c`, with the feature `x` and no dependency on `a`: without flags, `a` had `default` and `d` with `-p a`, `-p b` and `-p a -p b`. With `--all-features`, it had `default` and `d` with `-p b`, and `default`, `d` and `x` with `-p a` and `-p a -p b`. With `--no-default-features`, it had none with `-p a`, and `default` and `d` with `-p a -p b` and `-p b`. With `--features x`, `a` had `x` with `-p a` and `-p a -p b` but not with `-p b` or `-p b -p c`, while `b` and `c` had `x` wherever selected; `-p b --features y` and `-p a -p b --features y` passed, giving `y` to `b` only. With `--features a/x`, `a` had `x` with `-p a`, `-p b`, `-p a -p b` and `-p b -p c`, and `-p c --features a/x` failed with "the package 'c' does not contain this feature: a/x". In a second workspace, where `c2` depends on `b` and `b` on `a` and on a crate `o` outside the workspace, `-p c2 --features a/x` and `-p c2 --features o/p` failed the same way, and `-p b -p c2 --features a/x` passed with `a` having `x`, so `crate/feature` needs a selected crate that is that crate or depends on it directly. With `resolver.feature-unification = "workspace"`, which the `cargo` strategy sets, and `-Zfeature-unification` with `RUSTC_BOOTSTRAP=1` on both versions, `a` had `default`, `d` and `x` with `-p b --all-features` and with `-p a -p b --all-features`, and `default` and `d` with `-p a --no-default-features` and `-p a -p b --no-default-features`, while `-p c2 --features a/x` and `-p b -p c2 --features x` still failed, the latter with "none of the selected packages contains this feature: x". Cargo applies `--all-features`, `--no-default-features` and unqualified names in `--features` to the selected crates only, and checks `crate/feature` against them; under workspace unification only `--features` still depends on the selection.
@@ -2625,29 +3320,39 @@ Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0, the central 
 - **What cargo-hakari 0.9.39 generates for a git dependency.** In a workspace whose members `a` and `b` ask a crate `x` of a local git repository for `f1` and `f2`, with the host in `platforms`: the hack crate's hakari section held `x = { git = "file://…", default-features = false, features = ["f1", "f2"] }`, after the header, package table and comments that `init` writes, and its folder held `build.rs`, `src/lib.rs` and a `.gitattributes`; `generate --diff` and `manage-deps --dry-run` passed on it and on the same files written by the tests' harness, and `cargo build -p a` and then `cargo build -p a -p b` compiled `x` once, `a` printing `f1 f2` after both. With `b` asking `x` for no feature, `generate --diff` exited with 1; with the dependency of `a` on the hack crate removed, `generate --diff` exited with 0 and `manage-deps --dry-run` with 1, and with 0 again after `manage-deps -y`. Cargo 1.100.0 also warned that the members' dependency on the hack crate was unused (`cargo::unused_dependencies`), which changes no result.
 
 So the hack crate makes the features of third-party crates the same in every selection for normal, build and dev-dependencies, and for platform-specific dependencies only on the platforms that its configuration lists. It leaves the features of members, and of third-party crates that depend on a member through normal or build dependencies, to the selection, and `cargo hakari verify` reports neither. The `--no-deps` report shows what one member asks of another, not what a crate outside the workspace asks of a member. Cargo's `--all-features`, `--no-default-features` and `--features` act on the selected crates, and a command that selects one crate gives a member that is only its dependency what its dependents ask. Excludes and `version-only` in cargo-hakari's configuration leave features to the selection, without `generate --diff` or `verify` noticing. The points marked with a source file were read, not run.
-:::
 
-:::mara evidence EVD-HAKARI-PUBLISHING
-:mid: 01M7JRNDYF9P89B48NFK03QP5M
-:title: What cargo-hakari 0.9.39 writes that publishing depends on
-:status: accepted
-:supports: DES-RELEASE
+---
+
+<a id="01M7JRNDYF9P89B48NFK03QP5M"></a>
+
+### What cargo-hakari 0.9.39 writes that publishing depends on
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-HAKARI-PUBLISHING                                     |
+| Status   | Accepted                                                  |
+| Supports | [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) |
 
 A run on 16 November 2026 on Linux x86-64 with cargo 1.100.0 and cargo-hakari 0.9.39, in a throwaway Cargo workspace outside this repository with the members `a` and `b`, `a` depending on `b` with `path` and `version`, a git repository and resolver 2, with a Cargo home of its own and `CARGO_NET_OFFLINE=true`, so that nothing reached a registry. Each step started from the committed state.
 
 - **The hack crate.** `cargo hakari init workspace-hack --yes` wrote `.config/hakari.toml` with `hakari-package = "workspace-hack"`, `dep-format-version = "4"` and an empty `platforms`, added `workspace-hack` to the members of the root manifest, and wrote `workspace-hack/Cargo.toml` with `publish = false` under the comment "You can choose to publish this crate: see https://docs.rs/cargo-hakari/latest/cargo_hakari/publishing", beside `version = "0.1.0"` and `description = "workspace-hack package, managed by hakari"`. `cargo hakari generate` changed only the part between `### BEGIN HAKARI SECTION` and `### END HAKARI SECTION` and kept `publish = false`.
-- **The members' dependency.** `cargo hakari manage-deps --yes` added to the `[dependencies]` table of every member other than the hack crate, also of a member with `publish = false`, one entry: under `dep-format-version = "1"` `workspace-hack = { path = "../workspace-hack"}`, without a version requirement; under `"2"`, `"3"` and `"4"` `workspace-hack = { version = "0.1", path = "../workspace-hack" }`. Under `"4"` it wrote that entry in the member's own table also where `[workspace.dependencies]` of the root manifest held `workspace-hack` with `version` and `path`, not `workspace = true`. It writes no `registry` key, so the entry points to crates.io ([[DES-RELEASE]], **Where a dependency points**).
-- **Publishing.** `cargo hakari publish --help` says "Publish a package after temporarily removing the workspace-hack dependency from it", takes one package with `-p` and passes trailing arguments to `cargo publish`; [[EVD-CARGO-PUBLISH]] records what it does around the call from its sources.
+- **The members' dependency.** `cargo hakari manage-deps --yes` added to the `[dependencies]` table of every member other than the hack crate, also of a member with `publish = false`, one entry: under `dep-format-version = "1"` `workspace-hack = { path = "../workspace-hack"}`, without a version requirement; under `"2"`, `"3"` and `"4"` `workspace-hack = { version = "0.1", path = "../workspace-hack" }`. Under `"4"` it wrote that entry in the member's own table also where `[workspace.dependencies]` of the root manifest held `workspace-hack` with `version` and `path`, not `workspace = true`. It writes no `registry` key, so the entry points to crates.io ([DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T), **Where a dependency points**).
+- **Publishing.** `cargo hakari publish --help` says "Publish a package after temporarily removing the workspace-hack dependency from it", takes one package with `-p` and passes trailing arguments to `cargo publish`; [EVD-CARGO-PUBLISH](#01M7DBRA912K68NXEN2P6KCWMW) records what it does around the call from its sources.
 
-So under the default dep-format, every member depends on the hack crate with a version requirement and the hack crate sets `publish = false`, which the check _Unpublished dependencies_ of [[DES-RELEASE]] then fails for every member that is published; under dep-format 1, cargo refuses such a member itself, because a normal dependency without a version requirement cannot be published ([[EVD-CARGO-PUBLISH]]).
-:::
+So under the default dep-format, every member depends on the hack crate with a version requirement and the hack crate sets `publish = false`, which the check _Unpublished dependencies_ of [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) then fails for every member that is published; under dep-format 1, cargo refuses such a member itself, because a normal dependency without a version requirement cannot be published ([EVD-CARGO-PUBLISH](#01M7DBRA912K68NXEN2P6KCWMW)).
 
-:::mara evidence EVD-CARGO-BATCH-FAILURES
-:mid: 01M7DC64QCDZKPH44D2YB14XD7
-:title: What cargo reports per crate when one command serves several crates and one of them fails
-:status: accepted
-:supports: DES-BATCH
-:supports: DES-TEST-RUN
+---
+
+<a id="01M7DC64QCDZKPH44D2YB14XD7"></a>
+
+### What cargo reports per crate when one command serves several crates and one of them fails
+
+| Type     | Evidence                                                   |
+| -------- | ---------------------------------------------------------- |
+| ID       | EVD-CARGO-BATCH-FAILURES                                   |
+| Status   | Accepted                                                   |
+| Supports | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)  |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) |
 
 Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0, the central cases repeated with cargo 1.91.0, in throwaway workspaces outside this repository, with `RUSTUP_AUTO_INSTALL=0`. The first workspace had the members `base`, `dep`, which depends on `base`, `broken`, `indep`, with a library, a binary and an integration test, `user`, which depends on `broken`, and `scripted`, whose build script panics when an environment variable is set.
 
@@ -2656,21 +3361,26 @@ Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0, the central 
 - **What the JSON messages show.** Each target that cargo built gave a `compiler-artifact` message with its package id and target, with `fresh` set where nothing was compiled. A rustc error gave a `compiler-message` at level `error` with the package id and target, and `build-finished` reported `success: false`. With the build script of `scripted` panicking, `cargo build --keep-going` and `cargo check --all-targets --keep-going` gave an artifact for the compiled build script and none for the library of `scripted`, and no error message and no `build-script-executed` for it. Only the human-readable "failed to run custom build command for `scripted v0.1.0 (…)`" on stderr named it.
 - **Which package a test result belongs to.** A second workspace had the members `good`, `other`, whose library is also named `good`, `third` and `fourth`, under `crates/`; the unit test and the doctest of `other` and of `third` failed. `cargo test --doc --no-fail-fast -p good -p other -p third -p fourth` printed `Doc-tests fourth`, `Doc-tests good` twice and `Doc-tests third` on stderr, and the test lines on stdout with paths from the workspace root, such as `test crates/other/src/lib.rs - one (line 1) ... FAILED`. After each failing block it printed "doctest failed, to rerun pass `-p other --doc`", and at the end "2 targets failed:" with `` `-p other --doc` `` and `` `-p third --doc` ``. `cargo test --no-fail-fast` printed `Running unittests src/lib.rs (…/good-<hash>)` for both `good` and `other`, and listed `-p other --lib`, `-p third --lib`, `-p other --doc` and `-p third --doc`. With one failing target the list read "1 target failed:". Without `--no-fail-fast`, cargo stopped after the doctests of `other` and printed no list. cargo 1.91.0 printed the same lines. Its unit-test binaries lay in `target/debug/deps`, while those of 1.100.0 lay in a folder per package under `target/debug/build`.
 - **Units compiled as tests.** In a third workspace, the member `a` had a library with a unit test, a binary, an example, an integration test, a bench without harness and a dev-dependency on the member `brokendev`. `cargo check --all-targets --message-format=json -p a` reported the library, the binary and the example with `profile.test` off, and the library, the binary, the integration test and the bench with it on, with cargo 1.100.0 and 1.91.0; `clippy --all-targets` reported the same units. With the library of `brokendev` not compiling, `cargo check --all-targets --keep-going --message-format=json -p a -p c` reported the library and the binary of `a` with `profile.test` off, nothing of `a` with it on, and no error for `a`, while `cargo check --all-targets -p a` alone failed. `test = false` on the library kept its test unit while its `bench` flag stayed on, and `test = false` with `bench = false` left it out; the binary behaved the same. `test = false` on the integration test left it out, `test = true` on the example added its test unit, and `bench = false` on the bench left the bench out. The `cargo metadata` report gives each target's `test` flag and not its `bench` flag. Without `--all-targets`, `build` and `check` reported the library and the binary with `profile.test` off only.
-- **Package names.** Two members named `same` made `cargo metadata` fail with "two packages named `same` in this workspace". With a member `good` 0.1.0 and a path dependency `good` 0.2.0 outside the workspace, `-p good` failed with "specification `good` is ambiguous", while `-p good@0.1.0` worked. The failure list named the member by its bare name, `` `-p good --doc` ``. Which selections are ambiguous, and the form that never is, are in [[EVD-CARGO-PACKAGE-SPECS]].
+- **Package names.** Two members named `same` made `cargo metadata` fail with "two packages named `same` in this workspace". With a member `good` 0.1.0 and a path dependency `good` 0.2.0 outside the workspace, `-p good` failed with "specification `good` is ambiguous", while `-p good@0.1.0` worked. The failure list named the member by its bare name, `` `-p good --doc` ``. Which selections are ambiguous, and the form that never is, are in [EVD-CARGO-PACKAGE-SPECS](#01M7DDYY0FZTWB37H3FWXCG5AF).
 - **The selection decides the features.** In a workspace where the member `b` asks for the feature `x` of the member `shared` and `a` does not, `cargo test --doc -p a` compiled `shared` and `a` again after `cargo test --no-run --workspace`. After another `cargo test --no-run --workspace`, `cargo test --doc --workspace` compiled nothing.
 
-So with `--keep-going`, which `cargo test` does not have, cargo builds as much as it can. Its JSON messages show what it built, unit by unit, a target in normal mode and compiled as a test apart, but not every failure. The list of failed targets that `--no-fail-fast` prints identifies the package of a failing test, and the block headers do not. A further step that selects other crates resolves other features. That nextest builds every test binary before it runs one was read in its documentation when this item was written; [[EVD-WORKSPACE-TEST-SELECTION]] ran it with cargo-nextest 0.9.152 on both versions, and the run stopped before any test.
-:::
+So with `--keep-going`, which `cargo test` does not have, cargo builds as much as it can. Its JSON messages show what it built, unit by unit, a target in normal mode and compiled as a test apart, but not every failure. The list of failed targets that `--no-fail-fast` prints identifies the package of a failing test, and the block headers do not. A further step that selects other crates resolves other features. That nextest builds every test binary before it runs one was read in its documentation when this item was written; [EVD-WORKSPACE-TEST-SELECTION](#01M7DMTE8WX7EFV63DCFSGAWWJ) ran it with cargo-nextest 0.9.152 on both versions, and the run stopped before any test.
 
-:::mara evidence EVD-CARGO-ARTIFACT-WRITERS
-:mid: 01M7DJ8QGMBPJSJHQ2BVBCHA1R
-:title: Which cargo calls replace the executables that build stores, and what Nx stores when they run beside it
-:status: accepted
-:supports: ADR-TEST-AFTER-BUILD
-:supports: DES-TARGETS
-:supports: DES-OUTPUTS
-:supports: DES-BATCH
-:supports: RISK-ARTIFACT-DIR-WRITERS
+---
+
+<a id="01M7DJ8QGMBPJSJHQ2BVBCHA1R"></a>
+
+### Which cargo calls replace the executables that build stores, and what Nx stores when they run beside it
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-CARGO-ARTIFACT-WRITERS                                |
+| Status   | Accepted                                                  |
+| Supports | [ADR-TEST-AFTER-BUILD](#01M7DJ8QGMASKGT057YS8Z9QBY)       |
+| Supports | [DES-TARGETS](targets.mara.md#01M78FHG7FMRNFBSN2G9VG7CX3) |
+| Supports | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4) |
+| Supports | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) |
+| Supports | [RISK-ARTIFACT-DIR-WRITERS](#01M7DJ8QGM2WH33TJ7HBG7XRD0)  |
 
 Three sets of experiments on 14 November 2026, on Linux x86-64 with 32 cores, `nx` 24.0.6, Node.js 26.12.0, cargo 1.100.0 and, where named, 1.91.0, `RUSTUP_AUTO_INSTALL=0`, the Nx daemon off, a private `NX_CACHE_DIRECTORY` and the variables by which Nx detects an AI agent removed, in throwaway workspaces outside the repository. The research for nxr-1q1f0n (the research below) used the plugin compiled from `main` at 3445ae7 and stand-ins for the edge, a lock, a copy and batch executors. The work on nxr-621hvq (mine below) used the plugin compiled from `main` at 96ba5f0, without the edge, and from the change that adds the edge and its guard, on a machine whose load average was about 4 from other work. The work on nxr-ew8kb3 (**Files of one name** below) used the plugin compiled from the change that leaves such builds uncached, on `main` at ae3fd4c, with the rule in place and taken out, on a machine whose load average was about 30 from other work. In each workspace, crate `a` has a binary that prints `FLAVOUR-EXTRA` where the feature `extra` of its path dependency `f` is on and `FLAVOUR-PLAIN` otherwise, and turns `extra` on through a dev-dependency on `f`.
 
@@ -2719,19 +3429,24 @@ With the edge, the `cargo test` of each crate started 93 to 461 ms after the `ca
 **A second installation and overlapping entries.** The second review of nxr-ew8kb3 found that a second installation of the plugin, registered under another name for one workspace, is not taken for an entry of the plugin, so that graph creation leaves the build of the plugin's crate cached and a held run stored the other crate's executable under its key, on Cargo 1.100.0 and 1.91.0 with plugin isolation on and off. In the fixture `shared-executables`, with a copy of the compiled plugin installed as the package `rust-alias` and registered under that name for `tools/`, beside the plugin's entry for `rust/`, both builds stayed cached; with the check when the task starts, `alpha:build`, `alpha:test` and `tools:build` failed before cargo ran and the builds of `beta` and `gamma` ran and were restored; without the check, `alpha:build` ran and succeeded. The check took 2.64 µs a task, over 19 cached `build`, `doc` and `test` tasks of `release-crates`, the largest fixture with 18 projects, in 2,000 rounds, and found no pair in any fixture. With two entries that both receive `rust/` (the plugin's name, and the plugin with `include` of `rust/**`), Nx 24.0.6 joins the lists that both give a project (`mergeMetadata` in `target-merging.js`): before the change, `metadata.cargo.warnings` held the warning twice and `nx show projects` printed it twice, with plugin isolation on and off; target metadata such as `triples`, `digests`, `members` and Nx's own `technologies` held their entries two to nine times, while `gamma:build`, `gamma:check` and `beta:test` passed. `cargo doc` of a workspace with two binaries called `cli` failed on 1.100.0 and 1.91.0 with a document output filename collision, and passed with `doc = false` on one of them.
 
 So within one command, ordering `test` after the crate's own `build` keeps every stored `build` entry and every `test` result right on this workload, and a batch keeps them right only where `build` runs in a batch of its own. The experiments used small path crates on one machine; macOS, other Nx versions, nextest and real dependency trees were not tried.
-**Commands that select the whole workspace.** Run on 15 November 2026 for nxr-8f9dz2 with cargo 1.100.0, in a copy of the `binary-tests` fixture outside the repository, after `cargo build -p app`: `cargo test --workspace --exclude app --no-run` and `cargo test -p library --no-run` left `target/debug/app` as `cargo build` wrote it, and `cargo test --workspace --no-run` replaced it with another file, whose SHA-256 differed, as `cargo test -p app` does. Then, with cargo 1.100.0 and 1.91.0 alike, after `cargo build --workspace` in another copy, `cargo test --workspace --no-run` replaced exactly the files `app`, `benched` and `harnessless` of `target/debug` with others, and left `libaddon.so`, `libaddon.a`, the libraries' `rlib` files and the executables of `showcase`, `timed`, `unit` and `untested` as `cargo build` wrote them; `cargo test --workspace --tests --no-fail-fast` and `cargo test --workspace --doc --no-fail-fast` after it changed no file's content further. `gated`, whose binary needs a feature, was not built. A `cargo test` that selects the whole workspace, as the steps of `workspace-build` do ([[DES-TEST-RUN]]), therefore writes the executables that the `build` of every crate of the workspace with a binary and an integration test or a bench that `cargo test` builds stores, not only those of the crates of its group, and no other file that a `build` declares.
+**Commands that select the whole workspace.** Run on 15 November 2026 for nxr-8f9dz2 with cargo 1.100.0, in a copy of the `binary-tests` fixture outside the repository, after `cargo build -p app`: `cargo test --workspace --exclude app --no-run` and `cargo test -p library --no-run` left `target/debug/app` as `cargo build` wrote it, and `cargo test --workspace --no-run` replaced it with another file, whose SHA-256 differed, as `cargo test -p app` does. Then, with cargo 1.100.0 and 1.91.0 alike, after `cargo build --workspace` in another copy, `cargo test --workspace --no-run` replaced exactly the files `app`, `benched` and `harnessless` of `target/debug` with others, and left `libaddon.so`, `libaddon.a`, the libraries' `rlib` files and the executables of `showcase`, `timed`, `unit` and `untested` as `cargo build` wrote them; `cargo test --workspace --tests --no-fail-fast` and `cargo test --workspace --doc --no-fail-fast` after it changed no file's content further. `gated`, whose binary needs a feature, was not built. A `cargo test` that selects the whole workspace, as the steps of `workspace-build` do ([DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ)), therefore writes the executables that the `build` of every crate of the workspace with a binary and an integration test or a bench that `cargo test` builds stores, not only those of the crates of its group, and no other file that a `build` declares.
 
 **Feature sets of one crate.** Run on 16 November 2026 for the review of nxr-8f9dz2, with cargo 1.100.0 and 1.91.0 alike, in a throwaway workspace whose members are `a`, a binary with a feature `extra` that it prints; `b`, a binary whose feature `extra` turns on the features `extra` of its path dependencies `c`, `d` and `e`; `c`, a library with the crate types `cdylib` and `rlib`; `d`, one with `staticlib` and `rlib`; and `e`, a library with a binary `e-tool`. After `cargo build --workspace`, the files directly in `target/debug` were listed with their modification times, and after `cargo build -p b --all-features` one second later, only `b` and `b.d` had been written: `a`, `libc.so`, `libd.a`, `e-tool` and their dependency files kept their times, though `b`'s feature set compiled `c`, `d` and `e` again with other features, and `a` still printed `plain`. A command that selects one crate writes the files of that crate alone: a dependency is built as a library, without its `cdylib`, `staticlib` or binaries.
-:::
 
-:::mara evidence EVD-BATCH-FILES-ON-DISK
-:mid: 01M7WVPS52WX44QPGQDNT5PQM5
-:title: What a later cargo command of a batch does to the files that a task outside the batch reads, and what keeping them changes
-:status: accepted
-:supports: DES-BATCH
-:supports: RISK-ARTIFACT-DIR-WRITERS
+---
 
-Runs on 20 November 2026 for nxr-yfh7zh, with `nx` 24.0.6, Node.js 26.12.0 and cargo 1.100.0 on Linux x86-64 with 32 cores, through the test harness, without the Nx daemon where not named and with a private cache, and a reading of that Nx package (paths under `dist/src/`). The fixtures were copies of `workspace-tests` with the binary crates `pa` and `pb` of [[VER-BATCHING]], whose builds differ in environment through `pb`'s `.env`, and of `binary-tests`, where `cargo test` links `app` with a feature that `cargo build` leaves off. A cached JS target `pack` depended on `pa:build`, or `app:build`, with that crate as an implicit dependency and the inputs `default` and `^default`, and wrote what the executable printed into `dist`, as in the reviewer's reproduction ([[EVD-NX-24-BATCHES]], "Tasks left out"). Each run was made with the plugin as on `main` and with the first remedy of nxr-yfh7zh, commit 41c2299, which kept the files of the command's other builds and put them back after each later group, and which [[ADR-STAGED-BUILDS]] replaced:
+<a id="01M7WVPS52WX44QPGQDNT5PQM5"></a>
+
+### What a later cargo command of a batch does to the files that a task outside the batch reads, and what keeping them changes
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-BATCH-FILES-ON-DISK                                   |
+| Status   | Accepted                                                  |
+| Supports | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) |
+| Supports | [RISK-ARTIFACT-DIR-WRITERS](#01M7DJ8QGM2WH33TJ7HBG7XRD0)  |
+
+Runs on 20 November 2026 for nxr-yfh7zh, with `nx` 24.0.6, Node.js 26.12.0 and cargo 1.100.0 on Linux x86-64 with 32 cores, through the test harness, without the Nx daemon where not named and with a private cache, and a reading of that Nx package (paths under `dist/src/`). The fixtures were copies of `workspace-tests` with the binary crates `pa` and `pb` of [VER-BATCHING](verification.mara.md#01M78FHG7FRB1N8C3QP3YJZZAM), whose builds differ in environment through `pb`'s `.env`, and of `binary-tests`, where `cargo test` links `app` with a feature that `cargo build` leaves off. A cached JS target `pack` depended on `pa:build`, or `app:build`, with that crate as an implicit dependency and the inputs `default` and `^default`, and wrote what the executable printed into `dist`, as in the reviewer's reproduction ([EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA), "Tasks left out"). Each run was made with the plugin as on `main` and with the first remedy of nxr-yfh7zh, commit 41c2299, which kept the files of the command's other builds and put them back after each later group, and which [ADR-STAGED-BUILDS](#01M7X59APKESA509GHH54BNQW7) replaced:
 
 | Run                                                                                                                                  | `pack` stored, as on `main` | With the files kept                                         |
 | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- | ----------------------------------------------------------- |
@@ -2743,22 +3458,27 @@ Runs on 20 November 2026 for nxr-yfh7zh, with `nx` 24.0.6, Node.js 26.12.0 and c
 
 After each wrong batched run, deleting `dist` and running `nx run pack:pack` restored `plain flag` beside a restored `pa` that printed `plain`, with the daemon too: its record of `pa:build`'s outputs no longer matched the file that `pb`'s build had linked, so that Nx copied `pa` from the cache in the later command (`shouldCopyOutputsFromCacheBatch` in `tasks-runner/task-orchestrator.js`). Within a command, Nx restores a task only before it runs it, as the waves of a batch do for the tasks that they look up (`applyCachedResults`, line 678), never one that has ended, and a batch's result has a status, a terminal output and times and no outputs (`TaskResult` in `config/misc-interfaces.d.ts`). No report of the batch and no order of its waves therefore has Nx put a file back: any order leaves one build's links last, and the restored case has a single wave. With batching off, `--parallel=1` and `pack` depending only on `pa:build`, Nx ran `pack` before `pb:build` in one run, storing `plain`, and after it in another, storing `plain flag`; a task run on its own keeps no files.
 
-A `test` of `pa` whose integration test asserts that `CARGO_BIN_EXE_pa` prints `plain` passed in `nx run-many -t build test -p pa pb` after both waves: the plugin's own tasks read these files only through cargo, which links again what its command runs, and `napi-build`'s post-processing reads the library that its own compile reported (read, not run). Within one batch process, no group writes another's stored files: two whole-workspace `build` groups of one workspace root never both run there, and a group that selects crates writes only theirs ([[DES-BATCH]], "Files that a batch stores"). The case therefore needs a build that ended before the batch process, in an earlier wave or restored, or a `test` or `bench` batch after the builds.
+A `test` of `pa` whose integration test asserts that `CARGO_BIN_EXE_pa` prints `plain` passed in `nx run-many -t build test -p pa pb` after both waves: the plugin's own tasks read these files only through cargo, which links again what its command runs, and `napi-build`'s post-processing reads the library that its own compile reported (read, not run). Within one batch process, no group writes another's stored files: two whole-workspace `build` groups of one workspace root never both run there, and a group that selects crates writes only theirs ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Files that a batch stores"). The case therefore needs a build that ended before the batch process, in an earlier wave or restored, or a `test` or `bench` batch after the builds.
 
-That first remedy kept the files in groups of `build`, `napi-build` and `wasm-build`. Keeping them in the groups of `test` as well, which was tried, stored `plain` in the fourth row, but left the artifact directory with the executables of `cargo build` after `nx run-many -t build test`, where [[ADR-TEST-AFTER-BUILD]] accepted those of `cargo test`, as plain cargo leaves them, and 9 tests of that choice failed (nxr-5hzxra). With the files kept by that remedy, no second name was left in the artifact directory after any run, and plain `cargo build --workspace` with `pb`'s flags afterwards compiled nothing and linked `pa` again with the flag. The runs on `main` were reproduced with the keeping switched off, under which the batched cases of `nx-rust/test/batch-deferral.spec.ts` fail. The fixtures had two or three small crates; macOS, other Nx versions and real dependency trees were not tried.
+That first remedy kept the files in groups of `build`, `napi-build` and `wasm-build`. Keeping them in the groups of `test` as well, which was tried, stored `plain` in the fourth row, but left the artifact directory with the executables of `cargo build` after `nx run-many -t build test`, where [ADR-TEST-AFTER-BUILD](#01M7DJ8QGMASKGT057YS8Z9QBY) accepted those of `cargo test`, as plain cargo leaves them, and 9 tests of that choice failed (nxr-5hzxra). With the files kept by that remedy, no second name was left in the artifact directory after any run, and plain `cargo build --workspace` with `pb`'s flags afterwards compiled nothing and linked `pa` again with the flag. The runs on `main` were reproduced with the keeping switched off, under which the batched cases of `nx-rust/test/batch-deferral.spec.ts` fail. The fixtures had two or three small crates; macOS, other Nx versions and real dependency trees were not tried.
 
-Runs on 21 November 2026 for nxr-5hzxra, with the same Nx and Node.js and cargo 1.100.0, through the test harness, with `test` and `bench` groups keeping the files of the command's builds ([[DES-BATCH]], "Files that a test batch puts back"): in `binary-tests` with `pack` depending on `app:build` and `app:test`, `nx run-many -t build test pack` stored `plain` for `pack`, the integration test passed against the executable of `cargo test`, and afterwards `app` printed `plain` and no second name was left; `nx run pack:pack` without `dist` restored `plain` beside an `app` that printed `plain`. Plain `cargo test --workspace --no-run` afterwards compiled nothing and left `app` printing `extra`, having linked its uplifted file into place again, as it does after plain `cargo build`, and plain `cargo build --workspace` then compiled nothing and left it printing `plain`. The group of the whole workspace kept the nine files of the builds that the fixture stores, the `cdylib` and `staticlib` of `addon` among them, under second names beside them. That was the implementation at commit c08c014, which expanded each build's outputs into files; the review replaced it with the candidates of [[DES-BATCH]] and a stage, under which the same group keeps the executables of `app`, `benched` and `harnessless` (`nx-rust/test/test-after-build.spec.ts`).
-:::
+Runs on 21 November 2026 for nxr-5hzxra, with the same Nx and Node.js and cargo 1.100.0, through the test harness, with `test` and `bench` groups keeping the files of the command's builds ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ), "Files that a test batch puts back"): in `binary-tests` with `pack` depending on `app:build` and `app:test`, `nx run-many -t build test pack` stored `plain` for `pack`, the integration test passed against the executable of `cargo test`, and afterwards `app` printed `plain` and no second name was left; `nx run pack:pack` without `dist` restored `plain` beside an `app` that printed `plain`. Plain `cargo test --workspace --no-run` afterwards compiled nothing and left `app` printing `extra`, having linked its uplifted file into place again, as it does after plain `cargo build`, and plain `cargo build --workspace` then compiled nothing and left it printing `plain`. The group of the whole workspace kept the nine files of the builds that the fixture stores, the `cdylib` and `staticlib` of `addon` among them, under second names beside them. That was the implementation at commit c08c014, which expanded each build's outputs into files; the review replaced it with the candidates of [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) and a stage, under which the same group keeps the executables of `app`, `benched` and `harnessless` (`nx-rust/test/test-after-build.spec.ts`).
 
-:::mara evidence EVD-STAGED-BUILDS
-:mid: 01M7X59APKVHDRKGF3ZJ3EYWB9
-:title: What building into a stage of cargo's own does, on cargo 1.91.0 and 1.100.0 and through Nx 24.0.6
-:status: accepted
-:supports: ADR-STAGED-BUILDS
-:supports: DES-BATCH
-:supports: DES-BUILD-DIRS
-:supports: DES-OUTPUTS
-:supports: REQ-CARGO-UNCHANGED
+---
+
+<a id="01M7X59APKVHDRKGF3ZJ3EYWB9"></a>
+
+### What building into a stage of cargo's own does, on cargo 1.91.0 and 1.100.0 and through Nx 24.0.6
+
+| Type     | Evidence                                                          |
+| -------- | ----------------------------------------------------------------- |
+| ID       | EVD-STAGED-BUILDS                                                 |
+| Status   | Accepted                                                          |
+| Supports | [ADR-STAGED-BUILDS](#01M7X59APKESA509GHH54BNQW7)                  |
+| Supports | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)         |
+| Supports | [DES-BUILD-DIRS](caching.mara.md#01M78FHG7FMKCDSEX3Y6Q65F4Y)      |
+| Supports | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)         |
+| Supports | [REQ-CARGO-UNCHANGED](caching.mara.md#01M78FHG7F5VCD6HDS9R6HDS3Z) |
 
 A spike on 20 November 2026 for nxr-yfh7zh, on Linux x86-64 with 32 cores, cargo and rustc 1.91.0 and 1.100.0 through rustup's `+<toolchain>`, `nx` 24.0.6 and Node.js 26.12.0, in throwaway workspaces outside the repository. A _stage_ is a folder that cargo gets as `--target-dir <stage>`, with `--config 'build.build-dir="<build dir>"'` naming the build directory that cargo would use anyway. The cargo workspace had the binary crates `pa` and `pb`, which print `flag` where `RUSTFLAGS=--cfg flag` applies and `plain` otherwise. `pa` also has a build script that writes a file into `OUT_DIR` and prints `OUT_DIR` and `CARGO_TARGET_DIR`, an example, an integration test that runs `CARGO_BIN_EXE_pa`, and a library dependency `pd`. `pc` is a library with the crate types `cdylib`, `staticlib` and `rlib`. The fixtures `napi-addons` and `wasm-packages` were copied from `nx-rust/test/fixtures`. Unless a point names one version, both versions behaved the same.
 
@@ -2766,9 +3486,9 @@ A spike on 20 November 2026 for nxr-yfh7zh, on Linux x86-64 with 32 cores, cargo
 - **What lands in the stage.** The stage held `CACHEDIR.TAG` and, in the folder of the profile (`debug`, `release`) or of the triple and profile (`x86_64-unknown-linux-gnu/debug` with `--target`), the files that plain cargo puts in the artifact directory. These were the executables, `libpc.so`, `libpc.a`, the `rlib` files of the members, and their dependency records `pa.d`, `pb.d`, `libpc.d` and `libpd.d`, beside cargo's lock files and an empty `examples` folder. The executables and libraries were hard links of the build directory's files. Only the records and lock files took space of their own: 6 of 12 files on 1.91.0 and 6 of 13 on 1.100.0 had other links. The stage's `debug` folder held no `build` or `deps` folder. Cargo's `compiler-artifact` messages named the stage's files as `filenames` and `executable`, and the build directory's file only for a library's `rmeta`.
 - **Split debuginfo.** With `CARGO_PROFILE_DEV_SPLIT_DEBUGINFO=packed`, the stage also held `pa.dwp`, `pb.dwp` and `libpc.so.dwp`, and the messages listed each `.dwp` among the `filenames` of its target. `.dSYM` and `.pdb` were not tried.
 - **Build scripts.** The build script ran with `OUT_DIR` in the build directory: `target/debug/build/pa-<hash>/out` on 1.91.0, `target/debug/build/pa/<hash>/out` in 1.100.0's layout. `CARGO_TARGET_DIR` was unset for it. The build script's messages named the same `OUT_DIR`.
-- **Dependency records.** The stage's `pa.d` named its rule's target in the stage, and absolutely, or relative to `build.dep-info-basedir` where that is configured. On 1.100.0 it named the file that the build script generated in the build directory. On 1.91.0 it spelled that file under the stage, `<stage>/debug/build/pa-<hash>/out/gen.txt`, a path that does not exist, as 1.91.0 does with any build directory apart from the artifact directory ([[EVD-CARGO-DEP-INFO]]).
+- **Dependency records.** The stage's `pa.d` named its rule's target in the stage, and absolutely, or relative to `build.dep-info-basedir` where that is configured. On 1.100.0 it named the file that the build script generated in the build directory. On 1.91.0 it spelled that file under the stage, `<stage>/debug/build/pa-<hash>/out/gen.txt`, a path that does not exist, as 1.91.0 does with any build directory apart from the artifact directory ([EVD-CARGO-DEP-INFO](#01M7ACMK1Q7ATJKRRHC2WPJE1Z)).
 - **The user's configuration.** `--target-dir` won over `CARGO_TARGET_DIR` and over `build.target-dir` in `.cargo/config.toml`; neither folder was created. `--config build.build-dir` won over `CARGO_BUILD_BUILD_DIR`, which created no folder, and every crate stayed `Fresh`. `cargo metadata --no-deps --format-version 1` reports both `target_directory` and `build_directory` on both versions. `build_directory` follows `CARGO_BUILD_BUILD_DIR` and equals `target_directory` where nothing sets it.
-- **Nothing else written.** No staged build touched a file of the artifact directory: inode and modification time of `target/debug/pa` stayed the same through a staged build of the same variant and of the other. With `--release`, no `target/release` was created. A stage inside the artifact directory, `target/.nx-rust-stage/<id>`, worked like one outside it. A plain `cargo build -p pb` with the flag did not touch `target/debug/pa` either, as [[EVD-CARGO-ARTIFACT-WRITERS]] found ("Feature sets of one crate").
+- **Nothing else written.** No staged build touched a file of the artifact directory: inode and modification time of `target/debug/pa` stayed the same through a staged build of the same variant and of the other. With `--release`, no `target/release` was created. A stage inside the artifact directory, `target/.nx-rust-stage/<id>`, worked like one outside it. A plain `cargo build -p pb` with the flag did not touch `target/debug/pa` either, as [EVD-CARGO-ARTIFACT-WRITERS](#01M7DJ8QGMBPJSJHQ2BVBCHA1R) found ("Feature sets of one crate").
 - **Plain cargo afterwards.** Plain cargo compiled the same crates in the sequence flag, plain, flag as in the same sequence with each build staged. On 1.91.0 that was 4, 1 and 1 crates; on 1.100.0, which keeps both variants, 4, 0 and 0. After a staged build of the other variant, plain `cargo build --workspace` linked `target/debug/pa` again, as it does after any build, and plain `cargo test --workspace` passed.
 - **Tests.** After a staged `cargo test --workspace --no-run` and the stage's removal, the test's record held `# env-dep:CARGO_BIN_EXE_pa=<stage>/debug/pa`. Plain `cargo test --workspace` then reported every crate `Fresh` and failed with status 101: cargo does not count the folder in the fingerprint of a test that names the executable. A stage is therefore no place for `cargo test` or `--all-targets`.
 - **Locks.** A second staged build with another stage, started while the first held the build directory through a build script that slept 4 s, waited 6.7 s on 1.100.0 ("Blocking waiting for file lock on build directory") and 7.1 s on 1.91.0 (first on the package cache). Two `nx` commands with stages of their own therefore take turns as plain cargo commands do.
@@ -2776,7 +3496,7 @@ A spike on 20 November 2026 for nxr-yfh7zh, on Linux x86-64 with 32 cores, cargo
 - **Cost.** A staged build that compiled nothing took 11 to 16 ms against 14 to 20 ms for plain cargo. No difference shows at that size.
 - **The stage's folder and plain cargo.** With a stage folder `target/.nx-rust-stage/<id>` left in the artifact directory, `cargo metadata --no-deps` reported the same directories, `cargo build --workspace` reported every crate `Fresh`, `cargo clean -p pa` left the folder's files alone and `cargo clean` removed it with the artifact directory.
 - **`--nx-bail`.** Read in Nx 24.0.6: `runTasks` of `tasks-runner/batch/run-batch.js` hands the batch implementation the batch's task graph, the combined options of each task, the last task's `overrides` and a context of `root`, `cwd`, `projectsConfigurations`, `nxJsonConfiguration`, `isVerbose: false`, `projectGraph` and `taskGraph`. `nxBail` stays among the orchestrator's `nxArgs` (`default-tasks-runner.js`, line 79), so a batch cannot tell that a run bails.
-- **`napi-build` and `wasm-build`.** The plugin runs their compile itself and hands the file that cargo reports to `@napi-rs/cli`'s functions or the `wasm-bindgen` CLI afterwards ([[DES-NAPI]], [[DES-WASM]]), so the flags reach cargo without going through either tool. In `napi-addons`, a staged `cargo build --workspace` with `NAPI_TYPE_DEF_TMP_FOLDER` set reported `libaddon_a.so`, `libaddon_b.so` and `libplain_cdylib.so` in the stage. The uplifted files of the artifact directory kept inode and modification time; on 1.91.0 only intermediates under `target/debug/deps` changed, as they do without a stage. In `wasm-packages` on 1.100.0, a staged `--target wasm32-unknown-unknown` build reported `codec.wasm`, `codec_b.wasm` and `plain_cdylib.wasm` in the stage's triple folder, and `wasm-bindgen` 0.2.130 turned the staged `codec.wasm` into `codec_bg.wasm`, `codec.js` and their type definitions. 1.91.0 has no wasm target installed here and was not tried for wasm.
+- **`napi-build` and `wasm-build`.** The plugin runs their compile itself and hands the file that cargo reports to `@napi-rs/cli`'s functions or the `wasm-bindgen` CLI afterwards ([DES-NAPI](artifacts.mara.md#01M78FHG7FRRT8J6Z5NYMT12A3), [DES-WASM](artifacts.mara.md#01M78FHG7FEJ8068G4VR6C06QJ)), so the flags reach cargo without going through either tool. In `napi-addons`, a staged `cargo build --workspace` with `NAPI_TYPE_DEF_TMP_FOLDER` set reported `libaddon_a.so`, `libaddon_b.so` and `libplain_cdylib.so` in the stage. The uplifted files of the artifact directory kept inode and modification time; on 1.91.0 only intermediates under `target/debug/deps` changed, as they do without a stage. In `wasm-packages` on 1.100.0, a staged `--target wasm32-unknown-unknown` build reported `codec.wasm`, `codec_b.wasm` and `plain_cdylib.wasm` in the stage's triple folder, and `wasm-bindgen` 0.2.130 turned the staged `codec.wasm` into `codec_bg.wasm`, `codec.js` and their type definitions. 1.91.0 has no wasm target installed here and was not tried for wasm.
 
 **Through Nx.** The reviewer's probes of nxr-yfh7zh (the cached `pack`, the held `cargo build` of `pb`, the glob output, the early hash) were run with Nx 24.0.6 and cargo 1.100.0 against a throwaway prototype, never committed. It was the plugin compiled from commit d0971e5 with three changes: a `build` group that selects the whole workspace ran cargo with a stage under `.nx/workspace-data/nx-rust/stage/<pid>-<n>` and the build directory from `cargo metadata`; the files that the messages named for its own crates' `bin`, `cdylib` and `staticlib` targets, and the records beside them, were moved into the artifact directory and the stage removed; and the batch neither left groups for a following batch nor kept files.
 
@@ -2790,16 +3510,21 @@ A spike on 20 November 2026 for nxr-yfh7zh, on Linux x86-64 with 32 cores, cargo
 | `pa:build-alt`, a copy of `pa:build` with `pa`'s `.env.build-alt` setting the flag and depending on `pa:build`                                                                                                      | every entry `flag`                              | every entry `flag`: both own one path, which a stage cannot help                                                                                 |
 
 In the cold run of both builds and `pack` with the stage, each restored executable matched what its own command built byte for byte, `pack` was restored as `plain`, and plain `cargo build --workspace -v` afterwards reported both crates `Fresh` without the flag and with it. The prototype's moved records let the build input check run unchanged. The runs used two or three small crates. macOS, `.dSYM`, other Nx versions, the `hakari` and `cargo` strategies through Nx, and wasm on 1.91.0 were not tried.
-:::
 
-:::mara evidence EVD-CARGO-NESTED-DIRECTORY-CREATION
-:mid: 01M7FC5XF9QX97J7ZBYQVPPSN3
-:title: Two cargo commands that at once create artifact directories lying one inside the other
-:status: accepted
-:supports: DES-OUTPUTS
-:supports: DES-DIAGNOSTICS
+---
 
-Experiments on 15 November 2026 for nxr-cq1cx1, on Linux x86-64 with 32 cores and a btrfs file system, `nx` 24.0.6, Node.js 26.12.0, cargo 1.100.0 and 1.91.0, `RUSTUP_AUTO_INSTALL=0` and the Nx daemon off, on a machine whose load average was between about 7 and 50 from other work. Each run used a new copy of the fixture `shared-executables` laid out as its case "one workspace's artifact directory is the folder of a triple in another's" lays it out: `build.target-dir = "target"` in `.cargo/config.toml` at the repository root, `build.target-dir = "../target/x86_64-unknown-linux-gnu"` in `tools/.cargo/config.toml`, `beta`'s binary renamed, and `alpha`'s `build` for the host triple through its `project.json`. The artifact directory of `tools` is then the folder of that triple in the artifact directory of `rust` ([[DES-OUTPUTS]], "Files of one name"), and neither exists before the first build.
+<a id="01M7FC5XF9QX97J7ZBYQVPPSN3"></a>
+
+### Two cargo commands that at once create artifact directories lying one inside the other
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-CARGO-NESTED-DIRECTORY-CREATION                         |
+| Status   | Accepted                                                    |
+| Supports | [DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4)   |
+| Supports | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG) |
+
+Experiments on 15 November 2026 for nxr-cq1cx1, on Linux x86-64 with 32 cores and a btrfs file system, `nx` 24.0.6, Node.js 26.12.0, cargo 1.100.0 and 1.91.0, `RUSTUP_AUTO_INSTALL=0` and the Nx daemon off, on a machine whose load average was between about 7 and 50 from other work. Each run used a new copy of the fixture `shared-executables` laid out as its case "one workspace's artifact directory is the folder of a triple in another's" lays it out: `build.target-dir = "target"` in `.cargo/config.toml` at the repository root, `build.target-dir = "../target/x86_64-unknown-linux-gnu"` in `tools/.cargo/config.toml`, `beta`'s binary renamed, and `alpha`'s `build` for the host triple through its `project.json`. The artifact directory of `tools` is then the folder of that triple in the artifact directory of `rust` ([DES-OUTPUTS](caching.mara.md#01M78FHG7FRNE981T1QJYYVWC4), "Files of one name"), and neither exists before the first build.
 
 **Plain cargo.** `cargo build -p alpha --target x86_64-unknown-linux-gnu` in `rust/` and `cargo build -p tools` in `tools/`, started at once from a shell after `rm -rf target`, 100 rounds on each version. In 97 rounds on 1.100.0 and 99 on 1.91.0, one of the two printed `Blocking waiting for file lock on build directory`: both take the lock in `target/x86_64-unknown-linux-gnu/debug`, so they do not compile into the shared folder at once. In 2 of the 100 rounds on 1.100.0, and in none on 1.91.0, the command of `tools` failed before it took that lock, while that of `alpha` built:
 
@@ -2816,14 +3541,19 @@ A third series on 1.100.0, with `inotifywait -m -r` on the repository root and s
 **Through Nx.** The first `nx run-many -t build` in such a copy starts `rust:lockfile`, `alpha:build` and `tools:build` together, Nx's default of three tasks at once, since neither uncached `build` depends on the lockfile task. 7 of 750 such runs failed on 1.100.0 and 7 of 500 on 1.91.0, each time `tools:build` with the message above, while `alpha:build`, `gamma:build` and `beta:build` built. With `--parallel=1`, which runs one task at a time, none of 500 failed on 1.100.0. The test case as a whole, whose later commands find both directories, passed 384 of 384 runs on 1.100.0 before its first command had `--parallel=1`, at load averages of about 19 and, with 32 busy loops beside it, about 50, and 50 of 50 with it.
 
 So two cargo commands that at once create artifact directories lying one inside the other can fail in cargo itself, before either takes its build lock, wherever the outer directory does not exist yet: on a first build, in a fresh checkout, or after `cargo clean`. A second run, which finds the directories, builds. Plain cargo fails in the same way when two such commands start at once. `cargo check`, `cargo test --no-run` and `cargo doc` in `tools/` alone created its artifact directory in the same way on 1.100.0, with `CACHEDIR.TAG` in it, so other commands than `build` can meet this as well; that they do was not tried, nor macOS, other file systems, or a build directory (`build.build-dir`) inside another workspace's artifact directory.
-:::
 
-:::mara evidence EVD-CARGO-PACKAGE-SPECS
-:mid: 01M7DDYY0FZTWB37H3FWXCG5AF
-:title: A package ID specification selects a member that another package of the resolve shares a name with
-:status: accepted
-:supports: DES-INVOCATION
-:supports: DES-TARGET-COMMANDS
+---
+
+<a id="01M7DDYY0FZTWB37H3FWXCG5AF"></a>
+
+### A package ID specification selects a member that another package of the resolve shares a name with
+
+| Type     | Evidence                                                          |
+| -------- | ----------------------------------------------------------------- |
+| ID       | EVD-CARGO-PACKAGE-SPECS                                           |
+| Status   | Accepted                                                          |
+| Supports | [DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB)      |
+| Supports | [DES-TARGET-COMMANDS](targets.mara.md#01M78FHG7F9X4M34PB2MP9Y7S8) |
 
 Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, the older through a private `RUSTUP_HOME` with `RUSTUP_AUTO_INSTALL=0`, in throwaway workspaces outside this repository; then with the plugin built from this repository, in a copy of the fixture `shared-names`. A workspace had the members `good` 0.1.0 in `crates/good`, `app` with a binary, and `renamed` in `crates/folder-x`. In one copy `good` depended on `old = { package = "good", path = "../../../outside/good" }`, a package `good` 0.2.0 outside the workspace; in another it depended on `published = { package = "good", version = "0.1.0" }` from a directory registry that `[source.crates-io]` in the workspace's `.cargo/config.toml` put in place of crates.io, so that the resolve held a registry package with the member's name and version.
 
@@ -2835,25 +3565,30 @@ Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, t
 - **Through the plugin.** Built from this repository before the change, the plugin ran `build`, `check`, `lint`, `test`, `bench` and `run` of `good` with `-p good`, and each failed with "specification `good` is ambiguous"; in the registry copy, `kit` in `crates/toolkit` with a registry `kit` 0.1.0, every target with `-p kit` failed in the same way. `fmt-check` and the lockfile task passed in both. With each task asking cargo for the member's `id` in the workspace root, every target of both crates passed with cargo 1.100.0, and with `RUSTUP_TOOLCHAIN` set to 1.91.0.
 
 So a name, and a name with its version, can be ambiguous wherever the packages that a command reaches include another package of that name, which the `--no-deps` report does not show. The specification that cargo reports for the member is unambiguous for every command but `cargo fmt`, which takes names and matches only members. It holds the path through which cargo reached the workspace, so it has to be asked where the command starts.
-:::
 
-:::mara evidence EVD-WORKSPACE-TEST-SELECTION
-:mid: 01M7DMTE8WX7EFV63DCFSGAWWJ
-:title: How a test step runs only some crates' tests while it compiles the whole workspace
-:status: accepted
-:supports: ADR-TEST-SELECTING-RUNNER
-:supports: DES-TEST-RUN
-:supports: DES-UNIFICATION
-:supports: RISK-TEST-RUNNER-MACOS
+---
 
-Superseded in part: since the maintainer's decision of 14 November 2026 ([[ADR-TEST-SELECTING-RUNNER]]), doctests no longer go through a runner, so what this item finds about doctests started through the runner records why that design was given up; [[EVD-TEST-STEPS-SPLIT]] holds the experiments of the design that replaced it. Its findings on selection, features, fingerprints, a runner that the user configured, the cost of the runner's start and nextest still hold.
+<a id="01M7DMTE8WX7EFV63DCFSGAWWJ"></a>
 
-Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 (3acc79c0c 2026-11-05) and 1.91.0 (ea2d97820 2025-10-10), Node 26.12.0 and cargo-nextest 0.9.152 (26ebeda79 2026-11-13), the released binary in a folder of its own, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own, offline, in throwaway folders outside this repository. Two sets of runs are recorded: those of the research for [[ADR-TEST-SELECTING-RUNNER]], whose commands and outputs are taken as its report gives them (marked _research_), and those run for this item, which repeated the central cases on both versions and added the rest (marked _rerun_). The rerun's workspace had resolver 2 and these members: `shared`, with a feature `x`; `a`, which depends on `shared` without features and on a path crate `ext` outside the workspace with its feature `e1`; `b`, which depends on `shared` with `x` and on `ext` with `e2`; `ab`, with 300 doctests in edition 2021; `c`, in edition 2024 with 201 doctests, whose unit test, integration test and one doctest fail when `C_FAIL` is set and which has a test that sleeps for 2 s; and `binonly`, with only `src/main.rs`. The research's workspace was alike, with 200 and 202 doctests. The selecting runner was a Node script, started as `["/usr/bin/node", "<script>"]`, that took the group as a JSON list, ran the programs of its packages, recorded skips and failed closed; the runner that [[DES-TEST-RUN]] now describes, which records every start and its end, is tried in [[EVD-TEST-RUNNER-EVIDENCE]]; a `/bin/sh` script with the same logic, started as `["<script>"]`, served for the timings.
+### How a test step runs only some crates' tests while it compiles the whole workspace
+
+| Type     | Evidence                                                        |
+| -------- | --------------------------------------------------------------- |
+| ID       | EVD-WORKSPACE-TEST-SELECTION                                    |
+| Status   | Accepted                                                        |
+| Supports | [ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV)        |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ)      |
+| Supports | [DES-UNIFICATION](execution.mara.md#01M78FHG7F43VP2172VYY8A41Q) |
+| Supports | [RISK-TEST-RUNNER-MACOS](#01M7DMTE8WRK2WHQ2R4VXJTWQ3)           |
+
+Superseded in part: since the maintainer's decision of 14 November 2026 ([ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV)), doctests no longer go through a runner, so what this item finds about doctests started through the runner records why that design was given up; [EVD-TEST-STEPS-SPLIT](#01M7DWK026HSWGJ537QZAN4GHV) holds the experiments of the design that replaced it. Its findings on selection, features, fingerprints, a runner that the user configured, the cost of the runner's start and nextest still hold.
+
+Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 (3acc79c0c 2026-11-05) and 1.91.0 (ea2d97820 2025-10-10), Node 26.12.0 and cargo-nextest 0.9.152 (26ebeda79 2026-11-13), the released binary in a folder of its own, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own, offline, in throwaway folders outside this repository. Two sets of runs are recorded: those of the research for [ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV), whose commands and outputs are taken as its report gives them (marked _research_), and those run for this item, which repeated the central cases on both versions and added the rest (marked _rerun_). The rerun's workspace had resolver 2 and these members: `shared`, with a feature `x`; `a`, which depends on `shared` without features and on a path crate `ext` outside the workspace with its feature `e1`; `b`, which depends on `shared` with `x` and on `ext` with `e2`; `ab`, with 300 doctests in edition 2021; `c`, in edition 2024 with 201 doctests, whose unit test, integration test and one doctest fail when `C_FAIL` is set and which has a test that sleeps for 2 s; and `binonly`, with only `src/main.rs`. The research's workspace was alike, with 200 and 202 doctests. The selecting runner was a Node script, started as `["/usr/bin/node", "<script>"]`, that took the group as a JSON list, ran the programs of its packages, recorded skips and failed closed; the runner that [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) now describes, which records every start and its end, is tried in [EVD-TEST-RUNNER-EVIDENCE](#01M7DQV5AEH9FVXN5XCW749Y6G); a `/bin/sh` script with the same logic, started as `["<script>"]`, served for the timings.
 
 - **Selecting crates narrows the features** (rerun; research for `--exclude` and the target flags). After `cargo test --no-run --workspace`, `cargo test --doc -p a` compiled `ext`, `shared` and `a` again, on both versions. `--workspace --exclude` narrowed the features as `-p` did, `--lib` ran the unit tests of every library, and unit-test names such as `tests::it_works` carry no crate (research). With `resolver.feature-unification = "workspace"` given by `--config`, or `CARGO_RESOLVER_FEATURE_UNIFICATION=workspace`, both versions printed "warning: ignoring `resolver.feature-unification` without `-Zfeature-unification`", and `cargo test --no-run -p b` compiled `ext` and `b` again; with `-Zfeature-unification` added, both failed with "the `-Z` flag is only accepted on the nightly channel of Cargo, but this is the `stable` channel" and exit code 101. The research found the same with the setting in `.cargo/config.toml`.
 - **The runner runs only the selected crates** (rerun; research with a shell script). `C_FAIL=1 NX_RUST_TEST_PACKAGES='["a","b"]' cargo test --workspace --no-fail-fast --config 'target.x86_64-unknown-linux-gnu.runner=["/usr/bin/node","<script>"]'` exited with 0 and compiled nothing, on both versions. The unit test, integration test and doctest of `a` and of `b` passed, and no test of `c` ran, its failing tests and its 2-second test included. Cargo started the runner for each test binary and rustdoc for each doctest, the same on both versions: for `a` 3 times (2 binaries, 1 doctest), `b` 3, `ab` 301, `binonly` 1, `c` 3 (2 binaries and one merged program for its 201 doctests) and `shared` 2, each time in the package's folder and with the package's name in `CARGO_PKG_NAME`, also for doctests that rustdoc ran from its temporary folder. In a second workspace, a package `other` whose library is named `good`, beside a package `good`, and a package `my-crate` in edition 2024 had their own names in `CARGO_PKG_NAME`, while cargo printed `Doc-tests good` for both `good` and `other`, and `Doc-tests my_crate`. The `Running` line of each test binary named the path that the runner received as its program. With `c` selected and `C_FAIL=1`, its 2-second test ran, and cargo ended with "3 targets failed:" `` `-p c --lib` ``, `` `-p c --test c_it` `` and `` `-p c --doc` `` and exit code 101.
-- **A skip looks like a pass** (rerun; the control plane's check found it first). For each skipped doctest of `ab`, rustdoc printed a line such as `test crates/ab/src/lib.rs - f1 (line 1) ... ok`, and then `test result: ok. 300 passed`, on both versions. A skipped test binary left only cargo's `Running` line. The skipped merged program of `c` printed no test line: cargo 1.100.0 printed only "all doctests ran in 0.23s; merged doctests compilation took 0.22s", cargo 1.91.0 nothing. A skipped standalone `should_panic` doctest, which this workspace lacked, is reported as failed ([[EVD-TEST-RUNNER-EVIDENCE]]).
-- **Failing closed** (rerun). With `NX_RUST_TEST_PACKAGES='a b'`, which is no JSON list, the runner exited with 125 at every call and cargo listed all 14 targets of the workspace as failed; without the variable, the doctest step failed with exit code 101. Without `CARGO_PKG_NAME`, and with it empty, the runner exited with 125 and started nothing. With the record folder missing, each skip failed, and cargo listed every target of the crates outside the selection as failed while those of `a` passed. The integration test of `a` asserted that neither of the runner's two variables reached it, and passed through the runner. That workspace had no `should_panic` doctest; for such a doctest rustdoc counts the runner's failure as a pass ([[EVD-TEST-RUNNER-EVIDENCE]]).
+- **A skip looks like a pass** (rerun; the control plane's check found it first). For each skipped doctest of `ab`, rustdoc printed a line such as `test crates/ab/src/lib.rs - f1 (line 1) ... ok`, and then `test result: ok. 300 passed`, on both versions. A skipped test binary left only cargo's `Running` line. The skipped merged program of `c` printed no test line: cargo 1.100.0 printed only "all doctests ran in 0.23s; merged doctests compilation took 0.22s", cargo 1.91.0 nothing. A skipped standalone `should_panic` doctest, which this workspace lacked, is reported as failed ([EVD-TEST-RUNNER-EVIDENCE](#01M7DQV5AEH9FVXN5XCW749Y6G)).
+- **Failing closed** (rerun). With `NX_RUST_TEST_PACKAGES='a b'`, which is no JSON list, the runner exited with 125 at every call and cargo listed all 14 targets of the workspace as failed; without the variable, the doctest step failed with exit code 101. Without `CARGO_PKG_NAME`, and with it empty, the runner exited with 125 and started nothing. With the record folder missing, each skip failed, and cargo listed every target of the crates outside the selection as failed while those of `a` passed. The integration test of `a` asserted that neither of the runner's two variables reached it, and passed through the runner. That workspace had no `should_panic` doctest; for such a doctest rustdoc counts the runner's failure as a pass ([EVD-TEST-RUNNER-EVIDENCE](#01M7DQV5AEH9FVXN5XCW749Y6G)).
 - **Nothing is compiled again** (rerun; research for its shell script). After `cargo test --no-run --workspace`, runs with the runner and the selections `a b`, `c`, `shared binonly` and `a`, `cargo build --workspace`, `cargo test --no-run --workspace`, the doctest step with the runner and `cargo test --workspace` without it compiled nothing, on both versions: neither the runner nor its variables enter a fingerprint.
 - **A compile error stops the step** (rerun). With a unit test of `c` that does not compile, the run with the selection `a b` exited with 101 after "error: could not compile `c` (lib test) due to 1 previous error" and printed no `test result` line, on both versions. With the library of `c` broken, the doctest step stopped after "could not compile `c` (lib)".
 - **The library path** (rerun; research for macOS, read and not run). A test of a member `user`, linked against a member `dy` of crate type `dylib` and built with `RUSTFLAGS="-C prefer-dynamic"`, passed through the Node runner on both versions; run directly, it failed with "error while loading shared libraries: libdy.so: cannot open shared object file". On macOS cargo sets `DYLD_FALLBACK_LIBRARY_PATH` instead of `LD_LIBRARY_PATH`, and the system removes `DYLD_*` variables when it starts a binary that System Integrity Protection protects, such as `/bin/sh` and `/usr/bin/env`.
@@ -2883,82 +3618,102 @@ Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 (3acc79c0c 20
 
 - **nextest** (research; the cases with a result rerun with 0.9.152 on both versions). After `cargo test --no-run --workspace`, `C_FAIL=1 cargo nextest run --workspace --no-fail-fast --no-tests=pass -E 'package(=a) | package(=b)'` exited with 0 and compiled nothing, printing "Starting 4 tests across 4 binaries (5 binaries skipped)"; the research's logging runner showed that nextest started the binaries of `a` and `b` only. A filterset that matched no test, `package(=a) & test(=nosuch)`, failed with exit code 4 and "error: no tests to run", and passed with `--no-tests=pass`; the research found the same with `package(shared)`. `package(=x)` for a name that no package has failed with exit code 94, "operator didn't match any packages". `package(a*)` matched `a` and `ab`, `package(=a)` only `a`. With a unit test of `c` that does not compile, the run stopped before any test with "command `…/cargo '--color=never' test --no-run '--message-format=json-render-diagnostics' --workspace` exited with code 101" (research, both versions): nextest builds through `cargo test --no-run` and stops as `cargo test` does. The doctest step with the selecting runner after it compiled nothing and skipped 302 programs (rerun).
 
-So stable cargo has no flag that leaves out crates without narrowing features, while a runner given with `--config` and a nextest filterset keep the whole-workspace build on both versions and run the selected crates' tests only. Cargo and rustdoc count a skip as a pass, so a result must not rest on it, and rustdoc counts a runner's failure as a pass for a `should_panic` doctest ([[EVD-TEST-RUNNER-EVIDENCE]]). A runner given on the command line replaces the user's on 1.100.0, and on 1.91.0 is appended to it, fails beside it or loses to it, and stable cargo cannot say which runner applies. Not run: macOS, dash or another `/bin/sh` than bash, large workspaces, and cargo-affected under `--workspace` ([[RISK-CARGO-AFFECTED]]).
-:::
+So stable cargo has no flag that leaves out crates without narrowing features, while a runner given with `--config` and a nextest filterset keep the whole-workspace build on both versions and run the selected crates' tests only. Cargo and rustdoc count a skip as a pass, so a result must not rest on it, and rustdoc counts a runner's failure as a pass for a `should_panic` doctest ([EVD-TEST-RUNNER-EVIDENCE](#01M7DQV5AEH9FVXN5XCW749Y6G)). A runner given on the command line replaces the user's on 1.100.0, and on 1.91.0 is appended to it, fails beside it or loses to it, and stable cargo cannot say which runner applies. Not run: macOS, dash or another `/bin/sh` than bash, large workspaces, and cargo-affected under `--workspace` ([RISK-CARGO-AFFECTED](#01M78FHG7F5EH60R4TW2E645EW)).
 
-:::mara evidence EVD-TEST-RUNNER-EVIDENCE
-:mid: 01M7DQV5AEH9FVXN5XCW749Y6G
-:title: What shows that a program started through a runner ran
-:status: accepted
-:supports: ADR-TEST-SELECTING-RUNNER
-:supports: DES-TEST-RUN
-:supports: DES-BATCH
-:supports: DES-UNIFICATION
-:supports: RISK-TEST-RUNNER-MACOS
+---
 
-Superseded in part: the record, the check and the counts tried here were for doctests run through a runner, which the plugin no longer does ([[ADR-TEST-SELECTING-RUNNER]]); the item stays as the record of why. Its findings that a group of one task needs whole-workspace selection, and how cargo lists a failure in a workspace with one member, still hold.
+<a id="01M7DQV5AEH9FVXN5XCW749Y6G"></a>
+
+### What shows that a program started through a runner ran
+
+| Type     | Evidence                                                        |
+| -------- | --------------------------------------------------------------- |
+| ID       | EVD-TEST-RUNNER-EVIDENCE                                        |
+| Status   | Accepted                                                        |
+| Supports | [ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV)        |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ)      |
+| Supports | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)       |
+| Supports | [DES-UNIFICATION](execution.mara.md#01M78FHG7F43VP2172VYY8A41Q) |
+| Supports | [RISK-TEST-RUNNER-MACOS](#01M7DMTE8WRK2WHQ2R4VXJTWQ3)           |
+
+Superseded in part: the record, the check and the counts tried here were for doctests run through a runner, which the plugin no longer does ([ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV)); the item stays as the record of why. Its findings that a group of one task needs whole-workspace selection, and how cargo lists a failure in a workspace with one member, still hold.
 
 Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, Node 26.12.0 and bash 5.3.20 as `/bin/sh`, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own, offline, in throwaway folders outside this repository, run after a review of the selecting runner that reported the first three wrong passes below. Every result held on both versions unless it says otherwise. Each doctest wrote a marker file before anything else, so that a marker shows that its code ran.
 
 - **What the runner learns.** A probing runner logged, for each start, `CARGO_PKG_NAME`, the program and the environment. No `UNSTABLE_RUSTDOC_TEST_PATH`, `UNSTABLE_RUSTDOC_TEST_LINE` or other variable of rustdoc reached it, so it cannot tell which doctest it starts. Each standalone doctest that ran was one start of rustdoc's `rust_out` in a folder of its own; a crate in edition 2024 had one start for its merged program, whose folder also held `doctest_runner_2024.rs`, `doctest_bundle_2024.rs` and `libdoctest_bundle_2024.rlib`. Doctests marked `no_run`, `compile_fail` and `ignore` started nothing. A standalone `should_panic` doctest that panicked ended with 101, one that called `std::process::exit(3)` with 3. rustdoc's line for a standalone `should_panic` doctest carried no mark, `test a/src/lib.rs - p (line 5) ... ok`, while those of merged doctests did, `... - should panic ... ok`; `no_run` and `compile_fail` doctests are marked ` - compile` and ` - compile fail`.
-- **Wrong passes of the first runner.** The members `a1` and `a2`, in edition 2021 with `[lib] test = false`, each had one `should_panic` doctest that writes its marker and then panics, and `m1`, in edition 2024, the same. With the runner of [[EVD-WORKSPACE-TEST-SELECTION]] and `NX_RUST_TEST_PACKAGES=bad`, the runner exited with 125 at every start, and rustdoc printed `test a1/src/lib.rs - f (line 1) ... ok` and the same for `a2`, with no marker and no record. A valid list with `NODE_OPTIONS=--not-a-real-node-option`, under which the runner never started, gave the same. Only `m1` failed, because rustdoc counts a non-zero exit of a merged program as a failure. In a workspace with a member `dy` of crate type `dylib`, built with `RUSTFLAGS="-C prefer-dynamic"` and with the toolchain's `lib/rustlib/<host>/lib` on `LD_LIBRARY_PATH`, plain cargo passed the doctests of `dl` (edition 2021), `dm` (2024) and `dp` (one `should_panic` doctest) and wrote every marker. With `LD_LIBRARY_PATH` removed in the runner's process by `/usr/bin/env -u LD_LIBRARY_PATH` before the runner, the loader failed with status 127, and the `should_panic` doctests of `dp` and `dl` were reported `ok` with no marker. Plain cargo does the same on its own: with `RUSTDOCFLAGS="-C prefer-dynamic"`, under which the doctest could not find `libstd`, it reported the `should_panic` doctest `ok`.
+- **Wrong passes of the first runner.** The members `a1` and `a2`, in edition 2021 with `[lib] test = false`, each had one `should_panic` doctest that writes its marker and then panics, and `m1`, in edition 2024, the same. With the runner of [EVD-WORKSPACE-TEST-SELECTION](#01M7DMTE8WX7EFV63DCFSGAWWJ) and `NX_RUST_TEST_PACKAGES=bad`, the runner exited with 125 at every start, and rustdoc printed `test a1/src/lib.rs - f (line 1) ... ok` and the same for `a2`, with no marker and no record. A valid list with `NODE_OPTIONS=--not-a-real-node-option`, under which the runner never started, gave the same. Only `m1` failed, because rustdoc counts a non-zero exit of a merged program as a failure. In a workspace with a member `dy` of crate type `dylib`, built with `RUSTFLAGS="-C prefer-dynamic"` and with the toolchain's `lib/rustlib/<host>/lib` on `LD_LIBRARY_PATH`, plain cargo passed the doctests of `dl` (edition 2021), `dm` (2024) and `dp` (one `should_panic` doctest) and wrote every marker. With `LD_LIBRARY_PATH` removed in the runner's process by `/usr/bin/env -u LD_LIBRARY_PATH` before the runner, the loader failed with status 127, and the `should_panic` doctests of `dp` and `dl` were reported `ok` with no marker. Plain cargo does the same on its own: with `RUSTDOCFLAGS="-C prefer-dynamic"`, under which the doctest could not find `libstd`, it reported the `should_panic` doctest `ok`.
 - **Merged doctests with a runner.** With any runner, the merged program printed "WARNING: No rustdoc doctest environment variable provided so doctests will be run in the same process". Its doctest that called `std::process::exit(3)` ended the program with status 3, cut off the lines of the doctests after it and failed the crate, where plain cargo ran each merged doctest in a process of its own and passed them all. With a doctest that called `std::process::exit(0)` before one that fails, cargo exited with 0 and printed no test line, where plain cargo reported `b1 ... FAILED` and exited with 101. A runner that set `RUSTDOC_DOCTEST_BIN_PATH` to the merged program's path gave the same lines and status as plain cargo in both cases, without the warning. Plain rustdoc does not give a standalone doctest that variable: one that read it found none.
-- **The record and the check.** Prototypes of the two runners of [[DES-TEST-RUN]], a `/bin/sh` script and a Node script, recorded each start before anything else and then its end, and a script applied the plugin's three conditions to the record and to cargo's two output streams, read as one. With a valid list every task passed and every marker was written. With `bad`, every start had an error entry and `a1`, `a2` and `m1` failed. The Node runner under the bad `NODE_OPTIONS` left no record, and `a1` and `a2` failed on the count, one doctest reported and none recorded, and `m1` on cargo's list; the shell runner under the same variable passed. With `LD_LIBRARY_PATH` removed in either runner's process, every start ended with 127, and `dl`, `dm` and `dp` failed, `dp` on the record alone. With the record folder missing or read-only, nothing was recorded, and `a1` and `a2` failed on the count. With the runner killed after it recorded its start, and with an end that could not be recorded, the records had no end, and every task failed, also where the markers show that the doctests ran. A standalone `should_panic` doctest that calls `std::process::exit(3)` failed its crate on the status 3, where plain cargo passes it; the same doctest in a merged program passed, as under plain cargo. With one crate selected, another crate's skipped standalone `should_panic` doctest exited with 0 and rustdoc reported it as failed, so cargo exited with 101 while the selected task passed. 300 standalone doctests, a merged program of 200 doctests and three test binaries in one step gave 304 records, each with its start and the status 0, and the check passed.
+- **The record and the check.** Prototypes of the two runners of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ), a `/bin/sh` script and a Node script, recorded each start before anything else and then its end, and a script applied the plugin's three conditions to the record and to cargo's two output streams, read as one. With a valid list every task passed and every marker was written. With `bad`, every start had an error entry and `a1`, `a2` and `m1` failed. The Node runner under the bad `NODE_OPTIONS` left no record, and `a1` and `a2` failed on the count, one doctest reported and none recorded, and `m1` on cargo's list; the shell runner under the same variable passed. With `LD_LIBRARY_PATH` removed in either runner's process, every start ended with 127, and `dl`, `dm` and `dp` failed, `dp` on the record alone. With the record folder missing or read-only, nothing was recorded, and `a1` and `a2` failed on the count. With the runner killed after it recorded its start, and with an end that could not be recorded, the records had no end, and every task failed, also where the markers show that the doctests ran. A standalone `should_panic` doctest that calls `std::process::exit(3)` failed its crate on the status 3, where plain cargo passes it; the same doctest in a merged program passed, as under plain cargo. With one crate selected, another crate's skipped standalone `should_panic` doctest exited with 0 and rustdoc reported it as failed, so cargo exited with 101 while the selected task passed. 300 standalone doctests, a merged program of 200 doctests and three test binaries in one step gave 304 records, each with its start and the status 0, and the check passed.
 - **`panic = "abort"`.** In `[profile.dev]` and `[profile.test]` it was ignored for tests, with cargo's warning, and a panicking doctest still ended with 101. With `RUSTDOCFLAGS="-C panic=abort"` it ended with status 134, SIGABRT as the shell reports it, which plain rustdoc counts as a pass for a `should_panic` doctest.
 - **Cargo's list without `-p`.** Under `--workspace` in a workspace with one member, cargo printed "to rerun pass `--doc`" and listed `` `--doc` ``; with `-p e`, and with two members or a root package beside the member, it named the package.
-- **The shell.** `/bin/sh` did not read a script named by `ENV` or `BASH_ENV`. With `SHELLOPTS=errexit`, bash as `/bin/sh` ended the runner right after a failing program, before it recorded the end; with the options reset as the script's first command, the end was recorded. Under `noexec` and `onecmd` the reset cannot help ([[EVD-TEST-RUNNER-SILENT-EXIT]]).
+- **The shell.** `/bin/sh` did not read a script named by `ENV` or `BASH_ENV`. With `SHELLOPTS=errexit`, bash as `/bin/sh` ended the runner right after a failing program, before it recorded the end; with the options reset as the script's first command, the end was recorded. Under `noexec` and `onecmd` the reset cannot help ([EVD-TEST-RUNNER-SILENT-EXIT](#01M7DT543KQM8ZV17Y8RQK1SAZ)).
 - **Cost** (cargo 1.100.0, 32 cores, three rounds each). 200 starts one after another, each of `/bin/true` for a selected package, took 0.19 s through the recording shell script, 3.0 s through the recording Node script and 0.04 s without a runner. A test step with 304 starts took 1.67–1.74 s without a runner, 1.67–1.86 s through the shell script and 2.03–2.23 s through the Node script with 32 test threads, and 2.67–2.76 s, 2.86–3.02 s and 4.15–4.39 s with `--test-threads=4`.
 - **A group of one task.** A member `a` depends on `shared` without its feature `x`, a member `b` switches `x` on, and a test of `a` asserts that `x` is off: `cargo test -p a` passed, and `cargo test --workspace` with the runner selecting `a` failed that test.
 
-So the status that cargo or rustdoc reports does not show that a program ran, while a record of every start and its end, with the count of standalone doctests, caught each case tried; a runner that ends with 0 before it records anything was not among them, and [[EVD-TEST-RUNNER-SILENT-EXIT]] shows that every kind of program then needs comparing. A runner takes away the isolation of merged doctests unless the variable is set, and selecting one crate with `-p` under `workspace-build` gives it other features than the whole workspace. Not run: macOS, and a `/bin/sh` other than bash.
-:::
+So the status that cargo or rustdoc reports does not show that a program ran, while a record of every start and its end, with the count of standalone doctests, caught each case tried; a runner that ends with 0 before it records anything was not among them, and [EVD-TEST-RUNNER-SILENT-EXIT](#01M7DT543KQM8ZV17Y8RQK1SAZ) shows that every kind of program then needs comparing. A runner takes away the isolation of merged doctests unless the variable is set, and selecting one crate with `-p` under `workspace-build` gives it other features than the whole workspace. Not run: macOS, and a `/bin/sh` other than bash.
 
-:::mara evidence EVD-TEST-RUNNER-SILENT-EXIT
-:mid: 01M7DT543KQM8ZV17Y8RQK1SAZ
-:title: What cargo shows of each program that a runner starts, and how a runner can end with 0 without running
-:status: accepted
-:supports: DES-TEST-RUN
-:supports: ADR-TEST-SELECTING-RUNNER
-:supports: RISK-TEST-RUNNER-MACOS
+---
 
-Superseded in part: the comparison of the record with cargo's and rustdoc's human-readable output tried here was given up ([[ADR-TEST-SELECTING-RUNNER]]), and test binaries are now compared with cargo's JSON messages ([[EVD-TEST-STEPS-SPLIT]]). That a runner's interpreter can end with 0 before it records anything still holds.
+<a id="01M7DT543KQM8ZV17Y8RQK1SAZ"></a>
 
-Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, the merged line also with 1.97.1, 1.98.1 and 1.99.0, Node 26.12.0 and bash 5.3.20 as `/bin/sh`, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own, offline, in throwaway folders outside this repository, after a second review of the selecting runner reported the first case. The prototypes of [[EVD-TEST-RUNNER-EVIDENCE]] served as runners, and a script applied the plugin's conditions. Every result held on both versions unless it says otherwise. The workspace had the members `u`, edition 2021, with a failing unit test and a passing integration test; `m`, edition 2024 with `[lib] test = false`, with one failing doctest, merged; `s`, edition 2021, with one passing doctest; and `e`, with a unit test that writes the `SHELLOPTS` and `BASHOPTS` it sees. Each test wrote a marker before anything else.
+### What cargo shows of each program that a runner starts, and how a runner can end with 0 without running
+
+| Type     | Evidence                                                   |
+| -------- | ---------------------------------------------------------- |
+| ID       | EVD-TEST-RUNNER-SILENT-EXIT                                |
+| Status   | Accepted                                                   |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) |
+| Supports | [ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV)   |
+| Supports | [RISK-TEST-RUNNER-MACOS](#01M7DMTE8WRK2WHQ2R4VXJTWQ3)      |
+
+Superseded in part: the comparison of the record with cargo's and rustdoc's human-readable output tried here was given up ([ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV)), and test binaries are now compared with cargo's JSON messages ([EVD-TEST-STEPS-SPLIT](#01M7DWK026HSWGJ537QZAN4GHV)). That a runner's interpreter can end with 0 before it records anything still holds.
+
+Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, the merged line also with 1.97.1, 1.98.1 and 1.99.0, Node 26.12.0 and bash 5.3.20 as `/bin/sh`, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own, offline, in throwaway folders outside this repository, after a second review of the selecting runner reported the first case. The prototypes of [EVD-TEST-RUNNER-EVIDENCE](#01M7DQV5AEH9FVXN5XCW749Y6G) served as runners, and a script applied the plugin's conditions. Every result held on both versions unless it says otherwise. The workspace had the members `u`, edition 2021, with a failing unit test and a passing integration test; `m`, edition 2024 with `[lib] test = false`, with one failing doctest, merged; `s`, edition 2021, with one passing doctest; and `e`, with a unit test that writes the `SHELLOPTS` and `BASHOPTS` it sees. Each test wrote a marker before anything else.
 
 - **A runner that ends with 0 without running.** `env SHELLOPTS=noexec /bin/sh -c 'set +n; printf RAN'` printed nothing and exited with 0. Under `SHELLOPTS=noexec`, and under `SHELLOPTS=onecmd`, with which bash ran the script's first line only, `cargo test --workspace --no-fail-fast` with the shell runner exited with 0, wrote no record and no marker, and a check of the three conditions of the second round passed `u` and `m`, whose tests fail; only `s` failed, on its count. Plain cargo in the same environment ran every test and exited with 101. `NODE_OPTIONS=--require=<preload>`, with a preload that calls `process.exit(0)` for the runner's script, and `NODE_OPTIONS='--import=data:text/javascript,process.exit(0)'` did the same to the Node runner. An exported function `BASH_FUNC_printf%%='() { :; }'` left record files without content while the tests ran. `NODE_OPTIONS=--check` was refused with exit code 9, and `BASHOPTS=failglob` changed nothing.
 - **What cargo prints for each program.** Cargo printed `Running unittests src/lib.rs (<path>)` and `Running tests/it.rs (<path>)` before each test binary that it started through the runner, also where the runner did nothing; the path counted from the workspace root, and with `CARGO_TARGET_DIR` outside the workspace it was absolute. Compared by real path, the printed paths were the paths that the runner received, two of two in both layouts on both versions. For standalone doctests rustdoc printed one line each, also where the runner did nothing. For a merged program that did nothing, cargo 1.100.0, 1.99.0, 1.98.1 and 1.97.1 printed rustdoc's line `all doctests ran in …; merged doctests compilation took …` in the crate's block. Cargo 1.91.0 printed it for a crate with merged and standalone doctests, but for a crate whose doctests are all merged printed the `Doc-tests m` header and nothing else, where a crate without doctests gives `running 0 tests` on every version tried and a crate with only standalone doctests gives no merged line.
-- **The check with every kind compared.** With a record required for every `Running` line and for every block with the merged line or without any run of libtest, `u`, `m`, `s` and `e` all failed under `noexec`, `onecmd`, the exported `printf` and the Node preload, with no marker written in the first three; In the workspace of [[EVD-TEST-RUNNER-EVIDENCE]] whose members have doctests only, `m1` failed under `noexec` on its merged program alone, also as the only selected crate, on 1.91.0 through its empty block and on 1.100.0 through the merged line. Valid runs passed `s` and `e` and failed `u` and `m` through cargo's list, as plain cargo does; the cases of [[EVD-TEST-RUNNER-EVIDENCE]], run again, gave the same results as there.
+- **The check with every kind compared.** With a record required for every `Running` line and for every block with the merged line or without any run of libtest, `u`, `m`, `s` and `e` all failed under `noexec`, `onecmd`, the exported `printf` and the Node preload, with no marker written in the first three; In the workspace of [EVD-TEST-RUNNER-EVIDENCE](#01M7DQV5AEH9FVXN5XCW749Y6G) whose members have doctests only, `m1` failed under `noexec` on its merged program alone, also as the only selected crate, on 1.91.0 through its empty block and on 1.100.0 through the merged line. Valid runs passed `s` and `e` and failed `u` and `m` through cargo's list, as plain cargo does; the cases of [EVD-TEST-RUNNER-EVIDENCE](#01M7DQV5AEH9FVXN5XCW749Y6G), run again, gave the same results as there.
 - **Starting the shell without the options.** With the runner started as `/usr/bin/env -u SHELLOPTS -u BASHOPTS /bin/sh <script>` and the user's values handed to the program through `/usr/bin/env`, `SHELLOPTS=noexec`, `onecmd` and `errexit` with `BASHOPTS=nullglob` gave complete records and the results of a valid run, and the test of `e` saw `SHELLOPTS` and `BASHOPTS` exactly as under plain cargo. With the runner started as `/bin/sh <script>` and `SHELLOPTS=errexit`, the reset in the script ran, and the test saw a `SHELLOPTS` without `errexit`.
 
 So a runner's interpreter can end with 0 before the script does anything, in ways that no reset inside the script can stop, and only a comparison of every program that cargo's output reports with the record catches it. Cargo's output reported every program in the shapes tried, the merged programs through rustdoc's merged line or an empty block. Not run: macOS, Cargo 1.92 to 1.96, and a `/bin/sh` other than bash.
-:::
 
-:::mara evidence EVD-NX-24-VERBOSE
-:mid: 01M7DPAR4595KRB69GS95QAF1V
-:title: How Nx 24.0.6 tells a task that it runs verbosely, and what it stores of what the task prints
-:status: accepted
-:supports: DES-INVOCATION
-:supports: ADR-VERBOSE-COMMAND
+---
+
+<a id="01M7DPAR4595KRB69GS95QAF1V"></a>
+
+### How Nx 24.0.6 tells a task that it runs verbosely, and what it stores of what the task prints
+
+| Type     | Evidence                                                     |
+| -------- | ------------------------------------------------------------ |
+| ID       | EVD-NX-24-VERBOSE                                            |
+| Status   | Accepted                                                     |
+| Supports | [DES-INVOCATION](caching.mara.md#01M78NVF8ETK5PJ64FK45AEDFB) |
+| Supports | [ADR-VERBOSE-COMMAND](#01M7DPAR45W1QX0DDQQ8535BFC)           |
 
 A reading of the `nx` 24.0.6 package that this repository installs (paths under `dist/`), and runs on 14 November 2026 through this repository's test harness with Node.js 26.12.0 and cargo 1.100.0 on Linux, in copies of the fixture `shared-names`, with the plugin compiled from this repository and its executor printing the command in verbose mode (`nx-rust/test/verbose-command.spec.ts`).
 
 - **The flag and the variable.** `nx run`, `nx run-many` and `nx affected` take `--verbose` through `withVerbose` in `src/command-line/yargs-utils/shared-options.js`. Its middleware takes `NX_VERBOSE_LOGGING === 'true'` where the flag is missing, and then sets `process.env.NX_VERBOSE_LOGGING` of the `nx` process to `true` or `false`; `src/command-line/run-many/run-many.js` sets it to `true` again for `--verbose`. The flag thus wins over the variable both ways. Through the harness, `nx run` printed a task's command with `--verbose`, with `NX_VERBOSE_LOGGING=true` and with `--verbose` beside `NX_VERBOSE_LOGGING=false`, and printed none without either and with `--verbose=false` beside `NX_VERBOSE_LOGGING=true`, with the Nx daemon off and on; `nx run-many --verbose` printed it as well.
-- **What a task's executor gets.** Nx runs the executor of every task but `nx:run-commands` in a process of its own (`runTask` in `src/tasks-runner/task-orchestrator.js`). `ForkedProcessTaskRunner` reads `process.env.NX_VERBOSE_LOGGING === 'true'` when it is created and sends it with each task as `isVerbose` (`src/tasks-runner/forked-process-task-runner.js`). `bin/run-executor.js` hands that to `runExecutorInternal` in `src/command-line/run/run.js`, which puts it into the executor's context as `isVerbose` and passes it to `combineOptionsForExecutor`, which adds `verbose: true` to the options only where the executor's schema declares `verbose` or sets `additionalProperties: true` (`applyVerbosity` in `src/utils/params.js`), which the plugin's schemas do not ([[EVD-NX-24-OPTION-SEMANTICS]]). A task's environment does not always hold the variable as the middleware set it. `getTaskSpecificEnv` in `src/tasks-runner/task-env.js` copies the `nx` process's environment, deletes each variable whose value equals the one in the root `.env`, `.local.env` or `.env.local` (`unloadDotEnvFiles`), and then loads the task's dotenv files, the crate's `.env` among them, without overriding what is left. So where the root `.env` sets `NX_VERBOSE_LOGGING=false` and a crate's `.env` sets it to `true`, a run with `--verbose=false` or without the flag gives the crate's tasks `true` in their environment and `isVerbose: false` in their context. An independent review of this change found that case on 14 November 2026: a plugin that also read the task's environment printed the command under `--verbose=false` there, with the daemon on and off, and through the harness the plugin as it now is printed none, without the flag and with `--verbose=false`, and printed it with `--verbose`, with the daemon off and on. A batch implementation gets a context with `isVerbose: false` whatever the run (`src/tasks-runner/batch/run-batch.js`, line 28). Its process gets the environment that `getEnvVariablesForBatchProcess` builds once per command, a copy of the `nx` process's own, which the root `.env` files reached before the middleware set the variable, with no dotenv file unloaded or loaded ([[EVD-NX-24-BATCHES]]), so there the variable is the run's. The daemon creates the graph and runs no task, and it is not sent the `NX_VERBOSE_LOGGING` of its clients (`src/daemon/client/daemon-environment.js`).
+- **What a task's executor gets.** Nx runs the executor of every task but `nx:run-commands` in a process of its own (`runTask` in `src/tasks-runner/task-orchestrator.js`). `ForkedProcessTaskRunner` reads `process.env.NX_VERBOSE_LOGGING === 'true'` when it is created and sends it with each task as `isVerbose` (`src/tasks-runner/forked-process-task-runner.js`). `bin/run-executor.js` hands that to `runExecutorInternal` in `src/command-line/run/run.js`, which puts it into the executor's context as `isVerbose` and passes it to `combineOptionsForExecutor`, which adds `verbose: true` to the options only where the executor's schema declares `verbose` or sets `additionalProperties: true` (`applyVerbosity` in `src/utils/params.js`), which the plugin's schemas do not ([EVD-NX-24-OPTION-SEMANTICS](#01M7AD4BCYERDMG40D5WH2XMAK)). A task's environment does not always hold the variable as the middleware set it. `getTaskSpecificEnv` in `src/tasks-runner/task-env.js` copies the `nx` process's environment, deletes each variable whose value equals the one in the root `.env`, `.local.env` or `.env.local` (`unloadDotEnvFiles`), and then loads the task's dotenv files, the crate's `.env` among them, without overriding what is left. So where the root `.env` sets `NX_VERBOSE_LOGGING=false` and a crate's `.env` sets it to `true`, a run with `--verbose=false` or without the flag gives the crate's tasks `true` in their environment and `isVerbose: false` in their context. An independent review of this change found that case on 14 November 2026: a plugin that also read the task's environment printed the command under `--verbose=false` there, with the daemon on and off, and through the harness the plugin as it now is printed none, without the flag and with `--verbose=false`, and printed it with `--verbose`, with the daemon off and on. A batch implementation gets a context with `isVerbose: false` whatever the run (`src/tasks-runner/batch/run-batch.js`, line 28). Its process gets the environment that `getEnvVariablesForBatchProcess` builds once per command, a copy of the `nx` process's own, which the root `.env` files reached before the middleware set the variable, with no dotenv file unloaded or loaded ([EVD-NX-24-BATCHES](#01M7DA96ZTW4EQHXFWV0VTGNEA)), so there the variable is the run's. The daemon creates the graph and runs no task, and it is not sent the `NX_VERBOSE_LOGGING` of its clients (`src/daemon/client/daemon-environment.js`).
 - **What Nx stores.** With `outputCapture: "pipe"`, which the plugin's schemas set, Nx starts a task's process under a pseudo-terminal or with piped standard output and error, and keeps everything that arrives there as the task's terminal output, which it stores with the result; only without it does `bin/run-executor.js` patch the process's streams and write the file itself (`src/tasks-runner/forked-process-task-runner.js`, and `pipeOutputCapture` in `task-orchestrator.js`). Under the pseudo-terminal, the task's controlling terminal is Nx's. Nx 24.0.6 has no other channel from an executor to the user's terminal. Through the harness, `nx run good:test --verbose` printed the command, ran cargo and stored the result, and a later `nx run good:test` without the flag was a hit that printed the stored output, the command's lines included, and ran no cargo.
-- **Keys.** Nx's task hasher, called as the harness calls it, gave `good:build`, `good:test` and `rust:lockfile` the same hashes with `NX_VERBOSE_LOGGING=true` as without it; with an `env` input of the variable added to the plugin's inputs for the check, the hash of `good:test` differed. `--verbose` is not among a task's overrides ([[EVD-NX-24-OPTION-SEMANTICS]]).
+- **Keys.** Nx's task hasher, called as the harness calls it, gave `good:build`, `good:test` and `rust:lockfile` the same hashes with `NX_VERBOSE_LOGGING=true` as without it; with an `env` input of the variable added to the plugin's inputs for the check, the hash of `good:test` differed. `--verbose` is not among a task's overrides ([EVD-NX-24-OPTION-SEMANTICS](#01M7AD4BCYERDMG40D5WH2XMAK)).
 
 So both of Nx's ways of asking for verbose output reach a single task's executor as `isVerbose`, which alone is reliable there, and a batch only as the variable of its own process; what the executor prints is stored with the result and replayed by later hits; and the flag reaches no key. macOS, the terminal UI and `nx affected` were not run.
-:::
 
-:::mara evidence EVD-TEST-STEPS-SPLIT
-:mid: 01M7DWK026HSWGJ537QZAN4GHV
-:title: Test binaries checked against cargo's messages, doctests run without a runner
-:status: accepted
-:supports: ADR-TEST-SELECTING-RUNNER
-:supports: DES-TEST-RUN
-:supports: RISK-TEST-RUNNER-MACOS
+---
 
-Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, Node 26.12.0, bash 5.3.20 as `/bin/sh` and cargo-nextest 0.9.152, the released binary in a folder of its own, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own, offline, in throwaway folders outside this repository, after a fourth review of the selecting runner. Every result held on both versions unless it says otherwise. Each test wrote a marker before anything else. The runner was a Node script that records the start of every program before anything else, skips the packages outside the list and records the end of the others, and a script applied the conditions of [[DES-TEST-RUN]] to cargo's JSON messages and the record.
+<a id="01M7DWK026HSWGJ537QZAN4GHV"></a>
+
+### Test binaries checked against cargo's messages, doctests run without a runner
+
+| Type     | Evidence                                                   |
+| -------- | ---------------------------------------------------------- |
+| ID       | EVD-TEST-STEPS-SPLIT                                       |
+| Status   | Accepted                                                   |
+| Supports | [ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV)   |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) |
+| Supports | [RISK-TEST-RUNNER-MACOS](#01M7DMTE8WRK2WHQ2R4VXJTWQ3)      |
+
+Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, Node 26.12.0, bash 5.3.20 as `/bin/sh` and cargo-nextest 0.9.152, the released binary in a folder of its own, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own, offline, in throwaway folders outside this repository, after a fourth review of the selecting runner. Every result held on both versions unless it says otherwise. Each test wrote a marker before anything else. The runner was a Node script that records the start of every program before anything else, skips the packages outside the list and records the end of the others, and a script applied the conditions of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) to cargo's JSON messages and the record.
 
 - **Which targets plain `cargo test` runs.** A member `p` had a library, a binary `pb`, a binary `pnt` with `test = false`, an example `ex_t` with `test = true`, an example `ex_n` without, a bench `bt` with `test = true` and `harness = false`, a bench `bn` without `test = true`, integration tests `it`, `hf` with `harness = false` and `itn` with `test = false`; a member `q` had a library with `test = false` and an integration test. Plain `cargo test --workspace`, through a runner that logs, started the unit tests of `p`'s library and of `pb`, `it` of both members, `hf`, `ex_t`, `bt` and the doctest, and built `ex_n` as an ordinary binary without running it. `--tests` started the same test executables, without the doctest, and did not build `ex_n`; `--lib --bins --tests` also started `pnt` and the library of `q`, which have `test = false`; `--tests --examples` ran `ex_n` as a test; `--all-targets` also ran `bn`, `pnt` and `q`'s library. `cargo test --workspace --no-run`, then `--tests` with the runner, then `--doc`, wrote the markers of plain `cargo test` and built `ex_n`, and the second and third commands compiled nothing.
 - **Cargo's JSON messages.** With `--message-format=json-render-diagnostics`, cargo wrote one `compiler-artifact` message with `executable` and `profile.test` for each of the seven test executables, `fresh` where step 1 had built them, with the `package_id` of `cargo metadata` such as `path+file:///…/p#0.1.0`, and the runner was started for exactly those seven, compared by real path. Its `build-finished` message came before the first line that a test wrote to standard output. The messages and the record gave the same verdicts with `CARGO_TERM_QUIET=true`, which takes away cargo's `Running` lines, and with `CARGO_TERM_VERBOSE=true`.
@@ -2973,17 +3728,22 @@ Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, N
 So cargo's JSON messages name every test executable that `cargo test --tests` runs whatever the terminal settings, before anything that a test writes, and a record of each, of its package and ending with 0, caught every way of failing to run that was tried, while nothing that tests print changed a verdict. The three commands together run what plain `cargo test` runs. Not run: macOS, Cargo 1.92 to 1.96, and large workspaces.
 
 **A member that another member builds with.** Run on 16 November 2026 for nxr-8f9dz2 with cargo 1.100.0 and 1.91.0, in copies of the `subfolder-workspace` fixture, where `api` has a build script and a build-dependency on the member `codegen`, which has no integration test: after `cargo test --workspace`, `cargo test --workspace --no-run` compiled nothing, while `cargo test --workspace --tests --no-run` compiled `codegen` and `api` again, and `cargo test --workspace --no-run` after it compiled nothing again. The rustc lines showed why: plain `cargo test` and `--no-run` without target flags build every library in normal mode for its doctests, so that cargo builds `codegen` once for `api`'s build script and for its doctests, with the profile of normal builds; `--tests` builds no doctest, so `codegen` is needed by the build script alone and gets the profile for build scripts, another `-C metadata`, and `api`, whose build script links it, compiles again. Both variants then stay in the build directory, and neither command compiles anything in later runs. Through the plugin, the end-to-end fixture's tasks compiled exactly those two crates once in the test binaries' step after plain `cargo build`, `cargo test` and `cargo clippy` of the whole workspace, and nothing in the other order.
-:::
 
-:::mara evidence EVD-TEST-STREAM-AND-NEXTEST
-:mid: 01M7DYJ90W6F92NQYGR49KPKVS
-:title: Lines that compiled code writes into cargo's JSON stream, doctest output under nocapture, and nextest's configuration
-:status: accepted
-:supports: DES-TEST-RUN
-:supports: DES-INPUTS
-:supports: ADR-TEST-SELECTING-RUNNER
+---
 
-Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, Node 26.12.0 and cargo-nextest 0.9.152, the released binary in a folder of its own, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own, offline, in throwaway folders outside this repository, after a fifth review. Every result held on both versions. The runner was the Node runner of [[EVD-TEST-STEPS-SPLIT]], and a script applied the conditions of [[DES-TEST-RUN]] to the test binaries' step.
+<a id="01M7DYJ90W6F92NQYGR49KPKVS"></a>
+
+### Lines that compiled code writes into cargo's JSON stream, doctest output under nocapture, and nextest's configuration
+
+| Type     | Evidence                                                   |
+| -------- | ---------------------------------------------------------- |
+| ID       | EVD-TEST-STREAM-AND-NEXTEST                                |
+| Status   | Accepted                                                   |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)   |
+| Supports | [ADR-TEST-SELECTING-RUNNER](#01M7DMTE8WN7QHDS5925MFCEVV)   |
+
+Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, Node 26.12.0 and cargo-nextest 0.9.152, the released binary in a folder of its own, with `RUSTUP_AUTO_INSTALL=0`, a Cargo home of their own, offline, in throwaway folders outside this repository, after a fifth review. Every result held on both versions. The runner was the Node runner of [EVD-TEST-STEPS-SPLIT](#01M7DWK026HSWGJ537QZAN4GHV), and a script applied the conditions of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) to the test binaries' step.
 
 - **A forged `build-finished`.** A member `pm` is a proc macro that prints `{"reason":"build-finished","success":true}` while it is expanded; a member `b` uses it, has a build script that prints `cargo:rerun-if-changed=never-exists`, and an integration test. After `cargo test --workspace --no-run`, the test binaries' step compiled `b` again, and its standard output held the forged line twice, on lines 5 and 6, once for each compilation that expanded the macro, the artifact message of `b`'s integration test on line 9 and cargo's own `build-finished` on line 10. With the runner ended by a preload in `NODE_OPTIONS` before it recorded anything and `b`'s test failing, cargo exited with 0; a reading that stopped at the first `build-finished` expected no executable of `b` and passed it, while plain `cargo test` exited with 101. A reading of every artifact message expected two executables of `b` and one of `pm`, found no record and failed both.
 - **What forged lines can still do.** With `b`'s test passing and the runner working, both tasks passed with the forged lines in the stream. A forged `compiler-artifact` line for an executable of `b`, printed by the proc macro, added an expectation without a record and failed `b`; a forged `build-finished` with `success: false` failed both tasks; cargo exited with 0 each time. The stream of `cargo test --workspace --no-run --message-format=json` named the same three test executables as the test binaries' step.
@@ -2991,17 +3751,22 @@ Experiments on 14 November 2026 on Linux x86-64 with cargo 1.100.0 and 1.91.0, N
 - **nextest's default filter.** A member `a` had a passing test `t::ok` and a failing `t::must_run`, `b` a passing test and `e` none; `.config/nextest.toml` set `default-filter = "not test(=t::must_run)"` in `[profile.default]` and `default-filter = "all()"` in `[profile.ci]`. Plain `cargo nextest run --workspace` exited with 0, with `Starting 2 tests across 3 binaries (1 test skipped via profile.default.default-filter)` and the summary `2 tests run: 2 passed, 1 skipped`; with `NEXTEST_PROFILE=ci` it ran `t::must_run` and exited with 100. The earlier form of the plugin's command, with `--profile nx-rust` from a tool configuration file, skipped `t::must_run` and exited with 0 in both cases, also under `NEXTEST_PROFILE=ci`. A tool configuration file that sets only `junit.path` of `[profile.default]`, without `--profile`, gave the results of plain nextest in both cases and wrote the report in both, the profile `ci` inheriting the path. `--ignore-default-filter` ran `t::must_run` under the default profile and exited with 100. The report listed only the tests that ran, `t::ok` of `a` and of `b`. With `junit.path = "repo-junit.xml"` in the repository's `[profile.default]`, nextest wrote `target/nextest/default/repo-junit.xml` and nothing to the tool configuration's path. The run's help names the user configuration in `~/.config/nextest/config.toml` for `--show-progress` only.
 
 So a line that compiled code writes can stand before cargo's artifact messages, and only a reading without a stopping point keeps every expectation; forged lines then only fail tasks. Doctest output can reach cargo's standard error, but cargo's list ends it. nextest applies the repository's profile and default filter unless the command chooses a profile, and a tool configuration's report path yields to the repository's.
-:::
 
-:::mara evidence EVD-CARGO-AFFECTED-REPORT
-:mid: 01M7J4YJXH9M7KNRM19MJPWS7H
-:title: What cargo-affected's report gives for selecting, running and attributing tests
-:status: accepted
-:supports: RISK-CARGO-AFFECTED
-:supports: ADR-TEST-SELECTOR
-:supports: ADR-AFFECTED-TESTS-WIDENING
-:supports: DES-TEST-RUN
-:supports: ADR-AFFECTED-BASELINE-CONTEXT
+---
+
+<a id="01M7J4YJXH9M7KNRM19MJPWS7H"></a>
+
+### What cargo-affected's report gives for selecting, running and attributing tests
+
+| Type     | Evidence                                                     |
+| -------- | ------------------------------------------------------------ |
+| ID       | EVD-CARGO-AFFECTED-REPORT                                    |
+| Status   | Accepted                                                     |
+| Supports | [RISK-CARGO-AFFECTED](#01M78FHG7F5EH60R4TW2E645EW)           |
+| Supports | [ADR-TEST-SELECTOR](#01M78FHG7FH90JZ8ESEP4R4HCJ)             |
+| Supports | [ADR-AFFECTED-TESTS-WIDENING](#01M7J59DN6SH9F9NGK13ETDBVZ)   |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ)   |
+| Supports | [ADR-AFFECTED-BASELINE-CONTEXT](#01M7J8GXGNJ2X4GBGAJW7N0ZMS) |
 
 Experiments on 16 November 2026 on Linux x86-64 with cargo and rustc 1.100.0, cargo-affected 0.4.1 from crates.io (`cargo install --locked` into a folder of its own; source read at `6ddf292`), cargo-nextest 0.9.152, the released binary, and `llvm-cov` and `llvm-profdata` from the `llvm-tools` component of 1.100.0 (LLVM 23.1.5), put on `PATH` without changing the toolchain. The workspaces were clones of [ripgrep](https://github.com/BurntSushi/ripgrep) at `178cc02` (ten crates, 1,220 tests in 14 test binaries), of [tokio](https://github.com/tokio-rs/tokio) at `f3e855f` (ten members, 2,184 tests in 266 binaries with `--all-features`), and a fixture of four crates: a library `core-x` with a build script, a crate `app` that depends on it and on a proc macro `pm`, whose integration test reads `tests/data.txt`, and a crate `cli` whose binary calls `core-x` and whose integration test runs that binary through `CARGO_BIN_EXE_cli`; the fixture lay once at the top of its git repository and once in its subfolder `rust/`. Coverage came from `cargo affected collect -- --workspace --no-fail-fast` at the commit checked out; every status ran as `cargo affected status --report-json <file> --report-detail full -- <the cargo arguments of the run>` in the workspace root. A script built the filtersets from the report, ran `cargo nextest run` with them and compared nextest's JUnit report with the report's list.
 
@@ -3015,18 +3780,23 @@ Experiments on 16 November 2026 on Linux x86-64 with cargo and rustc 1.100.0, ca
 - **nextest's filters.** Two `-E` arguments ran the union of their tests. A repository `default-filter` was intersected with `-E` as with one filterset. A `default-filter` in a tool configuration file applied only where the repository's configuration set none: with one in `.config/nextest.toml`, under the default profile and under `NEXTEST_PROFILE=ci`, the repository's applied and the tool's was ignored. One `-E` argument of 139 KB failed with `Argument list too long`, the per-argument limit of Linux being 128 KiB, while three of 139 KB in all ran. The equality matcher `test(=…)` takes `\`, `/`, `)` and `,` only escaped.
 - **The database.** cargo-affected keeps it in `target/affected/coverage.db` under the workspace root, whatever `CARGO_TARGET_DIR` or `build.target-dir` say, and builds the instrumented binaries in `target/affected/build`. For ripgrep it held 89,283 ranges in 51 MB. A collect without `--no-fail-fast` stopped at nextest's first failure and stored 616 of ripgrep's 1,220 tests; with it, 29 tests of `ignore` whose temporary-folder helper races between processes failed under instrumentation while they pass under plain nextest, and 7 left no coverage; those are listed as `new` and always selected.
 
-So the report gives what steps 1, 3 and 4 of [[DES-TEST-RUN]] need: the decision in `cache.status` with its reason, and each selected test precisely enough for a filter that runs exactly those tests and for results that map to crates. It does not narrow the selection to the crates passed, it lists the files that coverage cannot see without selecting for them, and it misses tests that reach changed code through another process. In a workspace below the top of its git repository, the usual layout of an Nx monorepo, cargo-affected 0.4.1 selects nothing unless git's `diff.relative` is set for it. A tool configuration cannot carry a selection past a repository's default filter, and one `-E` argument cannot carry a large one. Not run: macOS, Cargo 1.91, a workspace with input rules, `collect --diff`, and a repository with several Cargo workspaces.
-:::
+So the report gives what steps 1, 3 and 4 of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) need: the decision in `cache.status` with its reason, and each selected test precisely enough for a filter that runs exactly those tests and for results that map to crates. It does not narrow the selection to the crates passed, it lists the files that coverage cannot see without selecting for them, and it misses tests that reach changed code through another process. In a workspace below the top of its git repository, the usual layout of an Nx monorepo, cargo-affected 0.4.1 selects nothing unless git's `diff.relative` is set for it. A tool configuration cannot carry a selection past a repository's default filter, and one `-E` argument cannot carry a large one. Not run: macOS, Cargo 1.91, a workspace with input rules, `collect --diff`, and a repository with several Cargo workspaces.
 
-:::mara evidence EVD-CARGO-AFFECTED-COST
-:mid: 01M7J59DN6XGWT1DGJ4DMC0J7E
-:title: What cargo affected status costs against the tests it saves
-:status: accepted
-:supports: RISK-CARGO-AFFECTED
-:supports: DES-TEST-RUN
-:supports: DES-TEST-MODE
+---
 
-Measurements on 16 November 2026 on Linux x86-64 (AMD Ryzen 9 9950X3D, 16 cores, 14 GB of memory, NVMe SSD with btrfs) with the tools and workspaces of [[EVD-CARGO-AFFECTED-REPORT]], each series run with nothing else on the machine through its queue's exclusive mode. A time is wall-clock milliseconds of one command, three runs each, given as the lowest to the highest. A run applied a change, built with `cargo test --no-run <args>` (the build that both ways need), then timed `cargo affected status --report-json <file> --report-detail full -- <args>`, a second `status` without the report, `cargo nextest run <args> --no-fail-fast` with the selection as `-E` filtersets, and the same without them, the full suite. The cold series removed the build directory but not `target/affected` before each `status` and each full run. The arguments were `--workspace` for ripgrep, whose series ran with cargo's and nextest's default parallelism, and `--workspace --all-features` for tokio, run with `CARGO_BUILD_JOBS=4` and `NEXTEST_TEST_THREADS=4` in a scope of 8 GB.
+<a id="01M7J59DN6XGWT1DGJ4DMC0J7E"></a>
+
+### What cargo affected status costs against the tests it saves
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-CARGO-AFFECTED-COST                                     |
+| Status   | Accepted                                                    |
+| Supports | [RISK-CARGO-AFFECTED](#01M78FHG7F5EH60R4TW2E645EW)          |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ)  |
+| Supports | [DES-TEST-MODE](testing.mara.md#01M78FHG7F7NZT1HQM98QHVY34) |
+
+Measurements on 16 November 2026 on Linux x86-64 (AMD Ryzen 9 9950X3D, 16 cores, 14 GB of memory, NVMe SSD with btrfs) with the tools and workspaces of [EVD-CARGO-AFFECTED-REPORT](#01M7J4YJXH9M7KNRM19MJPWS7H), each series run with nothing else on the machine through its queue's exclusive mode. A time is wall-clock milliseconds of one command, three runs each, given as the lowest to the highest. A run applied a change, built with `cargo test --no-run <args>` (the build that both ways need), then timed `cargo affected status --report-json <file> --report-detail full -- <args>`, a second `status` without the report, `cargo nextest run <args> --no-fail-fast` with the selection as `-E` filtersets, and the same without them, the full suite. The cold series removed the build directory but not `target/affected` before each `status` and each full run. The arguments were `--workspace` for ripgrep, whose series ran with cargo's and nextest's default parallelism, and `--workspace --all-features` for tokio, run with `CARGO_BUILD_JOBS=4` and `NEXTEST_TEST_THREADS=4` in a scope of 8 GB.
 
 | Workspace, change                     | Selected     | Build after change     | `status`  | Selected tests | Full suite    |
 | ------------------------------------- | ------------ | ---------------------- | --------- | -------------- | ------------- |
@@ -3042,33 +3812,43 @@ Measurements on 16 November 2026 on Linux x86-64 (AMD Ryzen 9 9950X3D, 16 cores,
 - **Reading the database.** `SELECT DISTINCT env_fingerprint, collect_sha FROM test_regions` on ripgrep's 51 MB database took 22–171 ms with the `sqlite3` command.
 - **Collecting.** A collection from scratch at `-j 4` with 4 test threads took 15.7 s on ripgrep and peaked at 1,483 MiB in its memory group, page cache included; the instrumented build directory took 1.2 GB. On tokio, with `--all-features`, it took 80.2 s, peaked at 4,750 MiB, and wrote 681,820 ranges into a database of 400 MB and an instrumented build directory of 11 GB. An earlier collection of tokio at cargo's default of 32 jobs, while other builds ran, ended with the machine's out-of-memory killer.
 
-The savings were measured on cargo-affected's raw selection, before the widening that step 2 of [[DES-TEST-RUN]] now requires ([[ADR-AFFECTED-TESTS-WIDENING]]), so they are upper bounds. So step 1 costs what listing costs, a tenth to a sixth of a second on ripgrep and 0.6 to 1.4 s on tokio, and never a build of its own: a cold build directory costs both ways the same build. Selection pays where the full suite takes longer than the selected tests by more than that: on ripgrep, whose whole suite takes a second, 74 selected tests saved 0.76 s, while 698 of 1,220, a crate root that six crates depend on, cost 0.07 s more than the full suite. On tokio, whose suite takes 15 s, 11 selected tests saved 13.5 to 14.5 s, and 549, a quarter of the tests but most of the slow ones, still saved about 2 s. The break-even lies where the selected tests take all but the time of status, about 85 % of the suite's time on ripgrep and 93 % on tokio; a small change is far below it. The mode command cannot ask status for the baseline at every hash, since that would build the tests, while reading the database takes milliseconds. Not run: macOS, a CI runner, a workspace whose suite takes minutes, and a pull request whose baseline lies many commits back ([[RISK-BASELINE-DRIFT]]).
-:::
+The savings were measured on cargo-affected's raw selection, before the widening that step 2 of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) now requires ([ADR-AFFECTED-TESTS-WIDENING](#01M7J59DN6SH9F9NGK13ETDBVZ)), so they are upper bounds. So step 1 costs what listing costs, a tenth to a sixth of a second on ripgrep and 0.6 to 1.4 s on tokio, and never a build of its own: a cold build directory costs both ways the same build. Selection pays where the full suite takes longer than the selected tests by more than that: on ripgrep, whose whole suite takes a second, 74 selected tests saved 0.76 s, while 698 of 1,220, a crate root that six crates depend on, cost 0.07 s more than the full suite. On tokio, whose suite takes 15 s, 11 selected tests saved 13.5 to 14.5 s, and 549, a quarter of the tests but most of the slow ones, still saved about 2 s. The break-even lies where the selected tests take all but the time of status, about 85 % of the suite's time on ripgrep and 93 % on tokio; a small change is far below it. The mode command cannot ask status for the baseline at every hash, since that would build the tests, while reading the database takes milliseconds. Not run: macOS, a CI runner, a workspace whose suite takes minutes, and a pull request whose baseline lies many commits back ([RISK-BASELINE-DRIFT](#01M78FHG7F90XWFCQ150XBFKGM)).
 
-:::mara evidence EVD-TEST-MODE-GUARD
-:mid: 01M7K5MZ9947Q1ACERV7VWPGF0
-:title: What Nx 24 tells an executor about a task's key, and what cargo-affected's status writes
-:status: accepted
-:supports: DES-TEST-MODE
-:supports: RISK-SUBSET-AS-FULL
+---
+
+<a id="01M7K5MZ9947Q1ACERV7VWPGF0"></a>
+
+### What Nx 24 tells an executor about a task's key, and what cargo-affected's status writes
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-TEST-MODE-GUARD                                         |
+| Status   | Accepted                                                    |
+| Supports | [DES-TEST-MODE](testing.mara.md#01M78FHG7F7NZT1HQM98QHVY34) |
+| Supports | [RISK-SUBSET-AS-FULL](#01M78FHG7FECGDXGMB8MB75DPD)          |
 
 A reading of the installed Nx 24.0.6 and of cargo-affected 0.4.1's source, and experiments on 16 November 2026 on Linux x86-64 with cargo 1.100.0, cargo-affected 0.4.1 and cargo-nextest 0.9.152, for nxr-tabkjx.
 
 - **What an executor gets.** `pruneTaskGraph` in `tasks-runner/prune-task-graph.js` removes `hash`, `hashDetails`, `startTime`, `endTime` and `terminalOutput` from every task of the graph that Nx passes to a forked executor, single or batch; its comment says that a worker learns its own hash from `NX_TASK_HASH`, which `getNxEnvVariablesForTask` in `tasks-runner/task-env.js` sets for a task's own process and which a batch process, running several tasks, does not get per task. `TaskHashDetails` holds hashes of the inputs, not the output of a runtime input. So an executor cannot tell from Nx what its mode input printed.
-- **When Nx hashes.** `runCommand` in `tasks-runner/run-command.js` runs the plugins' `preTasksExecution` hooks before it creates the task graph and hashes. A task whose inputs read a dependency's outputs, as the `test` of a crate reads its lockfile task's digests ([[DES-LOCKFILE-HASHING]]), is hashed when it is scheduled (`processTask` in `tasks-runner/task-orchestrator.js`); in a batch, such a task whose dependency missed the cache runs first and is hashed again after its run (`rehashAfterRun`), and its result is stored under the later hash.
+- **When Nx hashes.** `runCommand` in `tasks-runner/run-command.js` runs the plugins' `preTasksExecution` hooks before it creates the task graph and hashes. A task whose inputs read a dependency's outputs, as the `test` of a crate reads its lockfile task's digests ([DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D)), is hashed when it is scheduled (`processTask` in `tasks-runner/task-orchestrator.js`); in a batch, such a task whose dependency missed the cache runs first and is hashed again after its run (`rehashAfterRun`), and its result is stored under the later hash.
 - **What status writes.** `Db::open`, which `status` calls before it lists the tests, opens `target/affected/coverage.db` read-write in WAL mode, creates the database where it is missing, and `status` updates the fingerprint's `last_seen` on a hit. Watched with `inotifywait`, one `status` created `coverage.db-wal` and `coverage.db-shm`, wrote to the `-wal` file, checkpointed into `coverage.db` and removed both; the database's bytes, modification and change times differed afterwards, while its commits did not.
 - **The environment of a runtime input.** Nx runs a task's runtime inputs with `getTaskSpecificEnv`, the `nx` command's environment with the task's dotenv files (`tasks-runner/task-env.js`); `NX_TASK_TARGET_PROJECT` and the other variables that name a task are set only for the task's own process (`getNxEnvVariablesForTask`). So nothing tells the mode command which task it is evaluated for.
 - **The guard.** The tests of nxr-tabkjx (`affected-selection.spec.ts`) record the mode command's evaluations as a command does: a baseline that appears after hashing, one whose commit changes after hashing, a run without the hook's command id and a run without a recorded evaluation each give a reason and no subset; once a subset is recorded, an evaluation with another value prints a value that is never restored; and an evaluation that cannot write the record prints such a value as well. The review of nxr-tabkjx showed that setting aside evaluations that asked for `full` let another task's evaluation stand in for one hashed as `full`; the review's sequence, a crate hashed as `full` and another as `affected` in one command, now gives the first the full suite, also through Nx (`affected-runs.spec.ts`), where a later command in mode `full` restores only the full result. A record that cannot be written gives the full suite, and a stale record that cannot be removed fails no command.
 
-So the executor can see the mode that Nx hashed only through a record that the mode command keeps itself, and only a record of the whole command covers a key that Nx computes after the run. A guard by the times of the database files would fail after every `status`, so that every task but the first of a command would run its full suite. Not run: macOS, the Nx daemon, which evaluates the command with the task's environment as well ([[EVD-NX-24-INPUT-SEMANTICS]]), and two `nx` commands at once in one checkout, whose records are separate.
-:::
+So the executor can see the mode that Nx hashed only through a record that the mode command keeps itself, and only a record of the whole command covers a key that Nx computes after the run. A guard by the times of the database files would fail after every `status`, so that every task but the first of a command would run its full suite. Not run: macOS, the Nx daemon, which evaluates the command with the task's environment as well ([EVD-NX-24-INPUT-SEMANTICS](#01M7A0X81J8XAG79EE2DFXFEZD)), and two `nx` commands at once in one checkout, whose records are separate.
 
-:::mara evidence EVD-AFFECTED-RUNS
-:mid: 01M7K5MZ99V4PW1R98G8XMGQVY
-:title: What cargo-affected reports and what the plugin selects on the affected-tests fixture
-:status: accepted
-:supports: DES-TEST-RUN
-:supports: ADR-AFFECTED-TESTS-WIDENING
+---
+
+<a id="01M7K5MZ99V4PW1R98G8XMGQVY"></a>
+
+### What cargo-affected reports and what the plugin selects on the affected-tests fixture
+
+| Type     | Evidence                                                   |
+| -------- | ---------------------------------------------------------- |
+| ID       | EVD-AFFECTED-RUNS                                          |
+| Status   | Accepted                                                   |
+| Supports | [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ) |
+| Supports | [ADR-AFFECTED-TESTS-WIDENING](#01M7J59DN6SH9F9NGK13ETDBVZ) |
 
 Experiments on 16 November 2026 on Linux x86-64 with cargo 1.100.0, cargo-affected 0.4.1, cargo-nextest 0.9.152 and `llvm-cov` and `llvm-profdata` of the `llvm-tools` component of a copy of the 1.100.0 toolchain, for nxr-tabkjx: first in a throwaway workspace of two crates in the subfolder `rust/` of a git repository, then through Nx with the plugin on the `affected-tests` fixture (`affected-coverage.spec.ts`), whose baseline `cargo affected collect -- --workspace --no-fail-fast` collected with `diff.relative`, `-j 4` and four test threads.
 
@@ -3078,17 +3858,22 @@ Experiments on 16 November 2026 on Linux x86-64 with cargo 1.100.0, cargo-affect
 - **The mode command.** It read the commit of a database that cargo-affected wrote and changed no file beside it.
 
 So the report gives what the plugin's checks need, also for renames and deletions, and the widening of step 2 runs what coverage cannot see on a real baseline. Not run: macOS, Cargo 1.91 for the collection, and workspaces larger than the fixture.
-:::
 
-:::mara evidence EVD-COVERAGE-COLLECT-COST
-:mid: 01M7JGWF3ZWGCQTDYM0EN28YJ1
-:title: What collecting coverage costs on main, and whether coverage builds and normal builds share Cargo's directories
-:status: accepted
-:supports: RISK-COVERAGE-COST
-:supports: DES-BASELINE
-:supports: DES-BUILD-DIRS
+---
 
-Measurements on 16 November 2026 on Linux x86-64 (AMD Ryzen 9 9950X3D, 16 cores, 14 GB of memory, NVMe SSD with btrfs) with cargo and rustc 1.100.0, cargo-affected 0.4.1 from crates.io (`cargo install --locked` into a folder of its own; source read at `6ddf292`), cargo-nextest 0.9.152, the released binary, and `llvm-cov` and `llvm-profdata` from the `llvm-tools` component of 1.100.0, added to a copy of the toolchain under a rustup home of its own. The workspaces were clones of [ripgrep](https://github.com/BurntSushi/ripgrep) at `178cc02` (ten members, 1,220 tests in 14 test binaries, 50 crates compiled) and of [rust-analyzer](https://github.com/rust-lang/rust-analyzer) at `15d97b98ea` (46 members, 8,314 tests in 57 test binaries, 284 crates compiled). Every command ran with `CARGO_INCREMENTAL=0`, as CI usually does, `CARGO_BUILD_JOBS=4` and `NEXTEST_TEST_THREADS=4`, alone on the machine through its queue's exclusive mode, in a memory group of 8 GiB without swap; a time is the wall-clock time of one command, three runs each, given as the lowest to the highest. The plain run was `cargo nextest run --workspace --no-fail-fast`, collection `cargo affected collect -- --workspace --no-fail-fast` and `collect --diff` with the same arguments, as [[DES-BASELINE]] runs them. A peak is the memory group's, page cache included, with the largest anonymous memory in brackets. A few of ripgrep's tests failed in this environment, and one of rust-analyzer's (a formatting check), in every run alike.
+<a id="01M7JGWF3ZWGCQTDYM0EN28YJ1"></a>
+
+### What collecting coverage costs on main, and whether coverage builds and normal builds share Cargo's directories
+
+| Type     | Evidence                                                     |
+| -------- | ------------------------------------------------------------ |
+| ID       | EVD-COVERAGE-COLLECT-COST                                    |
+| Status   | Accepted                                                     |
+| Supports | [RISK-COVERAGE-COST](#01M78FHG7F5ES0QNZ84J94JZQ2)            |
+| Supports | [DES-BASELINE](ci.mara.md#01M78FHG7F1EWYSCPVF4MY7YGF)        |
+| Supports | [DES-BUILD-DIRS](caching.mara.md#01M78FHG7FMKCDSEX3Y6Q65F4Y) |
+
+Measurements on 16 November 2026 on Linux x86-64 (AMD Ryzen 9 9950X3D, 16 cores, 14 GB of memory, NVMe SSD with btrfs) with cargo and rustc 1.100.0, cargo-affected 0.4.1 from crates.io (`cargo install --locked` into a folder of its own; source read at `6ddf292`), cargo-nextest 0.9.152, the released binary, and `llvm-cov` and `llvm-profdata` from the `llvm-tools` component of 1.100.0, added to a copy of the toolchain under a rustup home of its own. The workspaces were clones of [ripgrep](https://github.com/BurntSushi/ripgrep) at `178cc02` (ten members, 1,220 tests in 14 test binaries, 50 crates compiled) and of [rust-analyzer](https://github.com/rust-lang/rust-analyzer) at `15d97b98ea` (46 members, 8,314 tests in 57 test binaries, 284 crates compiled). Every command ran with `CARGO_INCREMENTAL=0`, as CI usually does, `CARGO_BUILD_JOBS=4` and `NEXTEST_TEST_THREADS=4`, alone on the machine through its queue's exclusive mode, in a memory group of 8 GiB without swap; a time is the wall-clock time of one command, three runs each, given as the lowest to the highest. The plain run was `cargo nextest run --workspace --no-fail-fast`, collection `cargo affected collect -- --workspace --no-fail-fast` and `collect --diff` with the same arguments, as [DES-BASELINE](ci.mara.md#01M78FHG7F1EWYSCPVF4MY7YGF) runs them. A peak is the memory group's, page cache included, with the largest anonymous memory in brackets. A few of ripgrep's tests failed in this environment, and one of rust-analyzer's (a formatting check), in every run alike.
 
 | Step                                                     | ripgrep                 | rust-analyzer                |
 | -------------------------------------------------------- | ----------------------- | ---------------------------- |
@@ -3111,18 +3896,23 @@ The leaf crates were `grep-printer` and `ide-completion`, the core crates `grep-
 - **Directories.** cargo-affected passes `--target-dir target/affected/build` to its own builds and points `LLVM_PROFILE_FILE` of build scripts there, so with no `build.build-dir` its instrumented build has a build directory of its own. With `CARGO_BUILD_BUILD_DIR` set to one folder for both, as the caching guidance suggests, both builds kept their files side by side in it. On ripgrep, a normal build (`cargo nextest run --workspace --no-run`), `collect`, a normal build, `collect` and a normal build compiled 50, 50, 0, 0 and 0 crates, and the shared folder held 1.58 GB. On rust-analyzer, with the instrumented build run as cargo-affected's listing runs it (`RUSTFLAGS="-C instrument-coverage"`, `LLVM_PROFILE_FILE` in `target/affected/build`, `--target-dir target/affected/build`), the same sequence compiled 284, 284, 0, 0 and 0 crates in 36, 39, 0.4, 0.3 and 0.2 s, and the shared folder held 14.7 GB. Even in one target directory, without a build directory or target directory of its own, normal and instrumented builds alternated without compiling anything after the first of each, on both workspaces; rust-analyzer's directory then held 15.4 GB. An instrumented build without `LLVM_PROFILE_FILE`, as a first attempt at this check ran it, wrote `default_*.profraw` files into the folders of crates whose build scripts it ran, 577 on rust-analyzer and 60 on ripgrep. That left the git tree dirty, so that cargo-affected refuses to collect, and cargo rebuilt one package at every switch: `proc-macro-srv`, whose build script names no file to watch, so that cargo watches its whole folder, and `ripgrep`.
 - **Selection over repeated commits.** The three commits that changed one function in the same way re-collected 11, 94 and 11 tests on ripgrep's printer, because `--diff` re-anchors only the tests it re-collects and compares the others against their older commit.
 
-So on a small workspace collection costs about as much as a plain run: a full `collect` twice a cold run, a `--diff` less than the plain run of the same commit. On rust-analyzer, whose 8,314 tests take 21 s, a full `collect` takes 31 times the plain run, `--diff` takes 52 s even where nothing is re-collected and up to 14 minutes after a change to a core crate, more than a full collect into an empty database, and the database needs 8.75 GB per commit. The cost grows with the number of tests and the ranges they reach and includes running them under instrumentation, so a workspace with many fast tests that cover much code pays more on main than selection could save it. These two workspaces do not show where collection pays: neither has slow tests, and what pull requests save after the widening of [[DES-TEST-RUN]], the upkeep of the baseline over many commits and moving the database between CI runs were not measured. Instrumented and normal builds did not evict each other in any layout tried, so keeping them apart needs no directory of the plugin's own. Not run: macOS, a CI runner, Cargo 1.91 (ripgrep at this commit needs rustc 1.96), a workspace whose tests take minutes, tokio's `--diff`, and how far `--diff` drifts over many commits ([[RISK-BASELINE-DRIFT]]).
-:::
+So on a small workspace collection costs about as much as a plain run: a full `collect` twice a cold run, a `--diff` less than the plain run of the same commit. On rust-analyzer, whose 8,314 tests take 21 s, a full `collect` takes 31 times the plain run, `--diff` takes 52 s even where nothing is re-collected and up to 14 minutes after a change to a core crate, more than a full collect into an empty database, and the database needs 8.75 GB per commit. The cost grows with the number of tests and the ranges they reach and includes running them under instrumentation, so a workspace with many fast tests that cover much code pays more on main than selection could save it. These two workspaces do not show where collection pays: neither has slow tests, and what pull requests save after the widening of [DES-TEST-RUN](testing.mara.md#01M78FHG7FBRFVSZC9GZW2Q3CQ), the upkeep of the baseline over many commits and moving the database between CI runs were not measured. Instrumented and normal builds did not evict each other in any layout tried, so keeping them apart needs no directory of the plugin's own. Not run: macOS, a CI runner, Cargo 1.91 (ripgrep at this commit needs rustc 1.96), a workspace whose tests take minutes, tokio's `--diff`, and how far `--diff` drifts over many commits ([RISK-BASELINE-DRIFT](#01M78FHG7F90XWFCQ150XBFKGM)).
 
-:::mara evidence EVD-NAPI-POSTPROCESS
-:mid: 01M7J1ARJDN1WVK6PSCT84HJH1
-:title: What the napi CLI needs to turn a plain cargo build into a Node addon, and what it costs to let it run cargo
-:status: accepted
-:supports: RISK-NAPI-TOOLING
-:supports: DES-NAPI
-:supports: DES-ARTIFACT-STEPS
-:supports: ADR-NAPI-SHARED-BUILD-DIR
-:supports: ADR-NAPI-RS-3
+---
+
+<a id="01M7J1ARJDN1WVK6PSCT84HJH1"></a>
+
+### What the napi CLI needs to turn a plain cargo build into a Node addon, and what it costs to let it run cargo
+
+| Type     | Evidence                                                           |
+| -------- | ------------------------------------------------------------------ |
+| ID       | EVD-NAPI-POSTPROCESS                                               |
+| Status   | Accepted                                                           |
+| Supports | [RISK-NAPI-TOOLING](#01M78FHG7F2Q33HWV789RWB7T7)                   |
+| Supports | [DES-NAPI](artifacts.mara.md#01M78FHG7FRRT8J6Z5NYMT12A3)           |
+| Supports | [DES-ARTIFACT-STEPS](artifacts.mara.md#01M78FHG7F47NNMQ07P6DKD6KB) |
+| Supports | [ADR-NAPI-SHARED-BUILD-DIR](#01M7J3B4MGB6VKYKPMJ2EVTA7K)           |
+| Supports | [ADR-NAPI-RS-3](#01M7J3B4MG430J5R1KA7TD5WZW)                       |
 
 Experiments on 16 November 2026 on Linux x86-64 with cargo 1.100.0, the central case repeated with cargo 1.91.0, Node 26.12.0, `@napi-rs/cli` 3.10.12, the current release, and 2.18.4, the last of major 2, each installed with pnpm into a scratch package of its own, and the crates `napi` 3.16.2, `napi-derive` 3.7.1 and `napi-build` 2.6.0 from crates.io, in throwaway folders outside this repository. The workspace had the members `shared`, a plain library, and `addon-a` and `addon-b`, each with the crate type `cdylib`, dependencies on `napi`, `napi-derive` with its default features and `shared`, a build script that calls `napi_build::setup()`, a feature `extra` that adds an exported function, and a `package.json` with a `napi` setting `binaryName`. A fourth member `core-napi`, a library with `#[napi]` items and the same build script, was added as a dependency of `addon-a` for the last case. Source of the CLIs and crates was read where the results needed it.
 
@@ -3139,21 +3929,26 @@ Experiments on 16 November 2026 on Linux x86-64 with cargo 1.100.0, the central 
 - **Running `cargo test` on napi-rs 3 crates.** Checked on 22 November 2026 on Linux x86-64 with cargo 1.100.0 on a throwaway copy of the `napi-addons` fixture (`napi` 3.16.2, `napi-derive` 3.7.1, `napi-build` 2.6.0, `napi-sys` 3.4.1): plain `cargo test --workspace` and `cargo test -p addon-a` (with a `#[test]` calling `#[napi]`-annotated `sum_a`) compiled, linked and executed without any special feature, because `napi-sys` enables `dyn-symbols` by default via `libloading` rather than linking against Node's symbols at link time.
 
 Not run: macOS, where `napi_build::setup()` adds the link arguments `-undefined dynamic_lookup`, other triples, Windows, `napi-derive` 2 with `@napi-rs/cli` 2, two crates with one library name, which the review reproduced, and Nx. The exported functions' options were read from 3.10.12's declarations; the options of other 3.x releases were not compared.
-:::
 
-:::mara evidence EVD-WASM-POSTPROCESS
-:mid: 01M7K1HVDB0EZ0X21ZQ0DEJZ3H
-:title: What cargo reports for a wasm cdylib and what the wasm-bindgen CLI reads and writes
-:status: accepted
-:supports: DES-WASM
-:supports: DES-ARTIFACT-STEPS
-:supports: DES-BUILD-INPUT-CHECK
-:supports: DES-INPUTS
+---
+
+<a id="01M7K1HVDB0EZ0X21ZQ0DEJZ3H"></a>
+
+### What cargo reports for a wasm cdylib and what the wasm-bindgen CLI reads and writes
+
+| Type     | Evidence                                                            |
+| -------- | ------------------------------------------------------------------- |
+| ID       | EVD-WASM-POSTPROCESS                                                |
+| Status   | Accepted                                                            |
+| Supports | [DES-WASM](artifacts.mara.md#01M78FHG7FEJ8068G4VR6C06QJ)            |
+| Supports | [DES-ARTIFACT-STEPS](artifacts.mara.md#01M78FHG7F47NNMQ07P6DKD6KB)  |
+| Supports | [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)            |
 
 Experiments on 16 November 2026 on Linux x86-64 with cargo 1.100.0 and its `wasm32-unknown-unknown` target, Node 26.12.0, the crate `wasm-bindgen` 0.2.130 from crates.io and the CLI `wasm-bindgen-cli` 0.2.130, installed with `cargo install --locked` into a folder of its own, in throwaway workspaces outside this repository and in the fixture `wasm-packages` through the plugin's tests; and a reading of the sources of `wasm-bindgen-cli` 0.2.130, `wasm-bindgen-cli-support` 0.2.130, `wasm-bindgen-macro-support` 0.2.130 and `walrus` 0.27.3, the version that the CLI's lockfile names. The crate `codec` had the crate type `cdylib`, a dependency on `wasm-bindgen` and one exported function.
 
 - **What cargo reports.** `cargo build -p codec --target wasm32-unknown-unknown --message-format=json` printed a `compiler-artifact` message for the crate's library whose `filenames` held `target/wasm32-unknown-unknown/debug/codec.wasm`, without the `lib` prefix that the host's dynamic libraries have, and with `crate-type = ["cdylib", "rlib"]` also `libcodec.rlib`. The message came for a fresh unit too, as the second compile of each test that changed only the JS flavour showed.
-- **Dependency files.** With `cdylib` alone, cargo wrote `codec.d` beside `codec.wasm` and no `libcodec.d`; with `cdylib` and `rlib`, it wrote both, with the same paths. The name `lib<name>.d`, which [[DES-BUILD-INPUT-CHECK]] gave every library, names no record of a `cdylib` built for the wasm triple alone, or an older one where the crate's types had changed, so the check would have read nothing for it, by the rule and the files above. With `<name>.d` named for such a `cdylib`, a `wasm-build` whose crate reads a file outside its inputs through `include_str!` fails and names the file, in the plugin's tests.
+- **Dependency files.** With `cdylib` alone, cargo wrote `codec.d` beside `codec.wasm` and no `libcodec.d`; with `cdylib` and `rlib`, it wrote both, with the same paths. The name `lib<name>.d`, which [DES-BUILD-INPUT-CHECK](caching.mara.md#01M7ACMK1QPYW1JQ7G9ETNAZ7H) gave every library, names no record of a `cdylib` built for the wasm triple alone, or an older one where the crate's types had changed, so the check would have read nothing for it, by the rule and the files above. With `<name>.d` named for such a `cdylib`, a `wasm-build` whose crate reads a file outside its inputs through `include_str!` fails and names the file, in the plugin's tests.
 - **What the CLI writes.** `wasm-bindgen --target <flavour> --out-dir <folder> codec.wasm` created the folder and wrote `codec.js`, `codec.d.ts`, `codec_bg.wasm` and `codec_bg.wasm.d.ts` for `web` and `nodejs`, and `codec_bg.js` besides for `bundler`, the CLI's default. By its source it also writes a `snippets` folder for the JS modules that the crate's code imports with `#[wasm_bindgen(module = …)]` and a `package.json` for the npm packages that a crate's own `package.json` lists. Its output names the files after the input file's stem. `wasm-bindgen --version` printed `wasm-bindgen 0.2.130` and exited with 0.
 - **What the CLI reads.** Of the variables, `wasm-bindgen-cli-support` reads `WASM_BINDGEN_ANYREF` and `WASM_BINDGEN_EXTERNREF`, which turn on reference types, and `WASM_BINDGEN_MULTI_VALUE`, each by whether it is set; `walrus` reads none, and the other variables in the CLI's sources belong to `wasm-bindgen-test-runner`, which the plugin does not run. Of files, it reads the `.wasm` file and, for each crate whose code imports a local JS module, the `package.json` in that crate's folder, whose absolute path `wasm-bindgen-macro-support` puts into the `.wasm` file when it finds the file in `CARGO_MANIFEST_DIR` at compile time. It reads no configuration file.
 - **Loading.** In Node 26.12.0, the `nodejs` flavour loaded with `require`, the `web` flavour with `import` and its `initSync` given the bytes of `codec_bg.wasm`, as a browser loads it, and the `bundler` flavour with `import`, which Node 26 takes for a `.wasm` module with an experimental warning; each returned the function's result.
@@ -3161,14 +3956,19 @@ Experiments on 16 November 2026 on Linux x86-64 with cargo 1.100.0 and its `wasm
 - **Empty and unset variables.** The CLI takes each of its three variables as on whenever it is set, so `WASM_BINDGEN_MULTI_VALUE=""` changes what it writes: the review of 02ed6a2 built `codec-b` with `RUSTFLAGS="-C strip=symbols"`, and the run with the variable empty wrote other wasm, JS glue and declarations than the run without it. Nx 24.0.6 hashed an unset and an empty `env` input alike, so it restored the first package for the second run: with the real hasher, the key of a `build` was the same with `RUSTFLAGS` unset and empty. The plugin's tests show that the key of `wasm-build` differs between unset, empty and `1` for each of the three, through the line of the runtime input that says whether the variable is set, and that the empty run is not restored and writes another `.wasm` file.
 
 Not run: the CLI of another version than the crate's, which the plugin refuses before cargo runs, other wasm triples, macOS, and cargo 1.91.0, whose toolchain on this machine has no wasm target.
-:::
 
-:::mara evidence EVD-DOTENV-STATIC-CHECK
-:mid: 01M7WZS4FNFKPT2TQQZ8T2KA3D
-:title: Static dotenv check evaluation against Nx 24.0.6, dotenv 16.4.7 and dotenv-expand 12.0.3
-:status: accepted
-:supports: DES-BATCH
-:supports: RISK-UPSTREAM-CHANGES
+---
+
+<a id="01M7WZS4FNFKPT2TQQZ8T2KA3D"></a>
+
+### Static dotenv check evaluation against Nx 24.0.6, dotenv 16.4.7 and dotenv-expand 12.0.3
+
+| Type     | Evidence                                                  |
+| -------- | --------------------------------------------------------- |
+| ID       | EVD-DOTENV-STATIC-CHECK                                   |
+| Status   | Accepted                                                  |
+| Supports | [DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ) |
+| Supports | [RISK-UPSTREAM-CHANGES](#01M78FHG7F662HG5KVZQEN15Z3)      |
 
 Experiments on 20 November 2026 on Linux x86-64 with Nx 24.0.6, dotenv 16.4.7, dotenv-expand 12.0.3 and Node 26.13.1 (nxr-qkxcmm), evaluating replacements for the step-by-step `dotenv-expand` 12.0.3 follower in `nx-rust/src/executors/dotenv-check.ts`.
 
@@ -3204,14 +4004,19 @@ Experiments on 20 November 2026 on Linux x86-64 with Nx 24.0.6, dotenv 16.4.7, d
 
 - **Edge cases verified in `dotenv-expand@12.0.3`.** `VALUE=${A:-$FORCE_}COLOR` expanded `FORCE_COLOR` (`VALUE="1"`), `PASSWORD=pa$$FORCE_` with `USE=${PASSWORD}COLOR` expanded `FORCE_COLOR` (`USE="pa1"`), and `VALUE=\\$FORCE_COLOR` stayed literal (`\\$FORCE_COLOR`) under `(?<!\\)\$`. Because `expandValue` calls `expression.split(splitter)` with `splitter = null` when no `:+`/`+`/`:-`/`-` operator matches, JavaScript coerces `null` to `"null"`: `VALUE=${NX_FORKED_TASK_EXECUTORnull}` looked up `NX_FORKED_TASK_EXECUTOR` (`""` alone vs `"true"` in a batch) and `VALUE=${Anull$FORCE_COLOR}` looked up `A` with default `$FORCE_COLOR` (`""` vs `"1"`), while `VALUE=${SET:?error}` with `SET="$FORCE_COLOR"` looked up the single literal key `"SET:?error"` (`""` in both paths). Because `expandValue` substitutes via `String.prototype.replace`, which replaces the first literal match and ignores backslashes in replacement patterns: `VALUE=\$NAMEEXECUTOR $NAME` with `NAME=x$NX_FORKED_TASK_` expanded to `"\\xtrue x"` in a batch vs `"\\x x"` alone, `VALUE=\${A}COLOR ${B}` with `B="p${A} "` and `A="x$FORCE_"` expanded `FORCE_COLOR` into `\${A}COLOR`, and `VALUE=${A}` with `A="\\$&"` re-inserted `${A}` without ending (`A="\\$'"` and `A="\\$\`"`substituted trailing/leading text). A top-level unclosed`${` (`VALUE=${UNCLOSED`) and empty `${}` (`VALUE=${}`) stayed literal plain text, whereas a top-level unclosed `${` followed by a matched reference (`VALUE=${FORCE_${PART}`with`PART="COLOR}"`) expanded `${PART}`to close`${FORCE_COLOR}`and looked up`FORCE_COLOR`. For `$$NAME` at top level, `dotenv-expand` leaves the first `$` in place and replaces `$NAME` with `NAME`'s value, re-scanning `$<value>` on the next pass: `SELECTED=FORCE_COLOR` with `VALUE=$$SELECTED`looked up`FORCE_COLOR`(giving the file value alone and the shield value in a batch),`SELECTED=NX_FORKED_TASK_EXECUTOR`in the command gave`""`alone and`"true"`in a batch,`SELECTED={FORCE_COLOR}`gave`FORCE_COLOR`, `A=B`+`B=FORCE_COLOR`+`VALUE=$$$A`gave`FORCE_COLOR`, whereas `PASSWORD=pa$$word` (with `word` unset) expanded `PASSWORD` to `"pa$"` and `VALUE=${PASSWORD}` to `"pa"` in both paths, and `PASSWORD=pa$$!DUMMY_TOKEN`and`VALUE=${DUMMY_TOKEN}` (`DUMMY_TOKEN="$!SAMPLE_SECRET_DO_NOT_USE"`) stayed literal in both paths. For braced expressions with no `$`in the key,`${APP.VERSION}`and`${1}` looked up those literal keys.
 - **Seed counts.** Over the original 2,500 default seeds of `dotenv-equivalence.spec.ts` (468 skipped as non-terminating), the former follower passed 878 with 0 mismatches, the cycle-rejecting static check passed 567 (311 narrowed, 0 mismatches), and the cycle-allowing static check passed 597 and refused 1,435 with 0 mismatches. Over the updated 2,500-seed suite (where references written in the generated files follow a strict acyclic order plus leaf `RUSTFLAGS` self-append cases, while references that only come into being by substitution — through variable-name literals, explicit `$$HOST`/`$$CMD` indirection, dynamic `${...}` assembly or adjacent text joining — are not restricted by that order; all 2,500 default seeds terminate in Nx's loader with no second simulator, alongside fixed cases for terminating multi-variable cycles, `split(null)`, earlier-escaped `replace` targets, unclosed `${`, `${}`, `\\$FORCE_COLOR`, and `${SET:?error}`), 716 passed, 1,784 were refused, 0 were skipped, and 0 mismatched.
-:::
 
-:::mara evidence EVD-NX-24-ULTRACACHE
-:mid: 01M81ARX6H8G4E0GJX0GX03D7K
-:title: What Nx 24.0.6 Ultracache replaces in a task's hash plan and tracks at run time
-:status: accepted
-:supports: DES-INPUTS
-:supports: RISK-UNDECLARED-INPUTS
+---
+
+<a id="01M81ARX6H8G4E0GJX0GX03D7K"></a>
+
+### What Nx 24.0.6 Ultracache replaces in a task's hash plan and tracks at run time
+
+| Type     | Evidence                                                 |
+| -------- | -------------------------------------------------------- |
+| ID       | EVD-NX-24-ULTRACACHE                                     |
+| Status   | Accepted                                                 |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP) |
+| Supports | [RISK-UNDECLARED-INPUTS](#01M78FHG7F7QAFW6P09CQYEPJA)    |
 
 A reading of `nx` 24.0.6 (`dist/src/ultracache/`, `dist/src/tasks-runner/task-io-service.js`, `dist/src/tasks-runner/forked-process-task-runner.js`, `dist/src/hasher/hash-task.js`, `dist/src/native/index.d.ts`) and direct probes of its native `HashPlanner`, `UltracacheConfigurationStore` and `getUltracacheReport` on 22 November 2026 on Linux x86-64 with Node 26.13.1 (nxr-j25xwy).
 
@@ -3221,18 +4026,23 @@ A reading of `nx` 24.0.6 (`dist/src/ultracache/`, `dist/src/tasks-runner/task-io
   - `UltracacheMode.On` documents that the recording stands in for the target's declared inputs and outputs; `TaskUltracacheSettings.collectStats` defaults to `false`.
 - **What `mode: "warn"` and `mode: "off"` do.** In `HashPlanner.getPlans`, both `mode: "warn"` (`getUltracacheReport` diagnostic `autofix-disabled`) and `mode: "off"` (`disabled`) kept every declared input intact. At run time, `registerTaskProcessStart` (`task-io-service.js`) notifies `TaskIOService` of the task's PID unless `task.ultracache?.mode === "off"` (so `warn` still traces IO and reports undeclared reads/writes, including Cargo's intermediate writes inside `target/` and sibling reads under `workspace-build`, while `off` suppresses tracing altogether).
 - **Batched vs. single tasks.** `forkProcessForBatch` (`forked-process-task-runner.js`) registers the batch worker with `ProcessMetricsService` only and does not call `registerTaskProcessStart`; only single-task runs (`nx run`, `--batch=false`, `NX_BATCH_MODE=false`) register their PID with `TaskIOService`.
-- **Consequence for Rust targets.** Leaving `ultracache.mode` at `"on"` risks stale cache hits whenever an unbatched Rust task is recorded on a warm Cargo build (where unchanged files are only `stat`'d while `collectStats` is `false`), under `NX_RUST_TEST_MODE=affected`, or across platform/feature `#[cfg(...)]` branches, and conflicts with [[ADR-RESULTS-ONLY-CACHE]] because Cargo writes intermediate files to `target/` outside declared outputs. Setting `ultracache: { mode: "off" }` keeps declared inputs and outputs authoritative and avoids noisy warnings and tracing overhead on `cargo`/`rustc` process trees.
+- **Consequence for Rust targets.** Leaving `ultracache.mode` at `"on"` risks stale cache hits whenever an unbatched Rust task is recorded on a warm Cargo build (where unchanged files are only `stat`'d while `collectStats` is `false`), under `NX_RUST_TEST_MODE=affected`, or across platform/feature `#[cfg(...)]` branches, and conflicts with [ADR-RESULTS-ONLY-CACHE](#01M78FHG7FYVQP1W5GZC509GEF) because Cargo writes intermediate files to `target/` outside declared outputs. Setting `ultracache: { mode: "off" }` keeps declared inputs and outputs authoritative and avoids noisy warnings and tracing overhead on `cargo`/`rustc` process trees.
 
 Not run: a live Nx Cloud workspace with a recording worker; only Nx 24.0.6's local native `HashPlanner`, `UltracacheConfigurationStore` and JavaScript task-runner sources were exercised.
-:::
 
-:::mara evidence EVD-CLIPPY-RUSTFMT-CONFIG-LOOKUP
-:mid: 01M81GZP7WVSAEGZMZ8469VS80
-:title: Which configuration file clippy takes under CLIPPY_CONF_DIR, also from Cargo's [env], and rustfmt takes outside the repository
-:status: accepted
-:supports: DES-INPUTS
-:supports: DES-DIAGNOSTICS
-:supports: RISK-HOST-ENVIRONMENT
+---
+
+<a id="01M81GZP7WVSAEGZMZ8469VS80"></a>
+
+### Which configuration file clippy takes under CLIPPY_CONF_DIR, also from Cargo's [env], and rustfmt takes outside the repository
+
+| Type     | Evidence                                                    |
+| -------- | ----------------------------------------------------------- |
+| ID       | EVD-CLIPPY-RUSTFMT-CONFIG-LOOKUP                            |
+| Status   | Accepted                                                    |
+| Supports | [DES-INPUTS](caching.mara.md#01M78FHG7FX4MX7J2W6TW28PDP)    |
+| Supports | [DES-DIAGNOSTICS](setup.mara.md#01M78FHG7F2T375STHFWNZZZYG) |
+| Supports | [RISK-HOST-ENVIRONMENT](#01M78FHG7F36BVH0EP3K2REH3E)        |
 
 Experiments on 22 November 2026 on Linux with clippy 0.1.100 and rustfmt 1.11.0 (toolchain 1.100.0) and with clippy 0.1.91 and rustfmt 1.8.0 (toolchain 1.91.0), which agreed in every case, in a throwaway virtual workspace `ws` with one member `a` whose `pub fn f(a: u8, b: u8, c: u8)` clippy reports where `too-many-arguments-threshold` is below 3, and whose `let` line rustfmt indents by `tab_spaces` (nxr-rpcfg4).
 
@@ -3243,7 +4053,8 @@ Experiments on 22 November 2026 on Linux with clippy 0.1.100 and rustfmt 1.11.0 
 - **Rustfmt outside the repository.** With a repository below a folder `above`, `HOME` set to a folder `home` and `XDG_CONFIG_HOME` to a folder `xdg`, `cargo fmt -- --emit stdout` took, where no folder from the crate's up to the repository root held a configuration file: a `rustfmt.toml` in `above`, before any per-user file; then `home/.rustfmt.toml`, then `home/rustfmt.toml`; then `xdg/rustfmt/.rustfmt.toml`, then `xdg/rustfmt/rustfmt.toml`. With `XDG_CONFIG_HOME` unset, empty or relative, it took `home/.config/rustfmt/rustfmt.toml` instead. A `rustfmt.toml` at the repository root replaced every one of them, without merging. Where the home folder is itself above the repository, its file is found in the walk up.
 
 Not run: macOS, where the `dirs` crate that rustfmt uses names `Library/Application Support` in the home folder as the configuration folder, and an empty `HOME`, which that crate takes as unset.
-:::
+
+---
 
 ## Sources
 

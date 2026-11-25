@@ -5,10 +5,12 @@ contain the zban workflow guide (it starts with `# zban workflow`), for example 
 the zban MCP server, follow it and use the zban tools. Otherwise, before anything
 else, run `zban prime` and follow its output.
 
-Use the zban and Mara MCP servers when your client has them configured. In a
-worktree, pass `directory` (zban) and `project` (Mara) on every MCP call, or
-start the session in that worktree. Without MCP, use the `zban` and `mara`
-command lines on your `PATH`. The rules below add to the guide.
+Use the zban and Mara MCP servers when your client has them configured (pointed
+at `@convesoft/mara` 0.4). In a worktree, pass `directory` (zban) and `project`
+(Mara) on every MCP call, or start the session in that worktree. Without MCP,
+use `zban` on your `PATH` (or `pnpm zban`) and `pnpm mara` (installed as a
+devDependency; run `pnpm mara prime` for its workflow guide). The rules below
+add to the guide.
 
 ## Project
 
@@ -56,8 +58,8 @@ The principles every change has to respect:
 - A spike ends in knowledge, not only in a closed issue: record what was found as
   an evidence item (`EVD-`) and update the risks, designs and decisions it
   concerns.
-- Read a cited item with the Mara MCP `get` tool or `mara get <ID>`, and follow
-  `related` for its context.
+- Read a cited item with the Mara MCP `get` tool or `pnpm mara get <ID>`, and
+  follow `relation list` (`pnpm mara relation list <ID>`) for its context.
 
 ## Working on an issue
 
@@ -90,31 +92,31 @@ the user before implementing it.
 
 ## Mara
 
-- Use the Mara skill and MCP tools, or the `mara` CLI, with the repository root
-  as the project root. Inspect `schema_get` guidance before choosing a flavour or
+- Use the Mara MCP tools (when pointed at `@convesoft/mara` 0.4) or `pnpm mara`
+  (run `pnpm mara prime` for the workflow guide) with the repository root as the
+  project root. Inspect `pnpm mara schema get <name>` before choosing a type or
   relation.
-- After changing knowledge, run schema and project validation and require
-  `valid: true` with complete evaluation. The engineering policies require every
-  accepted requirement to have an accepted basis and an accepted verification,
-  every accepted design to have an accepted basis, and an accepted item to
-  point only at accepted items through `satisfies`, `verifies`, `mitigates`,
-  `threatens`, `accepts` and similar relations.
-- `accepted` means agreed, not implemented or tested. Cite actual test runs as
+- After changing knowledge, run `pnpm mara schema validate` and
+  `pnpm mara project validate` and require 0 errors. The engineering invariants
+  in `.mara/rules/knowledge.dl` require every accepted requirement to have an
+  accepted basis and an accepted verification, every accepted design to have an
+  accepted basis, and an accepted item to point only at accepted items through
+  `Satisfies`, `Verifies`, `Mitigates`, `Threatens`, `Accepts` and similar
+  relations.
+- `Accepted` means agreed, not implemented or tested. Cite actual test runs as
   evidence of completion.
-- `draft` items are areas that are named but not designed. Each ends with its
+- `Draft` items are areas that are named but not designed. Each ends with its
   open questions. Settling one means rewriting the item, removing its `Open:`
   paragraph and accepting it together with whatever the policies then require,
   after the user has agreed to the answers.
-- Never write a `:mid:` line. Create items with the Mara tools, or write the
-  item without one and run `mara project mid backfill`.
-- Link implementing code with comment markers on the declaration, for example
-  `// @mara implements DES-DISCOVERY`. `.mara/project.toml` indexes the
-  TypeScript sources with `scip-typescript` through
-  `.mara/code/scip-index-cache.cjs`. Its cached index equals a fresh one while
-  the files git does not ignore, the tsconfig chains, pnpm's installed state
-  and the tool versions are unchanged (ignored files such as build output are
-  outside that promise); set `SCIP_INDEX_CACHE=0` where Mara runs to reindex
-  on every call. Confirm the link with `mara related <ID>`.
+- Never make up a MID, change one, or copy an anchor (`<a id="…"></a>`) to
+  another item. Create items with `pnpm mara item create`, or write the item by
+  hand separated by `---` and run `pnpm mara project fix`.
+- Link implementing code with comment markers on their own comment line, for
+  example `// @mara implements DES-DISCOVERY`. `.mara/config.toml` scans
+  TypeScript sources for these markers under `[code.languages.typescript]`.
+  Confirm the link with `pnpm mara relation list <ID>` or
+  `pnpm mara query execute implemented --id <ID>`.
 
 ## Documentation layout
 
@@ -146,13 +148,11 @@ the files you changed. Validate with Mara again afterwards.
 - CI runs on Linux only for the moment (`ADR-CI-LINUX-ONLY`). Do not add macOS
   jobs to a workflow until the user says the runners are usable again, and do
   not write code that assumes Linux.
-- CI does not run the Mara validation yet, because the Mara version this
-  knowledge base needs is not published (nxr-0x99we). Your local run is the
-  only check of the knowledge base, so never skip it.
 - Before reporting work as done, run `pnpm nx run-many -t build lint test` and
   `pnpm nx format:check --all`. Run `pnpm nx e2e nx-rust-e2e` when behaviour of
-  the built plugin changed. Run `mara schema validate`, `mara project validate`
-  and `zban check` when knowledge or issues changed. Report which checks ran.
+  the built plugin changed. Run `pnpm mara schema validate`,
+  `pnpm mara project validate` and `zban check` when knowledge or issues
+  changed. Report which checks ran.
 - Run Nx as `pnpm nx <command>`; `pnpm exec` is not needed. Formatting goes
   through Nx as well: `nx format:check` and `nx format:write` run oxfmt, and
   without `--all` they cover only the files you changed. Do not add package

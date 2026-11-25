@@ -34,16 +34,16 @@ for users, followed by the requirements and design that govern that topic.
 
 ## How to read the specification
 
-The `:::mara` blocks are [Mara](https://github.com/convesoft/mara) items: goals
-(`GOAL-`), needs (`NEED-`), terms (`TERM-`), scenarios (`SCN-`), requirements
-(`REQ-`), designs (`DES-`), decisions (`ADR-`), risks (`RISK-`), evidence
-(`EVD-`), verifications (`VER-`) and validations (`VAL-`). Lines such as
-`:satisfies: NEED-…` connect items to each other. `[[ID]]` mentions another
-item.
+The sections with a `Type` / `ID` / `Status` table are
+[Mara](https://github.com/convesoft/mara) items: goals (`GOAL-`), needs
+(`NEED-`), terms (`TERM-`), scenarios (`SCN-`), requirements (`REQ-`), designs
+(`DES-`), decisions (`ADR-`), risks (`RISK-`), evidence (`EVD-`), verifications
+(`VER-`) and validations (`VAL-`). Table rows such as `Satisfies` connect items
+to each other, and Markdown links like `[ID](…)` mention another item.
 
-`status: accepted` means the knowledge is agreed. It does not mean the feature
-is implemented or tested. `draft` marks open proposals: areas that are named
-but not designed yet, each with its open questions. `retired` marks history
+`Status` `Accepted` means the knowledge is agreed. It does not mean the feature
+is implemented or tested. `Draft` marks open proposals: areas that are named
+but not designed yet, each with its open questions. `Retired` marks history
 that no longer applies.
 
 The work to build nx-rust is tracked in [`.zban/`](../../.zban/) with

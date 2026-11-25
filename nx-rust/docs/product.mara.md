@@ -71,7 +71,7 @@ Rust-only repositories work too, but they do not drive priorities.
 v1 is delivered in stages, completed on `main` one after another, and the work
 is tracked as one epic per milestone in [`.zban/`](../../.zban/). No 0.x
 milestone is published to npm on its own: whether and when the package is
-published is decided at 1.0 ([[ADR-PUBLISHING-AT-1-0]]).
+published is decided at 1.0 ([ADR-PUBLISHING-AT-1-0](decisions.mara.md#01M7D7W01MEC0ER974G0K2G8M1)).
 
 | Milestone | Status | Contents                                                                                                |
 | --------- | ------ | ------------------------------------------------------------------------------------------------------- |
@@ -99,268 +99,417 @@ published is decided at 1.0 ([[ADR-PUBLISHING-AT-1-0]]).
   `@monodon/rust`, format Rust through `nx format`, or spread Rust tasks across
   CI agents.
 
-The reasons are recorded in [[ADR-V1-SCOPE]] and [[ADR-SINGLE-MACHINE]]. Adding
+The reasons are recorded in [ADR-V1-SCOPE](decisions.mara.md#01M78FHG7FTPVXE53KP8PW9NR7) and [ADR-SINGLE-MACHINE](decisions.mara.md#01M78FHG7FYYRPH4D9BRH2Y94M). Adding
 one of these needs a recorded need and decision before it is built.
 
 ## Goals
 
-:::mara goal GOAL-CARGO-NATIVE
-:mid: 01M78FHG7FRG7B5PSZD2NZ1ZAZ
-:title: Keep Cargo the build tool and the source of truth
-:status: accepted
+---
+
+<a id="01M78FHG7FRG7B5PSZD2NZ1ZAZ"></a>
+
+### Keep Cargo the build tool and the source of truth
+
+| Type   | Goal              |
+| ------ | ----------------- |
+| ID     | GOAL-CARGO-NATIVE |
+| Status | Accepted          |
 
 Rust developers in an Nx monorepo keep working exactly as they would without the plugin. Cargo builds, the Cargo manifests describe the crates, and plain `cargo` and rust-analyzer behave the same with the plugin installed. Nothing about a crate has to be stated a second time for Nx, so the two descriptions cannot drift apart.
-:::
 
-:::mara goal GOAL-ONE-MONOREPO
-:mid: 01M78FHG7F29A0KR2HCWPTFFZ1
-:title: Treat Rust and JS as one monorepo
-:status: accepted
+---
+
+<a id="01M78FHG7F29A0KR2HCWPTFFZ1"></a>
+
+### Treat Rust and JS as one monorepo
+
+| Type   | Goal              |
+| ------ | ----------------- |
+| ID     | GOAL-ONE-MONOREPO |
+| Status | Accepted          |
 
 In a repository that mixes JS/TS and Rust, one Nx graph, one cache, one `nx affected` and one set of commands cover both languages. A change in a Rust crate reaches the JS projects that consume it, and the other way round, without glue scripts.
-:::
 
-:::mara goal GOAL-TRUSTED-CACHE
-:mid: 01M78FHG7F44E8BAFK3ZZJRQT7
-:title: Never restore a wrong result
-:status: accepted
+---
+
+<a id="01M78FHG7F44E8BAFK3ZZJRQT7"></a>
+
+### Never restore a wrong result
+
+| Type   | Goal               |
+| ------ | ------------------ |
+| ID     | GOAL-TRUSTED-CACHE |
+| Status | Accepted           |
 
 A result restored from the Nx cache is the result the task would produce if it ran now. Teams can leave caching on in CI and on developer machines without re-running tasks to be safe. Where the plugin cannot be sure, it runs more work instead of restoring.
-:::
 
-:::mara goal GOAL-FAST-FEEDBACK
-:mid: 01M78FHG7FME1CA6KC45BJAH4E
-:title: Do as little Rust work as correctness allows
-:status: accepted
+---
+
+<a id="01M78FHG7FME1CA6KC45BJAH4E"></a>
+
+### Do as little Rust work as correctness allows
+
+| Type   | Goal               |
+| ------ | ------------------ |
+| ID     | GOAL-FAST-FEEDBACK |
+| Status | Accepted           |
 
 A change triggers only the compilation and tests that it can affect, and that work costs about what a well-tuned plain cargo setup would cost. Developers and CI get Rust feedback in time proportional to the change, not to the size of the repository.
-:::
+
+---
 
 ## Needs
 
-:::mara need NEED-ZERO-CONFIG
-:mid: 01M78FHG7F6ZMMNWYB6PVC4PPT
-:title: Use a Cargo workspace without describing it again
-:status: accepted
-:contributes_to: GOAL-CARGO-NATIVE
-:contributes_to: GOAL-ONE-MONOREPO
+---
+
+<a id="01M78FHG7F6ZMMNWYB6PVC4PPT"></a>
+
+### Use a Cargo workspace without describing it again
+
+| Type           | Need                                             |
+| -------------- | ------------------------------------------------ |
+| ID             | NEED-ZERO-CONFIG                                 |
+| Status         | Accepted                                         |
+| Contributes to | [GOAL-CARGO-NATIVE](#01M78FHG7FRG7B5PSZD2NZ1ZAZ) |
+| Contributes to | [GOAL-ONE-MONOREPO](#01M78FHG7F29A0KR2HCWPTFFZ1) |
 
 A team can add the plugin to a repository and get Nx projects, targets and dependencies for its crates from the Cargo manifests it already has, without writing or generating per-crate Nx configuration.
-:::
 
-:::mara need NEED-ANY-LAYOUT
-:mid: 01M78FHG7F1CQQA7RNG78E8109
-:title: Keep the repository layout the team already has
-:status: accepted
-:contributes_to: GOAL-ONE-MONOREPO
+---
+
+<a id="01M78FHG7F1CQQA7RNG78E8109"></a>
+
+### Keep the repository layout the team already has
+
+| Type           | Need                                             |
+| -------------- | ------------------------------------------------ |
+| ID             | NEED-ANY-LAYOUT                                  |
+| Status         | Accepted                                         |
+| Contributes to | [GOAL-ONE-MONOREPO](#01M78FHG7F29A0KR2HCWPTFFZ1) |
 
 The plugin works with the Cargo layout a repository already has: one workspace or several, at the Nx root or in subfolders, standalone crates, crates excluded from a workspace, path dependencies between workspaces, and vendored or generated crates that should be left alone.
-:::
 
-:::mara need NEED-CARGO-UNCHANGED
-:mid: 01M78FHG7FQRS21JJJXM330EJE
-:title: Keep plain cargo and editor tooling working unchanged
-:status: accepted
-:contributes_to: GOAL-CARGO-NATIVE
+---
+
+<a id="01M78FHG7FQRS21JJJXM330EJE"></a>
+
+### Keep plain cargo and editor tooling working unchanged
+
+| Type           | Need                                             |
+| -------------- | ------------------------------------------------ |
+| ID             | NEED-CARGO-UNCHANGED                             |
+| Status         | Accepted                                         |
+| Contributes to | [GOAL-CARGO-NATIVE](#01M78FHG7FRG7B5PSZD2NZ1ZAZ) |
 
 A developer can run `cargo` directly and use rust-analyzer in a repository that has the plugin, and get the behaviour, directories and build reuse they would have without it. Work done through Nx and work done through plain cargo do not invalidate each other.
-:::
 
-:::mara need NEED-CONFIG-IN-CARGO
-:mid: 01M78FHG7FKY2H96D624M0CEMJ
-:title: Adjust the plugin where the crate is described
-:status: accepted
-:contributes_to: GOAL-CARGO-NATIVE
+---
+
+<a id="01M78FHG7FKY2H96D624M0CEMJ"></a>
+
+### Adjust the plugin where the crate is described
+
+| Type           | Need                                             |
+| -------------- | ------------------------------------------------ |
+| ID             | NEED-CONFIG-IN-CARGO                             |
+| Status         | Accepted                                         |
+| Contributes to | [GOAL-CARGO-NATIVE](#01M78FHG7FRG7B5PSZD2NZ1ZAZ) |
 
 When a crate or workspace needs something other than the default, such as tags, another project name or different options for a target, a developer states it in the Cargo manifest that already describes that crate or workspace.
-:::
 
-:::mara need NEED-UNIFORM-COMMANDS
-:mid: 01M78FHG7F03FJS926C86QPTPP
-:title: Run Rust and JS tasks with the same commands
-:status: accepted
-:contributes_to: GOAL-ONE-MONOREPO
+---
+
+<a id="01M78FHG7F03FJS926C86QPTPP"></a>
+
+### Run Rust and JS tasks with the same commands
+
+| Type           | Need                                             |
+| -------------- | ------------------------------------------------ |
+| ID             | NEED-UNIFORM-COMMANDS                            |
+| Status         | Accepted                                         |
+| Contributes to | [GOAL-ONE-MONOREPO](#01M78FHG7F29A0KR2HCWPTFFZ1) |
 
 The commands a mixed repository already uses for JS projects, such as `nx affected -t lint test build`, also cover its Rust crates, so developers and CI pipelines do not need a second set of commands for Rust.
-:::
 
-:::mara need NEED-CORRECT-CACHE
-:mid: 01M78FHG7FMWW59PS4KPRKVCEJ
-:title: Trust cached results
-:status: accepted
-:contributes_to: GOAL-TRUSTED-CACHE
+---
+
+<a id="01M78FHG7FMWW59PS4KPRKVCEJ"></a>
+
+### Trust cached results
+
+| Type           | Need                                              |
+| -------------- | ------------------------------------------------- |
+| ID             | NEED-CORRECT-CACHE                                |
+| Status         | Accepted                                          |
+| Contributes to | [GOAL-TRUSTED-CACHE](#01M78FHG7F44E8BAFK3ZZJRQT7) |
 
 Developers and CI can rely on a cache hit for a Rust task: everything that can change the task's result is part of what decides whether the cached result is reused, and a result of one kind is never reused as a result of another kind.
-:::
 
-:::mara need NEED-AFFECTED
-:mid: 01M78FHG7F4CKFXTSBXJ7131EY
-:title: Run only what a change affects
-:status: accepted
-:contributes_to: GOAL-FAST-FEEDBACK
-:contributes_to: GOAL-ONE-MONOREPO
+---
+
+<a id="01M78FHG7F4CKFXTSBXJ7131EY"></a>
+
+### Run only what a change affects
+
+| Type           | Need                                              |
+| -------------- | ------------------------------------------------- |
+| ID             | NEED-AFFECTED                                     |
+| Status         | Accepted                                          |
+| Contributes to | [GOAL-FAST-FEEDBACK](#01M78FHG7FME1CA6KC45BJAH4E) |
+| Contributes to | [GOAL-ONE-MONOREPO](#01M78FHG7F29A0KR2HCWPTFFZ1)  |
 
 Given a change, developers and CI can run the tasks of the crates and JS projects it can affect, and skip the rest, across language boundaries. A change in a dependency, including one used only by tests or build scripts, counts as affecting its dependents.
-:::
 
-:::mara need NEED-EFFICIENT-BUILDS
-:mid: 01M78FHG7F597HWJZPETAMWPQ4
-:title: Avoid repeated and contended compilation
-:status: accepted
-:contributes_to: GOAL-FAST-FEEDBACK
+---
+
+<a id="01M78FHG7F597HWJZPETAMWPQ4"></a>
+
+### Avoid repeated and contended compilation
+
+| Type           | Need                                              |
+| -------------- | ------------------------------------------------- |
+| ID             | NEED-EFFICIENT-BUILDS                             |
+| Status         | Accepted                                          |
+| Contributes to | [GOAL-FAST-FEEDBACK](#01M78FHG7FME1CA6KC45BJAH4E) |
 
 Running many Rust tasks through Nx does not compile the same code several times with the same features, does not queue cargo processes behind one build lock, and does not rebuild because a different set of crates happened to run together.
-:::
 
-:::mara need NEED-FAST-TESTS
-:mid: 01M78FHG7FX5BYGF6N2SGWAV2D
-:title: Get test feedback proportional to the change
-:status: accepted
-:contributes_to: GOAL-FAST-FEEDBACK
+---
+
+<a id="01M78FHG7FX5BYGF6N2SGWAV2D"></a>
+
+### Get test feedback proportional to the change
+
+| Type           | Need                                              |
+| -------------- | ------------------------------------------------- |
+| ID             | NEED-FAST-TESTS                                   |
+| Status         | Accepted                                          |
+| Contributes to | [GOAL-FAST-FEEDBACK](#01M78FHG7FME1CA6KC45BJAH4E) |
 
 A developer who changes a few lines in a large crate can get the results of the tests that the change can affect without waiting for the crate's whole suite, while the full suite still runs for every state of the main branch.
-:::
 
-:::mara need NEED-JS-BRIDGE
-:mid: 01M78FHG7F1RBZVPETF1K490S9
-:title: Consume Rust from JS projects
-:status: accepted
-:contributes_to: GOAL-ONE-MONOREPO
+---
+
+<a id="01M78FHG7F1RBZVPETF1K490S9"></a>
+
+### Consume Rust from JS projects
+
+| Type           | Need                                             |
+| -------------- | ------------------------------------------------ |
+| ID             | NEED-JS-BRIDGE                                   |
+| Status         | Accepted                                         |
+| Contributes to | [GOAL-ONE-MONOREPO](#01M78FHG7F29A0KR2HCWPTFFZ1) |
 
 A JS project can depend on a Rust crate that is built into a Node addon or a wasm package. Building the JS project builds the artifact first when needed, and a change in the crate affects the JS project.
-:::
 
-:::mara need NEED-RELEASE
-:mid: 01M78FHG7F4QQYZSG4XA0NKA2W
-:title: Version and publish crates with the rest of the repository
-:status: accepted
-:contributes_to: GOAL-ONE-MONOREPO
+---
+
+<a id="01M78FHG7F4QQYZSG4XA0NKA2W"></a>
+
+### Version and publish crates with the rest of the repository
+
+| Type           | Need                                             |
+| -------------- | ------------------------------------------------ |
+| ID             | NEED-RELEASE                                     |
+| Status         | Accepted                                         |
+| Contributes to | [GOAL-ONE-MONOREPO](#01M78FHG7F29A0KR2HCWPTFFZ1) |
 
 A team that releases its JS packages with Nx release can version and publish its crates through the same process, with versions of dependent crates and the lockfile kept consistent.
-:::
 
-:::mara need NEED-EASY-SETUP
-:mid: 01M78FHG7F7N61AHPME24567FE
-:title: Start using the plugin without trial and error
-:status: accepted
-:contributes_to: GOAL-ONE-MONOREPO
+---
+
+<a id="01M78FHG7F7N61AHPME24567FE"></a>
+
+### Start using the plugin without trial and error
+
+| Type           | Need                                             |
+| -------------- | ------------------------------------------------ |
+| ID             | NEED-EASY-SETUP                                  |
+| Status         | Accepted                                         |
+| Contributes to | [GOAL-ONE-MONOREPO](#01M78FHG7F29A0KR2HCWPTFFZ1) |
 
 A team can add the plugin to an existing repository, and add new crates later, with one command each, and can tell from the documentation whether its Nx, Cargo and operating system are supported.
-:::
 
-:::mara need NEED-CLEAR-FAILURES
-:mid: 01M78FHG7FV4WYX1Q7P92VTFTT
-:title: Understand what is missing or misconfigured
-:status: accepted
-:contributes_to: GOAL-ONE-MONOREPO
-:contributes_to: GOAL-TRUSTED-CACHE
+---
+
+<a id="01M78FHG7FV4WYX1Q7P92VTFTT"></a>
+
+### Understand what is missing or misconfigured
+
+| Type           | Need                                              |
+| -------------- | ------------------------------------------------- |
+| ID             | NEED-CLEAR-FAILURES                               |
+| Status         | Accepted                                          |
+| Contributes to | [GOAL-ONE-MONOREPO](#01M78FHG7F29A0KR2HCWPTFFZ1)  |
+| Contributes to | [GOAL-TRUSTED-CACHE](#01M78FHG7F44E8BAFK3ZZJRQT7) |
 
 When a tool is missing, a version is unsupported or a setting cannot work, the developer learns what is wrong, where, and what to do about it, before or instead of a confusing failure deep inside a build.
-:::
+
+---
 
 ## Vocabulary
 
-:::mara term TERM-WORKSPACE-CONTEXT
-:mid: 01M78FHG7FMWPZ9BFDB3SSSXM3
-:title: Workspace context
-:status: accepted
+---
 
-Everything that Cargo scopes to one Cargo workspace and that the plugin therefore handles per workspace: the lockfile, the build directory, the toolchain file, the batches and the coverage baseline. A repository has one workspace context per Cargo workspace, including each [[TERM-STANDALONE-CRATE]].
-:::
+<a id="01M78FHG7FMWPZ9BFDB3SSSXM3"></a>
 
-:::mara term TERM-STANDALONE-CRATE
-:mid: 01M78FHG7F37Z611RA86TV4DP2
-:title: Standalone crate
-:status: accepted
-:aliases: workspace of one
+### Workspace context
+
+| Type   | Term                   |
+| ------ | ---------------------- |
+| ID     | TERM-WORKSPACE-CONTEXT |
+| Status | Accepted               |
+
+Everything that Cargo scopes to one Cargo workspace and that the plugin therefore handles per workspace: the lockfile, the build directory, the toolchain file, the batches and the coverage baseline. A repository has one workspace context per Cargo workspace, including each [TERM-STANDALONE-CRATE](#01M78FHG7F37Z611RA86TV4DP2).
+
+---
+
+<a id="01M78FHG7F37Z611RA86TV4DP2"></a>
+
+### Standalone crate
+
+| Type    | Term                  |
+| ------- | --------------------- |
+| ID      | TERM-STANDALONE-CRATE |
+| Status  | Accepted              |
+| Aliases | workspace of one      |
 
 A crate that is not a member of any Cargo workspace, either because no enclosing manifest declares a workspace or because the enclosing workspace excludes it. The plugin treats it as a workspace with one member, with its own lockfile and build directory.
-:::
 
-:::mara term TERM-WORKSPACE-PROJECT
-:mid: 01M78FHG7F8DTF27C4K7XPZK6X
-:title: Workspace project
-:status: accepted
-:aliases: synthetic project
+---
 
-The Nx project that hosts the tasks of a whole Cargo workspace, such as documentation, auditing and coverage collection. It is rooted at the workspace folder and depends on every member. When the root manifest also defines a crate, that crate's project takes this role. See [[REQ-WORKSPACE-PROJECT]].
-:::
+<a id="01M78FHG7F8DTF27C4K7XPZK6X"></a>
 
-:::mara term TERM-BUILD-DIR
-:mid: 01M78FHG7FC78D37XE5W6AAEDD
-:title: Build directory
-:status: accepted
+### Workspace project
+
+| Type    | Term                   |
+| ------- | ---------------------- |
+| ID      | TERM-WORKSPACE-PROJECT |
+| Status  | Accepted               |
+| Aliases | synthetic project      |
+
+The Nx project that hosts the tasks of a whole Cargo workspace, such as documentation, auditing and coverage collection. It is rooted at the workspace folder and depends on every member. When the root manifest also defines a crate, that crate's project takes this role. See [REQ-WORKSPACE-PROJECT](workspaces.mara.md#01M78FHG7FEH8W5X747EMPM5B1).
+
+---
+
+<a id="01M78FHG7FC78D37XE5W6AAEDD"></a>
+
+### Build directory
+
+| Type   | Term           |
+| ------ | -------------- |
+| ID     | TERM-BUILD-DIR |
+| Status | Accepted       |
 
 The directory where Cargo keeps intermediate build files, set by `build.build-dir`. Cargo owns it: its layout is internal to Cargo, and the plugin never names a path inside it. Each build directory has one build lock.
-:::
 
-:::mara term TERM-ARTIFACT-DIR
-:mid: 01M78FHG7FX7GW7Y4KYF94XF2B
-:title: Artifact directory
-:status: accepted
-:aliases: target directory
+---
+
+<a id="01M78FHG7FX7GW7Y4KYF94XF2B"></a>
+
+### Artifact directory
+
+| Type    | Term              |
+| ------- | ----------------- |
+| ID      | TERM-ARTIFACT-DIR |
+| Status  | Accepted          |
+| Aliases | target directory  |
 
 The directory where Cargo puts final artifacts such as binaries, set by `build.target-dir`. It is the only Cargo directory that Nx outputs point into.
-:::
 
-:::mara term TERM-GROUP
-:mid: 01M78FHG7FKNVJ758TVW9DMDAD
-:title: Batch group
-:status: accepted
-:aliases: group
-:aliases: build flavour
+---
 
-The set of tasks that the plugin serves together, with one cargo command for each step of their target: tasks of the same kind in the same Cargo workspace whose commands would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment, of which cargo never gets the two variables by which Nx names a task's project ([[ADR-TASK-NAME-VARIABLES]]), so that tasks of one target and configuration share it. Where their command would pass a flag whose effect on a crate depends on which other crates it selects, would select crates whose features cargo then resolves for that selection alone, or would set a runner where the user may have configured one, each task forms a group of one crate ([[DES-BATCH]]). Only those cases do: a group that holds one task because the command names one crate, or because Nx restored the others from the cache, selects its crates as any group does.
-:::
+<a id="01M78FHG7FKNVJ758TVW9DMDAD"></a>
 
-:::mara term TERM-FEATURE-UNIFICATION
-:mid: 01M78FHG7FH1JD1FSYB97BFN9P
-:title: Feature unification
-:status: accepted
+### Batch group
+
+| Type    | Term          |
+| ------- | ------------- |
+| ID      | TERM-GROUP    |
+| Status  | Accepted      |
+| Aliases | group         |
+| Aliases | build flavour |
+
+The set of tasks that the plugin serves together, with one cargo command for each step of their target: tasks of the same kind in the same Cargo workspace whose commands would differ only in the crates they select. They have the same feature set, profile and target triple, the same options that shape the command, such as the switch for `--all-targets`, and the same environment, of which cargo never gets the two variables by which Nx names a task's project ([ADR-TASK-NAME-VARIABLES](decisions.mara.md#01M7FZHXES8CVY46H25QJG3BV7)), so that tasks of one target and configuration share it. Where their command would pass a flag whose effect on a crate depends on which other crates it selects, would select crates whose features cargo then resolves for that selection alone, or would set a runner where the user may have configured one, each task forms a group of one crate ([DES-BATCH](execution.mara.md#01M78FHG7FY1VKFFHZ8G4WFDBJ)). Only those cases do: a group that holds one task because the command names one crate, or because Nx restored the others from the cache, selects its crates as any group does.
+
+---
+
+<a id="01M78FHG7FH1JD1FSYB97BFN9P"></a>
+
+### Feature unification
+
+| Type   | Term                     |
+| ------ | ------------------------ |
+| ID     | TERM-FEATURE-UNIFICATION |
+| Status | Accepted                 |
 
 Cargo's merging of the features requested for a shared dependency across all the crates that are built together. The same crate can therefore be compiled with different features of its dependencies depending on which other crates are in the same cargo invocation.
-:::
 
-:::mara term TERM-HACK-CRATE
-:mid: 01M78FHG7FTG4JJ6EH5BFWDMBF
-:title: Hack crate
-:status: accepted
-:aliases: workspace-hack crate
+---
 
-The crate that cargo-hakari generates and every workspace member depends on. It depends on the workspace's third-party dependencies with the union of the features that the members ask for, so those dependencies are compiled with the same features whichever members are built. It leaves out the members themselves, third-party crates that depend on a member through normal or build dependencies, and platform-specific dependencies on platforms that its configuration does not list ([[EVD-HAKARI-UNIFICATION]]). The workspace's cargo-hakari configuration names it. The plugin never publishes it, and [[DES-RELEASE]] says what happens to the crates that depend on it when they are published.
-:::
+<a id="01M78FHG7FTG4JJ6EH5BFWDMBF"></a>
 
-:::mara term TERM-EXTERNAL-NODE
-:mid: 01M78FHG7FTX12MCSFNZK69KW7
-:title: External node
-:status: retired
+### Hack crate
+
+| Type    | Term                 |
+| ------- | -------------------- |
+| ID      | TERM-HACK-CRATE      |
+| Status  | Accepted             |
+| Aliases | workspace-hack crate |
+
+The crate that cargo-hakari generates and every workspace member depends on. It depends on the workspace's third-party dependencies with the union of the features that the members ask for, so those dependencies are compiled with the same features whichever members are built. It leaves out the members themselves, third-party crates that depend on a member through normal or build dependencies, and platform-specific dependencies on platforms that its configuration does not list ([EVD-HAKARI-UNIFICATION](decisions.mara.md#01M7D9EQW8FQW9BAEZSHQ37116)). The workspace's cargo-hakari configuration names it. The plugin never publishes it, and [DES-RELEASE](release.mara.md#01M78FHG7F65ZV4NB8NPNJGH1T) says what happens to the crates that depend on it when they are published.
+
+---
+
+<a id="01M78FHG7FTX12MCSFNZK69KW7"></a>
+
+### External node
+
+| Type   | Term               |
+| ------ | ------------------ |
+| ID     | TERM-EXTERNAL-NODE |
+| Status | Retired            |
 
 A node in the Nx graph for a dependency that is not a project in the repository. The plugin was to create one per direct external crate dependency, with the prefix `cargo:`.
 
-Retired on 13 November 2026: v1 creates no external nodes. A crate's locked dependencies reach its cache key through the lockfile task of its workspace ([[ADR-LOCKFILE-TASK]], [[DES-LOCKFILE-HASHING]]).
-:::
+Retired on 13 November 2026: v1 creates no external nodes. A crate's locked dependencies reach its cache key through the lockfile task of its workspace ([ADR-LOCKFILE-TASK](decisions.mara.md#01M7ACCPE3JYNPZCK42RZG5H3H), [DES-LOCKFILE-HASHING](workspaces.mara.md#01M78FHG7FQWJY49AGS0FVGY2D)).
 
-:::mara term TERM-TEST-MODE
-:mid: 01M78FHG7FZA0TQ1TJABZBVGAP
-:title: Test mode
-:status: accepted
+---
+
+<a id="01M78FHG7FZA0TQ1TJABZBVGAP"></a>
+
+### Test mode
+
+| Type   | Term           |
+| ------ | -------------- |
+| ID     | TERM-TEST-MODE |
+| Status | Accepted       |
 
 The kind of result a `test` task produces in the current run: `full` for the whole suite, or `affected:<baseline commit>` for the tests selected against a coverage baseline. The test mode is part of the task's cache key.
-:::
 
-:::mara term TERM-BASELINE
-:mid: 01M78FHG7FY74HS6V7R78Z5FYH
-:title: Coverage baseline
-:status: accepted
-:aliases: coverage database
+---
+
+<a id="01M78FHG7FY74HS6V7R78Z5FYH"></a>
+
+### Coverage baseline
+
+| Type    | Term              |
+| ------- | ----------------- |
+| ID      | TERM-BASELINE     |
+| Status  | Accepted          |
+| Aliases | coverage database |
 
 The per-test coverage data that cargo-affected collected for one commit of the main branch. Selecting affected tests means comparing a change against this data.
-:::
 
-:::mara term TERM-ARTIFACT-TARGET
-:mid: 01M78FHG7F5DC68V07AK3ENTZN
-:title: Artifact target
-:status: accepted
+---
+
+<a id="01M78FHG7F5DC68V07AK3ENTZN"></a>
+
+### Artifact target
+
+| Type   | Term                 |
+| ------ | -------------------- |
+| ID     | TERM-ARTIFACT-TARGET |
+| Status | Accepted             |
 
 A target that produces a kind of artifact other than native binaries and libraries, and therefore has its own name: `napi-build` for a Node addon and `wasm-build` for a wasm package.
-:::
